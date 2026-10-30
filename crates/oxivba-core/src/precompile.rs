@@ -241,7 +241,7 @@ fn split_ending(line: &str) -> (&str, &str) {
 /// A run of spaces the same length as what it replaces, so every later span
 /// still points at the byte it did.
 fn blank_into(out: &mut String, body: &str) {
-    for _ in body.chars() {
+    for _ in 0..body.len() {
         out.push(' ');
     }
 }

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: CC-BY-SA-4.0
+# Excel 16.0 build 20430; exact source/input bound; only normal-zero owned process measurements.
+# version	method	arguments_json	expected
+1	NothingReceiver	[1]	5|1
+1	NothingReceiver	[3]	5|1
+1	NothingReceiver	[4]	1004|1
+1	NothingReceiver	[5]	5|1
+1	NothingReceiver	[8]	5|1
+1	NothingReceiver	[9]	5|1

@@ -1,0 +1,78 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "source_identity": 2026102092,
+  "source_packet_sha256": "9c4fb0332270257c4afec47ee380a486c3eade6c1e339b4400e56c8089fe965d",
+  "scope": "Complete unmodified Native macro returns. The self-authored VBA macro returns per-stage callback counts and typed cell values; raw varying callback traces remain in the separately measured2091 source. No Python/JS normalization or count adjustment.",
+  "groups": [
+    {
+      "source": "conditional_reads.bas",
+      "package": "conditional_reads.xlsm",
+      "cases": [
+        {
+          "id": 0,
+          "steps": [
+            {
+              "procedure": "ConditionalCounts",
+              "arguments": [
+                0
+              ],
+              "expected": "entered:3[5:1,5:1,5:1]|calculated:9[5:1,5:1,5:1]|again:9[5:1,5:1,5:1]|full:12[5:1,5:1,5:1]|rebuilt:15[5:1,5:1,5:1]"
+            }
+          ],
+          "native_observations": [
+            {
+              "id": 1100,
+              "return_value": "entered:3[5:1,5:1,5:1]|calculated:9[5:1,5:1,5:1]|again:9[5:1,5:1,5:1]|full:12[5:1,5:1,5:1]|rebuilt:15[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "id": 1102,
+              "return_value": "entered:3[5:1,5:1,5:1]|calculated:9[5:1,5:1,5:1]|again:9[5:1,5:1,5:1]|full:12[5:1,5:1,5:1]|rebuilt:15[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "id": 1104,
+              "return_value": "entered:3[5:1,5:1,5:1]|calculated:9[5:1,5:1,5:1]|again:9[5:1,5:1,5:1]|full:12[5:1,5:1,5:1]|rebuilt:15[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "steps": [
+            {
+              "procedure": "ConditionalCounts",
+              "arguments": [
+                1
+              ],
+              "expected": "entered:3[5:1,5:1,5:1]|calculated:8[5:1,5:1,5:1]|again:8[5:1,5:1,5:1]|full:11[5:1,5:1,5:1]|rebuilt:14[5:1,5:1,5:1]"
+            }
+          ],
+          "native_observations": [
+            {
+              "id": 1101,
+              "return_value": "entered:3[5:1,5:1,5:1]|calculated:8[5:1,5:1,5:1]|again:8[5:1,5:1,5:1]|full:11[5:1,5:1,5:1]|rebuilt:14[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "id": 1103,
+              "return_value": "entered:3[5:1,5:1,5:1]|calculated:8[5:1,5:1,5:1]|again:8[5:1,5:1,5:1]|full:11[5:1,5:1,5:1]|rebuilt:14[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "id": 1105,
+              "return_value": "entered:3[5:1,5:1,5:1]|calculated:8[5:1,5:1,5:1]|again:8[5:1,5:1,5:1]|full:11[5:1,5:1,5:1]|rebuilt:14[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

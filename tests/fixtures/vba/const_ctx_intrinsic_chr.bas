@@ -1,0 +1,7 @@
+Attribute VB_Name = "DriverModule"
+Option Explicit
+Public Function Probe() As String
+On Error Resume Next
+Dim value(Chr(50)) As Long
+Probe = CStr(UBound(value))
+End Function

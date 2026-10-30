@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: CC-BY-SA-4.0
+# Excel 16.0 build 20430; source/input bound; only owned normal-zero measurements.
+# version	method	arguments_json	expected
+1	WidthCoercion	["use",0]	0|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",1]	0|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",2]	0|8.43:True:8.43:False|8:True
+1	WidthCoercion	["use",3]	0|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",4]	0|8.43:True:8.43:False|8:True
+1	WidthCoercion	["use",5]	1004|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",6]	1004|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",7]	1004|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",8]	13|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",10]	1004|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",11]	0|8.43:True:8.43:False|8:True
+1	WidthCoercion	["use",12]	1004|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",13]	0|8.43:True:8.43:False|8:True
+1	WidthCoercion	["use",14]	5|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",15]	0|8.43:True:8.43:False|8:True
+1	WidthCoercion	["use",16]	0|8.43:True:8.43:False|8:True
+1	WidthCoercion	["use",17]	1004|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",18]	1004|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",19]	0|8.43:True:8.43:False|8:True
+1	WidthCoercion	["use",20]	0|8.43:True:8.43:False|8:True
+1	WidthCoercion	["use",21]	1004|12.57:False:8.43:False|13:False
+1	WidthCoercion	["use",22]	1004|12.57:False:8.43:False|13:False

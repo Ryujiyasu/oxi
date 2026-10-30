@@ -1,0 +1,2053 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "groups": [
+    {
+      "source": "rand_replay.bas",
+      "package": "rand_replay.xlsm",
+      "cases": [
+        {
+          "id": 400,
+          "name": "let-rand-two",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                0
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 401,
+          "name": "separate-rand",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                0
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "RememberTick(RAND())+RememberTick(RAND())",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FD"
+            }
+          ]
+        },
+        {
+          "id": 402,
+          "name": "let-rand-three",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                0
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:3|calls:3|labels:FSF"
+            }
+          ]
+        },
+        {
+          "id": 403,
+          "name": "constant-between",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                0
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDBETWEEN(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 404,
+          "name": "let-rand-application",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                0
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                0
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 405,
+          "name": "let-rand-worksheet",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                0
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                1
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 406,
+          "name": "let-randarray",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                0
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDARRAY(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|E:3|calls:0|labels:"
+            }
+          ]
+        },
+        {
+          "id": 407,
+          "name": "literal-control",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                0
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,1,RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 408,
+          "name": "let-rand-two",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                1
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 409,
+          "name": "separate-rand",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                1
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "RememberTick(RAND())+RememberTick(RAND())",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FD"
+            }
+          ]
+        },
+        {
+          "id": 410,
+          "name": "let-rand-three",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                1
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:3|calls:3|labels:FSF"
+            }
+          ]
+        },
+        {
+          "id": 411,
+          "name": "constant-between",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                1
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDBETWEEN(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 412,
+          "name": "let-rand-application",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                1
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                0
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 413,
+          "name": "let-rand-worksheet",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                1
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                1
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 414,
+          "name": "let-randarray",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                1
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDARRAY(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|E:3|calls:0|labels:"
+            }
+          ]
+        },
+        {
+          "id": 415,
+          "name": "literal-control",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                1
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,1,RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 416,
+          "name": "let-rand-two",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                2
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 417,
+          "name": "separate-rand",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                2
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "RememberTick(RAND())+RememberTick(RAND())",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FD"
+            }
+          ]
+        },
+        {
+          "id": 418,
+          "name": "let-rand-three",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                2
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:3|calls:3|labels:FSF"
+            }
+          ]
+        },
+        {
+          "id": 419,
+          "name": "constant-between",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                2
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDBETWEEN(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 420,
+          "name": "let-rand-application",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                2
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                0
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 421,
+          "name": "let-rand-worksheet",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                2
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                1
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 422,
+          "name": "let-randarray",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                2
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDARRAY(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|E:3|calls:0|labels:"
+            }
+          ]
+        },
+        {
+          "id": 423,
+          "name": "literal-control",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                2
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,1,RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 424,
+          "name": "let-rand-two",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                3
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 425,
+          "name": "separate-rand",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                3
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "RememberTick(RAND())+RememberTick(RAND())",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FD"
+            }
+          ]
+        },
+        {
+          "id": 426,
+          "name": "let-rand-three",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                3
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:3|calls:3|labels:FSF"
+            }
+          ]
+        },
+        {
+          "id": 427,
+          "name": "constant-between",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                3
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDBETWEEN(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 428,
+          "name": "let-rand-application",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                3
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                0
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 429,
+          "name": "let-rand-worksheet",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                3
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                1
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 430,
+          "name": "let-randarray",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                3
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDARRAY(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|E:3|calls:0|labels:"
+            }
+          ]
+        },
+        {
+          "id": 431,
+          "name": "literal-control",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                3
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,1,RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 432,
+          "name": "let-rand-two",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                4
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 433,
+          "name": "separate-rand",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                4
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "RememberTick(RAND())+RememberTick(RAND())",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FD"
+            }
+          ]
+        },
+        {
+          "id": 434,
+          "name": "let-rand-three",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                4
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:3|calls:3|labels:FSF"
+            }
+          ]
+        },
+        {
+          "id": 435,
+          "name": "constant-between",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                4
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDBETWEEN(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 436,
+          "name": "let-rand-application",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                4
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                0
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 437,
+          "name": "let-rand-worksheet",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                4
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                1
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 438,
+          "name": "let-randarray",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                4
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDARRAY(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|E:3|calls:0|labels:"
+            }
+          ]
+        },
+        {
+          "id": 439,
+          "name": "literal-control",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                4
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,1,RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 440,
+          "name": "let-rand-two",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                5
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 441,
+          "name": "separate-rand",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                5
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "RememberTick(RAND())+RememberTick(RAND())",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FD"
+            }
+          ]
+        },
+        {
+          "id": 442,
+          "name": "let-rand-three",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                5
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:3|calls:3|labels:FSF"
+            }
+          ]
+        },
+        {
+          "id": 443,
+          "name": "constant-between",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                5
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDBETWEEN(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 444,
+          "name": "let-rand-application",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                5
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                0
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 445,
+          "name": "let-rand-worksheet",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                5
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                1
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 446,
+          "name": "let-randarray",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                5
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDARRAY(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|E:3|calls:0|labels:"
+            }
+          ]
+        },
+        {
+          "id": 447,
+          "name": "literal-control",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                5
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,1,RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 448,
+          "name": "let-rand-two",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                6
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 449,
+          "name": "separate-rand",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                6
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "RememberTick(RAND())+RememberTick(RAND())",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FD"
+            }
+          ]
+        },
+        {
+          "id": 450,
+          "name": "let-rand-three",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                6
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:3|calls:3|labels:FSF"
+            }
+          ]
+        },
+        {
+          "id": 451,
+          "name": "constant-between",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                6
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDBETWEEN(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 452,
+          "name": "let-rand-application",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                6
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                0
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 453,
+          "name": "let-rand-worksheet",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                6
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                1
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 454,
+          "name": "let-randarray",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                6
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDARRAY(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|E:3|calls:0|labels:"
+            }
+          ]
+        },
+        {
+          "id": 455,
+          "name": "literal-control",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                6
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,1,RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 456,
+          "name": "let-rand-two",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                7
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 457,
+          "name": "separate-rand",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                7
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "RememberTick(RAND())+RememberTick(RAND())",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FD"
+            }
+          ]
+        },
+        {
+          "id": 458,
+          "name": "let-rand-three",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                7
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:3|calls:3|labels:FSF"
+            }
+          ]
+        },
+        {
+          "id": 459,
+          "name": "constant-between",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                7
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDBETWEEN(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 460,
+          "name": "let-rand-application",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                7
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                0
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 461,
+          "name": "let-rand-worksheet",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                7
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                1
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 462,
+          "name": "let-randarray",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                7
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDARRAY(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|E:3|calls:0|labels:"
+            }
+          ]
+        },
+        {
+          "id": 463,
+          "name": "literal-control",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                7
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,1,RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 464,
+          "name": "let-rand-two",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                8
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 465,
+          "name": "separate-rand",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                8
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "RememberTick(RAND())+RememberTick(RAND())",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FD"
+            }
+          ]
+        },
+        {
+          "id": 466,
+          "name": "let-rand-three",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                8
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:3|calls:3|labels:FSF"
+            }
+          ]
+        },
+        {
+          "id": 467,
+          "name": "constant-between",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                8
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDBETWEEN(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 468,
+          "name": "let-rand-application",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                8
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                0
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 469,
+          "name": "let-rand-worksheet",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                8
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                1
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 470,
+          "name": "let-randarray",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                8
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDARRAY(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|E:3|calls:0|labels:"
+            }
+          ]
+        },
+        {
+          "id": 471,
+          "name": "literal-control",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                8
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,1,RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 472,
+          "name": "let-rand-two",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                9
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 473,
+          "name": "separate-rand",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                9
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "RememberTick(RAND())+RememberTick(RAND())",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FD"
+            }
+          ]
+        },
+        {
+          "id": 474,
+          "name": "let-rand-three",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                9
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:3|calls:3|labels:FSF"
+            }
+          ]
+        },
+        {
+          "id": 475,
+          "name": "constant-between",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                9
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDBETWEEN(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 476,
+          "name": "let-rand-application",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                9
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                0
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 477,
+          "name": "let-rand-worksheet",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                9
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                1
+              ],
+              "expected": "V|5:2|calls:4|labels:FSFS"
+            }
+          ]
+        },
+        {
+          "id": 478,
+          "name": "let-randarray",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                9
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,RANDARRAY(1,1),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|E:3|calls:0|labels:"
+            }
+          ]
+        },
+        {
+          "id": 479,
+          "name": "literal-control",
+          "steps": [
+            {
+              "procedure": "SeedScenario",
+              "arguments": [
+                9
+              ],
+              "expected_number": 21
+            },
+            {
+              "procedure": "BranchTrace",
+              "arguments": [
+                "LET(x,1,RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source": "rand_replay_boundaries.bas",
+      "package": "rand_replay_boundaries.xlsm",
+      "cases": [
+        {
+          "id": 500,
+          "name": "combined-shared-0",
+          "steps": [
+            {
+              "procedure": "CombinedScenario",
+              "arguments": [
+                0,
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 501,
+          "name": "combined-shared-1",
+          "steps": [
+            {
+              "procedure": "CombinedScenario",
+              "arguments": [
+                1,
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 502,
+          "name": "combined-shared-2",
+          "steps": [
+            {
+              "procedure": "CombinedScenario",
+              "arguments": [
+                2,
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 503,
+          "name": "combined-shared-3",
+          "steps": [
+            {
+              "procedure": "CombinedScenario",
+              "arguments": [
+                3,
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 504,
+          "name": "combined-shared-4",
+          "steps": [
+            {
+              "procedure": "CombinedScenario",
+              "arguments": [
+                4,
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 505,
+          "name": "combined-shared-5",
+          "steps": [
+            {
+              "procedure": "CombinedScenario",
+              "arguments": [
+                5,
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 506,
+          "name": "combined-shared-6",
+          "steps": [
+            {
+              "procedure": "CombinedScenario",
+              "arguments": [
+                6,
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 507,
+          "name": "combined-shared-7",
+          "steps": [
+            {
+              "procedure": "CombinedScenario",
+              "arguments": [
+                7,
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 508,
+          "name": "combined-shared-8",
+          "steps": [
+            {
+              "procedure": "CombinedScenario",
+              "arguments": [
+                8,
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 509,
+          "name": "combined-shared-9",
+          "steps": [
+            {
+              "procedure": "CombinedScenario",
+              "arguments": [
+                9,
+                "LET(x,RAND(),RememberTick(x)+RememberTick(x))",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FS"
+            }
+          ]
+        },
+        {
+          "id": 510,
+          "name": "combined-separate-1",
+          "steps": [
+            {
+              "procedure": "CombinedScenario",
+              "arguments": [
+                1,
+                "RememberTick(RAND())+RememberTick(RAND())",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FD"
+            }
+          ]
+        },
+        {
+          "id": 511,
+          "name": "combined-separate-9",
+          "steps": [
+            {
+              "procedure": "CombinedScenario",
+              "arguments": [
+                9,
+                "RememberTick(RAND())+RememberTick(RAND())",
+                2
+              ],
+              "expected": "V|5:2|calls:2|labels:FD"
+            }
+          ]
+        },
+        {
+          "id": 512,
+          "name": "text-columns-0-False-False",
+          "steps": [
+            {
+              "procedure": "TextColumnsCase",
+              "arguments": [
+                0,
+                false,
+                false
+              ],
+              "expected": "0|V|5:2|calls:0|labels:|formula:True"
+            }
+          ]
+        },
+        {
+          "id": 513,
+          "name": "text-columns-0-False-True",
+          "steps": [
+            {
+              "procedure": "TextColumnsCase",
+              "arguments": [
+                0,
+                false,
+                true
+              ],
+              "expected": "0|V|5:1|calls:1|labels:F|formula:True"
+            }
+          ]
+        },
+        {
+          "id": 514,
+          "name": "text-columns-0-True-False",
+          "steps": [
+            {
+              "procedure": "TextColumnsCase",
+              "arguments": [
+                0,
+                true,
+                false
+              ],
+              "expected": "0|V|5:2|calls:0|labels:|formula:True"
+            }
+          ]
+        },
+        {
+          "id": 515,
+          "name": "text-columns-0-True-True",
+          "steps": [
+            {
+              "procedure": "TextColumnsCase",
+              "arguments": [
+                0,
+                true,
+                true
+              ],
+              "expected": "0|V|5:1|calls:1|labels:F|formula:True"
+            }
+          ]
+        },
+        {
+          "id": 516,
+          "name": "text-columns-1-False-False",
+          "steps": [
+            {
+              "procedure": "TextColumnsCase",
+              "arguments": [
+                1,
+                false,
+                false
+              ],
+              "expected": "0|V|5:2|calls:0|labels:|formula:True"
+            }
+          ]
+        },
+        {
+          "id": 517,
+          "name": "text-columns-1-False-True",
+          "steps": [
+            {
+              "procedure": "TextColumnsCase",
+              "arguments": [
+                1,
+                false,
+                true
+              ],
+              "expected": "0|V|5:1|calls:1|labels:F|formula:True"
+            }
+          ]
+        },
+        {
+          "id": 518,
+          "name": "text-columns-1-True-False",
+          "steps": [
+            {
+              "procedure": "TextColumnsCase",
+              "arguments": [
+                1,
+                true,
+                false
+              ],
+              "expected": "0|V|5:2|calls:0|labels:|formula:True"
+            }
+          ]
+        },
+        {
+          "id": 519,
+          "name": "text-columns-1-True-True",
+          "steps": [
+            {
+              "procedure": "TextColumnsCase",
+              "arguments": [
+                1,
+                true,
+                true
+              ],
+              "expected": "0|V|5:1|calls:1|labels:F|formula:True"
+            }
+          ]
+        },
+        {
+          "id": 520,
+          "name": "partial-formula-0-False",
+          "steps": [
+            {
+              "procedure": "PartialFormulaCase",
+              "arguments": [
+                0,
+                false
+              ],
+              "expected": "1004|V|5:1|calls:1|labels:F|formula:True"
+            }
+          ]
+        },
+        {
+          "id": 521,
+          "name": "partial-formula-0-True",
+          "steps": [
+            {
+              "procedure": "PartialFormulaCase",
+              "arguments": [
+                0,
+                true
+              ],
+              "expected": "1004|V|5:1|calls:1|labels:F|formula:True"
+            }
+          ]
+        },
+        {
+          "id": 522,
+          "name": "partial-formula-1-False",
+          "steps": [
+            {
+              "procedure": "PartialFormulaCase",
+              "arguments": [
+                1,
+                false
+              ],
+              "expected": "1004|V|5:1|calls:1|labels:F|formula:True"
+            }
+          ]
+        },
+        {
+          "id": 523,
+          "name": "partial-formula-1-True",
+          "steps": [
+            {
+              "procedure": "PartialFormulaCase",
+              "arguments": [
+                1,
+                true
+              ],
+              "expected": "1004|V|5:1|calls:1|labels:F|formula:True"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

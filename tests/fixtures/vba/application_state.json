@@ -1,0 +1,128 @@
+{
+  "environment": {
+    "version": "16.0",
+    "build": 20430.0,
+    "ui": 1041
+  },
+  "cases": [
+    {
+      "mode": 0,
+      "inside": "-4135|False|False|False|8:persist|2|False|2",
+      "after": "-4135|False|False|False|8:persist|2|False|2",
+      "after_write": "-4135|False|False|False|8:persist|2|False|2",
+      "automatic": "-4105|False|False|False|8:persist|2|False|18",
+      "reset_text": "-4105|False|False|False|11:False|2|False|18",
+      "failed": false
+    },
+    {
+      "mode": 1,
+      "inside": "-4135|False|False|False|8:persist|2|False|2",
+      "after": "-4135|False|False|False|8:persist|2|False|2",
+      "after_write": "-4135|False|False|False|8:persist|2|False|2",
+      "automatic": "-4105|False|False|False|8:persist|2|False|18",
+      "reset_text": "-4105|False|False|False|11:False|2|False|18",
+      "failed": true
+    },
+    {
+      "mode": 2,
+      "inside": "-4135|False|False|False|8:persist|2|False|2",
+      "after": "-4135|False|False|False|8:persist|2|False|2",
+      "after_write": "-4135|False|False|False|8:persist|2|False|2",
+      "automatic": "-4105|False|False|False|8:persist|2|False|18",
+      "reset_text": "-4105|False|False|False|11:False|2|False|18",
+      "failed": true
+    },
+    {
+      "mode": 3,
+      "inside": "-4135|False|False|False|8:persist|2|False|2",
+      "after": "-4135|False|False|False|8:persist|2|False|2",
+      "after_write": "-4135|False|False|False|8:persist|2|False|2",
+      "automatic": "-4105|False|False|False|8:persist|2|False|18",
+      "reset_text": "-4105|False|False|False|11:False|2|False|18",
+      "failed": false
+    },
+    {
+      "mode": 4,
+      "inside": "-4135|False|False|False|8:persist|2|False|2",
+      "after": "-4135|False|False|False|8:persist|2|False|2",
+      "after_write": "-4135|False|False|False|8:persist|2|False|2",
+      "automatic": "-4105|False|False|False|8:persist|2|False|18",
+      "reset_text": "-4105|False|False|False|11:False|2|False|18",
+      "failed": true
+    },
+    {
+      "mode": 5,
+      "inside": "-4135|False|False|False|8:persist|2|False|2",
+      "after": "-4135|False|False|False|8:persist|2|False|2",
+      "after_write": "-4135|False|False|False|8:persist|2|False|2",
+      "automatic": "-4105|False|False|False|8:persist|2|False|18",
+      "reset_text": "-4105|False|False|False|11:False|2|False|18",
+      "failed": true
+    }
+  ],
+  "transitions": [
+    {
+      "initial": -4105,
+      "target": -4105,
+      "before": "-4105|True|True|True|11:False|-4143|True|14",
+      "after": "-4105|True|True|True|11:False|-4143|True|14",
+      "following": "-4105|True|True|True|11:False|-4143|True|18"
+    },
+    {
+      "initial": -4105,
+      "target": -4135,
+      "before": "-4105|True|True|True|11:False|-4143|True|14",
+      "after": "-4135|True|True|True|11:False|-4143|True|14",
+      "following": "-4135|True|True|True|11:False|-4143|True|14"
+    },
+    {
+      "initial": -4105,
+      "target": 2,
+      "before": "-4105|True|True|True|11:False|-4143|True|14",
+      "after": "2|True|True|True|11:False|-4143|True|14",
+      "following": "2|True|True|True|11:False|-4143|True|18"
+    },
+    {
+      "initial": -4135,
+      "target": -4105,
+      "before": "-4135|True|True|True|11:False|-4143|True|2",
+      "after": "-4105|True|True|True|11:False|-4143|True|14",
+      "following": "-4105|True|True|True|11:False|-4143|True|18"
+    },
+    {
+      "initial": -4135,
+      "target": -4135,
+      "before": "-4135|True|True|True|11:False|-4143|True|2",
+      "after": "-4135|True|True|True|11:False|-4143|True|2",
+      "following": "-4135|True|True|True|11:False|-4143|True|2"
+    },
+    {
+      "initial": -4135,
+      "target": 2,
+      "before": "-4135|True|True|True|11:False|-4143|True|2",
+      "after": "2|True|True|True|11:False|-4143|True|14",
+      "following": "2|True|True|True|11:False|-4143|True|18"
+    },
+    {
+      "initial": 2,
+      "target": -4105,
+      "before": "2|True|True|True|11:False|-4143|True|14",
+      "after": "-4105|True|True|True|11:False|-4143|True|14",
+      "following": "-4105|True|True|True|11:False|-4143|True|18"
+    },
+    {
+      "initial": 2,
+      "target": -4135,
+      "before": "2|True|True|True|11:False|-4143|True|14",
+      "after": "-4135|True|True|True|11:False|-4143|True|14",
+      "following": "-4135|True|True|True|11:False|-4143|True|14"
+    },
+    {
+      "initial": 2,
+      "target": 2,
+      "before": "2|True|True|True|11:False|-4143|True|14",
+      "after": "2|True|True|True|11:False|-4143|True|14",
+      "following": "2|True|True|True|11:False|-4143|True|18"
+    }
+  ]
+}

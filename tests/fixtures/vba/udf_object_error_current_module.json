@@ -1,0 +1,85 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "scope": "Two Object/Error argument profiles. Each option is one complete macro return from the same Excel module and unchanged packet. All three original 42-case invocation sequences are preserved in the primary records; stages are never combined. Kept separate from the stable strict corpus.",
+  "excel_module_sha256": "368e548f9b5a96a47b834cc8b7e0b6354b876f830ce500240f25055b974006f9",
+  "source_file_sha256": "10c36ca26f797d22d40bc22767ac4fe6446a5bd6d2d17ad4248623134893747b",
+  "source_packet_sha256": "a7da90e844e381a15132dbfb4428ea80865aa6d1f804c7e70b377a2b9b7e4e38",
+  "native_owned_applications": 3,
+  "native_observations": 6,
+  "original_observations_per_application": 42,
+  "thread_environment": {
+    "enabled": true,
+    "thread_count": 16,
+    "thread_mode": 0
+  },
+  "groups": [
+    {
+      "source": "udf_indirect_selector_affinity_guarded.bas",
+      "package": "udf_indirect_selector_affinity_guarded.xlsm",
+      "cases": [
+        {
+          "id": 3508,
+          "steps": [
+            {
+              "procedure": "TextCase",
+              "arguments": [
+                9,
+                0,
+                2
+              ],
+              "expected_returns": [
+                "entry:1,0,1,0:EA:0;EC:9;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|normal:2,0,2,0:EA:0;EC:9;NC:9;NA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|dirty:3,0,2,0:EA:0;EC:9;NC:9;NA:0;DA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|switch:3,0,2,0:EA:0;EC:9;NC:9;NA:0;DA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|other:3,0,3,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|full:4,0,4,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;FC:13;FA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|rebuilt:5,0,5,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;FC:13;FA:1;RA:1;RC:13;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]",
+                "entry:1,0,1,0:EA:0;EC:9;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|normal:2,0,2,0:EA:0;EC:9;NC:9;NA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|dirty:3,0,2,0:EA:0;EC:9;NC:9;NA:0;DA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|switch:3,0,2,0:EA:0;EC:9;NC:9;NA:0;DA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|other:3,0,3,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|full:4,0,4,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;FC:13;FA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|rebuilt:5,0,5,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;FC:13;FA:1;RC:13;RA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]"
+              ]
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "entry:1,0,1,0:EA:0;EC:9;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|normal:2,0,2,0:EA:0;EC:9;NC:9;NA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|dirty:3,0,2,0:EA:0;EC:9;NC:9;NA:0;DA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|switch:3,0,2,0:EA:0;EC:9;NC:9;NA:0;DA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|other:3,0,3,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|full:4,0,4,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;FC:13;FA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|rebuilt:5,0,5,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;FC:13;FA:1;RA:1;RC:13;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]"
+            },
+            {
+              "repeat": 1,
+              "return_value": "entry:1,0,1,0:EA:0;EC:9;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|normal:2,0,2,0:EA:0;EC:9;NC:9;NA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|dirty:3,0,2,0:EA:0;EC:9;NC:9;NA:0;DA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|switch:3,0,2,0:EA:0;EC:9;NC:9;NA:0;DA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|other:3,0,3,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|full:4,0,4,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;FC:13;FA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|rebuilt:5,0,5,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;FC:13;FA:1;RC:13;RA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]"
+            },
+            {
+              "repeat": 2,
+              "return_value": "entry:1,0,1,0:EA:0;EC:9;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|normal:2,0,2,0:EA:0;EC:9;NC:9;NA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|dirty:3,0,2,0:EA:0;EC:9;NC:9;NA:0;DA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|switch:3,0,2,0:EA:0;EC:9;NC:9;NA:0;DA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|other:3,0,3,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|full:4,0,4,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;FC:13;FA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|rebuilt:5,0,5,0:EA:0;EC:9;NC:9;NA:0;DA:1;OC:13;FC:13;FA:1;RA:1;RC:13;[5:1,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]"
+            }
+          ]
+        },
+        {
+          "id": 3509,
+          "steps": [
+            {
+              "procedure": "TextCase",
+              "arguments": [
+                9,
+                1,
+                2
+              ],
+              "expected_returns": [
+                "entry:1,0,1,0:EA:1;EC:9;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|normal:2,0,2,0:EA:1;EC:9;NA:1;NC:9;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|dirty:3,0,2,0:EA:1;EC:9;NA:1;NC:9;DA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|switch:3,0,2,0:EA:1;EC:9;NA:1;NC:9;DA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|other:3,0,3,0:EA:1;EC:9;NA:1;NC:9;DA:0;OC:13;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|full:4,0,4,0:EA:1;EC:9;NA:1;NC:9;DA:0;OC:13;FA:0;FC:13;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|rebuilt:5,0,5,0:EA:1;EC:9;NA:1;NC:9;DA:0;OC:13;FA:0;FC:13;RC:13;RA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]",
+                "entry:1,0,1,0:EA:1;EC:9;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|normal:2,0,2,0:EA:1;EC:9;NC:9;NA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|dirty:3,0,2,0:EA:1;EC:9;NC:9;NA:1;DA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|switch:3,0,2,0:EA:1;EC:9;NC:9;NA:1;DA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|other:3,0,3,0:EA:1;EC:9;NC:9;NA:1;DA:0;OC:13;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|full:4,0,4,0:EA:1;EC:9;NC:9;NA:1;DA:0;OC:13;FC:13;FA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|rebuilt:5,0,5,0:EA:1;EC:9;NC:9;NA:1;DA:0;OC:13;FC:13;FA:0;RC:13;RA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]"
+              ]
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "entry:1,0,1,0:EA:1;EC:9;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|normal:2,0,2,0:EA:1;EC:9;NC:9;NA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|dirty:3,0,2,0:EA:1;EC:9;NC:9;NA:1;DA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|switch:3,0,2,0:EA:1;EC:9;NC:9;NA:1;DA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|other:3,0,3,0:EA:1;EC:9;NC:9;NA:1;DA:0;OC:13;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|full:4,0,4,0:EA:1;EC:9;NC:9;NA:1;DA:0;OC:13;FC:13;FA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|rebuilt:5,0,5,0:EA:1;EC:9;NC:9;NA:1;DA:0;OC:13;FC:13;FA:0;RC:13;RA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]"
+            },
+            {
+              "repeat": 1,
+              "return_value": "entry:1,0,1,0:EA:1;EC:9;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|normal:2,0,2,0:EA:1;EC:9;NA:1;NC:9;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|dirty:3,0,2,0:EA:1;EC:9;NA:1;NC:9;DA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|switch:3,0,2,0:EA:1;EC:9;NA:1;NC:9;DA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|other:3,0,3,0:EA:1;EC:9;NA:1;NC:9;DA:0;OC:13;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|full:4,0,4,0:EA:1;EC:9;NA:1;NC:9;DA:0;OC:13;FA:0;FC:13;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|rebuilt:5,0,5,0:EA:1;EC:9;NA:1;NC:9;DA:0;OC:13;FA:0;FC:13;RC:13;RA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]"
+            },
+            {
+              "repeat": 2,
+              "return_value": "entry:1,0,1,0:EA:1;EC:9;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|normal:2,0,2,0:EA:1;EC:9;NC:9;NA:1;[5:1,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|dirty:3,0,2,0:EA:1;EC:9;NC:9;NA:1;DA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|switch:3,0,2,0:EA:1;EC:9;NC:9;NA:1;DA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:9,10:\u30a8\u30e9\u30fc 2042]|other:3,0,3,0:EA:1;EC:9;NC:9;NA:1;DA:0;OC:13;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|full:4,0,4,0:EA:1;EC:9;NC:9;NA:1;DA:0;OC:13;FC:13;FA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]|rebuilt:5,0,5,0:EA:1;EC:9;NC:9;NA:1;DA:0;OC:13;FC:13;FA:0;RC:13;RA:0;[5:0,10:\u30a8\u30e9\u30fc 2015,5:13,10:\u30a8\u30e9\u30fc 2042]"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

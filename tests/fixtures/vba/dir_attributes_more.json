@@ -1,0 +1,6690 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "source": "dir_attributes_more.bas",
+  "source_sha256": "e2d2f79661a833635c4ab02f014fb9ce1e4ccccfa1779cf8d10d99826df466be",
+  "package": "dir_attributes_more.xlsm",
+  "package_sha256": "d635c7b7f1cf20fc0b3d78cb88d3ebcb2beabda721c275aa6e0cc808623718a4",
+  "initial_directory_state": {
+    "currentDrive": "C",
+    "directories": [
+      "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+      "D:\\"
+    ]
+  },
+  "volumes": [
+    {
+      "root": "C:\\",
+      "label": ""
+    },
+    {
+      "root": "D:\\",
+      "label": "OXI-EXT"
+    }
+  ],
+  "native_evidence": {
+    "identity": 2026102076,
+    "raw_report_sha256": "ab6f4c44adfe4129127d6df9aa43a3705352f29e0895814fa37d1b9f85f46641",
+    "cases_sha256": "ff7263dfe5c85699eab5a5f47c02d82c0e4e837d1da375fd5d567cc03b2e1e9c",
+    "owned_exit_code": 0,
+    "controller_exit_code": 0,
+    "volume_facts_source": "Independent read-only Win32 GetVolumeInformation; not inferred from expected VBA output"
+  },
+  "cases": [
+    {
+      "kind": 116,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        116,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs"
+      ],
+      "expected": "5|VBAProject|プロシージャの呼び出し、または引数が不正です。|result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-116\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 117,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        117,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs"
+      ],
+      "expected": "5|VBAProject|プロシージャの呼び出し、または引数が不正です。|result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-117\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 118,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        118,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs"
+      ],
+      "expected": "0|||result:0:.:0;1:..:0;2:a.txt:0;3:ab.txt:0;4:empty:0;5:held.txt:0;6:name.a.b:0;7:nonempty:0;8:plain:0;9:UPPER.TXT:0;10::0;11::5;|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-118\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 119,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        119,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs"
+      ],
+      "expected": "0|||result:held.txt|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-119\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 120,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        120,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs"
+      ],
+      "expected": "0|||result:0:.:0;1:..:0;2:a.txt:0;3:ab.txt:0;4:empty:0;5:held.txt:0;6:name.a.b:0;7:nonempty:0;8:plain:0;9:UPPER.TXT:0;10::0;11::5;|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-120\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 121,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        121,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs"
+      ],
+      "expected": "13|VBAProject|型が一致しません。|result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-121\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 122,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        122,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs"
+      ],
+      "expected": "13|VBAProject|型が一致しません。|result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-122\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 123,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        123,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs"
+      ],
+      "expected": "13|VBAProject|型が一致しません。|result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-123\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 124,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        124,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs"
+      ],
+      "expected": "13|VBAProject|型が一致しません。|result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-124\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 125,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        125,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs"
+      ],
+      "expected": "94|VBAProject|Null の使い方が不正です。|result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-125\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 126,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        126,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs"
+      ],
+      "expected": "5|VBAProject|プロシージャの呼び出し、または引数が不正です。|result:|trace:PA|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-126\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 127,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        127,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs"
+      ],
+      "expected": "13|VBAProject|型が一致しません。|result:|trace:PA|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-127\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 128,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        128,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs"
+      ],
+      "expected": "0|||result:0:plain:0;1::0;2::5;3::5;4::5;5::5;6::5;7::5;8::5;9::5;10::5;11::5;|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-128\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 129,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        129,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs"
+      ],
+      "expected": "0|||result:0::0;1::5;2::5;3::5;4::5;5::5;6::5;7::5;8::5;9::5;10::5;11::5;|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-129\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 130,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        130,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs"
+      ],
+      "expected": "0|||result:0:a.txt:0;1:ab.txt:0;2::0;3::5;4::5;5::5;6::5;7::5;8::5;9::5;10::5;11::5;|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-130\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 131,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        131,
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs"
+      ],
+      "expected": "0|||result:0:plain:0;1::0;2::5;3::5;4::5;5::5;6::5;7::5;8::5;9::5;10::5;11::5;|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_dir_attributes_more_native_20261020\\case-131\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    }
+  ]
+}

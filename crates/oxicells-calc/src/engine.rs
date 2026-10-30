@@ -136,19 +136,272 @@ pub enum UserArg {
 /// last two counted from zero.
 pub type UserCaller = Option<(String, u32, u32)>;
 
+pub type FormulaCell = (String, (u32, u32));
+
+#[derive(Debug, Clone, Copy)]
+pub struct UserFunctionCallContext { pub occurrence: u64, pub provisional: bool, pub provisional_indirect_text_value: bool, pub dynamic_reference_argument_mask: u64 }
+
+/// Published array extents at the start of a host calculation operation.
+pub type SpillProbeLayout = Vec<(FormulaCell, (u32, u32))>;
+
 type UserFunctionHook = Box<dyn FnMut(&str, Vec<UserArg>, UserCaller) -> Option<Arg>>;
+type UserFunctionReferenceRetryHook = Box<dyn FnMut(&str, &[UserArg], &UserCaller, UserFunctionCallContext, bool, bool) -> bool>;
+
+/// Cell values at the instant a callback was requested. Later calculation
+/// steps can publish other values before the host dispatches the callback.
+#[derive(Debug, Clone)]
+pub struct UserFunctionReadView {
+    epoch: u64,
+    history: std::rc::Rc<std::cell::RefCell<UserReadHistory>>,
+}
+
+#[derive(Debug, Default)]
+struct UserReadHistory {
+    epoch: u64,
+    cells: BTreeMap<FormulaCell, (Value, Vec<(u64, Value)>)>,
+}
+
+impl UserReadHistory {
+    fn change(&mut self, sheet: &str, coord: (u32, u32), before: &Value, after: &Value) {
+        let unchanged = match (before, after) {
+            (Value::Number(before), Value::Number(after)) => before.to_bits() == after.to_bits(),
+            _ => before == after,
+        };
+        if unchanged { return; }
+        self.epoch += 1;
+        let entry = self.cells.entry((sheet.to_string(), coord)).or_insert_with(|| (before.clone(), Vec::new()));
+        entry.1.push((self.epoch, after.clone()));
+    }
+}
+
+impl UserFunctionReadView {
+    pub fn value(&self, sheet: &str, col: u32, row: u32) -> Option<Value> {
+        let history = self.history.borrow();
+        let (original, changes) = history.cells.get(&(sheet.to_string(), (col, row)))?;
+        let at = changes.partition_point(|(epoch, _)| *epoch <= self.epoch);
+        Some(if at == 0 { original.clone() } else { changes[at - 1].1.clone() })
+    }
+}
 
 thread_local! {
+    static USER_REFERENCE_ARGUMENTS: std::cell::RefCell<BTreeMap<String, BTreeSet<usize>>> = const { std::cell::RefCell::new(BTreeMap::new()) };
+    static USER_VARIANT_ARGUMENTS: std::cell::RefCell<BTreeMap<String, BTreeSet<usize>>> = const { std::cell::RefCell::new(BTreeMap::new()) };
+    static USER_VALUE_READ_ARGUMENTS: std::cell::RefCell<BTreeMap<String, BTreeSet<usize>>> = const { std::cell::RefCell::new(BTreeMap::new()) };
+    static USER_ADDRESS_ONLY_ARGUMENTS: std::cell::RefCell<BTreeMap<String, BTreeSet<usize>>> = const { std::cell::RefCell::new(BTreeMap::new()) };
+    static USER_FUNCTION_ARGUMENT_CONTEXT: std::cell::RefCell<Option<(String, usize)>> = const { std::cell::RefCell::new(None) };
+    static USER_FORMULA_READS: std::cell::RefCell<BTreeSet<FormulaCell>> = const { std::cell::RefCell::new(BTreeSet::new()) };
+    static USER_FUNCTION_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static USER_FUNCTION_WAIT_FOR_DEPENDENCIES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static USER_FUNCTION_SPILL_PROBE_LAYOUT: std::cell::RefCell<Option<SpillProbeLayout>> = const { std::cell::RefCell::new(None) };
+    static USER_FUNCTION_WAIT_FOR_DYNAMIC_LOOKUPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static USER_FUNCTION_PROVISIONAL_DYNAMIC_TEXT_VALUE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static USER_FUNCTION_PROVISIONAL_ZERO_TEXT_PROBE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static USER_FUNCTION_PRIORITIZE_DYNAMIC_INDIRECT_CONSUMERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static USER_FUNCTION_PROVISIONAL_TEXT_PROBE_TARGET: std::cell::RefCell<Option<FormulaCell>> = const { std::cell::RefCell::new(None) };
+    static USER_FUNCTION_FULL_REBUILD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static USER_FUNCTION_FULL_CALCULATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static USER_FUNCTION_DISTINCT_PROVISIONAL_CALLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static USER_FUNCTION_AT_ROOT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static USER_FUNCTION_OCCURRENCE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static USER_FUNCTION_CONTEXT: std::cell::Cell<UserFunctionCallContext> = const { std::cell::Cell::new(UserFunctionCallContext { occurrence: 0, provisional: false, provisional_indirect_text_value: false, dynamic_reference_argument_mask: 0 }) };
+    static USER_PROVISIONAL_INDIRECT_TEXT_VALUE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static USER_FUNCTIONS: std::cell::RefCell<Option<UserFunctionHook>> = const { std::cell::RefCell::new(None) };
+    static USER_FUNCTION_REFERENCE_RETRY: std::cell::RefCell<Option<UserFunctionReferenceRetryHook>> = const { std::cell::RefCell::new(None) };
+    static USER_FUNCTION_READ_VIEW: std::cell::RefCell<Option<UserFunctionReadView>> = const { std::cell::RefCell::new(None) };
+    static USER_FUNCTION_WRITTEN_DEPENDENCIES: std::cell::RefCell<Vec<(String, RangeRef)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether a direct scalar answer may satisfy this formula replay.
+/// Geometry probes remain distinct calls even when their values agree.
+pub fn user_function_scalar_replay_allowed() -> bool { USER_FUNCTION_AT_ROOT.with(std::cell::Cell::get) }
+
+pub fn user_function_call_context() -> UserFunctionCallContext { USER_FUNCTION_CONTEXT.with(std::cell::Cell::get) }
+
+pub fn user_function_read_view() -> Option<UserFunctionReadView> {
+    USER_FUNCTION_READ_VIEW.with(|held| held.borrow().clone())
+}
+
+/// Formula references written into the call, before dynamic reference functions
+/// select additional ranges. Names and tables retain their written provenance.
+pub fn user_function_written_dependencies() -> Vec<(String, RangeRef)> {
+    USER_FUNCTION_WRITTEN_DEPENDENCIES.with(|held| held.borrow().clone())
 }
 
 /// Let formulas call the workbook's own functions while `hook` is set: it
 /// answers `None` for a name that is not one of them.
 pub fn set_user_function_hook(hook: Option<UserFunctionHook>) {
+    USER_FUNCTION_REFERENCE_RETRY.with(|held| *held.borrow_mut() = None);
+    USER_FUNCTION_PENDING.with(|pending| pending.set(false));
+    USER_FUNCTION_OCCURRENCE.with(|occurrence| occurrence.set(0));
+    if hook.is_none() {
+        USER_FUNCTION_SPILL_PROBE_LAYOUT.with(|held| held.replace(None));
+        USER_FORMULA_READS.with(|held| held.borrow_mut().clear());
+        USER_REFERENCE_ARGUMENTS.with(|held| held.borrow_mut().clear());
+        USER_VARIANT_ARGUMENTS.with(|held| held.borrow_mut().clear());
+        USER_VALUE_READ_ARGUMENTS.with(|held| held.borrow_mut().clear());
+        USER_ADDRESS_ONLY_ARGUMENTS.with(|held| held.borrow_mut().clear());
+        USER_FUNCTION_ARGUMENT_CONTEXT.with(|held| held.replace(None));
+    }
     USER_FUNCTIONS.with(|held| *held.borrow_mut() = hook);
 }
 
-fn ask_user_function(name: &str, args: Vec<UserArg>, caller: UserCaller) -> Option<Arg> {
+/// Observe a nested callback reference used as a provisional value. The final argument
+/// says whether its selected cells are ready. Return true to discard a cached
+/// provisional reference and request the callback again after publication.
+/// Replacing the main function hook clears this observer.
+pub fn set_user_function_reference_retry_hook(hook: Option<UserFunctionReferenceRetryHook>) {
+    USER_FUNCTION_REFERENCE_RETRY.with(|held| *held.borrow_mut() = hook);
+}
+
+/// Scope provisional spill reads to ownership known before callback replay.
+/// Return the previous layout so nested host operations can restore it.
+pub fn replace_user_function_spill_probe_layout(layout: Option<SpillProbeLayout>) -> Option<SpillProbeLayout> {
+    USER_FUNCTION_SPILL_PROBE_LAYOUT.with(|held| held.replace(layout))
+}
+
+/// Install the current project's object parameter declarations for sheet calls.
+pub fn set_user_function_reference_arguments(functions: &[(String, Vec<usize>)]) {
+    USER_REFERENCE_ARGUMENTS.with(|held| {
+        *held.borrow_mut() = functions.iter().map(|(name, indexes)|
+            (name.to_ascii_uppercase(), indexes.iter().copied().collect())).collect();
+    });
+}
+
+pub fn set_user_function_variant_arguments(functions: &[(String, Vec<usize>)]) {
+    USER_VARIANT_ARGUMENTS.with(|held| {
+        *held.borrow_mut() = functions.iter().map(|(name, indexes)|
+            (name.to_ascii_uppercase(), indexes.iter().copied().collect())).collect();
+    });
+}
+
+pub fn set_user_function_value_read_arguments(functions: &[(String, Vec<usize>)]) {
+    USER_VALUE_READ_ARGUMENTS.with(|held| {
+        *held.borrow_mut() = functions.iter().map(|(name, indexes)|
+            (name.to_ascii_uppercase(), indexes.iter().copied().collect())).collect();
+    });
+}
+
+pub fn set_user_function_address_only_arguments(functions: &[(String, Vec<usize>)]) {
+    USER_ADDRESS_ONLY_ARGUMENTS.with(|held| {
+        *held.borrow_mut() = functions.iter().map(|(name, indexes)|
+            (name.to_ascii_uppercase(), indexes.iter().copied().collect())).collect();
+    });
+}
+
+fn user_function_current_argument_is_address_only() -> bool {
+    USER_FUNCTION_ARGUMENT_CONTEXT.with(|context| {
+        let Some((name, index)) = context.borrow().clone() else { return false; };
+        USER_ADDRESS_ONLY_ARGUMENTS.with(|arguments| arguments.borrow().get(&name)
+            .is_some_and(|indexes| indexes.contains(&index)))
+    })
+}
+
+fn user_reference_argument(name: &str, index: usize) -> bool {
+    USER_REFERENCE_ARGUMENTS.with(|held| held.borrow().get(name)
+        .is_some_and(|indexes| indexes.contains(&index)))
+}
+
+fn user_value_read_argument(name: &str, index: usize) -> bool {
+    USER_VALUE_READ_ARGUMENTS.with(|held| held.borrow().get(name)
+        .is_some_and(|indexes| indexes.contains(&index)))
+}
+
+fn user_function_address_only_argument(name: &str, index: usize) -> bool {
+    USER_ADDRESS_ONLY_ARGUMENTS.with(|held| held.borrow().get(name)
+        .is_some_and(|indexes| indexes.contains(&index)))
+}
+
+fn user_variant_argument(name: &str, index: usize) -> bool {
+    USER_VARIANT_ARGUMENTS.with(|held| held.borrow().get(name)
+        .is_some_and(|indexes| indexes.contains(&index)))
+}
+
+/// The ranges actually read by earlier callbacks, used only to retry a provisional view.
+/// These reads do not add workbook dirty dependencies.
+pub fn record_user_function_reads(reads: impl IntoIterator<Item=FormulaCell>) {
+    USER_FORMULA_READS.with(|held| held.borrow_mut().extend(reads));
+}
+
+fn clear_user_function_reads() {
+    USER_FORMULA_READS.with(|held| held.borrow_mut().clear());
+}
+
+/// The host queued a callback; suspend the rest of this evaluation pass.
+pub fn defer_user_function() { USER_FUNCTION_PENDING.with(|pending| pending.set(true)); }
+pub fn clear_user_function_pending() { USER_FUNCTION_PENDING.with(|pending| pending.set(false)); }
+pub fn set_user_function_wait_for_dependencies(wait: bool) { USER_FUNCTION_WAIT_FOR_DEPENDENCIES.with(|held| held.set(wait)); }
+pub fn user_function_wait_for_dependencies() -> bool { USER_FUNCTION_WAIT_FOR_DEPENDENCIES.with(std::cell::Cell::get) }
+pub fn set_user_function_wait_for_dynamic_lookups(wait: bool) { USER_FUNCTION_WAIT_FOR_DYNAMIC_LOOKUPS.with(|held| held.set(wait)); }
+pub fn user_function_wait_for_dynamic_lookups() -> bool { USER_FUNCTION_WAIT_FOR_DYNAMIC_LOOKUPS.with(std::cell::Cell::get) }
+pub fn set_user_function_provisional_dynamic_text_value(allow: bool) { USER_FUNCTION_PROVISIONAL_DYNAMIC_TEXT_VALUE.with(|held| held.set(allow)); }
+pub fn user_function_provisional_dynamic_text_value() -> bool { USER_FUNCTION_PROVISIONAL_DYNAMIC_TEXT_VALUE.with(std::cell::Cell::get) }
+pub fn set_user_function_provisional_zero_text_probe(allow: bool) { USER_FUNCTION_PROVISIONAL_ZERO_TEXT_PROBE.with(|held| held.set(allow)); }
+pub fn user_function_provisional_zero_text_probe() -> bool { USER_FUNCTION_PROVISIONAL_ZERO_TEXT_PROBE.with(std::cell::Cell::get) }
+pub fn set_user_function_prioritize_dynamic_indirect_consumers(prioritize: bool) { USER_FUNCTION_PRIORITIZE_DYNAMIC_INDIRECT_CONSUMERS.with(|held| held.set(prioritize)); }
+pub fn user_function_prioritize_dynamic_indirect_consumers() -> bool { USER_FUNCTION_PRIORITIZE_DYNAMIC_INDIRECT_CONSUMERS.with(std::cell::Cell::get) }
+pub fn set_user_function_provisional_text_probe_target(target: Option<FormulaCell>) { USER_FUNCTION_PROVISIONAL_TEXT_PROBE_TARGET.with(|held| *held.borrow_mut() = target); }
+pub fn user_function_provisional_text_probe_target() -> Option<FormulaCell> { USER_FUNCTION_PROVISIONAL_TEXT_PROBE_TARGET.with(|held| held.borrow().clone()) }
+pub fn set_user_function_full_rebuild(rebuild: bool) { USER_FUNCTION_FULL_REBUILD.with(|held| held.set(rebuild)); }
+pub fn user_function_full_rebuild() -> bool { USER_FUNCTION_FULL_REBUILD.with(std::cell::Cell::get) }
+pub fn set_user_function_full_calculation(full: bool) { USER_FUNCTION_FULL_CALCULATION.with(|held| held.set(full)); }
+pub fn user_function_full_calculation() -> bool { USER_FUNCTION_FULL_CALCULATION.with(std::cell::Cell::get) }
+pub fn set_user_function_distinct_provisional_calls(distinct: bool) { USER_FUNCTION_DISTINCT_PROVISIONAL_CALLS.with(|held| held.set(distinct)); }
+pub fn user_function_distinct_provisional_calls() -> bool { USER_FUNCTION_DISTINCT_PROVISIONAL_CALLS.with(std::cell::Cell::get) }
+fn user_function_pending() -> bool { USER_FUNCTION_PENDING.with(|pending| pending.get()) }
+
+fn reset_user_function_occurrence() {
+    USER_FUNCTION_OCCURRENCE.with(|occurrence| occurrence.set(0));
+    USER_PROVISIONAL_INDIRECT_TEXT_VALUE.with(|held| held.set(false));
+}
+
+fn next_user_function_context(provisional: bool) -> UserFunctionCallContext {
+    let occurrence = USER_FUNCTION_OCCURRENCE.with(|held| {
+        let occurrence = held.get();
+        held.set(occurrence.saturating_add(1));
+        occurrence
+    });
+    UserFunctionCallContext {
+        occurrence,
+        provisional: provisional && USER_FUNCTION_DISTINCT_PROVISIONAL_CALLS.with(std::cell::Cell::get),
+        provisional_indirect_text_value: USER_PROVISIONAL_INDIRECT_TEXT_VALUE.with(|held| held.replace(false)),
+        dynamic_reference_argument_mask: 0,
+    }
+}
+
+fn omit_xlookup_return_arrays(expr: &Expr) -> Expr {
+    match expr {
+        Expr::Unary { op, operand } => Expr::Unary { op: *op, operand: Box::new(omit_xlookup_return_arrays(operand)) },
+        Expr::Binary { op, lhs, rhs } => Expr::Binary {
+            op: *op,
+            lhs: Box::new(omit_xlookup_return_arrays(lhs)),
+            rhs: Box::new(omit_xlookup_return_arrays(rhs)),
+        },
+        Expr::Function { name, args } => Expr::Function {
+            name: name.clone(),
+            args: args.iter().enumerate().map(|(index, arg)| {
+                if name == "XLOOKUP" && index == 2 { Expr::Literal(Value::Blank) }
+                else { omit_xlookup_return_arrays(arg) }
+            }).collect(),
+        },
+        _ => expr.clone(),
+    }
+}
+
+fn ask_user_function(name: &str, args: Vec<UserArg>, caller: UserCaller, context: UserFunctionCallContext, view: Option<UserFunctionReadView>, root: bool, written: Vec<(String, RangeRef)>) -> Option<Arg> {
+    struct Restore(Option<UserFunctionReadView>, bool, Vec<(String, RangeRef)>, UserFunctionCallContext);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            USER_FUNCTION_READ_VIEW.with(|held| *held.borrow_mut() = self.0.take());
+            USER_FUNCTION_AT_ROOT.with(|held| held.set(self.1));
+            USER_FUNCTION_WRITTEN_DEPENDENCIES.with(|held| *held.borrow_mut() = std::mem::take(&mut self.2));
+            USER_FUNCTION_CONTEXT.with(|held| held.set(self.3));
+        }
+    }
+    let previous = USER_FUNCTION_READ_VIEW.with(|held| held.replace(view));
+    let previous_root = USER_FUNCTION_AT_ROOT.with(|held| held.replace(root));
+    let previous_written = USER_FUNCTION_WRITTEN_DEPENDENCIES.with(|held| held.replace(written));
+    let previous_context = USER_FUNCTION_CONTEXT.with(|held| held.replace(context));
+    let _restore = Restore(previous, previous_root, previous_written, previous_context);
     USER_FUNCTIONS.with(|held| match held.try_borrow_mut() {
         Ok(mut hook) => hook.as_mut().and_then(|hook| hook(name, args, caller)),
         Err(_) => None,
@@ -167,6 +420,7 @@ enum Skip {
 }
 use crate::lexer::ParseError;
 use crate::parser::parse;
+mod recalculation;
 use crate::reference::{parse_a1, CellRef, RangeRef, MAX_COL, MAX_ROW};
 use crate::value::{compare, ExcelError, Value};
 
@@ -203,6 +457,7 @@ enum Cell {
     Literal(Value),
     Formula {
         source: String,
+        source_utf16: Option<Vec<u16>>,
         expr: Expr,
         cached: Value,
         /// Where this cell sits in the block its ARRAY formula is dealt
@@ -210,6 +465,18 @@ enum Cell {
         /// formula of its own.
         share: Option<(u32, u32)>,
     },
+}
+
+fn formula_source_value(source: &str, source_utf16: Option<&[u16]>) -> Value {
+    if let Some(units) = source_utf16 {
+        let body = units.strip_prefix(&[b'=' as u16]).unwrap_or(units);
+        let mut formula = Vec::with_capacity(body.len() + 1);
+        formula.push(b'=' as u16);
+        formula.extend_from_slice(body);
+        Value::from_utf16(formula)
+    } else {
+        Value::Text(format!("={}", source.strip_prefix('=').unwrap_or(source)))
+    }
 }
 
 impl Cell {
@@ -234,6 +501,7 @@ struct Sheet {
     dynamic: BTreeSet<(u32, u32)>,
     /// Each spilling formula's block, as (width, height), by its cell.
     spills: BTreeMap<(u32, u32), (u32, u32)>,
+    blocked_spills: BTreeMap<(u32, u32), (u32, u32)>,
     /// The values spilled into the cells beside them, with the formula that
     /// spilled each -- None for one remembered from before and not yet
     /// worked out again.
@@ -243,6 +511,9 @@ struct Sheet {
     dress: BTreeMap<(u32, u32), (Option<String>, Option<String>)>,
     /// The file's column widths, zero-based, and the width of any other.
     widths: (Vec<f32>, f32),
+    custom_widths: BTreeMap<u32, bool>,
+    default_width_explicit: bool,
+    hidden_columns: BTreeSet<u32>,
 }
 
 thread_local! {
@@ -261,6 +532,16 @@ pub fn set_digit_width(pixels: f64) {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RecalcReport {
     pub evaluated: usize,
+    /// Formula cells visited by the pass, including cells retaining a cyclic cache.
+    pub calculated: Vec<(String, (u32, u32))>,
+    /// First accepted visits, before consumers refreshed after a spill changed.
+    /// Normal calculation learns this traversal, rather than the refresh order.
+    pub traversal_order: Vec<FormulaCell>,
+    /// Dependencies learned by scalar value reads or waits for spill owners.
+    /// Hosts retain these local chain repairs, not the whole completion order.
+    pub dependency_order_repairs: Vec<(FormulaCell, FormulaCell)>,
+    pub blocked_spills: Vec<((String, (u32, u32)), (u32, u32))>,
+    pub deferred: bool,
     /// Cells that take part in a reference cycle, as `Sheet!A1`.
     ///
     /// With iterative calculation off, Excel leaves these at `0` and raises a
@@ -271,6 +552,29 @@ pub struct RecalcReport {
 
 #[derive(Debug, Clone, Default)]
 pub struct Workbook {
+    calculation_order: BTreeMap<(String, (u32, u32)), usize>,
+    chain_probes: bool,
+    read_history: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<UserReadHistory>>>>,
+    prepared_spills: BTreeMap<FormulaCell, Arg>,
+    /// Consumers whose arguments cross a changing spill footprint.
+    /// Their provisional and published reads require separate callbacks.
+    scalar_replay_exclusions: BTreeSet<FormulaCell>,
+    // A chain probe may hand an unready reference to a UDF, but consuming
+    // its value (or that UDF's result) suspends the rest of the expression.
+    provisional_value: std::cell::Cell<bool>,
+    value_deferred: std::cell::Cell<bool>,
+    dynamic_reference_wait: std::cell::Cell<bool>,
+    formula_values_before_pass: std::cell::RefCell<BTreeMap<FormulaCell, Value>>,
+    provisional_text_formula_values_before_pass: std::cell::RefCell<BTreeMap<FormulaCell, Value>>,
+    variant_value_read_context: std::cell::Cell<bool>,
+    /// Distinguish waiting before a callback from retrying a completed callback.
+    callback_answer_observed: std::cell::Cell<bool>,
+    reference_context: std::cell::Cell<bool>,
+    unready_cells: std::cell::RefCell<BTreeSet<FormulaCell>>,
+    /// Formula cells selected for this pass, including completed precedents.
+    pass_cells: std::cell::RefCell<BTreeSet<FormulaCell>>,
+    compatibility_version: u8,
+    dbcs_language: Option<bool>,
     sheets: BTreeMap<String, Sheet>,
     names: BTreeMap<String, Expr>,
     /// The tables, by the name a formula calls them, so that
@@ -332,6 +636,10 @@ fn cut_to_remembered(range: &RangeRef, cells: &BTreeMap<(u32, u32), Value>) -> R
 }
 
 impl Workbook {
+    pub fn set_dbcs_language(&mut self, enabled: bool) { self.dbcs_language=Some(enabled); }
+    pub fn set_compatibility_version(&mut self, version: u8) {
+        self.compatibility_version = version.max(1);
+    }
     /// Remember one cell of a linked workbook: which link, which sheet of it,
     /// and where in that sheet, counting a column and a row from zero as the
     /// rest of the engine does.
@@ -349,6 +657,9 @@ impl Workbook {
     pub fn remembers_link(&self, book: u32) -> bool {
         self.linked.keys().any(|(at, _)| *at == book)
     }
+
+    /// Enable calculation-chain attempts; formula entry keeps dependency order.
+    pub fn set_chain_probes(&mut self, enabled: bool) { self.chain_probes = enabled; }
 
     pub fn new() -> Workbook {
         Workbook::default()
@@ -373,6 +684,15 @@ impl Workbook {
     pub fn set_column_widths(&mut self, sheet: &str, widths: Vec<f32>, default: f32) {
         let held = self.sheets.entry(sheet.to_string()).or_default();
         held.widths = (widths, default);
+    }
+
+    pub fn set_custom_column_widths(&mut self, sheet: &str, custom: BTreeMap<u32, bool>) {
+        self.sheets.entry(sheet.to_string()).or_default().custom_widths = custom;
+    }
+    pub fn set_column_width_state(&mut self, sheet: &str, explicit_default: bool, hidden: BTreeSet<u32>) {
+        let held = self.sheets.entry(sheet.to_string()).or_default();
+        held.default_width_explicit = explicit_default;
+        held.hidden_columns = hidden;
     }
 
     /// Say that a row (0-based) is hidden, and whether a filter hid it.
@@ -456,13 +776,21 @@ impl Workbook {
     /// What a name stands for, read from the sheet asking: that sheet's own
     /// name of that spelling first, then the workbook's. Measured on a copied
     /// sheet: `=loc+mine` reads the copy's own `loc` and `mine`.
-    fn name_bound(&self, name: &str, sheet: &str) -> Option<&Expr> {
-        let upper = crate::case_fold::name_key(name);
-        let scope = crate::case_fold::name_key(sheet);
+    fn name_bound(&self, name: &str, sheet: &str, at: At) -> Option<Expr> {
+        self.name_definition(name, sheet).map(|(_, body)| body.for_defined_name(at.unwrap_or((0, 0))))
+    }
+
+    fn name_definition(&self, name: &str, sheet: &str) -> Option<(&String, &Expr)> {
+        let explicit = name.rsplit_once('!').map(|(owner, leaf)| {
+            (owner.strip_prefix('\'').and_then(|s| s.strip_suffix('\''))
+                .map(|s| s.replace("''", "'")).unwrap_or_else(|| owner.to_string()), leaf)
+        });
+        let upper = crate::case_fold::name_key(explicit.as_ref().map(|(_, leaf)| *leaf).unwrap_or(name));
+        let scope = crate::case_fold::name_key(explicit.as_ref().map(|(owner, _)| owner.as_str()).unwrap_or(sheet));
         self.names
-            .get(&format!("{scope}!{upper}"))
-            .or_else(|| self.names.get(&format!("'{}'!{upper}", scope.replace('\'', "''"))))
-            .or_else(|| self.names.get(&upper))
+            .get_key_value(&format!("{scope}!{upper}"))
+            .or_else(|| self.names.get_key_value(&format!("'{}'!{upper}", scope.replace('\'', "''"))))
+            .or_else(|| self.names.get_key_value(&upper))
     }
 
     pub fn define_name(&mut self, name: &str, formula: &str) -> Result<(), CalcError> {
@@ -496,11 +824,27 @@ impl Workbook {
             cell.coord(),
             Cell::Formula {
                 source: formula.to_string(),
+                source_utf16: None,
                 expr,
                 cached: Value::Blank,
                 share: None,
             },
         );
+        Ok(())
+    }
+
+    /// Place a formula whose source may contain unpaired UTF-16 units.
+    pub fn set_formula_utf16(&mut self, sheet: &str, a1: &str, formula: &[u16]) -> Result<(), CalcError> {
+        if let Ok(text) = String::from_utf16(formula) { return self.set_formula(sheet, a1, &text); }
+        let cell = self.cell_ref(a1)?;
+        let expr = crate::parser::parse_utf16(formula)?;
+        self.sheet_mut(sheet)?.cells.insert(cell.coord(), Cell::Formula {
+            source: String::from_utf16_lossy(formula),
+            source_utf16: Some(formula.to_vec()),
+            expr,
+            cached: Value::Blank,
+            share: None,
+        });
         Ok(())
     }
 
@@ -529,6 +873,23 @@ impl Workbook {
     pub fn set_spilled_value(&mut self, sheet: &str, a1: &str, value: Value) -> Result<(), CalcError> {
         let cell = self.cell_ref(a1)?;
         self.sheet_mut(sheet)?.spilled.insert(cell.coord(), (value, None));
+        Ok(())
+    }
+
+    /// Restore a cached spill's geometry and ownership without evaluating
+    /// its formula. Partial calculation can then read and preserve it.
+    pub fn set_cached_spill(&mut self, sheet: &str, a1: &str, width: u32, height: u32) -> Result<(), CalcError> {
+        let anchor = self.cell_ref(a1)?;
+        if width == 0 || height == 0 || width - 1 > MAX_COL - anchor.col || height - 1 > MAX_ROW - anchor.row {
+            return Err(CalcError::BadReference(a1.to_string()));
+        }
+        let held = self.sheet_mut(sheet)?;
+        held.spills.insert(anchor.coord(), (width, height));
+        for ((col, row), (_, owner)) in &mut held.spilled {
+            if *col >= anchor.col && *col - anchor.col < width && *row >= anchor.row && *row - anchor.row < height {
+                *owner = Some(anchor.coord());
+            }
+        }
         Ok(())
     }
 
@@ -579,11 +940,27 @@ impl Workbook {
             cell.coord(),
             Cell::Formula {
                 source: formula.to_string(),
+                source_utf16: None,
                 expr,
                 cached: Value::Blank,
                 share: Some(offset),
             },
         );
+        Ok(())
+    }
+
+    /// Place a member of an array formula with exact UTF-16 source.
+    pub fn set_array_member_utf16(&mut self, sheet: &str, a1: &str, formula: &[u16], offset: (u32, u32)) -> Result<(), CalcError> {
+        if let Ok(text) = String::from_utf16(formula) { return self.set_array_member(sheet, a1, &text, offset); }
+        let cell = self.cell_ref(a1)?;
+        let expr = crate::parser::parse_utf16(formula)?;
+        self.sheet_mut(sheet)?.cells.insert(cell.coord(), Cell::Formula {
+            source: String::from_utf16_lossy(formula),
+            source_utf16: Some(formula.to_vec()),
+            expr,
+            cached: Value::Blank,
+            share: Some(offset),
+        });
         Ok(())
     }
 
@@ -611,6 +988,15 @@ impl Workbook {
         }
     }
 
+    /// The exact UTF-16 source of a formula, including unpaired units.
+    pub fn formula_utf16(&self, sheet: &str, a1: &str) -> Option<Vec<u16>> {
+        let cell = self.cell_ref(a1).ok()?;
+        match self.sheets.get(sheet)?.cells.get(&cell.coord())? {
+            Cell::Formula { source, source_utf16, .. } => Some(source_utf16.clone().unwrap_or_else(|| source.encode_utf16().collect())),
+            Cell::Literal(_) => None,
+        }
+    }
+
     /// Evaluate a formula against the workbook without storing it anywhere.
     pub fn evaluate(&self, sheet: &str, formula: &str) -> Result<Value, CalcError> {
         let expr = parse(formula)?;
@@ -623,29 +1009,28 @@ impl Workbook {
     /// The last of the four says whether the answer came as a block -- an
     /// array, however small -- rather than as one value.
     pub fn evaluate_block(&self, sheet: &str, formula: &str) -> Result<(usize, usize, Vec<Value>, bool), CalcError> {
-        let expr = parse(formula)?;
-        // TRANSPOSE of one cell is that cell's value, where TRANSPOSE({1})
-        // is still an array: measured, TypeName Double against Variant().
-        let one_cell = matches!(&expr, Expr::Function { name, args }
-            if name == "TRANSPOSE" && matches!(args.as_slice(), [Expr::Ref(reference)] if reference.range.start == reference.range.end));
-        Ok(match self.eval_arg(&expr, sheet, 0, None) {
-            Arg::Range(block) => (block.width, block.height, block.cells.into_iter().map(formula_result).collect(), !one_cell),
-            // One value is still an array when an array went into it:
-            // measured, Evaluate of `{5}*2`, `A1*{2}`, `IF(A1=1,{7},0)`,
-            // `ROW()` and `ROW(A1)+0` are all Variant().
-            Arg::Value(value) => (1, 1, vec![formula_result(value)], arrayish(&expr)),
+        Ok(match self.evaluate_argument(sheet, formula)? {
+            Arg::Range(block) => { let array = block.is_array(); (block.width, block.height, block.cells, array) },
+            Arg::Value(value) => (1, 1, vec![value], false),
         })
+    }
+
+    pub fn evaluate_argument(&self, sheet: &str, formula: &str) -> Result<Arg, CalcError> {
+        let expr = parse(formula)?;
+        let mut answer = self.eval_arg(&expr, sheet, 0, None);
+        match &mut answer {
+            Arg::Range(block) => for value in &mut block.cells { *value = formula_result(value.clone()); },
+            Arg::Value(value) => *value = formula_result(value.clone()),
+        }
+        Ok(answer)
     }
 
     /// The cells a formula names when what it works out to is a reference
     /// -- `INDEX(A1:A6,2)`, `OFFSET(A1,1,0)`, `INDIRECT("B2")` -- as the
     /// sheet and range; None for anything else.
     pub fn evaluate_reference(&self, sheet: &str, formula: &str) -> Option<(String, RangeRef)> {
-        let expr = parse(formula).ok()?;
-        match &expr {
-            Expr::Function { name, .. } if matches!(name.as_str(), "INDEX" | "OFFSET" | "INDIRECT" | "TRIMRANGE" | "XLOOKUP") => {
-                self.reference_of(&expr, sheet, 0, None)
-            }
+        match self.evaluate_argument(sheet, formula).ok()? {
+            Arg::Range(block) => block.cell_reference(),
             _ => None,
         }
     }
@@ -678,23 +1063,9 @@ impl Workbook {
         for sheet in self.sheets.values_mut() {
             sheet.spilled.retain(|_, (_, owner)| owner.is_some());
         }
-        let mut report = self.work_out(Extent::Everything);
-        // A formula reading a cell a spill fills is waiting on the spilling
-        // formula, which the order can only know once the spill is known --
-        // so go round again while the spills are still changing.
-        let mut layout = self.spill_blocks();
-        for _ in 0..3 {
-            if layout.is_empty() {
-                break;
-            }
-            report = self.work_out(Extent::Everything);
-            let now = self.spill_blocks();
-            if now == layout {
-                break;
-            }
-            layout = now;
-        }
-        report
+        let layout = self.spill_blocks();
+        let report = self.work_out(Extent::Everything);
+        self.settle_changed_spills(layout, report, None)
     }
 
     /// Recalculate only the formulas a change to these cells can reach.
@@ -708,7 +1079,90 @@ impl Workbook {
     /// graph is still built, since a cell that has just been given a formula
     /// may read anything. What is skipped is the working out.
     pub fn recalculate_after(&mut self, changed: &[(String, (u32, u32))]) -> RecalcReport {
-        self.work_out(Extent::ReachedBy(changed))
+        let layout = self.spill_blocks();
+        let report = self.work_out(Extent::ReachedBy(changed));
+        self.settle_changed_spills(layout, report, None)
+    }
+
+    /// Normal dirty calculation also follows cells gained or lost by spills.
+    /// An explicit range calculation instead keeps its requested boundary.
+    pub fn recalculate_dirty(&mut self, wanted: &[(String, (u32, u32))], sheet_scope: Option<&str>) -> RecalcReport {
+        self.recalculate_dirty_with_dynamic_reference_wait(wanted, sheet_scope, false)
+    }
+
+    pub fn recalculate_dirty_with_dynamic_reference_wait(&mut self, wanted: &[(String, (u32, u32))], sheet_scope: Option<&str>, wait: bool) -> RecalcReport {
+        let layout = self.spill_blocks();
+        let previous = self.dynamic_reference_wait.replace(wait);
+        let report = self.work_out(Extent::JustThese(wanted));
+        self.dynamic_reference_wait.set(previous);
+        self.settle_changed_spills(layout, report, sheet_scope)
+    }
+
+    fn settle_changed_spills(&mut self, mut layout: Vec<(String, (u32, u32), (u32, u32))>, mut report: RecalcReport, sheet_scope: Option<&str>) -> RecalcReport {
+        for _ in 0..3 {
+            let now = self.spill_blocks();
+            if now == layout { break; }
+            let before: BTreeMap<_, _> = layout.iter().map(|(sheet, at, size)| ((sheet.clone(), *at), *size)).collect();
+            let after: BTreeMap<_, _> = now.iter().map(|(sheet, at, size)| ((sheet.clone(), *at), *size)).collect();
+            let anchors: BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
+            let positions: BTreeMap<_, _> = report.calculated.iter().enumerate().map(|(index, cell)| (cell.clone(), index)).collect();
+            let mut stale = BTreeSet::new();
+            for anchor in anchors {
+                let old = before.get(&anchor).copied().unwrap_or((1, 1));
+                let new = after.get(&anchor).copied().unwrap_or((1, 1));
+                if old == new { continue; }
+                // Only cells gained or lost by this owner changed geometry.
+                // Their intersection, including the anchor, is unchanged.
+                let mut strips = Vec::new();
+                for (outer, inner) in [(old, new), (new, old)] {
+                    if outer.0 > inner.0 { strips.push((anchor.1.0 + inner.0, anchor.1.1, anchor.1.0 + outer.0 - 1, anchor.1.1 + outer.1 - 1)); }
+                    if outer.1 > inner.1 { strips.push((anchor.1.0, anchor.1.1 + inner.1, anchor.1.0 + outer.0.min(inner.0) - 1, anchor.1.1 + outer.1 - 1)); }
+                }
+                for cell in self.formula_keys() {
+                    if sheet_scope.is_some_and(|name| cell.0 != name) { continue; }
+                    // A consumer already accepted after this producer saw
+                    // the new values. Repeating it would repeat VBA effects.
+                    if positions.get(&cell).zip(positions.get(&anchor)).is_some_and(|(consumer, producer)| consumer > producer) { continue; }
+                    let Some(expr) = self.expr_at(&cell.0, &cell.1) else { continue; };
+                    let reads = self.dependency_expression(&expr, &cell.0, Some(cell.1)).invalidation_references();
+                    if reads.iter().any(|reference| reference.sheet.as_deref().unwrap_or(&cell.0) == anchor.0
+                        && strips.iter().any(|(left, top, right, bottom)| reference.range.start.col <= *right && reference.range.end.col >= *left && reference.range.start.row <= *bottom && reference.range.end.row >= *top)) {
+                        stale.insert(cell);
+                    }
+                }
+            }
+            layout = now;
+            if stale.is_empty() { break; }
+            let stale: Vec<_> = stale.into_iter().collect();
+            let changed: Vec<_> = stale.iter().map(|(sheet, (col, row))|
+                (sheet.clone(), RangeRef::single(CellRef::new(*col, *row)))).collect();
+            let mut reached = self.dependent_formula_ranges(&changed);
+            if let Some(name) = sheet_scope { reached.retain(|(sheet, _)| sheet == name); }
+            if report.deferred {
+                // Retain newly required work across the host's callback
+                // suspension. No values are consumed from unfinished calls.
+                for cell in reached {
+                    if !report.calculated.contains(&cell) { report.calculated.push(cell); report.evaluated += 1; }
+                }
+                break;
+            }
+            let next = self.work_out(Extent::JustThese(&reached));
+            let visited: BTreeSet<_> = next.calculated.iter().cloned().collect();
+            report.calculated.retain(|cell| !visited.contains(cell));
+            report.calculated.extend(next.calculated);
+            let mut seen: BTreeSet<_> = report.traversal_order.iter().cloned().collect();
+            for cell in next.traversal_order {
+                if seen.insert(cell.clone()) { report.traversal_order.push(cell); }
+            }
+            for repair in next.dependency_order_repairs {
+                if !report.dependency_order_repairs.contains(&repair) { report.dependency_order_repairs.push(repair); }
+            }
+            report.evaluated += next.evaluated;
+            report.blocked_spills = next.blocked_spills;
+            report.deferred = next.deferred;
+            for circular in next.circular { if !report.circular.contains(&circular) { report.circular.push(circular); } }
+        }
+        report
     }
 
     /// Work out these formulas and no others, in the order a whole pass would
@@ -723,6 +1177,9 @@ impl Workbook {
 
     /// The whole of it, or some part.
     fn work_out(&mut self, extent: Extent<'_>) -> RecalcReport {
+        *self.read_history.get_mut() = None;
+        self.prepared_spills.clear();
+        self.scalar_replay_exclusions.clear();
         if !self.now_pinned {
             if let Some(moment) = Workbook::read_the_clock() {
                 self.now = moment;
@@ -732,6 +1189,12 @@ impl Workbook {
             crate::datetime::set_this_year(today.year);
         }
         let keys = self.formula_keys();
+        *self.formula_values_before_pass.borrow_mut() = if self.dynamic_reference_wait.get() || user_function_wait_for_dynamic_lookups() {
+            keys.iter().map(|(sheet, coord)| ((sheet.clone(), *coord), self.value_at(sheet, coord.0, coord.1))).collect()
+        } else { BTreeMap::new() };
+        *self.provisional_text_formula_values_before_pass.borrow_mut() = if user_function_provisional_dynamic_text_value() {
+            keys.iter().map(|(sheet, coord)| ((sheet.clone(), *coord), self.value_at(sheet, coord.0, coord.1))).collect()
+        } else { BTreeMap::new() };
         // Where the formulas are, sheet by sheet, ordered by column and then
         // row. A range can ask this directly for the formulas it covers; the
         // alternative is walking every cell of the sheet once per range, which
@@ -749,7 +1212,7 @@ impl Workbook {
         // -- is a cycle of one: measured, Excel leaves it at 0.
         let mut reads_itself = BTreeSet::new();
         for (i, (sheet, coord)) in keys.iter().enumerate() {
-            self.each_dependency(sheet, coord, &at, &mut |j| {
+            self.each_dependency(sheet, coord, &at, true, &mut |j| {
                 if j == i {
                     reads_itself.insert(i);
                 } else if dependents[j].insert(i) {
@@ -776,7 +1239,11 @@ impl Workbook {
             Extent::Everything => {}
             // Which of them a change can reach.
             Extent::ReachedBy(changed) => {
-                let reached = self.reached_by(changed, &keys, &at, &dependents);
+                let mut invalidation = vec![BTreeSet::new(); keys.len()];
+                for (i, (sheet, coord)) in keys.iter().enumerate() {
+                    self.each_dependency(sheet, coord, &at, false, &mut |j| { invalidation[j].insert(i); });
+                }
+                let reached = self.reached_by(changed, &keys, &at, &invalidation);
                 order.retain(|i| reached.contains(i));
             }
             // Just these, wherever they fall in the order.
@@ -793,43 +1260,373 @@ impl Workbook {
 
         let mut report = RecalcReport {
             evaluated: order.len(),
+            calculated: order.iter().map(|&i| keys[i].clone()).collect(),
+            traversal_order: Vec::new(),
+            dependency_order_repairs: Vec::new(),
+            blocked_spills: Vec::new(),
+            deferred: false,
             circular: Vec::new(),
         };
 
-        for &i in &order {
-            let (sheet, coord) = &keys[i];
-            // A formula naming its own cell is worked out all the same, and is
-            // circular only if it really read itself: measured,
-            // `=IF(D1>0,5,G1)` in G1 is 5 and `=CELL("address",L1)` $L$1,
-            // while `=E1` in E1 is 0.
-            if reads_itself.contains(&i) {
+
+        *self.pass_cells.borrow_mut() = order.iter().map(|&i| keys[i].clone()).collect();
+        let chain = self.chain_probes && !self.calculation_order.is_empty();
+        let mut accepted = Vec::new();
+        let mut dependency_order_repairs = BTreeSet::new();
+        let mut temporary_value_dependencies = false;
+        if chain {
+            let selected: BTreeSet<usize> = order.iter().copied().collect();
+            let mut requirements = vec![BTreeSet::new(); keys.len()];
+            let mut direct_requirements = vec![BTreeSet::new(); keys.len()];
+            for &i in &selected {
+                let (sheet, coord) = &keys[i];
+                self.each_dependency(sheet, coord, &at, true, &mut |j| {
+                    if j != i && selected.contains(&j) { requirements[i].insert(j); }
+                });
+                self.each_dependency_with_spills(sheet, coord, &at, true, false, &mut |j| {
+                    if j != i && selected.contains(&j) { direct_requirements[i].insert(j); }
+                });
                 if let Some(expr) = self.expr_at(sheet, coord) {
-                    *self.watched.borrow_mut() = Some((sheet.clone(), *coord));
-                    self.watched_read.set(false);
-                    let value = formula_result(self.eval(&expr, sheet, 0, Some(*coord)));
-                    *self.watched.borrow_mut() = None;
-                    if !self.watched_read.get() {
-                        self.store_cached(sheet, coord, value);
-                        continue;
+                    expr.visit(&mut |node| {
+                        let Expr::Function { name, args } = node else { return; };
+                        for (index, argument) in args.iter().enumerate() {
+                            let Some(reference) = Self::scalar_cell_reference(name, index, argument) else { continue; };
+                            let target = reference.sheet.as_deref().unwrap_or(sheet);
+                            for &j in &direct_requirements[i] {
+                                if crate::case_fold::name_key(&keys[j].0) == crate::case_fold::name_key(target)
+                                    && reference.range.contains(keys[j].1.0, keys[j].1.1) {
+                                    // Keep already ordered scalar links too:
+                                    // delaying one consumer must not move its
+                                    // own consumers ahead of it.
+                                    dependency_order_repairs.insert((j, i));
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            for &i in &selected {
+                if !reads_itself.contains(&i) {
+                    let (sheet, coord) = &keys[i]; self.store_cached(sheet, coord, Value::Blank);
+                }
+            }
+            // An array whose result waits on VBA has no published member
+            // values in the provisional view. Keep its known ownership for
+            // ordering, while callers probing those values observe Empty.
+            let mut unpublished = Vec::new();
+            for &i in &selected {
+                let (sheet, coord) = &keys[i];
+                if !self.sheets.get(sheet).is_some_and(|held| held.spills.contains_key(coord)) { continue; }
+                let mut walking = vec![i];
+                let mut seen = BTreeSet::new();
+                let mut user = false;
+                while let Some(j) = walking.pop() {
+                    if !seen.insert(j) { continue; }
+                    let (target, cell) = &keys[j];
+                    if let Some(expr) = self.expr_at(target, cell) {
+                        self.dependency_expression(&expr, target, Some(*cell)).visit(&mut |node| {
+                            if let Expr::Function { name, .. } = node {
+                                if !functions::is_known_function(name) && !matches!(name.as_str(), "_UNION" | "_ISECT" | "_SPILL" | "_SHEETS" | "_INVOKE") { user = true; }
+                            }
+                        });
+                    }
+                    if user { break; }
+                    walking.extend(requirements[j].iter().copied());
+                }
+                if user { unpublished.push((sheet.clone(), *coord)); }
+            }
+            for (sheet, anchor) in unpublished {
+                let history = self.read_history.borrow().clone();
+                if let Some(held) = self.sheets.get_mut(&sheet) {
+                    for (coord, (value, owner)) in &mut held.spilled {
+                        if *owner == Some(anchor) {
+                            if let Some(history) = &history { history.borrow_mut().change(&sheet, *coord, value, &Value::Blank); }
+                            *value = Value::Blank;
+                        }
                     }
                 }
-                self.keep_or_zero(sheet, coord);
-                continue;
             }
-            let Some(expr) = self.expr_at(sheet, coord) else {
-                continue;
-            };
-            let dynamic = self.sheets.get(sheet.as_str()).is_some_and(|held| held.dynamic.contains(coord));
-            let value = match self.share_at(sheet, coord) {
-                Some(offset) => {
-                    formula_result(element_of(self.eval_arg(&expr, sheet, 0, Some(*coord)), offset))
+            let mut read_cells = vec![BTreeSet::new(); keys.len()];
+            *self.unready_cells.borrow_mut() = selected.iter().map(|&i| keys[i].clone()).collect();
+            let mut remaining = selected;
+            let mut completed = BTreeSet::new();
+            let mut attempted: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+            let mut waiting = BTreeSet::new();
+            let mut held_back = BTreeSet::new();
+            let mut deferred = false;
+            // A deterministic array can discover its new footprint before
+            // publishing values. Cells gained or lost by that footprint are
+            // probed against Empty, then evaluated after publication. This
+            // remains two actual calls even when both arguments coerce to 0.
+            let mut geometry_probes = BTreeSet::new();
+            for &producer in &remaining {
+                let (sheet, anchor) = &keys[producer];
+                if !requirements[producer].is_empty() || !self.sheets.get(sheet).is_some_and(|held| held.dynamic.contains(anchor)) { continue; }
+                let Some(expr) = self.expr_at(sheet, anchor) else { continue; };
+                if !self.dependency_value_is_fixed(&expr, sheet) { continue; }
+                let old = self.sheets.get(sheet).and_then(|held| held.spills.get(anchor)).copied().unwrap_or((1, 1));
+                reset_user_function_occurrence();
+                let worked = self.eval_arg(&expr, sheet, 0, Some(*anchor));
+                let mut shadow = worked.clone();
+                match &mut shadow {
+                    Arg::Value(value) => *value = Value::Blank,
+                    Arg::Range(block) => block.cells.fill(Value::Blank),
                 }
-                None if dynamic => self.spill_out(sheet, *coord, &expr),
-                None => formula_result(self.eval(&expr, sheet, 0, Some(*coord))),
-            };
-            self.store_cached(sheet, coord, value);
+                self.clear_spill(sheet, *anchor);
+                let _ = self.publish_spill(sheet, *anchor, shadow, true);
+                self.prepared_spills.insert((sheet.clone(), *anchor), worked);
+                let new = self.sheets.get(sheet).and_then(|held| held.spills.get(anchor)).copied().unwrap_or((1, 1));
+                if old == new { continue; }
+                let mut strips = Vec::new();
+                for (outer, inner) in [(old, new), (new, old)] {
+                    if outer.0 > inner.0 { strips.push((anchor.0 + inner.0, anchor.1, anchor.0 + outer.0 - 1, anchor.1 + outer.1 - 1)); }
+                    if outer.1 > inner.1 { strips.push((anchor.0, anchor.1 + inner.1, anchor.0 + outer.0.min(inner.0) - 1, anchor.1 + outer.1 - 1)); }
+                }
+                for &consumer in &remaining {
+                    if consumer == producer { continue; }
+                    let (target, cell) = &keys[consumer];
+                    let Some(expr) = self.expr_at(target, cell) else { continue; };
+                    let resolved = self.dependency_expression(&expr, target, Some(*cell));
+                    let reads_changed = resolved.invalidation_references().iter().any(|reference| reference.sheet.as_deref().unwrap_or(target) == sheet
+                        && strips.iter().any(|(left, top, right, bottom)| reference.range.start.col <= *right && reference.range.end.col >= *left && reference.range.start.row <= *bottom && reference.range.end.row >= *top));
+                    let mut reads_extent = false;
+                    resolved.visit(&mut |node| {
+                        if let Expr::Function { name, args } = node {
+                            if name == "_SPILL" && args.iter().flat_map(Expr::invalidation_references).any(|reference| reference.sheet.as_deref().unwrap_or(target) == sheet && reference.range.contains(anchor.0, anchor.1)) { reads_extent = true; }
+                        }
+                    });
+                    if reads_changed || reads_extent {
+                        requirements[consumer].insert(producer);
+                        dependents[producer].insert(consumer);
+                        geometry_probes.insert(consumer);
+                    }
+                }
+            }
+            self.scalar_replay_exclusions.extend(geometry_probes.iter().map(|i| keys[*i].clone()));
+            for i in geometry_probes {
+                for &producer in requirements[i].difference(&direct_requirements[i]) {
+                    if producer > i && self.spill_dependency_was_published(&keys[i], &keys[producer]) {
+                        dependency_order_repairs.insert((producer, i));
+                    }
+                }
+                let (sheet, coord) = &keys[i];
+                clear_user_function_reads();
+                self.provisional_value.set(true); self.value_deferred.set(false);
+                reset_user_function_occurrence();
+                if let Some(expr) = self.expr_at(sheet, coord) { let _ = self.eval_arg(&expr, sheet, 0, Some(*coord)); }
+                self.provisional_value.set(false); self.value_deferred.set(false);
+                let observed = USER_FORMULA_READS.with(|held| std::mem::take(&mut *held.borrow_mut()));
+                for (read_sheet, read_coord) in observed {
+                    if let Some(&j) = at.get(read_sheet.as_str()).and_then(|cells| cells.get(&read_coord)) {
+                        if remaining.contains(&j) { read_cells[i].insert(j); }
+                    }
+                }
+                attempted.insert(i, BTreeSet::new());
+                if user_function_pending() { waiting.insert(i); deferred = true; }
+                USER_FUNCTION_PENDING.with(|pending| pending.set(false));
+            }
+            loop {
+                let refreshed = remaining.iter().copied().find(|i| {
+                    if waiting.contains(i) || held_back.contains(i) || requirements[*i].is_subset(&completed) { return false; }
+                    let view: BTreeSet<_> = requirements[*i].union(&read_cells[*i]).filter(|j| completed.contains(j)).copied().collect();
+                    attempted.get(i).is_some_and(|previous| previous != &view)
+                });
+                // If a scalar UDF's INDIRECT text comes from a later formula
+                // cell, Excel can call it once with the prior selected value
+                // before publishing a dirty target. Probe that consumer first;
+                // its read is still provisional and the normal dependency pass
+                // resumes it after the target is committed.
+                let lagging_text_consumer = if user_function_provisional_dynamic_text_value() {
+                    remaining.iter().copied().find(|i| {
+                        if waiting.contains(i) || held_back.contains(i) { return false; }
+                        let view: BTreeSet<_> = requirements[*i].union(&read_cells[*i]).filter(|j| completed.contains(j)).copied().collect();
+                        if !requirements[*i].is_subset(&completed) && attempted.get(i) == Some(&view) { return false; }
+                        let (sheet, coord) = &keys[*i];
+                        self.expr_at(sheet, coord).is_some_and(|expr| self.expression_has_lagging_indirect_text(&expr, sheet, Some(*coord)))
+                    })
+                } else { None };
+                // A suspended scalar UDF selected through INDIRECT waits for
+                // the producer it selected. Finish that producer before
+                // advancing an independent formula from the preferred chain.
+                let waiting_precedent = remaining.iter().copied().find(|i| {
+                    !waiting.contains(i) && !held_back.contains(i)
+                        && waiting.iter().any(|consumer| {
+                            if !requirements[*consumer].contains(i) { return false; }
+                            let Some(expr) = self.expr_at(&keys[*consumer].0, &keys[*consumer].1) else { return false; };
+                            let mut dynamic_reference = false;
+                            expr.visit(&mut |node| {
+                                if matches!(node, Expr::Function { name, .. } if name == "INDIRECT") {
+                                    dynamic_reference = true;
+                                }
+                            });
+                            dynamic_reference
+                        })
+                        && !completed.contains(i)
+                        && {
+                            let view: BTreeSet<_> = requirements[*i].union(&read_cells[*i])
+                                .filter(|j| completed.contains(j)).copied().collect();
+                            requirements[*i].is_subset(&completed) || attempted.get(i) != Some(&view)
+                        }
+                });
+                let provisional_target = user_function_provisional_text_probe_target().and_then(|target| {
+                    remaining.iter().copied().find(|i| !waiting.contains(i) && !held_back.contains(i) && keys[*i] == target)
+                });
+                let independent_of_dynamic_lookup = if user_function_prioritize_dynamic_indirect_consumers() {
+                    remaining.iter().copied().find(|i| {
+                        if waiting.contains(i) || held_back.contains(i) { return false; }
+                        let Some((sheet, coord)) = keys.get(*i) else { return false; };
+                        let Some(expr) = self.expr_at(sheet, coord) else { return false; };
+                        let mut dynamic_lookup = false;
+                        expr.visit(&mut |node| {
+                            if matches!(node, Expr::Function { name, .. } if name == "INDIRECT") { dynamic_lookup = true; }
+                        });
+                        if dynamic_lookup { return false; }
+                        let view: BTreeSet<_> = requirements[*i].union(&read_cells[*i]).filter(|j| completed.contains(j)).copied().collect();
+                        requirements[*i].is_subset(&completed) || attempted.get(i) != Some(&view)
+                    })
+                } else { None };
+                let candidate = provisional_target.or(independent_of_dynamic_lookup).or(lagging_text_consumer).or(refreshed).or(waiting_precedent).or_else(|| remaining.iter().copied().find(|i| {
+                    if waiting.contains(i) || held_back.contains(i) { return false; }
+                    let view: BTreeSet<_> = requirements[*i].union(&read_cells[*i]).filter(|j| completed.contains(j)).copied().collect();
+                    requirements[*i].is_subset(&completed) || attempted.get(i) != Some(&view)
+                }));
+                let Some(mut i) = candidate else { break; };
+                // In a forced pass, resume an earlier chain consumer after
+                // its queued precedent commits before dispatching callbacks
+                // farther down that chain. Those independent calls otherwise
+                // overtake the suspended consumer and change its host reads.
+                if matches!(extent, Extent::Everything) && deferred
+                    && held_back.range(..i).any(|j| remaining.contains(j)) {
+                    break;
+                }
+                // A ready builtin precedent can finish without dispatching VBA.
+                // Finish it before probing a reference to its uncomputed value.
+                let mut walking: Vec<_> = requirements[i].iter().copied().collect();
+                let mut seen = BTreeSet::new();
+                while let Some(j) = walking.pop() {
+                    if !seen.insert(j) || !remaining.contains(&j) || waiting.contains(&j) || held_back.contains(&j) { continue; }
+                    if requirements[j].is_subset(&completed) {
+                        let (target, cell) = &keys[j];
+                        if self.expr_at(target, cell).is_some_and(|expr| {
+                            let resolved = self.dependency_expression(&expr, target, Some(*cell));
+                            let mut udf = false;
+                            resolved.visit(&mut |node| {
+                                if let Expr::Function { name, .. } = node {
+                                    if name == "INDIRECT" || (!functions::is_known_function(name) && !matches!(name.as_str(), "_UNION" | "_ISECT" | "_SPILL" | "_SHEETS" | "_INVOKE")) { udf = true; }
+                                }
+                            });
+                            !udf
+                        }) { i = j; break; }
+                    } else { walking.extend(requirements[j].iter().copied()); }
+                }
+                let ready = requirements[i].is_subset(&completed);
+                let (sheet, coord) = &keys[i];
+                if ready {
+                    let value = self.calculate_cell(sheet, coord, reads_itself.contains(&i));
+                    self.provisional_value.set(false);
+                    if self.value_deferred.get() && !user_function_pending() {
+                        // A returned reference can reveal a prerequisite that
+                        // is absent from the formula's written arguments. Keep
+                        // it in this pass only: it is not a dirty dependency.
+                        let observed = USER_FORMULA_READS.with(|held| std::mem::take(&mut *held.borrow_mut()));
+                        for (read_sheet, read_coord) in observed {
+                            if let Some(&j) = at.get(read_sheet.as_str()).and_then(|cells| cells.get(&read_coord)) {
+                                if j != i && remaining.contains(&j) { let discovered = requirements[i].insert(j); temporary_value_dependencies |= discovered && !self.callback_answer_observed.get(); }
+                            }
+                        }
+                        if !requirements[i].is_subset(&completed) {
+                            attempted.insert(i, requirements[i].intersection(&completed).copied().collect());
+                            continue;
+                        }
+                    }
+                    if user_function_pending() {
+                        waiting.insert(i);
+                        // Cells after an already queued precedent wait for its result.
+                        // A valid learned chain must not acquire fresh zero probes.
+                        let mut downstream: Vec<_> = dependents[i].iter().copied().collect();
+                        while let Some(j) = downstream.pop() {
+                            if held_back.insert(j) { downstream.extend(dependents[j].iter().copied()); }
+                        }
+                    }
+                    else { self.store_cached(sheet, coord, value); self.unready_cells.borrow_mut().remove(&(sheet.clone(), *coord)); completed.insert(i); remaining.remove(&i); accepted.push(i); }
+                } else {
+                    // A spill child reveals its owner when the chain reaches
+                    // the consumer first. Retain that owner before this
+                    // consumer on later passes, even if the spill shrinks.
+                    // A ready builtin handled above never needed this wait.
+                    for &producer in requirements[i].difference(&direct_requirements[i]) {
+                        if producer > i && !completed.contains(&producer)
+                            && self.spill_dependency_was_published(&keys[i], &keys[producer]) {
+                            dependency_order_repairs.insert((producer, i));
+                        }
+                    }
+                    clear_user_function_reads();
+                    self.provisional_value.set(true); self.value_deferred.set(false);
+                    reset_user_function_occurrence();
+                    if let Some(expr) = self.expr_at(sheet, coord) { let _ = self.eval_arg(&expr, sheet, 0, Some(*coord)); }
+                    self.provisional_value.set(false);
+                    self.value_deferred.set(false);
+                    let observed = USER_FORMULA_READS.with(|held| std::mem::take(&mut *held.borrow_mut()));
+                    read_cells[i].clear();
+                    for (read_sheet, read_coord) in observed {
+                        if let Some(&j) = at.get(read_sheet.as_str()).and_then(|cells| cells.get(&read_coord)) {
+                            if remaining.contains(&j) || completed.contains(&j) { read_cells[i].insert(j); }
+                        }
+                    }
+                    let view = requirements[i].union(&read_cells[i]).filter(|j| completed.contains(j)).copied().collect();
+                    attempted.insert(i, view);
+                    if user_function_pending() { waiting.insert(i); }
+                }
+                deferred |= user_function_pending();
+                // Queue independent callbacks against the same uncommitted view.
+                USER_FUNCTION_PENDING.with(|pending| pending.set(false));
+            }
+            USER_FUNCTION_PENDING.with(|pending| pending.set(deferred));
+            self.unready_cells.borrow_mut().clear();
+        } else {
+            for &i in &order {
+                let (sheet, coord) = &keys[i];
+                let value = self.calculate_cell(sheet, coord, reads_itself.contains(&i));
+                if user_function_pending() { break; }
+                self.store_cached(sheet, coord, value); accepted.push(i);
+            }
         }
+        if !user_function_pending() { report.calculated = accepted.iter().map(|&i|keys[i].clone()).collect(); }
 
+        self.pass_cells.borrow_mut().clear();
+        self.scalar_replay_exclusions.clear();
+        report.blocked_spills = self.blocked_spill_ranges();
+        report.deferred = user_function_pending();
+        report.traversal_order = report.calculated.clone();
+        report.dependency_order_repairs = dependency_order_repairs.into_iter()
+            .map(|(producer, consumer)| (keys[producer].clone(), keys[consumer].clone())).collect();
+        if temporary_value_dependencies && !user_function_pending() && !matches!(extent, Extent::Everything) {
+            // Waiting for a computed reference before dispatching its callback
+            // does not move that consumer behind unrelated completed calls.
+            // Retain the incoming positions subject to the written graph;
+            // the published values and actual completion report stay intact.
+            let selected: BTreeSet<_> = accepted.iter().copied().collect();
+            let mut indegree = vec![0usize; keys.len()];
+            for &producer in &selected {
+                for &consumer in &dependents[producer] {
+                    if selected.contains(&consumer) { indegree[consumer] += 1; }
+                }
+            }
+            let mut ready: BTreeSet<_> = selected.iter().copied().filter(|&i| indegree[i] == 0).collect();
+            let mut learned = Vec::with_capacity(selected.len());
+            while let Some(producer) = ready.pop_first() {
+                learned.push(producer);
+                for &consumer in &dependents[producer] {
+                    if selected.contains(&consumer) {
+                        indegree[consumer] -= 1;
+                        if indegree[consumer] == 0 { ready.insert(consumer); }
+                    }
+                }
+            }
+            if learned.len() == accepted.len() {
+                report.traversal_order = learned.iter().map(|&i| keys[i].clone()).collect();
+            }
+        }
         // Anything Kahn could not emit sits in a cycle. A partial pass says
         // nothing about the cells it did not look at, so it leaves them be.
         if !matches!(extent, Extent::Everything) {
@@ -842,6 +1639,7 @@ impl Workbook {
                     .push(format!("{}!{}", sheet, CellRef::new(coord.0, coord.1).to_a1()));
             }
             if !emitted.contains(&i) {
+                report.calculated.push((sheet.clone(), *coord));
                 report
                     .circular
                     .push(format!("{}!{}", sheet, CellRef::new(coord.0, coord.1).to_a1()));
@@ -849,7 +1647,44 @@ impl Workbook {
             }
         }
 
+        report.traversal_order = report.calculated.clone();
         report
+    }
+
+    fn calculate_cell(&mut self, sheet: &str, coord: &(u32,u32), reads_itself: bool) -> Value {
+        reset_user_function_occurrence();
+        clear_user_function_reads();
+        self.callback_answer_observed.set(false);
+        self.provisional_value.set(false); self.value_deferred.set(false);
+            // A formula naming its own cell is worked out all the same, and is
+            // circular only if it really read itself: measured,
+            // `=IF(D1>0,5,G1)` in G1 is 5 and `=CELL("address",L1)` $L$1,
+            // while `=E1` in E1 is 0.
+            if reads_itself {
+                if let Some(expr) = self.expr_at(sheet, coord) {
+                    *self.watched.borrow_mut() = Some((sheet.to_string(), *coord));
+                    self.watched_read.set(false);
+                    let value = formula_result(self.eval(&expr, sheet, 0, Some(*coord)));
+                    *self.watched.borrow_mut() = None;
+                    if !self.watched_read.get() {
+                        return value;
+                    }
+                }
+                self.keep_or_zero(sheet, coord);
+                return self.value(sheet, &CellRef::new(coord.0, coord.1).to_a1());
+            }
+            let Some(expr) = self.expr_at(sheet, coord) else {
+                return Value::Blank;
+            };
+            let dynamic = self.sheets.get(sheet).is_some_and(|held| held.dynamic.contains(coord));
+            let value = match self.share_at(sheet, coord) {
+                Some(offset) => {
+                    formula_result(element_of(self.eval_arg(&expr, sheet, 0, Some(*coord)), offset))
+                }
+                None if dynamic => self.spill_out(sheet, *coord, &expr),
+                None => formula_result(self.eval(&expr, sheet, 0, Some(*coord))),
+            };
+            value
     }
 
     /// Work out a dynamic array and spill its block into the cells beside
@@ -857,15 +1692,42 @@ impl Workbook {
     /// in D1 fills D1:D3; a cell in the way holding anything makes it
     /// #SPILL! and fills nothing; a block of one is simply that value.
     fn spill_out(&mut self, sheet: &str, anchor: (u32, u32), expr: &Expr) -> Value {
+        let worked = match self.prepared_spills.remove(&(sheet.to_string(), anchor)) {
+            Some(worked) => worked,
+            None => self.eval_arg(expr, sheet, 0, Some(anchor)),
+        };
+        // A suspended callback has not replaced the array. Keep its known
+        // ownership so resumed consumers still wait for the same producer.
+        if user_function_pending() || !self.require_ready_value(&worked) {
+            return Value::Error(ExcelError::Value);
+        }
+        self.clear_spill(sheet, anchor);
+        self.publish_spill(sheet, anchor, worked, false)
+    }
+
+    fn clear_spill(&mut self, sheet: &str, anchor: (u32, u32)) {
+        let history = self.read_history.borrow().clone();
         if let Some(held) = self.sheets.get_mut(sheet) {
             held.spills.remove(&anchor);
+            if let Some(history) = &history {
+                let mut history = history.borrow_mut();
+                for (coord, (value, owner)) in &held.spilled {
+                    if *owner == Some(anchor) { history.change(sheet, *coord, value, &Value::Blank); }
+                }
+            }
             held.spilled.retain(|_, (_, owner)| *owner != Some(anchor));
         }
-        let worked = self.eval_arg(expr, sheet, 0, Some(anchor));
+    }
+
+    fn publish_spill(&mut self, sheet: &str, anchor: (u32, u32), worked: Arg, provisional: bool) -> Value {
+        let history = self.read_history.borrow().clone();
+        if !self.require_ready_value(&worked) { return Value::Error(ExcelError::Value); }
         let block = match worked {
             Arg::Range(block) if block.cells.len() > 1 => block,
-            Arg::Range(block) => return formula_result(block.cells.first().cloned().unwrap_or(Value::Blank)),
-            Arg::Value(value) => return formula_result(value),
+            answer => {
+                if !user_function_pending() { if let Some(held) = self.sheets.get_mut(sheet) { held.blocked_spills.remove(&anchor); } }
+                return match answer { Arg::Range(block) => formula_result(block.cells.first().cloned().unwrap_or(Value::Blank)), Arg::Value(value) => formula_result(value) };
+            }
         };
         let (width, height) = (block.width as u32, block.height as u32);
         let (col, row) = anchor;
@@ -887,17 +1749,23 @@ impl Workbook {
                 };
                 let taken = held.spilled.get(&at).is_some_and(|(_, owner)| owner.is_some());
                 if in_the_way || taken {
+                    held.blocked_spills.insert(anchor, (width, height));
                     return Value::Error(ExcelError::Spill);
                 }
             }
         }
+        held.blocked_spills.remove(&anchor);
         for down in 0..height {
             for across in 0..width {
                 let at = (col + across, row + down);
                 if at == anchor {
                     continue;
                 }
-                let value = block.cells[(down * width + across) as usize].clone();
+                let value = if provisional { Value::Blank } else { formula_result(block.cells[(down * width + across) as usize].clone()) };
+                if let Some(history) = &history {
+                    let before = held.spilled.get(&at).map(|(value, _)| value).unwrap_or(&Value::Blank);
+                    history.borrow_mut().change(sheet, at, before, &value);
+                }
                 held.spilled.insert(at, (value, Some(anchor)));
             }
         }
@@ -913,6 +1781,9 @@ impl Workbook {
                     keys.push((name.clone(), *coord));
                 }
             }
+        }
+        if !self.calculation_order.is_empty() {
+            keys.sort_by_key(|cell| self.calculation_order.get(cell).copied().unwrap_or(usize::MAX));
         }
         keys
     }
@@ -949,7 +1820,10 @@ impl Workbook {
             let Some(expr) = self.expr_at(sheet, coord) else {
                 continue;
             };
-            let reads_a_change = expr.value_references().iter().any(|reference| {
+            let obstruction_changed = self.sheets.get(sheet).and_then(|held| held.blocked_spills.get(coord)).is_some_and(|(width, height)| {
+                changed.iter().any(|(target, (col, row))| target == sheet && *col >= coord.0 && *row >= coord.1 && *col - coord.0 < *width && *row - coord.1 < *height)
+            });
+            let reads_a_change = obstruction_changed || self.dependency_expression(&expr, sheet, Some(*coord)).invalidation_references().iter().any(|reference| {
                 let target = reference.sheet.as_deref().unwrap_or(sheet.as_str());
                 changed.iter().any(|(where_, (col, row))| {
                     where_ == target && reference.range.contains(*col, *row)
@@ -980,14 +1854,27 @@ impl Workbook {
         sheet: &str,
         coord: &(u32, u32),
         at: &BTreeMap<&str, BTreeMap<(u32, u32), usize>>,
+        contents_only: bool,
+        found: &mut dyn FnMut(usize),
+    ) {
+        self.each_dependency_with_spills(sheet, coord, at, contents_only, true, found);
+    }
+
+    fn each_dependency_with_spills(
+        &self,
+        sheet: &str,
+        coord: &(u32, u32),
+        at: &BTreeMap<&str, BTreeMap<(u32, u32), usize>>,
+        contents_only: bool,
+        include_spills: bool,
         found: &mut dyn FnMut(usize),
     ) {
         let Some(expr) = self.expr_at(sheet, coord) else {
             return;
         };
-        // Not `references`: a range that is only being measured is not
-        // something this cell waits for.
-        for reference in expr.value_references() {
+        let expr = self.dependency_expression(&expr, sheet, Some(*coord));
+        let references = if contents_only { self.ordering_expression(&expr, sheet, Some(*coord)).value_references() } else { expr.invalidation_references() };
+        for reference in &references {
             let target = reference.sheet.as_deref().unwrap_or(sheet);
             let Some(formulas) = at.get(target) else {
                 continue;
@@ -1008,8 +1895,9 @@ impl Workbook {
                 }
             }
         }
+        if !include_spills { return; }
         // A cell a spill fills is waiting on the formula that spills it.
-        for reference in expr.value_references() {
+        for reference in &references {
             let target = reference.sheet.as_deref().unwrap_or(sheet);
             let (Some(formulas), Some(held)) = (at.get(target), self.sheets.get(target)) else {
                 continue;
@@ -1024,6 +1912,100 @@ impl Workbook {
                     }
                 }
             }
+        }
+    }
+
+    fn eval_reference_argument(&self, expr: &Expr, sheet: &str, depth: u32, at: At) -> Arg {
+        let previous = self.reference_context.replace(true);
+        let answer = self.eval_arg(expr, sheet, depth, at);
+        self.reference_context.set(previous);
+        answer
+    }
+
+    fn metadata_ranges(&self, expr: &Expr, sheet: &str, depth: u32, at: At) -> Option<Vec<(String, RangeRef)>> {
+        let ranges = match expr {
+            Expr::Function { name, args } if name == "_UNION" => args.iter().map(|area| self.reference_of(area, sheet, depth + 1, at)).collect::<Option<Vec<_>>>()?,
+            _ => vec![self.reference_of(expr, sheet, depth + 1, at)?],
+        };
+        let first = ranges.first()?;
+        ranges.iter().all(|(target, _)| target.eq_ignore_ascii_case(&first.0)).then_some(ranges)
+    }
+
+    fn dependency_value_is_fixed(&self, expr: &Expr, sheet: &str) -> bool {
+        let mut fixed = true;
+        expr.visit(&mut |node| match node {
+            Expr::Ref(reference) => {
+                let target = reference.sheet.as_deref().unwrap_or(sheet);
+                if reference.book.is_some() { fixed = false; return; }
+                if let Some(held) = self.sheets.get(target) {
+                    let (from, to) = (reference.range.start, reference.range.end);
+                    if held.cells.range((from.col, 0)..=(to.col, u32::MAX)).any(|((_, row), cell)| *row >= from.row && *row <= to.row && matches!(cell, Cell::Formula { .. })) { fixed = false; }
+                }
+            }
+            Expr::Function { name, .. } if !functions::is_known_function(name)
+                || matches!(name.as_str(), "RAND" | "RANDBETWEEN" | "RANDARRAY" | "NOW" | "TODAY" | "OFFSET" | "INDIRECT" | "CELL" | "INFO" | "SHEET" | "SHEETS" | "FORMULATEXT") => fixed = false,
+            Expr::Name(_) | Expr::Table { .. } => fixed = false,
+            _ => {},
+        });
+        fixed
+    }
+
+    // Reduce only lookup inputs whose values cannot change during this pass.
+    // Invalidation still uses the original expression and all its dependencies.
+    fn ordering_expression(&self, expr: &Expr, sheet: &str, at: At) -> Expr {
+        match expr {
+            Expr::Unary { op, operand } => Expr::Unary { op: *op, operand: Box::new(self.ordering_expression(operand, sheet, at)) },
+            Expr::Binary { op, lhs, rhs } => Expr::Binary { op: *op, lhs: Box::new(self.ordering_expression(lhs, sheet, at)), rhs: Box::new(self.ordering_expression(rhs, sheet, at)) },
+            Expr::Function { name, args } => {
+                let args: Vec<_> = args.iter().map(|arg| self.ordering_expression(arg, sheet, at)).collect();
+                if name == "IF" && (2..=3).contains(&args.len()) && self.dependency_value_is_fixed(&args[0], sheet) {
+                    let condition = self.eval_arg(&args[0], sheet, 0, at);
+                    if !matches!(&condition, Arg::Range(block) if block.is_array() || block.cells.len() != 1) {
+                        if let Ok(taken) = condition.scalar().to_logical() {
+                            let branch = args.get(if taken { 1 } else { 2 }).cloned().unwrap_or(Expr::Literal(Value::Logical(false)));
+                            // Only the selected value orders this pass. Changes
+                            // to either branch still invalidate the original IF.
+                            return Expr::Function { name: "_UNION".into(), args: vec![args[0].clone(), branch] };
+                        }
+                    }
+                }
+                if name == "FORMULATEXT" && args.len() == 1 {
+                    let first = match &args[0] {
+                        Expr::Ref(reference) => Some(reference),
+                        Expr::Function { name: union, args } if union == "_UNION" => match args.first() { Some(Expr::Ref(reference)) => Some(reference), _ => None },
+                        _ => None,
+                    };
+                    if let Some(reference) = first {
+                        let mut reference = reference.clone();reference.range = RangeRef::single(reference.range.start);
+                        let target = reference.sheet.as_deref().unwrap_or(sheet);
+                        if target == sheet && at == Some(reference.range.start.coord()) {
+                            if let Some(Cell::Formula { source, source_utf16, .. }) = self.sheets.get(target).and_then(|held| held.cells.get(&reference.range.start.coord())) {
+                                return Expr::Literal(formula_source_value(source, source_utf16.as_deref()));
+                            }
+                        }
+                        return Expr::Function { name: name.clone(), args: vec![Expr::Ref(reference)] };
+                    }
+                }
+                if name == "XLOOKUP" && (3..=6).contains(&args.len()) && [0, 1, 3, 4, 5].iter().all(|i| args.get(*i).is_none_or(|arg| self.dependency_value_is_fixed(arg, sheet))) {
+                    if let Expr::Ref(returned) = &args[2] {
+                        let lookup = self.eval_arg(&args[1], sheet, 0, at);
+                        let asked = [self.eval_arg(&args[0], sheet, 0, at), lookup.clone(), args.get(4).map(|arg| self.eval_arg(arg, sheet, 0, at)).unwrap_or(Arg::Value(Value::Number(0.0))), args.get(5).map(|arg| self.eval_arg(arg, sheet, 0, at)).unwrap_or(Arg::Value(Value::Number(1.0)))];
+                        match functions::call("XMATCH", &asked) {
+                            Value::Number(position) if position >= 1.0 => {
+                                let offset = position as u32 - 1;let mut selected = returned.clone();
+                                if lookup.as_range().height > 1 {
+                                    if offset < selected.range.height() { selected.range.start.row += offset;selected.range.end.row = selected.range.start.row;return Expr::Ref(selected); }
+                                } else if offset < selected.range.width() { selected.range.start.col += offset;selected.range.end.col = selected.range.start.col;return Expr::Ref(selected); }
+                            }
+                            Value::Error(ExcelError::NA) => return args.get(3).cloned().unwrap_or(Expr::Literal(Value::Error(ExcelError::NA))),
+                            Value::Error(why) => return Expr::Literal(Value::Error(why)),
+                            _ => {},
+                        }
+                    }
+                }
+                Expr::Function { name: name.clone(), args }
+            }
+            _ => expr.clone(),
         }
     }
 
@@ -1059,16 +2041,26 @@ impl Workbook {
     }
 
     fn store_cached(&mut self, sheet: &str, coord: &(u32, u32), value: Value) {
+        let history = self.read_history.borrow().clone();
         if let Some(Cell::Formula { cached, .. }) = self
             .sheets
             .get_mut(sheet)
             .and_then(|s| s.cells.get_mut(coord))
         {
+            if let Some(history) = history { history.borrow_mut().change(sheet, *coord, cached, &value); }
             *cached = value;
         }
     }
 
     // -- evaluation -------------------------------------------------------
+
+    fn callback_read_view(&self) -> Option<UserFunctionReadView> {
+        if !USER_FUNCTIONS.with(|held| held.try_borrow().is_ok_and(|hook| hook.is_some())) { return None; }
+        let mut slot = self.read_history.borrow_mut();
+        let history = slot.get_or_insert_with(|| std::rc::Rc::new(std::cell::RefCell::new(UserReadHistory::default())));
+        let epoch = history.borrow().epoch;
+        Some(UserFunctionReadView { epoch, history: history.clone() })
+    }
 
     fn value_at(&self, sheet: &str, col: u32, row: u32) -> Value {
         if let Some((watched_sheet, coord)) = self.watched.borrow().as_ref() {
@@ -1104,6 +2096,7 @@ impl Workbook {
 
     fn eval(&self, expr: &Expr, sheet: &str, depth: u32, at: At) -> Value {
         let worked = self.eval_arg(expr, sheet, depth, at);
+        if !self.require_ready_value(&worked) { return Value::Error(ExcelError::Value); }
         match &worked {
             // A block that was worked out spills: this cell shows the first of
             // it and the rest fills the cells below, which is why a file holds
@@ -1117,6 +2110,83 @@ impl Workbook {
                 .unwrap_or(Value::Error(ExcelError::NA)),
             _ => worked.scalar(),
         }
+    }
+
+    fn reference_arg(&self, sheet: &str, range: &RangeRef, skip: Skip) -> Arg {
+        let mut data = self.materialise(sheet, range, skip);
+        data.origin = crate::functions::BlockOrigin::Cells { sheet: sheet.to_string(), range: *range };
+        Arg::Range(data)
+    }
+
+    fn scalar_cell_reference<'a>(name: &str, index: usize, argument: &'a Expr) -> Option<&'a crate::reference::Reference> {
+        if functions::is_known_function(name) || user_reference_argument(name, index)
+            || user_variant_argument(name, index) { return None; }
+        match argument {
+            Expr::Ref(reference) if reference.book.is_none() && reference.range.is_single() => Some(reference),
+            _ => None,
+        }
+    }
+
+    fn spill_dependency_was_published(&self, consumer: &FormulaCell, producer: &FormulaCell) -> bool {
+        let original = USER_FUNCTION_SPILL_PROBE_LAYOUT.with(|held| held.borrow().as_ref().map(|layout|
+            layout.iter().find(|(owner, _)| owner == producer).map(|(_, size)| *size)));
+        let Some(original) = original else { return true; };
+        let Some((width, height)) = original else { return false; };
+        let Some(expr) = self.expr_at(&consumer.0, &consumer.1) else { return false; };
+        let expr = self.dependency_expression(&expr, &consumer.0, Some(consumer.1));
+        self.ordering_expression(&expr, &consumer.0, Some(consumer.1)).value_references().iter().any(|reference|
+            crate::case_fold::name_key(reference.sheet.as_deref().unwrap_or(&consumer.0)) == crate::case_fold::name_key(&producer.0)
+                && reference.range.start.col < producer.1.0 + width && reference.range.end.col >= producer.1.0
+                && reference.range.start.row < producer.1.1 + height && reference.range.end.row >= producer.1.1)
+    }
+
+    fn reference_waits_for_formula(&self, source: &str, range: &RangeRef, target: &str, coord: (u32, u32)) -> bool {
+        if crate::case_fold::name_key(source) != crate::case_fold::name_key(target) { return false; }
+        if range.contains(coord.0, coord.1) { return true; }
+        // A staged deterministic array intentionally exposes its new footprint
+        // to geometry probes. Other spill members wait for their owner.
+        if self.prepared_spills.contains_key(&(target.to_string(), coord)) { return false; }
+        self.sheets.get(target).and_then(|sheet| sheet.spills.get(&coord)).is_some_and(|(width, height)|
+            range.start.col < coord.0 + width && range.end.col >= coord.0
+                && range.start.row < coord.1 + height && range.end.row >= coord.1)
+    }
+
+    fn unready_argument(&self, argument: &Arg) -> bool {
+        if !self.provisional_value.get() { return false; }
+        let Arg::Range(block) = argument else { return false; };
+        let Some((sheet, range)) = block.cell_reference() else { return false; };
+        let cells = self.unready_cells.borrow();
+        cells.iter().any(|(target, coord)| self.reference_waits_for_formula(&sheet, &range, target, *coord))
+    }
+
+    fn require_ready_value(&self, argument: &Arg) -> bool {
+        if self.unready_argument(argument) { self.value_deferred.set(true); }
+        !self.value_deferred.get()
+    }
+
+    fn eval_function_argument(&self, (name, index): (&str, usize), expr: &Expr, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        let user_function_argument = !functions::is_known_function(name);
+        let previous_argument_context = if user_function_argument {
+            USER_FUNCTION_ARGUMENT_CONTEXT.with(|held| held.replace(Some((name.to_ascii_uppercase(), index))))
+        } else { None };
+        if user_function_argument && user_reference_argument(name, index) {
+            let previous = self.reference_context.replace(true);
+            let previous_value_read = self.variant_value_read_context.replace(self.variant_value_read_context.get()
+                || (user_variant_argument(name, index) && user_value_read_argument(name, index)));
+            let value = self.eval_arg_inner(expr, sheet, depth, skip, at);
+            self.variant_value_read_context.set(previous_value_read);
+            self.reference_context.set(previous);
+            USER_FUNCTION_ARGUMENT_CONTEXT.with(|held| { held.replace(previous_argument_context); });
+            return value;
+        }
+        let value = self.eval_arg_inner(expr, sheet, depth, skip, at);
+        if user_function_argument {
+            USER_FUNCTION_ARGUMENT_CONTEXT.with(|held| { held.replace(previous_argument_context); });
+        }
+        if (name == "SWITCH" && index == 0) || (name == "IFS" && index % 2 == 0) {
+            self.require_ready_value(&value);
+        }
+        value
     }
 
     fn eval_arg(&self, expr: &Expr, sheet: &str, depth: u32, at: At) -> Arg {
@@ -1133,6 +2203,7 @@ impl Workbook {
         skip: Skip,
         at: At,
     ) -> Arg {
+        if user_function_pending() || self.value_deferred.get() { return Arg::Value(Value::Error(ExcelError::Value)); }
         if depth > MAX_EVAL_DEPTH {
             return Arg::Value(Value::Error(ExcelError::Num));
         }
@@ -1145,7 +2216,7 @@ impl Workbook {
             Expr::Array(rows) => {
                 let height = rows.len();
                 let width = rows.first().map_or(0, |row| row.len());
-                Arg::Range(RangeData {
+                Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,
                     width,
                     height,
                     cells: rows.iter().flatten().cloned().collect(),
@@ -1180,10 +2251,10 @@ impl Workbook {
                 // the two differently: `SUM("5")` is 5, but `SUM(A1)` where A1
                 // holds text is 0. `Arg::scalar` unwraps a 1x1 range
                 // transparently, so nothing else has to care.
-                Arg::Range(self.materialise(target, &reference.range, skip))
+                self.reference_arg(target, &reference.range, skip)
             }
 
-            Expr::Table { name, asked } => self.a_table_column(name, asked, sheet, at),
+            Expr::Table { name, asked } => self.a_table_column(name, asked, sheet, skip, at),
 
             Expr::Name(name) => {
                 let bound_by_let = self
@@ -1196,11 +2267,11 @@ impl Workbook {
                 if let Some(value) = bound_by_let {
                     return value;
                 }
-                match self.name_bound(name, sheet) {
-                    Some(bound) => self.eval_arg(&bound.clone(), sheet, depth + 1, at),
+                match self.name_bound(name, sheet, at) {
+                    Some(bound) => self.eval_arg_inner(&bound, sheet, depth + 1, skip, at),
                     // A table's bare name is its data: `COLUMNS(tbl)`.
                     None if self.tables.contains_key(&crate::case_fold::table_key(name)) => {
-                        self.a_table_column(name, "", sheet, at)
+                        self.a_table_column(name, "", sheet, skip, at)
                     }
                     None => Arg::Value(Value::Error(ExcelError::Name)),
                 }
@@ -1208,9 +2279,11 @@ impl Workbook {
 
             Expr::Unary { op, operand } => {
                 let operand = self.eval_arg(operand, sheet, depth + 1, at);
+                if !self.require_ready_value(&operand) { return Arg::Value(Value::Error(ExcelError::Value)); }
                 match operand {
                     Arg::Value(v) => Arg::Value(apply_unary(*op, v)),
-                    Arg::Range(block) => Arg::Range(RangeData {
+                    Arg::Range(block) if block.cells.len() == 1 && !block.is_array() => Arg::Value(apply_unary(*op, block.cells[0].clone())),
+                    Arg::Range(block) => Arg::Range(RangeData {origin: RangeData::value_origin([&block]),
                         width: block.width,
                         height: block.height,
                         cells: block
@@ -1224,7 +2297,9 @@ impl Workbook {
 
             Expr::Binary { op, lhs, rhs } => {
                 let a = self.eval_arg(lhs, sheet, depth + 1, at);
+                if !self.require_ready_value(&a) { return Arg::Value(Value::Error(ExcelError::Value)); }
                 let b = self.eval_arg(rhs, sheet, depth + 1, at);
+                if !self.require_ready_value(&b) { return Arg::Value(Value::Error(ExcelError::Value)); }
                 across(*op, &a, &b)
             }
 
@@ -1250,6 +2325,21 @@ impl Workbook {
                 // cell is does not read it: measured, `=CELL("address",L1)` in L1
                 // is $L$1, not a circular 0.
                 let held = || self.value_at(&target, cell.col, cell.row);
+                if info == "width" {
+                    let held = self.sheets.get(&target);
+                    let stated = held.and_then(|sheet| sheet.widths.0.get(cell.col as usize)).copied().filter(|width| *width > 0.0);
+                    let default = held.map_or(0.0, |sheet| sheet.widths.1);
+                    let file = stated.or(Some(default).filter(|width| *width > 0.0 || held.is_some_and(|sheet| sheet.default_width_explicit)));
+                    let digit = DIGIT_WIDTH.with(|held| held.get());
+                    let characters = if held.is_some_and(|sheet| sheet.hidden_columns.contains(&cell.col)) { 0.0 }
+                        else { file.map_or(8.43, |file| crate::column_width::pixels_to_characters(crate::column_width::stored_width_to_pixels(f64::from(file), digit), digit)) };
+                    let custom = held.and_then(|sheet| sheet.custom_widths.get(&cell.col)).copied().unwrap_or(stated.is_some());
+                    return Arg::Range(RangeData {
+                        origin: crate::functions::BlockOrigin::Vector,
+                        width: 2, height: 1,
+                        cells: vec![Value::Number(characters.max(0.0).round()), Value::Logical(!custom)],
+                    });
+                }
                 Arg::Value(match info.as_str() {
                     "address" => {
                         let mut letters = String::new();
@@ -1291,20 +2381,6 @@ impl Workbook {
                         .to_string(),
                         _ => String::new(),
                     }),
-                    // The column's width in characters, rounded: measured, 8
-                    // for a fresh column and 13 for one set to 12.5.
-                    "width" => {
-                        let (widths, default) = self
-                            .sheets
-                            .get(&target)
-                            .map(|held| held.widths.clone())
-                            .unwrap_or_default();
-                        let file = widths.get(cell.col as usize).copied().filter(|width| *width > 0.0).or(Some(default).filter(|width| *width > 0.0));
-                        let digit = DIGIT_WIDTH.with(|held| held.get());
-                        // A column the file does not size is the standard 8.43.
-                        let characters = file.map_or(8.43, |file| (f64::from(file) * digit - 5.0) / digit);
-                        Value::Number(characters.max(0.0).round())
-                    }
                     "contents" => held(),
                     "type" => Value::Text(
                         match held() {
@@ -1325,7 +2401,12 @@ impl Workbook {
             // its row in a column, its column in a row, #VALUE! where there
             // is none; of a block of answers, the first.
             Expr::Function { name, args } if name == "_AT" && args.len() == 1 => {
-                if let Some((target, range)) = self.reference_of(&args[0], sheet, depth + 1, at) {
+                // A UDF may return either a reference or a scalar. Retain its
+                // result rather than calling it once to test for a reference
+                // and again to obtain its value.
+                let worked = self.eval_reference_argument(&args[0], sheet, depth + 1, at);
+                let reference = match &worked { Arg::Range(block) => block.cell_reference(), _ => None };
+                if let Some((target, range)) = reference {
                     let (start, end) = (range.start, range.end);
                     let cell = if start == end {
                         Some(start)
@@ -1341,18 +2422,18 @@ impl Workbook {
                         }
                     };
                     return match cell {
-                        Some(cell) => Arg::Range(self.materialise(&target, &RangeRef::single(cell), skip)),
+                        Some(cell) => self.reference_arg(&target, &RangeRef::single(cell), skip),
                         None => Arg::Value(Value::Error(ExcelError::Value)),
                     };
                 }
-                match self.eval_arg(&args[0], sheet, depth + 1, at) {
+                match worked {
                     Arg::Range(block) => Arg::Value(block.cells.into_iter().next().unwrap_or(Value::Blank)),
                     value => value,
                 }
             }
 
             Expr::Function { name, args } if name == "TRIMRANGE" => match self.trimmed_range(args, sheet, depth + 1, at) {
-                Some((target, range)) => Arg::Range(self.materialise(&target, &range, skip)),
+                Some((target, range)) => self.reference_arg(&target, &range, skip),
                 None => Arg::Value(Value::Error(ExcelError::Ref)),
             },
             // INFO: facts about the environment, as Excel 16 on Windows gives
@@ -1379,25 +2460,82 @@ impl Workbook {
                     _ => Value::Error(ExcelError::Value),
                 })
             }
-            Expr::Function { name, args } if name == "INDEX" && self.index_range(args, sheet, depth + 1, at).is_some() => {
-                let (target, range) = self.index_range(args, sheet, depth + 1, at).expect("just asked");
-                Arg::Range(self.materialise(&target, &range, skip))
+            Expr::Function { name, args } if name == "CHOOSE" && args.len() >= 2 => {
+                let index = self.eval_arg_inner(&args[0], sheet, depth + 1, skip, at);
+                if !self.require_ready_value(&index) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                if user_function_pending() || self.value_deferred.get() { return Arg::Value(Value::Error(ExcelError::Value)); }
+                if matches!(&index, Arg::Range(block) if block.is_array() || block.cells.len() > 1) {
+                    let mut evaluated = vec![index];
+                    evaluated.extend(args.iter().skip(1).map(|arg| self.eval_arg_inner(arg, sheet, depth + 1, skip, at)));
+                    functions::call_arg_with_text_context(name, &evaluated, self.compatibility_version, self.dbcs_language.unwrap_or(true))
+                } else {
+                    match index.scalar().to_number() {
+                        Ok(n) if n >= 1.0 && (n.trunc() as usize) < args.len() => self.eval_arg_inner(&args[n.trunc() as usize], sheet, depth + 1, skip, at),
+                        Ok(_) => Arg::Value(Value::Error(ExcelError::Value)),
+                        Err(why) => Arg::Value(Value::Error(why)),
+                    }
+                }
+            }
+            Expr::Function { name, args } if matches!(name.as_str(), "IFERROR" | "IFNA") && args.len() == 2 => {
+                let first = self.eval_arg_inner(&args[0], sheet, depth + 1, skip, at);
+                if !self.require_ready_value(&first) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                if user_function_pending() || self.value_deferred.get() { return Arg::Value(Value::Error(ExcelError::Value)); }
+                let needs_fallback = first.flatten().iter().any(|value| matches!(value, Value::Error(why) if name == "IFERROR" || *why == ExcelError::NA));
+                let fallback = if needs_fallback { self.eval_arg_inner(&args[1], sheet, depth + 1, skip, at) } else { Arg::Value(Value::Blank) };
+                functions::call_arg_with_text_context(name, &[first, fallback], self.compatibility_version, self.dbcs_language.unwrap_or(true))
+            }
+
+            // Resolve selections from their already evaluated arguments.
+            // A failed reference selection must not retry a volatile selector
+            // when falling back to the value-function path.
+            Expr::Function { name, args }
+                if matches!(name.as_str(), "INDEX" | "TAKE" | "DROP" | "XLOOKUP")
+                    && !(name == "INDEX" && matches!(args.first(), Some(Expr::Function { name, .. }) if name == "_UNION")) =>
+            {
+                let mut evaluated: Vec<Arg> = args.iter().map(|arg| self.eval_arg_inner(arg, sheet, depth + 1, skip, at)).collect();
+                let selectors: Vec<_> = if name == "XLOOKUP" { [0, 1, 4, 5].iter().filter_map(|i| evaluated.get(*i)).collect() } else { evaluated.iter().skip(1).collect() };
+                if selectors.iter().any(|arg| !self.require_ready_value(arg)) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                if name == "INDEX" {
+                    // Excel Evaluate uses the first index in an index block;
+                    // it does not produce one selection per index element.
+                    let array_context = at.is_some_and(|coord| self.share_at(sheet, &coord).is_some()
+                        || self.sheets.get(sheet).is_some_and(|held| held.dynamic.contains(&coord)));
+                    if !array_context {
+                        for arg in evaluated.iter_mut().skip(1) {
+                            *arg = Arg::Value(match &*arg { Arg::Range(block) => block.cells.first().cloned().unwrap_or(Value::Blank), other => other.scalar() });
+                        }
+                    }
+                    let has_array_index = evaluated.iter().skip(1).any(|arg| matches!(arg, Arg::Range(block) if block.is_array() || block.cells.len() > 1));
+                    if !has_array_index && evaluated.iter().skip(1).any(|arg| arg.scalar().to_number().is_ok_and(|n| n < 0.0)) {
+                        return Arg::Value(Value::Error(ExcelError::Value));
+                    }
+                }
+                let array_index = name == "INDEX" && evaluated.iter().skip(1).any(|arg| matches!(arg, Arg::Range(block) if block.is_array() || block.cells.len() > 1));
+                if let Some((target, range)) = (!array_index).then(|| self.selection_reference(name, &evaluated)).flatten() {
+                    self.reference_arg(&target, &range, skip)
+                } else if name == "INDEX" && !array_index && evaluated.len() == 2
+                    && matches!(evaluated.first(), Some(Arg::Range(block)) if block.cell_reference().is_some_and(|(_, range)| range.width() > 1 && range.height() > 1)) {
+                    Arg::Value(Value::Error(ExcelError::Ref))
+                } else {
+                    if evaluated.iter().any(|argument| !self.require_ready_value(argument)) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                    functions::call_arg_with_text_context(name, &evaluated, self.compatibility_version, self.dbcs_language.unwrap_or(true))
+                }
             }
 
             // Two references that share no cell: #NULL!, measured.
             Expr::Function { name, .. } if name == "_ISECT" => match self.reference_of(expr, sheet, depth + 1, at) {
-                Some((target, range)) => Arg::Range(self.materialise(&target, &range, skip)),
+                Some((target, range)) => self.reference_arg(&target, &range, skip),
                 None => Arg::Value(Value::Error(ExcelError::Null)),
             },
 
             // `D1#`: all that D1 spilled, or #REF! where it spills nothing.
             Expr::Function { name, .. } if name == "_SPILL" => match self.reference_of(expr, sheet, depth + 1, at) {
-                Some((target, range)) => Arg::Range(self.materialise(&target, &range, skip)),
+                Some((target, range)) => self.reference_arg(&target, &range, skip),
                 None => Arg::Value(Value::Error(ExcelError::Ref)),
             },
 
             Expr::Function { name, args } if name == "ISREF" => match args.as_slice() {
-                [only] => Arg::Value(Value::Logical(self.reference_of(only, sheet, depth + 1, at).is_some())),
+                [only] => Arg::Value(Value::Logical(self.metadata_ranges(only, sheet, depth + 1, at).is_some())),
                 _ => Arg::Value(Value::Error(ExcelError::Value)),
             },
 
@@ -1422,11 +2560,10 @@ impl Workbook {
             // range by evaluating it would pull in every cell it names — and
             // the commonest use writes the formula INTO that block, so the
             // count would be a circular reference where Excel sees no
-            // difficulty at all. Only a plain reference is taken this way; an
-            // array arriving from somewhere else still goes the ordinary road.
+            // difficulty at all. Computed references retain their full shape;
+            // value arrays and scalars use the function library.
             Expr::Function { name, args }
-                if matches!(name.as_str(), "ROWS" | "COLUMNS")
-                    && Expr::asks_only_the_shape(name, args) =>
+                if matches!(name.as_str(), "ROWS" | "COLUMNS") =>
             {
                 self.how_many_lines(name, args, sheet, at)
             }
@@ -1480,7 +2617,7 @@ impl Workbook {
                         })
                     })
                     .collect();
-                Arg::Range(RangeData { width, height, cells })
+                Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width, height, cells })
             }
 
             Expr::Function { name, args } if name == "RAND" || name == "RANDBETWEEN" => {
@@ -1517,6 +2654,17 @@ impl Workbook {
             // the formula's own sheet, SHEET(Two!A1) and SHEET("Two") that
             // sheet's place (an unknown name #N/A), ISFORMULA of a cell
             // whether it holds one, and AREAS of a plain range 1.
+            // A multi-area reference is still one PHONETIC argument. Its
+            // areas must not be flattened as separate scalar arguments.
+            Expr::Function { name, args } if name == "PHONETIC" && args.len() == 1
+                && matches!(&args[0], Expr::Function { name, .. } if name == "_UNION") =>
+            {
+                Arg::Value(Value::Error(if self.metadata_ranges(&args[0], sheet, depth + 1, at).is_some() {
+                    ExcelError::NA
+                } else {
+                    ExcelError::Value
+                }))
+            }
             Expr::Function { name, args }
                 if matches!(name.as_str(), "SHEET" | "SHEETS" | "ISFORMULA" | "AREAS") =>
             {
@@ -1531,23 +2679,39 @@ impl Workbook {
                     ("AREAS", [Expr::Function { name: union, args: areas }]) if union == "_UNION" => {
                         Arg::Value(Value::Number(areas.len() as f64))
                     }
+                    ("SHEET", [only @ Expr::Function { name: union, .. }]) if union == "_UNION" => {
+                        match self.metadata_ranges(only, sheet, depth + 1, at) {
+                            Some(ranges) => place(&ranges[0].0),
+                            None => Arg::Value(Value::Error(ExcelError::Value)),
+                        }
+                    }
+                    ("SHEETS", [only @ Expr::Function { name: union, .. }]) if union == "_UNION" => {
+                        match self.metadata_ranges(only, sheet, depth + 1, at) {
+                            Some(_) => Arg::Value(Value::Number(1.0)),
+                            None => Arg::Value(Value::Error(ExcelError::Value)),
+                        }
+                    }
                     ("SHEETS", []) => Arg::Value(Value::Number(self.sheet_order.len().max(1) as f64)),
                     ("SHEETS", [Expr::Ref(_)]) | ("AREAS", [Expr::Ref(_)]) => Arg::Value(Value::Number(1.0)),
                     ("SHEET", []) => place(sheet),
                     ("SHEET", [Expr::Ref(reference)]) => place(reference.sheet.as_deref().unwrap_or(sheet)),
-                    ("SHEET", [other]) => {
-                        match self.eval_arg_inner(other, sheet, depth + 1, skip, at).scalar() {
+                    ("SHEETS", [other]) | ("AREAS", [other]) | ("SHEET", [other]) => {
+                        let answer = self.eval_reference_argument(other, sheet, depth + 1, at);
+                        if let Arg::Range(block) = &answer {
+                            if let Some((target, _)) = block.cell_reference() { return if name == "SHEET" { place(&target) } else { Arg::Value(Value::Number(1.0)) }; }
+                        }
+                        if name != "SHEET" { return Arg::Value(Value::Error(if name == "SHEETS" { ExcelError::NA } else { ExcelError::Value })); }
+                        match answer.scalar() {
                             Value::Text(named) => place(&named),
                             Value::Error(why) => Arg::Value(Value::Error(why)),
                             _ => Arg::Value(Value::Error(ExcelError::NA)),
                         }
                     }
-                    ("ISFORMULA", [Expr::Ref(reference)]) => {
-                        let target = reference.sheet.as_deref().unwrap_or(sheet);
-                        let corner = (
-                            reference.range.start.col.min(reference.range.end.col),
-                            reference.range.start.row.min(reference.range.end.row),
-                        );
+                    ("ISFORMULA", [only]) => {
+                        let Some(ranges) = self.metadata_ranges(only, sheet, depth + 1, at) else { return Arg::Value(Value::Error(ExcelError::Value)); };
+                        let (target, reference) = &ranges[0];
+                        let target = target.as_str();
+                        let corner = (reference.start.col, reference.start.row);
                         let held = self
                             .sheets
                             .get(target)
@@ -1561,15 +2725,17 @@ impl Workbook {
             // FORMULATEXT: the formula a cell holds, as written; #N/A for a
             // cell holding none. Measured: over `=A1+1` it is "=A1+1".
             Expr::Function { name, args } if name == "FORMULATEXT" && args.len() == 1 => {
-                let Some((target, range)) = self.reference_of(&args[0], sheet, depth + 1, at) else {
+                let Some(ranges) = self.metadata_ranges(&args[0], sheet, depth + 1, at) else {
                     return Arg::Value(Value::Error(ExcelError::Value));
                 };
-                let corner = (range.start.col.min(range.end.col), range.start.row.min(range.end.row));
-                match self.sheets.get(&target).and_then(|held| held.cells.get(&corner)) {
-                    Some(Cell::Formula { source, .. }) => {
-                        let body = source.strip_prefix('=').unwrap_or(source);
-                        Arg::Value(Value::Text(format!("={body}")))
-                    }
+                let (target, range) = &ranges[0];
+                let corner = (range.start.col, range.start.row);
+                if self.provisional_value.get() && !(target == sheet && at == Some(corner)) {
+                    let reference = self.reference_arg(target, &RangeRef::single(range.start), skip);
+                    if !self.require_ready_value(&reference) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                }
+                match self.sheets.get(target).and_then(|held| held.cells.get(&corner)) {
+                    Some(Cell::Formula { source, source_utf16, .. }) => Arg::Value(formula_source_value(source, source_utf16.as_deref())),
                     _ => Arg::Value(Value::Error(ExcelError::NA)),
                 }
             }
@@ -1642,6 +2808,7 @@ impl Workbook {
                         named_lambdas += 1;
                     }
                     let value = self.eval_arg_inner(&pair[1], sheet, depth + 1, skip, at);
+                    if !self.reference_context.get() && !self.require_ready_value(&value) { answer = Some(Arg::Value(Value::Error(ExcelError::Value))); break; }
                     self.let_scope.borrow_mut().push((label.clone(), value));
                     bound += 1;
                 }
@@ -1659,8 +2826,8 @@ impl Workbook {
             // A LAMBDA nobody calls is #CALC!: measured, `=LAMBDA(x,x)`.
             Expr::Function { name, .. } if name == "LAMBDA" => Arg::Value(Value::Error(ExcelError::Calc)),
             // A LAMBDA a LET named, called by that name.
-            Expr::Function { name, args } if self.named_lambda(name, sheet).is_some() => {
-                let lambda = self.named_lambda(name, sheet).expect("just asked");
+            Expr::Function { name, args } if self.named_lambda(name, sheet, at).is_some() => {
+                let lambda = self.named_lambda(name, sheet, at).expect("just asked");
                 let values = args
                     .iter()
                     .map(|expr| self.eval_arg_inner(expr, sheet, depth + 1, skip, at))
@@ -1673,6 +2840,7 @@ impl Workbook {
             // cell by cell, and then every branch is worked out as before.
             Expr::Function { name, args } if name == "IF" && (2..=3).contains(&args.len()) => {
                 let test = self.eval_arg_inner(&args[0], sheet, depth + 1, skip, at);
+                if !self.require_ready_value(&test) { return Arg::Value(Value::Error(ExcelError::Value)); }
                 let single = match &test {
                     Arg::Value(value) => Some(value.clone()),
                     Arg::Range(block) if block.cells.len() == 1 => Some(block.cells[0].clone()),
@@ -1686,6 +2854,14 @@ impl Workbook {
                     Value::Text(text) if text.eq_ignore_ascii_case("FALSE") => Some(false),
                     _ => None,
                 });
+                if !matches!(&test, Arg::Range(block) if block.is_array()) {
+                    if let Some(selected) = taken {
+                        return match args.get(if selected { 1 } else { 2 }) {
+                            Some(branch) => self.eval_arg_inner(branch, sheet, depth + 1, skip, at),
+                            None => Arg::Value(Value::Logical(false)),
+                        };
+                    }
+                }
                 let mut evaluated = vec![test];
                 for (index, arg) in args.iter().enumerate().skip(1) {
                     let wanted = match taken {
@@ -1699,7 +2875,7 @@ impl Workbook {
                         Arg::Value(Value::Blank)
                     });
                 }
-                functions::call_arg(name, &evaluated)
+                functions::call_arg_with_text_context(name, &evaluated, self.compatibility_version, self.dbcs_language.unwrap_or(true))
             }
             Expr::Function { name, args } => {
                 // SUBTOTAL ignores any cell in its range that is itself a
@@ -1771,21 +2947,21 @@ impl Workbook {
                         // measured, SUM of a name for A1:B2,D4 adds both.
                         Expr::Name(label)
                             if matches!(
-                                self.name_bound(label, sheet),
+                                self.name_bound(label, sheet, at),
                                 Some(Expr::Function { name: union, .. }) if union == "_UNION"
                             ) =>
                         {
-                            expanded = self.name_bound(label, sheet).cloned().unwrap_or_else(|| a.clone());
+                            expanded = self.name_bound(label, sheet, at).unwrap_or_else(|| a.clone());
                             &expanded
                         }
                         _ => a,
                     };
                     let Expr::Function { name: union, args: areas } = a else {
-                        evaluated.push(self.eval_arg_inner(a, sheet, depth + 1, skip, at));
+                        evaluated.push(self.eval_function_argument((name, at_arg), a, sheet, depth + 1, skip, at));
                         continue;
                     };
                     if union != "_UNION" {
-                        evaluated.push(self.eval_arg_inner(a, sheet, depth + 1, skip, at));
+                        evaluated.push(self.eval_function_argument((name, at_arg), a, sheet, depth + 1, skip, at));
                         continue;
                     }
                     if spliced {
@@ -1797,7 +2973,7 @@ impl Workbook {
                             .iter()
                             .flat_map(|area| self.eval_arg_inner(area, sheet, depth + 1, skip, at).flatten())
                             .collect();
-                        evaluated.push(Arg::Range(RangeData { width: 1, height: cells.len(), cells }));
+                        evaluated.push(Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: cells.len(), cells }));
                     } else if name == "INDEX" && at_arg == 0 {
                         let chosen = args
                             .get(3)
@@ -1810,6 +2986,23 @@ impl Workbook {
                         }
                     } else {
                         return Arg::Value(Value::Error(ExcelError::Value));
+                    }
+                }
+                // SUMIF uses the sum range's top-left and the criteria range's
+                // dimensions, even when the written sum reference is shorter.
+                if name == "SUMIF" && evaluated.len() == 3 {
+                    if let (Some(criteria), Some((target, sum))) = (
+                        match &evaluated[0] { Arg::Range(block) => block.cell_reference().map(|(_, range)| range), _ => None },
+                        match &evaluated[2] { Arg::Range(block) => block.cell_reference(), _ => None },
+                    ) {
+                        let right = sum.start.col.checked_add(criteria.width() - 1);
+                        let bottom = sum.start.row.checked_add(criteria.height() - 1);
+                        evaluated[2] = match (right, bottom) {
+                            (Some(right), Some(bottom)) if right <= MAX_COL && bottom <= MAX_ROW => {
+                                self.reference_arg(&target, &RangeRef::normalised(sum.start, CellRef::new(right, bottom)), skip)
+                            }
+                            _ => Arg::Value(Value::Error(ExcelError::Ref)),
+                        };
                     }
                 }
                 // INDEX's area number has done its work once the area is picked.
@@ -1839,28 +3032,229 @@ impl Workbook {
                 {
                     return Arg::Value(Value::Error(ExcelError::Value));
                 }
+                if user_function_pending() || self.value_deferred.get() { return Arg::Value(Value::Error(ExcelError::Value)); }
+                if name == "IFS" && evaluated.len() >= 2 && evaluated.len() % 2 == 0 {
+                    for pair in evaluated.chunks_exact(2) {
+                        if matches!(&pair[0], Arg::Range(block) if block.is_array() || block.cells.len() > 1) { break; }
+                        match pair[0].scalar().to_logical() {
+                            Ok(true) => return pair[1].clone(),
+                            Ok(false) => {},
+                            Err(why) => return Arg::Value(Value::Error(why)),
+                        }
+                    }
+                }
+                if name == "SWITCH" && evaluated.len() >= 3 && !matches!(&evaluated[0], Arg::Range(block) if block.is_array() || block.cells.len() > 1) {
+                    let subject = evaluated[0].scalar();
+                    if let Value::Error(why) = subject { return Arg::Value(Value::Error(why)); }
+                    let mut i = 1;
+                    while i + 1 < evaluated.len() {
+                        if matches!(&evaluated[i], Arg::Range(block) if block.is_array() || block.cells.len() > 1) { break; }
+                        let candidate = evaluated[i].scalar();
+                        if let Value::Error(why) = candidate { return Arg::Value(Value::Error(why)); }
+                        if crate::value::compare(&subject, &candidate) == Ok(std::cmp::Ordering::Equal) { return evaluated[i + 1].clone(); }
+                        i += 2;
+                    }
+                    if i + 1 == evaluated.len() { return evaluated[i].clone(); }
+                }
                 // A function the sheet does not know may be one the workbook's
                 // macros define: `=Twice(A1)` asks the module's own Twice.
                 if !functions::is_known_function(name) {
+                    let legacy = at.is_some_and(|cell| self.sheets.get(sheet).is_some_and(|held| {
+                        !held.dynamic.contains(&cell) && matches!(held.cells.get(&cell), Some(Cell::Formula { share: None, .. }))
+                    }));
                     let handed: Vec<UserArg> = args
                         .iter()
                         .zip(&evaluated)
-                        .map(|(expr, arg)| match (expr, arg) {
+                        .enumerate()
+                        .map(|(index, (expr, arg))| match (expr, arg) {
                             (Expr::Ref(reference), arg) if reference.book.is_none() => UserArg::Cells {
                                 sheet: reference.sheet.clone().unwrap_or_else(|| sheet.to_string()),
                                 range: reference.range,
                                 values: arg.flatten(),
                             },
+                            (_, Arg::Range(block)) if legacy && block.is_vector() && !(user_reference_argument(name, index) && block.cell_reference().is_some()) => UserArg::Value(block.cells.first().cloned().unwrap_or(Value::Blank)),
                             (_, Arg::Range(block)) => UserArg::Block(block.clone()),
                             (_, Arg::Value(value)) => UserArg::Value(value.clone()),
                         })
                         .collect();
+                    let written = self.written_dependency_expression(expr, sheet, at);
+                    let written: Vec<(String, RangeRef)> = self.ordering_expression(&written, sheet, at).value_references().into_iter()
+                        .filter(|reference| reference.book.is_none())
+                        .map(|reference| (reference.sheet.unwrap_or_else(|| sheet.to_string()), reference.range)).collect();
                     let caller = at.map(|(col, row)| (sheet.to_string(), col, row));
-                    if let Some(answer) = ask_user_function(name, handed, caller) {
-                        return answer;
+                    let lagging_indirect_arguments: BTreeSet<usize> = if self.provisional_value.get() {
+                        args.iter().enumerate().filter_map(|(index, argument)|
+                            ((self.expression_has_lagging_indirect_text(argument, sheet, at)
+                                && (user_function_provisional_dynamic_text_value()
+                                    || user_function_address_only_argument(name, index)))
+                                || (user_function_wait_for_dynamic_lookups() && !user_function_full_rebuild()
+                                    && self.expression_has_shared_indirect_precedent(argument, sheet, at)))
+                                .then_some(index)
+                        ).collect()
+                    } else { BTreeSet::new() };
+                    let value_argument_ranges: Vec<_> = handed.iter().enumerate().filter_map(|(index, argument)| {
+                        if user_reference_argument(name, index) { return None; }
+                        let selected_lookup = !user_function_wait_for_dynamic_lookups() && args.get(index).is_some_and(|argument| {
+                            let mut xlookup = false;
+                            argument.visit(&mut |node| if matches!(node, Expr::Function { name, .. } if name == "XLOOKUP") { xlookup = true; });
+                            xlookup
+                        });
+                        if selected_lookup { return None; }
+                        match argument {
+                            UserArg::Cells { sheet, range, .. } => Some((index, sheet.clone(), *range)),
+                            UserArg::Block(block) => match &block.origin {
+                                functions::BlockOrigin::Cells { sheet, range } => Some((index, sheet.clone(), *range)),
+                                _ => None,
+                            },
+                            UserArg::Value(_) => None,
+                        }
+                    }).collect();
+                    let mut unready_formula_values: Vec<_> = if user_function_wait_for_dependencies() && self.provisional_value.get() {
+                        self.unready_cells.borrow().iter().filter(|(target, (col, row))| {
+                            value_argument_ranges.iter().any(|(_, source, range)|
+                                self.reference_waits_for_formula(source, range, target, (*col, *row)))
+                        }).cloned().collect()
+                    } else { Vec::new() };
+                    if user_function_wait_for_dependencies() && self.provisional_value.get() {
+                        if let Some(coord) = at {
+                            if let Some(formula) = self.expr_at(sheet, &coord) {
+                                let formula = if user_function_wait_for_dynamic_lookups() { formula } else { omit_xlookup_return_arrays(&formula) };
+                                let ordered_formula = self.ordering_expression(&self.dependency_expression(&formula, sheet, Some(coord)), sheet, Some(coord));
+                                let references = ordered_formula.value_references();
+                                unready_formula_values.extend(self.unready_cells.borrow().iter().filter(|(target, (col, row))| {
+                                    references.iter().any(|reference| {
+                                        self.reference_waits_for_formula(reference.sheet.as_deref().unwrap_or(sheet), &reference.range, target, (*col, *row))
+                                    })
+                                }).cloned());
+                            }
+                        }
+                        if !user_function_wait_for_dynamic_lookups() {
+                            unready_formula_values.retain(|(target, coord)| {
+                                self.expr_at(target, coord).is_none_or(|formula| {
+                                    let mut xlookup = false;
+                                    formula.visit(&mut |node| if matches!(node, Expr::Function { name, .. } if name == "XLOOKUP") { xlookup = true; });
+                                    !xlookup
+                                })
+                            });
+                        }
+                        unready_formula_values.sort();
+                        unready_formula_values.dedup();
+                        unready_formula_values.retain(|(target, coord)| {
+                            let precedes_owner = at.and_then(|cell| self.calculation_order.get(&(sheet.to_string(), cell)))
+                                .zip(self.calculation_order.get(&(target.clone(), *coord)))
+                                .is_some_and(|(consumer, producer)| consumer < producer);
+                            if !precedes_owner { return true; }
+                            let probes_written_scalar = value_argument_ranges.iter().any(|(index, source, range)|
+                                crate::case_fold::name_key(source) == crate::case_fold::name_key(target)
+                                    && range.contains(coord.0, coord.1)
+                                    && args.get(*index).is_some_and(|argument|
+                                        Self::scalar_cell_reference(name, *index, argument).is_some()));
+                            if probes_written_scalar { return false; }
+                            // A chain consumer may probe an unpublished spill
+                            // member before its later owner. A direct read of
+                            // the formula anchor still waits for that value.
+                            let reads_anchor = value_argument_ranges.iter().any(|(_, source, range)|
+                                crate::case_fold::name_key(source) == crate::case_fold::name_key(target)
+                                    && range.contains(coord.0, coord.1));
+                            let reads_spill = value_argument_ranges.iter().any(|(_, source, range)|
+                                !range.contains(coord.0, coord.1)
+                                    && self.reference_waits_for_formula(source, range, target, *coord)
+                                    && USER_FUNCTION_SPILL_PROBE_LAYOUT.with(|held| held.borrow().as_ref().is_none_or(|layout|
+                                        layout.iter().any(|((owner_sheet, owner), (width, height))|
+                                            owner_sheet == target && owner == coord
+                                                && range.start.col < owner.0 + width && range.end.col >= owner.0
+                                                && range.start.row < owner.1 + height && range.end.row >= owner.1))));
+                            reads_anchor || !reads_spill
+                        });
+                    }
+                    if !lagging_indirect_arguments.is_empty() {
+                        unready_formula_values.retain(|(target, coord)| !value_argument_ranges.iter().any(|(index, source, range)| {
+                            if !lagging_indirect_arguments.contains(index)
+                                || crate::case_fold::name_key(source) != crate::case_fold::name_key(target)
+                                || !range.contains(coord.0, coord.1) { return false; }
+                            if !user_function_provisional_dynamic_text_value() { return true; }
+                            let scalar_value_argument = !user_reference_argument(name, *index)
+                                && !user_variant_argument(name, *index)
+                                && !user_value_read_argument(name, *index);
+                            if !scalar_value_argument { return true; }
+                            let previous = self.provisional_text_formula_values_before_pass.borrow().get(&(target.clone(), *coord)).cloned();
+                            let previous_nonzero = previous.clone().is_some_and(|value| !matches!(value, Value::Blank | Value::Number(0.0)));
+                            if user_function_provisional_zero_text_probe() && matches!(previous, Some(Value::Number(0.0))) {
+                                true
+                            } else if user_function_full_rebuild() { !previous_nonzero } else { previous_nonzero }
+                        }));
+                    }
+                    if !unready_formula_values.is_empty() {
+                        // A scalar formula argument is only a provisional
+                        // value until its formula precedent is published.
+                        // Wait for that value before entering workbook VBA.
+                        self.value_deferred.set(true);
+                        record_user_function_reads(unready_formula_values);
+                        return Arg::Value(Value::Error(ExcelError::Value));
+                    }
+                    if !lagging_indirect_arguments.is_empty() {
+                        USER_PROVISIONAL_INDIRECT_TEXT_VALUE.with(|held| held.set(true));
+                    }
+                    let mut context = next_user_function_context(self.provisional_value.get());
+                    context.dynamic_reference_argument_mask = args.iter().take(64).enumerate().fold(0u64, |mask, (index, argument)| {
+                        let mut has_indirect = false;
+                        argument.visit(&mut |node| {
+                            if matches!(node, Expr::Function { name, .. } if name == "INDIRECT") { has_indirect = true; }
+                        });
+                        if has_indirect { mask | (1u64 << index) } else { mask }
+                    });
+                    let reference_retry_arguments = (!self.reference_context.get()
+                        && ((depth > 0 && !user_function_wait_for_dependencies())
+                            || (depth == 0 && user_function_full_calculation() && !user_function_full_rebuild()))
+                        && USER_FUNCTION_REFERENCE_RETRY.with(|held| held.borrow().is_some())).then(|| handed.clone());
+                    let root = depth == 0 && at.is_none_or(|coord| !self.scalar_replay_exclusions.contains(&(sheet.to_string(), coord)));
+                    if let Some(mut answer) = ask_user_function(name, handed, caller.clone(), context, self.callback_read_view(), root, written.clone()) {
+                        if let (Some(arguments), Arg::Range(block)) = (&reference_retry_arguments, &answer) {
+                            if let Some((target, range)) = block.cell_reference() {
+                                let ready = !self.unready_cells.borrow().iter().any(|(source, (col, row))|
+                                    crate::case_fold::name_key(source) == crate::case_fold::name_key(&target)
+                                        && range.contains(*col, *row));
+                                let retry = USER_FUNCTION_REFERENCE_RETRY.with(|held| held.try_borrow_mut().ok()
+                                    .and_then(|mut hook| hook.as_mut().map(|hook| hook(name, arguments, &caller, context, ready, depth == 0)))
+                                    .unwrap_or(false));
+                                if retry {
+                                    answer = ask_user_function(name, arguments.clone(), caller.clone(), context,
+                                        self.callback_read_view(), root, written.clone())
+                                        .unwrap_or(Arg::Value(Value::Error(ExcelError::Value)));
+                                }
+                            }
+                        }
+                        self.callback_answer_observed.set(true);
+                        if evaluated.iter().enumerate().any(|(index, argument)|
+                            !user_reference_argument(name, index) && self.unready_argument(argument))
+                            || USER_FORMULA_READS.with(|held| held.borrow().iter().any(|cell|
+                                self.unready_cells.borrow().contains(cell))) {
+                            self.value_deferred.set(true);
+                        }
+                        return match answer {
+                            Arg::Range(block) => match block.cell_reference() {
+                                Some((target, range)) => {
+                                    if !self.reference_context.get() {
+                                        // Its address was supplied by the callback, so the
+                                        // written formula could not order this value read.
+                                        self.provisional_value.set(true);
+                                        let cells = self.unready_cells.borrow();
+                                        let reads = cells.range((target.clone(), (range.start.col, 0))..=(target.clone(), (range.end.col, u32::MAX)))
+                                            .filter(|(_, (col, row))| *col <= range.end.col && *row >= range.start.row && *row <= range.end.row).cloned();
+                                        record_user_function_reads(reads);
+                                    }
+                                    self.reference_arg(&target, &range, skip)
+                                },
+                                None => Arg::Range(block),
+                            },
+                            other => other,
+                        };
                     }
                 }
-                functions::call_arg(name, &evaluated)
+                let reference_only = matches!(name.as_str(), "ROW" | "COLUMN" | "ROWS" | "COLUMNS" | "AREAS" | "ISREF" | "SHEET" | "SHEETS" | "FORMULATEXT" | "ISFORMULA");
+                let arguments = if name == "INDEX" { evaluated.get(1..).unwrap_or(&[]) } else if reference_only { &evaluated[0..0] } else { &evaluated[..] };
+                if arguments.iter().any(|argument| !self.require_ready_value(argument)) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                functions::call_arg_with_text_context(name, &evaluated, self.compatibility_version, self.dbcs_language.unwrap_or(true))
             }
         }
     }
@@ -1872,9 +3266,9 @@ impl Workbook {
     /// `Suppliers1[]` is every data cell. Which rows are meant depends on the
     /// part named — the body, the heading, this row — and which columns on the
     /// heading named, so the two are worked out separately and put together.
-    fn a_table_column(&self, name: &str, asked: &str, sheet: &str, at: At) -> Arg {
+    fn a_table_column(&self, name: &str, asked: &str, sheet: &str, skip: Skip, at: At) -> Arg {
         match self.table_range(name, asked, sheet, at) {
-            Ok((sheet, range)) => Arg::Range(self.materialise(&sheet, &range, Skip::Nothing)),
+            Ok((sheet, range)) => self.reference_arg(&sheet, &range, skip),
             Err(why) => Arg::Value(Value::Error(why)),
         }
     }
@@ -1950,6 +3344,7 @@ impl Workbook {
         // Which rows.
         let body_first = table.first_row + table.header_rows;
         let (first_row, last_row) = match part {
+            TablePart::Headers if table.header_rows == 0 => return Err(ExcelError::Ref),
             TablePart::Headers => (table.first_row, table.first_row + table.header_rows - 1),
             TablePart::All => (table.first_row, table.last_row),
             // A table with no totals row has no `[#Totals]`: Excel says #REF!.
@@ -2004,7 +3399,11 @@ impl Workbook {
                 Ok((_, range)) => range,
                 Err(why) => return Arg::Value(Value::Error(why)),
             },
-            _ => return Arg::Value(Value::Error(ExcelError::Value)),
+            _ => match self.eval_reference_argument(first, sheet, 0, at) {
+                Arg::Range(block) => match block.cell_reference() { Some((_, range)) => range, None => return Arg::Value(Value::Error(ExcelError::Value)) },
+                Arg::Value(Value::Error(why)) => return Arg::Value(Value::Error(why)),
+                _ => return Arg::Value(Value::Error(ExcelError::Value)),
+            },
         };
         let (from, to) = if down {
             (range.start.row, range.end.row)
@@ -2012,10 +3411,15 @@ impl Workbook {
             (range.start.col, range.end.col)
         };
         let many = (to.saturating_sub(from) + 1) as usize;
+        // Evaluate and legacy array formulas retain array identity even when
+        // the reference measures one row or column. Ordinary cell formulas
+        // pass a scalar result to their callers.
+        let scalar_context = at.is_some_and(|coord| self.share_at(sheet, &coord).is_none());
+        if many == 1 && scalar_context { return Arg::Value(Value::Number(from as f64 + 1.0)); }
         let cells: Vec<Value> = (from..=to)
             .map(|one| Value::Number(one as f64 + 1.0))
             .collect();
-        Arg::Range(RangeData {
+        Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,
             width: if down { 1 } else { many },
             height: if down { many } else { 1 },
             cells,
@@ -2031,15 +3435,22 @@ impl Workbook {
     /// instead of the reference's.
     fn how_many_lines(&self, name: &str, args: &[Expr], sheet: &str, at: At) -> Arg {
         let down = name == "ROWS";
+        if args.len() != 1 { return Arg::Value(Value::Error(ExcelError::Value)); }
         let range = match args.first() {
             Some(Expr::Ref(reference)) => reference.range,
             Some(Expr::Table { name, asked }) => match self.table_range(name, asked, sheet, at) {
                 Ok((_, range)) => range,
                 Err(why) => return Arg::Value(Value::Error(why)),
             },
-            Some(other) => match self.reference_of(other, sheet, 0, at) {
-                Some((_, range)) => range,
-                None => return Arg::Value(Value::Error(ExcelError::Value)),
+            Some(other) => {
+                let answer = self.eval_reference_argument(other, sheet, 0, at);
+                match &answer {
+                    Arg::Range(block) if block.cell_reference().is_some() => block.cell_reference().unwrap().1,
+                    _ => {
+                        if !self.require_ready_value(&answer) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                        return functions::call_arg_with_text_context(name, &[answer], self.compatibility_version, self.dbcs_language.unwrap_or(true));
+                    },
+                }
             },
             _ => return Arg::Value(Value::Error(ExcelError::Value)),
         };
@@ -2108,11 +3519,11 @@ impl Workbook {
         let rows: Vec<usize> = (first_row..fields.height).filter(|row| keep.get(*row).copied().unwrap_or(false)).collect();
         let aggregate = |picked: &[usize], column: usize| -> Value {
             let cells: Vec<Value> = picked.iter().map(|row| values.at(column, *row)).collect();
-            let block = Arg::Range(RangeData { width: 1, height: cells.len(), cells });
+            let block = Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: cells.len(), cells });
             match &args[2] {
                 Expr::Name(function) if function.eq_ignore_ascii_case("PERCENTOF") => {
                     let all: Vec<Value> = rows.iter().map(|row| values.at(column, *row)).collect();
-                    let all = Arg::Range(RangeData { width: 1, height: all.len(), cells: all });
+                    let all = Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: all.len(), cells: all });
                     crate::functions::call("PERCENTOF", &[block, all])
                 }
                 Expr::Name(function) => crate::functions::call(&function.to_uppercase(), &[block]),
@@ -2201,7 +3612,7 @@ impl Workbook {
             }
         }
         let height = out.len();
-        Arg::Range(RangeData { width, height, cells: out.into_iter().flatten().collect() })
+        Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width, height, cells: out.into_iter().flatten().collect() })
     }
 
     /// PIVOTBY(row_fields, col_fields, values, function, [field_headers],
@@ -2284,7 +3695,7 @@ impl Workbook {
             }
             let range = |members: &[usize]| {
                 let cells: Vec<Value> = members.iter().map(|row| values.at(column, *row)).collect();
-                Arg::Range(RangeData { width: 1, height: cells.len(), cells })
+                Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: cells.len(), cells })
             };
             match &args[3] {
                 Expr::Name(function) if function.eq_ignore_ascii_case("PERCENTOF") => {
@@ -2383,7 +3794,7 @@ impl Workbook {
         }
         out.extend(body);
         let tall = out.len();
-        Arg::Range(RangeData { width, height: tall, cells: out.into_iter().flatten().collect() })
+        Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width, height: tall, cells: out.into_iter().flatten().collect() })
     }
 
     /// Call a LAMBDA written in place with these values for its
@@ -2398,7 +3809,7 @@ impl Workbook {
             .unwrap_or_default()
     }
 
-    fn named_lambda(&self, name: &str, sheet: &str) -> Option<Expr> {
+    fn named_lambda(&self, name: &str, sheet: &str, at: At) -> Option<Expr> {
         self.lambda_scope
             .borrow()
             .iter()
@@ -2406,15 +3817,14 @@ impl Workbook {
             .find(|(held, _)| held.eq_ignore_ascii_case(name))
             .map(|(_, lambda)| lambda.clone())
             .or_else(|| {
-                self.name_bound(name, sheet)
+                self.name_bound(name, sheet, at)
                     .filter(|held| matches!(held, Expr::Function { name, .. } if name == "LAMBDA"))
-                    .cloned()
             })
     }
 
     fn call_lambda(&self, lambda: &Expr, values: Vec<Arg>, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
         if let Expr::Name(label) = lambda {
-            return match self.named_lambda(label, sheet) {
+            return match self.named_lambda(label, sheet, at) {
                 Some(named) => self.call_lambda(&named, values, sheet, depth + 1, skip, at),
                 None => Arg::Value(Value::Error(ExcelError::Value)),
             };
@@ -2495,7 +3905,7 @@ impl Workbook {
                         cells.push(one(self.call_lambda(lambda, values, sheet, depth, skip, at)));
                     }
                 }
-                Arg::Range(RangeData { width, height, cells })
+                Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width, height, cells })
             }
             "REDUCE" | "SCAN" => {
                 let (mut total, data) = match blocks.as_slice() {
@@ -2512,7 +3922,7 @@ impl Workbook {
                 if name == "REDUCE" {
                     Arg::Value(total)
                 } else {
-                    Arg::Range(RangeData { width: data.width, height: data.height, cells: steps })
+                    Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: data.width, height: data.height, cells: steps })
                 }
             }
             "BYROW" | "BYCOL" => {
@@ -2524,9 +3934,9 @@ impl Workbook {
                 let mut cells = Vec::with_capacity(lines);
                 for line in 0..lines {
                     let piece = if by_row {
-                        RangeData { width: data.width, height: 1, cells: (0..data.width).map(|col| data.at(col, line)).collect() }
+                        RangeData {origin: Default::default(),  width: data.width, height: 1, cells: (0..data.width).map(|col| data.at(col, line)).collect() }
                     } else {
-                        RangeData { width: 1, height: data.height, cells: (0..data.height).map(|row| data.at(line, row)).collect() }
+                        RangeData {origin: Default::default(),  width: 1, height: data.height, cells: (0..data.height).map(|row| data.at(line, row)).collect() }
                     };
                     // One value per line: measured, BYROW(A1:B3,LAMBDA(r,r))
                     // is a single #CALC!.
@@ -2538,9 +3948,9 @@ impl Workbook {
                     }
                 }
                 if by_row {
-                    Arg::Range(RangeData { width: 1, height: lines, cells })
+                    Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: lines, cells })
                 } else {
-                    Arg::Range(RangeData { width: lines, height: 1, cells })
+                    Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: lines, height: 1, cells })
                 }
             }
             _ => {
@@ -2566,7 +3976,7 @@ impl Workbook {
                         cells.push(one(self.call_lambda(lambda, values, sheet, depth, skip, at)));
                     }
                 }
-                Arg::Range(RangeData { width, height, cells })
+                Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width, height, cells })
             }
         }
     }
@@ -2579,7 +3989,14 @@ impl Workbook {
                 reference.range,
             )),
             Expr::Table { name, asked } => self.table_range(name, asked, sheet, at).ok(),
-            Expr::Name(name) => match self.name_bound(name, sheet) {
+            Expr::Name(name) if self.let_scope.borrow().iter().any(|(label, _)| label == name) => {
+                let scope = self.let_scope.borrow();
+                match &scope.iter().rev().find(|(label, _)| label == name)?.1 {
+                    Arg::Range(block) => block.cell_reference(),
+                    _ => None,
+                }
+            },
+            Expr::Name(name) => match self.name_bound(name, sheet, at) {
                 Some(bound) => {
                     let bound = bound.clone();
                     self.reference_of(&bound, sheet, depth, at)
@@ -2598,35 +4015,10 @@ impl Workbook {
             Expr::Function { name, args } if name == "INDIRECT" => {
                 self.indirect_range(args, sheet, depth, at).ok()
             }
-            Expr::Function { name, args } if name == "INDEX" => self.index_range(args, sheet, depth, at),
-            Expr::Function { name, args } if name == "TRIMRANGE" => self.trimmed_range(args, sheet, depth, at),
-            Expr::Function { name, args } if matches!(name.as_str(), "TAKE" | "DROP") => self.taken_range(name, args, sheet, depth, at),
-            // XLOOKUP answering out of a reference answers the cell it found
-            // there: measured, TypeName(Evaluate("XLOOKUP(3,A1:A6,A1:A6)")) is
-            // Range.
-            Expr::Function { name, args } if name == "XLOOKUP" && args.len() >= 3 => {
-                let (target, returned) = self.reference_of(&args[2], sheet, depth + 1, at)?;
-                let mut asked = vec![args[0].clone(), args[1].clone()];
-                asked.push(args.get(4).cloned().unwrap_or(Expr::Literal(Value::Number(0.0))));
-                asked.push(args.get(5).cloned().unwrap_or(Expr::Literal(Value::Number(1.0))));
-                let found = self.eval(&Expr::Function { name: "XMATCH".to_string(), args: asked }, sheet, depth + 1, at);
-                let Value::Number(position) = found else { return None };
-                let offset = position as u32 - 1;
-                let (_, looked) = self.reference_of(&args[1], sheet, depth + 1, at)?;
-                let down = looked.end.row > looked.start.row;
-                let range = if down {
-                    RangeRef::normalised(
-                        CellRef::new(returned.start.col, returned.start.row + offset),
-                        CellRef::new(returned.end.col, returned.start.row + offset),
-                    )
-                } else {
-                    RangeRef::normalised(
-                        CellRef::new(returned.start.col + offset, returned.start.row),
-                        CellRef::new(returned.start.col + offset, returned.end.row),
-                    )
-                };
-                Some((target, range))
+            Expr::Function { name, .. } if matches!(name.as_str(), "INDEX" | "TAKE" | "DROP" | "XLOOKUP") => {
+                match self.eval_reference_argument(expr, sheet, depth + 1, at) { Arg::Range(block) => block.cell_reference(), _ => None }
             }
+            Expr::Function { name, args } if name == "TRIMRANGE" => self.trimmed_range(args, sheet, depth, at),
             Expr::Function { name, args } if name == "_ISECT" && args.len() == 2 => {
                 let (left_sheet, left) = self.reference_of(&args[0], sheet, depth, at)?;
                 let (right_sheet, right) = self.reference_of(&args[1], sheet, depth, at)?;
@@ -2648,45 +4040,63 @@ impl Workbook {
                 })?;
                 Some((target, range))
             }
+            Expr::Function { .. } => match self.eval_reference_argument(expr, sheet, depth + 1, at) { Arg::Range(block) => block.cell_reference(), _ => None },
             _ => None,
         }
     }
 
-    /// TAKE and DROP of a reference are a reference, the rows and columns
-    /// kept of it: measured, INDEX(TAKE(B1:B6,-2),1) is B5's value alone,
-    /// where one index into an array of several rows gives a row.
-    fn taken_range(&self, name: &str, args: &[Expr], sheet: &str, depth: u32, at: At) -> Option<(String, RangeRef)> {
-        let (target, range) = self.reference_of(args.first()?, sheet, depth + 1, at)?;
-        let count = |i: usize| -> Option<Option<i64>> {
-            match args.get(i) {
-                None => Some(None),
-                Some(expr) => match self.eval_arg(expr, sheet, depth + 1, at).scalar() {
-                    Value::Blank => Some(None),
-                    value => value.to_number().ok().map(|n| Some(n.trunc() as i64)),
-                },
-            }
-        };
-        let (rows, columns) = (count(1)?, count(2)?);
+    /// Select cells without evaluating any expression a second time.
+    fn selection_reference(&self, name: &str, args: &[Arg]) -> Option<(String, RangeRef)> {
+        let reference = |arg: &Arg| match arg { Arg::Range(block) => block.cell_reference(), _ => None };
+        let whole = |at: usize| args.get(at)?.scalar().to_number().ok().map(|n| n.trunc() as i64);
+        if name == "XLOOKUP" {
+            let (target, returned) = reference(args.get(2)?)?;
+            let looked = args.get(1)?.as_range();
+            let asked = [args.first()?.clone(), args.get(1)?.clone(), args.get(4).cloned().unwrap_or(Arg::Value(Value::Number(0.0))), args.get(5).cloned().unwrap_or(Arg::Value(Value::Number(1.0)))];
+            let Value::Number(position) = functions::call("XMATCH", &asked) else { return None };
+            if position < 1.0 { return None; }
+            let offset = position as u32 - 1;
+            let range = if looked.height > 1 {
+                if offset >= returned.height() { return None; }
+                RangeRef::normalised(CellRef::new(returned.start.col, returned.start.row + offset), CellRef::new(returned.end.col, returned.start.row + offset))
+            } else {
+                if offset >= returned.width() { return None; }
+                RangeRef::normalised(CellRef::new(returned.start.col + offset, returned.start.row), CellRef::new(returned.start.col + offset, returned.end.row))
+            };
+            return Some((target, range));
+        }
+        let (target, range) = reference(args.first()?)?;
+        if name == "INDEX" {
+            if !(2..=3).contains(&args.len()) { return None; }
+            let (rows, cols) = (i64::from(range.height()), i64::from(range.width()));
+            let (row, col) = match args.get(2) {
+                Some(_) => (whole(1)?, whole(2)?),
+                None if rows == 1 => (1, whole(1)?),
+                None if cols == 1 => (whole(1)?, 1),
+                None => return None,
+            };
+            if row < 0 || col < 0 || row > rows || col > cols { return None; }
+            let (r0, r1) = if row == 0 { (range.start.row, range.end.row) } else { let r = range.start.row + row as u32 - 1; (r, r) };
+            let (c0, c1) = if col == 0 { (range.start.col, range.end.col) } else { let c = range.start.col + col as u32 - 1; (c, c) };
+            return Some((target, RangeRef::normalised(CellRef::new(c0, r0), CellRef::new(c1, r1))));
+        }
+        if !(2..=3).contains(&args.len()) { return None; }
+        let count = |at| match args.get(at).map(Arg::scalar) { None | Some(Value::Blank) => Some(None), Some(value) => value.to_number().ok().map(|n| Some(n.trunc() as i64)) };
         let cut = |start: u32, end: u32, asked: Option<i64>| -> Option<(u32, u32)> {
-            let length = i64::from(end - start + 1);
             let Some(asked) = asked else { return Some((start, end)) };
-            let (keep_from, keep_to) = if name == "TAKE" {
-                let n = asked.abs().min(length);
-                if n == 0 {
-                    return None;
-                }
+            let length = u64::from(end - start + 1);
+            let n = asked.unsigned_abs();
+            let (lo, hi) = if name == "TAKE" {
+                let n = n.min(length); if n == 0 { return None; }
                 if asked > 0 { (0, n - 1) } else { (length - n, length - 1) }
             } else {
-                let n = asked.abs();
-                if n >= length {
-                    return None;
-                }
-                if asked > 0 { (n, length - 1) } else { (0, length - 1 - n) }
+                if n >= length { return None; }
+                if asked > 0 { (n, length - 1) } else { (0, length - n - 1) }
             };
-            Some((start + keep_from as u32, start + keep_to as u32))
+            Some((start + lo as u32, start + hi as u32))
         };
-        let (r0, r1) = cut(range.start.row, range.end.row, rows)?;
-        let (c0, c1) = cut(range.start.col, range.end.col, columns)?;
+        let (r0, r1) = cut(range.start.row, range.end.row, count(1)?)?;
+        let (c0, c1) = cut(range.start.col, range.end.col, count(2)?)?;
         Some((target, RangeRef::normalised(CellRef::new(c0, r0), CellRef::new(c1, r1))))
     }
 
@@ -2757,36 +4167,6 @@ impl Workbook {
         Expr::Function { name: "_UNION".to_string(), args: areas }
     }
 
-    /// `INDEX(reference, row, [col])` as the cells it names: a row or column
-    /// of 0, or left empty, is all of them. Measured: `=@INDEX(A1:A3,0)` in
-    /// row 1 is A1, and `=@INDEX(A1:B3,2,0)` in column Z is #VALUE!, the
-    /// answer being A2:B2. Only a plain range is taken; anything else is
-    /// left to the function.
-    fn index_range(&self, args: &[Expr], sheet: &str, depth: u32, at: At) -> Option<(String, RangeRef)> {
-        if !(2..=3).contains(&args.len()) {
-            return None;
-        }
-        let (target, range) = self.reference_of(&args[0], sheet, depth, at)?;
-        let number = |expr: &Expr| -> Option<u32> {
-            let value = self.eval(expr, sheet, depth + 1, at).to_number().ok()?;
-            (value >= 0.0).then_some(value as u32)
-        };
-        let rows = range.end.row - range.start.row + 1;
-        let cols = range.end.col - range.start.col + 1;
-        let (row, col) = match args.get(2) {
-            Some(col) => (number(&args[1])?, number(col)?),
-            None if rows == 1 => (1, number(&args[1])?),
-            None if cols == 1 => (number(&args[1])?, 1),
-            None => return None,
-        };
-        if row > rows || col > cols {
-            return None;
-        }
-        let (first_row, last_row) = if row == 0 { (range.start.row, range.end.row) } else { (range.start.row + row - 1, range.start.row + row - 1) };
-        let (first_col, last_col) = if col == 0 { (range.start.col, range.end.col) } else { (range.start.col + col - 1, range.start.col + col - 1) };
-        Some((target, RangeRef::normalised(CellRef::new(first_col, first_row), CellRef::new(last_col, last_row))))
-    }
-
     /// `OFFSET(reference, rows, cols, [height], [width])`: the base range moved
     /// by rows/cols and, if asked, resized. Off the sheet is #REF!.
     fn offset_range(
@@ -2806,7 +4186,9 @@ impl Workbook {
             match args.get(index) {
                 None => Ok(default),
                 Some(expr) => {
-                    let value = self.eval_arg(expr, sheet, depth + 1, at).scalar();
+                    let argument = self.eval_arg(expr, sheet, depth + 1, at);
+                    if !self.require_ready_value(&argument) { return Err(ExcelError::Value); }
+                    let value = argument.scalar();
                     if let Some(why) = value.err() {
                         return Err(why);
                     }
@@ -2846,7 +4228,7 @@ impl Workbook {
 
     fn offset_reference(&self, args: &[Expr], sheet: &str, depth: u32, at: At) -> Arg {
         match self.offset_range(args, sheet, depth, at) {
-            Ok((s, range)) => Arg::Range(self.materialise(&s, &range, Skip::Nothing)),
+            Ok((s, range)) => self.reference_arg(&s, &range, Skip::Nothing),
             Err(why) => Arg::Value(Value::Error(why)),
         }
     }
@@ -2863,18 +4245,20 @@ impl Workbook {
         if args.is_empty() || args.len() > 2 {
             return Err(ExcelError::Value);
         }
-        let text = match self.eval_arg(&args[0], sheet, depth + 1, at).scalar() {
+        let argument = self.eval_arg(&args[0], sheet, depth + 1, at);
+        if !self.require_ready_value(&argument) { return Err(ExcelError::Value); }
+        let text = match argument.scalar() {
             Value::Text(s) => s,
             Value::Error(why) => return Err(why),
             _ => return Err(ExcelError::Ref),
         };
         let a1 = match args.get(1) {
             None => true,
-            Some(expr) => self
-                .eval_arg(expr, sheet, depth + 1, at)
-                .scalar()
-                .to_logical()
-                .unwrap_or(true),
+            Some(expr) => {
+                let argument = self.eval_arg(expr, sheet, depth + 1, at);
+                if !self.require_ready_value(&argument) { return Err(ExcelError::Value); }
+                argument.scalar().to_logical().unwrap_or(true)
+            },
         };
         let (target, address) = match text.rfind('!') {
             Some(pos) => {
@@ -2906,9 +4290,129 @@ impl Workbook {
         Ok((target, range))
     }
 
+    fn indirect_text_precedent_is_later(&self, args: &[Expr], sheet: &str, at: At) -> bool {
+        let selected = self.pass_cells.borrow();
+        let caller_order = at.and_then(|coord| self.calculation_order.get(&(sheet.to_string(), coord))).copied();
+        args.iter().any(|arg| {
+            let resolved = self.dependency_expression(arg, sheet, at);
+            let ordered = self.ordering_expression(&resolved, sheet, at);
+            ordered.value_references().iter().any(|reference| {
+                let target = reference.sheet.as_deref().unwrap_or(sheet);
+                let computed_scalar = reference.range.is_single()
+                    && self.expr_at(target, &reference.range.start.coord()).is_some()
+                    && (caller_order.zip(self.calculation_order.get(&(target.to_string(), reference.range.start.coord())).copied())
+                        .is_some_and(|(caller, text)| text > caller)
+                        || (target.eq_ignore_ascii_case(sheet)
+                            && at.is_some_and(|caller| reference.range.start.coord() > caller)));
+                computed_scalar || selected.range((target.to_string(), (reference.range.start.col, 0))..=(target.to_string(), (reference.range.end.col, u32::MAX)))
+                    .filter(|(_, (col, row))| *col <= reference.range.end.col && *row >= reference.range.start.row && *row <= reference.range.end.row)
+                    .any(|cell| caller_order.zip(self.calculation_order.get(cell).copied())
+                        .is_none_or(|(caller, text)| text > caller))
+            })
+        })
+    }
+
+    fn expression_has_lagging_indirect_text(&self, expr: &Expr, sheet: &str, at: At) -> bool {
+        let mut found = false;
+        expr.visit(&mut |node| {
+            if let Expr::Function { name, args } = node {
+                if name == "INDIRECT" && self.indirect_text_precedent_is_later(args, sheet, at) { found = true; }
+            }
+        });
+        found
+    }
+
+    fn expression_has_shared_indirect_precedent(&self, expr: &Expr, sheet: &str, at: At) -> bool {
+        let mut found = false;
+        expr.visit(&mut |node| {
+            let Expr::Function { name, args } = node else { return; };
+            if name != "INDIRECT" || args.is_empty() { return; }
+            let Some(Expr::Ref(selector)) = args.first() else { return; };
+            if selector.book.is_some() || !selector.range.is_single() { return; }
+            let selector_sheet = selector.sheet.as_deref().unwrap_or(sheet);
+            let selector_coord = selector.range.start.coord();
+            let Some(selector_expr) = self.expr_at(selector_sheet, &selector_coord) else { return; };
+            let Ok((target_sheet, target_range)) = self.indirect_range(args, sheet, 0, at) else { return; };
+            if !target_range.is_single() { return; }
+            let Some(target_expr) = self.expr_at(&target_sheet, &target_range.start.coord()) else { return; };
+            let previous_target = self.formula_values_before_pass.borrow()
+                .get(&(target_sheet.clone(), target_range.start.coord())).cloned();
+            if previous_target.is_none_or(|value| matches!(value, Value::Blank | Value::Number(0.0))) { return; }
+            let selector_reads = self.dependency_expression(&selector_expr, selector_sheet, Some(selector_coord)).value_references();
+            let target_reads = self.dependency_expression(&target_expr, &target_sheet, Some(target_range.start.coord())).value_references();
+            if selector_reads.iter().any(|left| target_reads.iter().any(|right| {
+                left.book == right.book
+                    && left.sheet.as_deref().unwrap_or(selector_sheet).eq_ignore_ascii_case(right.sheet.as_deref().unwrap_or(&target_sheet))
+                    && left.range.intersect(&right.range).is_some()
+            })) { found = true; }
+        });
+        found
+    }
+
     fn indirect_reference(&self, args: &[Expr], sheet: &str, depth: u32, at: At) -> Arg {
         match self.indirect_range(args, sheet, depth, at) {
-            Ok((s, range)) => Arg::Range(self.materialise(&s, &range, Skip::Nothing)),
+            Ok((target, range)) => {
+                let formula_selector = args.first().and_then(|selector| match selector {
+                    Expr::Ref(reference) if reference.book.is_none() && reference.range.is_single() => {
+                        let selector_sheet = reference.sheet.as_deref().unwrap_or(sheet);
+                        self.expr_at(selector_sheet, &reference.range.start.coord())
+                            .map(|_| (selector_sheet.to_string(), reference.range.start.coord()))
+                    }
+                    _ => None,
+                });
+                if !self.reference_context.get() {
+                    self.provisional_value.set(true);
+                    let cells = self.unready_cells.borrow();
+                    let reads = cells.range((target.clone(), (range.start.col, 0))..=(target.clone(), (range.end.col, u32::MAX)))
+                        .filter(|(_, (col, row))| *col <= range.end.col && *row >= range.start.row && *row <= range.end.row).cloned();
+                    record_user_function_reads(reads);
+                } else if self.dynamic_reference_wait.get() {
+                    if let Some((selector_sheet, selector_at)) = &formula_selector {
+                    let cells = self.unready_cells.borrow();
+                    let reads: Vec<_> = cells.range((target.clone(), (range.start.col, 0))..=(target.clone(), (range.end.col, u32::MAX)))
+                        .filter(|(_, (col, row))| *col <= range.end.col && *row >= range.start.row && *row <= range.end.row).cloned().collect();
+                    let caller_order = at.and_then(|coord| self.calculation_order.get(&(sheet.to_string(), coord))).copied();
+                    let follows_caller = reads.iter().any(|cell| caller_order.zip(self.calculation_order.get(cell).copied())
+                        .is_none_or(|(caller, producer)| producer > caller));
+                    let selector_expr = self.expr_at(selector_sheet, selector_at);
+                    let target_expr = range.is_single().then(|| self.expr_at(&target, &range.start.coord())).flatten();
+                    let shared_precedent = selector_expr.as_ref().zip(target_expr.as_ref()).is_some_and(|(selector, producer)| {
+                        let selector_reads = self.dependency_expression(selector, selector_sheet, Some(*selector_at)).value_references();
+                        let producer_reads = self.dependency_expression(producer, &target, Some(range.start.coord())).value_references();
+                        selector_reads.iter().any(|left| producer_reads.iter().any(|right| {
+                            left.book == right.book
+                                && left.sheet.as_deref().unwrap_or(selector_sheet).eq_ignore_ascii_case(right.sheet.as_deref().unwrap_or(&target))
+                                && left.range.intersect(&right.range).is_some()
+                        }))
+                    });
+                    let selector_unchanged = self.formula_values_before_pass.borrow()
+                        .get(&(selector_sheet.clone(), *selector_at)).cloned()
+                        .is_some_and(|previous| previous == self.eval_arg(&args[0], sheet, depth + 1, at).scalar().clone());
+                    if follows_caller && !(self.variant_value_read_context.get() && shared_precedent && selector_unchanged) {
+                        record_user_function_reads(reads);
+                        self.value_deferred.set(true);
+                    }
+                    }
+                }
+                let answer = self.reference_arg(&target, &range, Skip::Nothing);
+                if !self.reference_context.get() {
+                    let calculated_text = self.indirect_text_precedent_is_later(args, sheet, at);
+                    let shared_scalar_probe = user_function_wait_for_dynamic_lookups()
+                        && !user_function_full_rebuild()
+                        && self.provisional_value.get()
+                        && self.expression_has_shared_indirect_precedent(&Expr::Function { name: "INDIRECT".into(), args: args.to_vec() }, sheet, at)
+                        && USER_FUNCTION_ARGUMENT_CONTEXT.with(|held| held.borrow().as_ref().is_some_and(|(function, index)| !user_reference_argument(function, *index)));
+                    // A text precedent still behind its consumer starts a
+                    // separate readiness phase. An already placed precedent
+                    // retains the normal provisional callback value probes.
+                    if calculated_text && !((user_function_provisional_dynamic_text_value()
+                        || (user_function_wait_for_dependencies() && user_function_current_argument_is_address_only())
+                        || shared_scalar_probe) && self.provisional_value.get())
+                        && !self.require_ready_value(&answer)
+                    { return Arg::Value(Value::Error(ExcelError::Value)); }
+                }
+                answer
+            },
             Err(why) => Arg::Value(Value::Error(why)),
         }
     }
@@ -3037,6 +4541,7 @@ fn formula_result(value: Value) -> Value {
 }
 
 fn apply_unary(op: UnaryOp, v: Value) -> Value {
+    if op == UnaryOp::Plus { return v; }
     if let Some(e) = v.err() {
         return Value::Error(e);
     }
@@ -3067,7 +4572,7 @@ fn across(op: BinaryOp, a: &Arg, b: &Arg) -> Arg {
         (Arg::Value(x), Arg::Value(y)) => return Arg::Value(apply_binary(op, x.clone(), y.clone())),
         _ => (block_of(a), block_of(b)),
     };
-    if left.cells.len() == 1 && right.cells.len() == 1 {
+    if left.cells.len() == 1 && right.cells.len() == 1 && !left.is_array() && !right.is_array() {
         return Arg::Value(apply_binary(op, left.cells[0].clone(), right.cells[0].clone()));
     }
     let width = left.width.max(right.width);
@@ -3081,7 +4586,7 @@ fn across(op: BinaryOp, a: &Arg, b: &Arg) -> Arg {
             }
         }
     }
-    Arg::Range(RangeData {
+    Arg::Range(RangeData {origin: RangeData::value_origin([&left, &right]),
         width,
         height,
         cells,
@@ -3125,8 +4630,8 @@ fn apply_binary(op: BinaryOp, a: Value, b: Value) -> Value {
     }
 
     if op == BinaryOp::Concat {
-        return match (a.to_text(), b.to_text()) {
-            (Ok(x), Ok(y)) => Value::Text(x + &y),
+        return match (a.to_utf16(), b.to_utf16()) {
+            (Ok(mut x), Ok(y)) => { x.extend(y); Value::from_utf16(x) },
             (Err(e), _) | (_, Err(e)) => Value::Error(e),
         };
     }
@@ -3165,20 +4670,6 @@ fn fifteen_digits(x: f64) -> f64 {
         return x;
     }
     format!("{x:.14e}").parse().unwrap_or(x)
-}
-
-/// Whether a formula's answer is an array by its making, whatever its size:
-/// an array written out, ROW and COLUMN (which always answer arrays), or an
-/// operator or IF with one of those among its parts.
-fn arrayish(expr: &Expr) -> bool {
-    match expr {
-        Expr::Array(_) => true,
-        Expr::Function { name, .. } if matches!(name.as_str(), "ROW" | "COLUMN") => true,
-        Expr::Function { name, args } if name == "IF" => args.iter().any(arrayish),
-        Expr::Unary { operand, .. } => arrayish(operand),
-        Expr::Binary { lhs, rhs, .. } => arrayish(lhs) || arrayish(rhs),
-        _ => false,
-    }
 }
 
 #[cfg(test)]
@@ -3236,6 +4727,20 @@ mod tests {
 
     /// Three rows of three, so a whole column and a whole row are told apart
     /// by their sums.
+    #[test]
+    fn utf16_formula_calculation_and_formulatext_preserve_units() {
+        let mut workbook = book();
+        let formula = vec![b'=' as u16, b'"' as u16, b'a' as u16, 0xD83D, b'b' as u16, b'"' as u16];
+        workbook.set_formula_utf16("Sheet1", "A1", &formula).unwrap();
+        assert_eq!(workbook.formula_utf16("Sheet1", "A1"), Some(formula.clone()));
+        workbook.set_formula("Sheet1", "B1", "=FORMULATEXT(A1)").unwrap();
+        workbook.set_formula("Sheet1", "C1", "=A1 & \"!\"").unwrap();
+        workbook.recalculate();
+        assert_eq!(workbook.value("Sheet1", "A1"), Value::Utf16(vec![97, 0xD83D, 98]));
+        assert_eq!(workbook.value("Sheet1", "B1"), Value::Utf16(formula));
+        assert_eq!(workbook.value("Sheet1", "C1"), Value::Utf16(vec![97, 0xD83D, 98, 33]));
+    }
+
     fn a_block() -> Workbook {
         let mut wb = book();
         for row in 1..=3u32 {
@@ -3263,6 +4768,82 @@ mod tests {
         wb.set_formula("Sheet1", "E1", "=SUM(A1:A2)").unwrap();
         wb.recalculate();
         wb
+    }
+
+    #[test]
+    fn queued_callbacks_keep_the_values_from_their_request() {
+        let mut wb = book();
+        wb.set_formula("Sheet1", "A1", "=CAPTURE()").unwrap();
+        wb.set_formula("Sheet1", "C1", "=SEQUENCE(2)").unwrap();
+        wb.set_dynamic("Sheet1", "C1").unwrap();
+        wb.set_formula("Sheet1", "Z1", "=CAPTURE()").unwrap();
+        let views = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured = views.clone();
+        set_user_function_hook(Some(Box::new(move |name, _, _| {
+            assert_eq!(name, "CAPTURE");
+            captured.borrow_mut().push(user_function_read_view().unwrap());
+            Some(Arg::Value(Value::Number(0.0)))
+        })));
+        wb.recalculate();
+        set_user_function_hook(None);
+        assert_eq!(wb.value("Sheet1", "C2"), Value::Number(2.0));
+        drop(wb);
+        let views = views.borrow();
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].value("Sheet1", 2, 1), Some(Value::Blank));
+        assert_eq!(views[1].value("Sheet1", 2, 1), Some(Value::Number(2.0)));
+        assert!(user_function_read_view().is_none());
+    }
+
+    #[test]
+    fn rebuilt_order_separates_written_references_from_cached_spill_members() {
+        let mut wb = book();
+        wb.set_formula("Sheet1", "M1", "=PRODUCER()").unwrap();
+        wb.set_formula("Sheet1", "N1", "=CONSUMER(M1)").unwrap();
+        wb.set_formula("Sheet1", "X1", "=ARRAY_PRODUCER()").unwrap();
+        wb.set_dynamic("Sheet1", "X1").unwrap();
+        wb.set_spilled_value("Sheet1", "Y1", Value::Number(2.0)).unwrap();
+        wb.set_cached_spill("Sheet1", "X1", 2, 1).unwrap();
+        wb.set_formula("Sheet1", "Z1", "=CONSUMER(Y1)").unwrap();
+        wb.set_calculation_order(&[("Sheet1".into(), (13, 0)), ("Sheet1".into(), (25, 0)), ("Sheet1".into(), (12, 0)), ("Sheet1".into(), (23, 0))]);
+        let order = wb.rebuilt_calculation_order();
+        let position = |col| order.iter().position(|(sheet, at)| sheet == "Sheet1" && *at == (col, 0)).unwrap();
+        assert!(position(12) < position(13), "a written formula reference establishes the rebuilt traversal");
+        assert!(position(25) < position(23), "cached spill members remain work discovered during calculation");
+    }
+
+    #[test]
+    fn spill_refresh_keeps_the_first_accepted_traversal() {
+        let mut wb = book();
+        wb.set_formula("Sheet1", "N1", "=ARRAY_SOURCE()").unwrap();
+        wb.set_dynamic("Sheet1", "N1").unwrap();
+        wb.set_cached("Sheet1", "N1", Value::Number(1.0)).unwrap();
+        wb.set_formula("Sheet1", "Q1", "=OBSERVE(N2)").unwrap();
+        let wanted = vec![("Sheet1".into(), (16, 0)), ("Sheet1".into(), (13, 0))];
+        wb.set_calculation_order(&wanted);wb.set_chain_probes(true);
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = calls.clone();
+        set_user_function_hook(Some(Box::new(move |name, args, _| {
+            if name == "ARRAY_SOURCE" {
+                seen.borrow_mut().push("array".to_string());
+                return Some(Arg::Range(RangeData { origin: crate::functions::BlockOrigin::Array, width: 1, height: 2, cells: vec![Value::Number(1.0), Value::Number(2.0)] }));
+            }
+            assert_eq!(name, "OBSERVE");
+            let value = match &args[0] {
+                UserArg::Cells { values, .. } => values.first().cloned().unwrap_or(Value::Blank),
+                UserArg::Value(value) => value.clone(),
+                _ => panic!("expected one cell"),
+            };
+            let value = if value == Value::Blank { Value::Number(0.0) } else { value };
+            seen.borrow_mut().push(format!("observe:{value:?}"));
+            Some(Arg::Value(value))
+        })));
+        let report = wb.recalculate_dirty(&wanted, None);
+        set_user_function_hook(None);
+        assert_eq!(wb.value("Sheet1", "Q1"), Value::Number(2.0));
+        assert_eq!(&*calls.borrow(), &["observe:Number(0.0)", "array", "observe:Number(2.0)"]);
+        assert_eq!(report.traversal_order, wanted);
+        assert_eq!(report.calculated, vec![("Sheet1".into(), (13, 0)), ("Sheet1".into(), (16, 0))]);
     }
 
     #[test]
@@ -3517,6 +5098,26 @@ mod tests {
         wb.recalculate();
         assert_eq!(wb.value("Sheet1", "E1"), Value::text("PAY"));
         assert_eq!(wb.value("Sheet1", "E2"), Value::Number(1.0));
+    }
+
+    #[test]
+    fn hidden_table_headers_are_ref_errors_including_on_the_first_sheet_row() {
+        for first_row in [0, 1] {
+            let mut wb = book();
+            wb.add_table("Sheet1", "tbl", (first_row, first_row + 1), (0, 1), 0, 0, vec!["X".into(), "Y".into()]);
+            wb.set_value("Sheet1", &format!("A{}", first_row + 1), Value::Number(7.0)).unwrap();
+            for (address, formula) in [
+                ("E1", "=ROWS(tbl[#Headers])"),
+                ("E2", "=ROW(tbl[[#Headers],[X]])"),
+                ("E3", "=SUM(tbl[X])"),
+                ("E4", "=ROWS(tbl[#All])"),
+            ] { wb.set_formula("Sheet1", address, formula).unwrap(); }
+            wb.recalculate();
+            assert_eq!(wb.value("Sheet1", "E1"), Value::Error(ExcelError::Ref));
+            assert_eq!(wb.value("Sheet1", "E2"), Value::Error(ExcelError::Ref));
+            assert_eq!(wb.value("Sheet1", "E3"), Value::Number(7.0));
+            assert_eq!(wb.value("Sheet1", "E4"), Value::Number(2.0));
+        }
     }
 
     #[test]
@@ -3998,6 +5599,32 @@ mod tests {
 
     /// A space between references is the cells they share, #NULL! where they
     /// share none; MMULT is the matrix product. Measured in Excel.
+    #[test]
+    fn table_and_named_references_keep_subtotal_and_aggregate_exclusions() {
+        for filtered in [false, true] {
+            let mut wb = book();
+            wb.add_table("Sheet1", "T", (0, 5), (0, 0), 1, 0, vec!["X".into()]);
+            for (row, value) in [(2, 1.0), (3, 10.0), (4, 100.0), (6, 1000.0)] {
+                wb.set_value("Sheet1", &format!("A{row}"), Value::Number(value)).unwrap();
+            }
+            wb.set_formula("Sheet1", "A5", "=SUBTOTAL(9,A2:A4)").unwrap();
+            wb.hide_row("Sheet1", 2, filtered);
+            wb.hide_row("Sheet1", 3, filtered);
+            wb.define_name("Held", "=T[X]").unwrap();
+            for (row, formula) in [
+                (1, "=SUBTOTAL(9,T[X])"), (2, "=SUBTOTAL(109,T[X])"),
+                (3, "=SUBTOTAL(9,T)"), (4, "=SUBTOTAL(109,T)"),
+                (5, "=AGGREGATE(9,0,T[X])"), (6, "=AGGREGATE(9,5,T[X])"),
+                (7, "=SUBTOTAL(9,Held)"), (8, "=SUBTOTAL(109,Held)"),
+            ] { wb.set_formula("Sheet1", &format!("E{row}"), formula).unwrap(); }
+            wb.recalculate();
+            let subtotal = if filtered { 1001.0 } else { 1111.0 };
+            for (row, expected) in [(1, subtotal), (2, 1001.0), (3, subtotal), (4, 1001.0), (5, 1111.0), (6, if filtered { 1002.0 } else { 1112.0 }), (7, subtotal), (8, 1001.0)] {
+                assert_eq!(wb.value("Sheet1", &format!("E{row}")), Value::Number(expected), "filtered={filtered} E{row}");
+            }
+        }
+    }
+
     #[test]
     fn intersection_and_mmult() {
         let mut wb = Workbook::new();
@@ -4615,4 +6242,31 @@ mod name_union {
         wb.define_name("Twin", "Sheet1!$A$1:$B$2,Sheet1!$D$4").unwrap();
         assert_eq!(wb.evaluate("Sheet1", "=SUM(Twin)").unwrap(), Value::Number(8.0));
     }
+    #[test]
+    fn defined_names_use_relative_mixed_whole_line_and_wrapped_references() {
+        let mut wb = Workbook::new();wb.add_sheet("Caller");wb.add_sheet("Other");
+        for (cell, value) in [("E1",41.0),("E2",42.0),("F1",51.0),("F2",52.0),("F3",53.0),("G1",61.0),("G3",63.0),("D4",14.0),("B4",40.0),("B6",26.0),("C5",20.0),("E5",45.0)] {
+            wb.set_value("Other",cell,Value::Number(value)).unwrap();
+        }
+        for (name, body) in [("Rel","Other!A1"),("Block","Other!A1:B2"),("Mix","SUM(Other!A1,Other!$B2,Other!C$3,Other!$D$4)"),
+            ("Prev","Other!XFD1048576"),("FixedCol","Other!$B:$B"),("RelCol","Other!A:A"),("RelRows","Other!1:2"),
+            ("Scale","LAMBDA(x,x+Other!A1)"),("Other!Scale","LAMBDA(x,x+Other!A1)")] {
+            wb.define_name(name,body).unwrap();
+        }
+        for (cell, formula) in [("E1","=Rel"),("E2","=SUM(Block)"),("C5","=Prev"),("E5","=Mix"),("C8","=SUM(FixedCol)"),("C9","=SUM(RelCol)"),("E4","=SUM(RelRows)"),("F1","=Scale(1)"),("G1","=Other!Scale(1)")] {
+            wb.set_formula("Caller",cell,formula).unwrap();
+        }
+        wb.recalculate();
+        for (cell, expected) in [("E1",41.0),("E2",147.0),("C5",40.0),("E5",148.0),("C8",66.0),("C9",20.0),("E4",119.0),("F1",52.0),("G1",62.0)] {
+            assert_eq!(wb.value("Caller",cell),Value::Number(expected),"{cell}");
+        }
+        let affected=wb.dependent_formula_ranges(&[("Other".into(),RangeRef::single(CellRef::new(4,0)))]);
+        assert!(affected.contains(&("Caller".into(),(4,0))));
+        assert!(!affected.contains(&("Caller".into(),(4,1))));
+        wb.set_value("Other","E1",Value::Number(99.0)).unwrap();
+        wb.recalculate_after(&[("Other".into(),(4,0))]);
+        assert_eq!(wb.value("Caller","E1"),Value::Number(99.0));
+        assert_eq!(wb.value("Caller","E2"),Value::Number(147.0));
+    }
+
 }

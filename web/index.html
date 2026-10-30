@@ -1014,6 +1014,12 @@ input[type="file"] { display: none; }
 .dark .sheet-tab { background: #444; color: var(--text-secondary); border-color: #555; }
 .dark .sheet-tab.active { background: var(--surface); color: var(--oxi-accent); }
 .dark header { background: #16162a; }
+.vba-compatibility { margin: 8px 0; }
+.vba-compatibility details { margin-top: 8px; }
+.vba-compatibility summary { cursor: pointer; margin-bottom: 8px; }
+.vba-compatibility label { display: block; margin-top: 8px; }
+.vba-compatibility select, .vba-compatibility input { width: 100%; box-sizing: border-box; font: inherit; }
+.vba-compatibility p { font-size: 12px; margin: 8px 0; }
 </style>
 </head>
 <body>
@@ -1040,7 +1046,7 @@ input[type="file"] { display: none; }
 
 <div class="container">
     <div class="drop-zone" id="dropZone">
-        <p data-i18n="dropText">Drop a .docx, .xlsx, .pptx, or .pdf file here — or click to browse</p>
+        <p data-i18n="dropText">Drop a .docx, .xlsx, .xlsm, .pptx, or .pdf file here — or click to browse</p>
         <p class="hint" data-i18n="dropHint">Parsed, rendered, and edited entirely in your browser via WebAssembly</p>
     </div>
     <div class="sample-buttons" id="sampleButtons">
@@ -1054,7 +1060,7 @@ input[type="file"] { display: none; }
         <a href="./xlsx-demo.html" data-i18n="sheetDemo">Or open the spreadsheet
         on its own — drawn and edited by the renderer's own rules &rarr;</a>
     </p>
-    <input type="file" id="fileInput" accept=".docx,.xlsx,.pptx,.pdf">
+    <input type="file" id="fileInput" accept=".docx,.xlsx,.xlsm,.pptx,.pdf">
     <div class="toolbar" id="toolbar">
         <button id="btnDownload" class="primary" data-i18n="download">Download</button>
     </div>
@@ -1102,6 +1108,27 @@ input[type="file"] { display: none; }
         <datalist id="vbaProcedureList"></datalist>
         <label for="vbaArguments">Arguments (JSON array)</label>
         <input id="vbaArguments" type="text" value="[]" placeholder='[42, "text", true, null]' autocomplete="off" spellcheck="false">
+<div class="vba-compatibility">
+  <button type="button" id="vbaLoadSource">Load workbook source</button>
+  <details>
+    <summary>Excel compatibility</summary>
+    <label for="vbaHostCodePage">Windows character set</label>
+    <select id="vbaHostCodePage">
+      <option value="">Default</option>
+      <option value="932">Japanese (Shift JIS)</option>
+      <option value="1252">Western (Windows 1252)</option>
+    </select>
+    <label for="vbaErrorLanguage">VBA error language</label>
+    <select id="vbaErrorLanguage">
+      <option value="">Default (English)</option>
+      <option value="en-US">English</option>
+      <option value="ja-JP">日本語</option>
+    </select>
+    <label for="vbaHelpFile">VBA help file (optional)</label>
+    <input id="vbaHelpFile" type="text" spellcheck="false" autocomplete="off">
+    <p>Changing these settings resets macro execution state. Source edits stay in the editor.</p>
+  </details>
+</div>
         <label for="vbaSource">VBA source</label>
         <textarea id="vbaSource" spellcheck="false">Public Sub Main()
     Range("A1").Value = "Hello from Oxi VBA"
@@ -1109,6 +1136,7 @@ input[type="file"] { display: none; }
 End Sub</textarea>
         <div class="vba-actions">
             <button id="vbaClose">Cancel</button>
+            <button id="vbaCompile">Compile</button>
             <button id="vbaRun" class="primary">Run</button>
         </div>
         <pre class="vba-result" id="vbaResult" aria-live="polite">Ready.</pre>
@@ -1138,7 +1166,7 @@ End Sub</textarea>
 const I18N = {
     en: {
         subtitle: 'Document viewer & editor — .docx / .xlsx / .pptx / .pdf (Rust + Wasm)',
-        dropText: 'Drop a .docx, .xlsx, .pptx, or .pdf file here — or click to browse',
+        dropText: 'Drop a .docx, .xlsx, .xlsm, .pptx, or .pdf file here — or click to browse',
         dropHint: 'Parsed, rendered, and edited entirely in your browser via WebAssembly',
         trySample: 'Try a sample:',
         sheetDemo: "Or open the spreadsheet on its own — drawn and edited by the renderer's own rules →",
@@ -1156,7 +1184,7 @@ const I18N = {
         loadingSample: 'Loading sample...',
         wasmLoading: 'Wasm is still loading...',
         engineLoading: 'Loading WASM engine (~47 MB, first visit only)...',
-        unsupported: 'Supported formats: .docx, .xlsx, .pptx, .pdf',
+        unsupported: 'Supported formats: .docx, .xlsx, .xlsm, .pptx, .pdf',
         noChanges: 'No changes to save',
         noMatches: 'No matches found',
         matchOf: (cur, total) => `${cur} of ${total} matches`,
@@ -1190,7 +1218,7 @@ const I18N = {
     },
     ja: {
         subtitle: 'ドキュメント ビューア & エディタ — .docx / .xlsx / .pptx / .pdf (Rust + Wasm)',
-        dropText: '.docx, .xlsx, .pptx, .pdf ファイルをドロップ — またはクリックして選択',
+        dropText: '.docx, .xlsx, .xlsm, .pptx, .pdf ファイルをドロップ — またはクリックして選択',
         dropHint: 'WebAssemblyによりブラウザ内で完結。サーバーにファイルは送信されません',
         trySample: 'サンプルを試す:',
         sheetDemo: '表計算だけを開く — レンダラと同じ実測の規則で描き、そのまま編集できます →',
@@ -1208,7 +1236,7 @@ const I18N = {
         loadingSample: 'サンプルを読み込み中...',
         wasmLoading: 'Wasmを読み込み中...',
         engineLoading: 'WASMエンジンを読み込み中（約47MB・初回のみ）...',
-        unsupported: '対応形式: .docx, .xlsx, .pptx, .pdf',
+        unsupported: '対応形式: .docx, .xlsx, .xlsm, .pptx, .pdf',
         noChanges: '変更がありません',
         noMatches: '一致なし',
         matchOf: (cur, total) => `${total}件中 ${cur}件目`,
@@ -1510,9 +1538,11 @@ document.addEventListener('keydown', (e) => {
 </script>
 
 <script type="module">
-import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_xlsx_from_workbook, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, format_cell_number } from './oxidocs_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_xlsx_from_workbook, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, spreadsheet_vba_source, save_spreadsheet_vba_source, format_cell_number } from './oxidocs_wasm.js';
 import { collectAdvances, familyPresent } from './face-metrics.js';
-import { cancelActiveVbaExecution, parseVbaArguments, runVbaInWorker } from './vba-runner.js';
+import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker } from './vba-runner.js';
+import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-settings.js';
+import * as vbaProjectApi from './oxidocs_wasm.js';
 
 let wasmReady = false;
 let currentFileType = null; // 'docx', 'xlsx', 'pptx', or 'pdf'
@@ -1526,6 +1556,12 @@ const xlsxVbaEdits = new Map();
 // cheap save writes cell values only, so those go by the whole
 // workbook instead.
 let xlsxWorkbookChanged = false;
+let currentXlsxVbaSource = '';
+let xlsxVbaSourceBound = false;
+let xlsxVbaSourceBaseline = '';
+let xlsxVbaSourceDirty = false;
+let xlsxVbaSourceRevision = 0;
+let currentXlsxSavedCalculation = { mode: 'auto', on_save: true };
 
 const HIGHLIGHT_COLORS = {
     yellow: '#FFFF00', green: '#00FF00', cyan: '#00FFFF', magenta: '#FF00FF',
@@ -2372,6 +2408,17 @@ function defaultCellStyle() {
     };
 }
 
+function cellStringValue(text) {
+    const units = Array.from({ length: text.length }, (_, at) => text.charCodeAt(at));
+    for (let at = 0; at < units.length; at++) {
+        if (units[at] >= 0xD800 && units[at] <= 0xDBFF) {
+            if (units[at + 1] >= 0xDC00 && units[at + 1] <= 0xDFFF) at++;
+            else return { Utf16: units };
+        } else if (units[at] >= 0xDC00 && units[at] <= 0xDFFF) return { Utf16: units };
+    }
+    return { String: text };
+}
+
 function setWorkbookCellString(workbook, sheetIdx, rowIndex, colIndex, value) {
     const sheet = workbook?.sheets?.[sheetIdx];
     if (!sheet) return;
@@ -2385,16 +2432,19 @@ function setWorkbookCellString(workbook, sheetIdx, rowIndex, colIndex, value) {
 
     let cell = row.cells.find(candidate => candidate.col === colIndex);
     if (!cell) {
+        const bands = sheet.band_styles || {};
+        const inherited = new Map(bands.rows || []).get(rowIndex)
+            || new Map(bands.columns || []).get(colIndex) || bands.sheet;
         cell = {
             col: colIndex,
-            value: { String: value },
-            style: defaultCellStyle(),
+            value: cellStringValue(value),
+            style: inherited ? { ...inherited } : defaultCellStyle(),
             formula: null,
         };
         row.cells.push(cell);
         row.cells.sort((left, right) => left.col - right.col);
     } else {
-        cell.value = { String: value };
+        cell.value = cellStringValue(value);
         cell.formula = null;
     }
     sheet.col_count = Math.max(sheet.col_count || 0, colIndex + 1);
@@ -2451,6 +2501,8 @@ function typedXlsxEdit(location, cell) {
             valueType = 'empty';
         } else if ('String' in value) {
             newValue = value.String;
+        } else if ('Utf16' in value) {
+            newValue = cellUtf16Text(value.Utf16);
         } else if ('Error' in value) {
             newValue = value.Error;
         }
@@ -2522,11 +2574,58 @@ function formatVbaExecution(execution) {
     if (execution.status_bar !== null && execution.status_bar !== undefined) {
         sections.push(`StatusBar:\n${execution.status_bar}`);
     }
-    sections.push(result);
+    sections.push(execution.error?.message || result);
     return sections.join('\n\n');
 }
 
+function applyVbaExecution(execution, before) {
+    const changed = execution.workbook_changed !== false;
+    const previousSheet = currentXlsxSheetIndex;
+    if (changed) {
+        recordVbaWorkbookChanges(before, execution.workbook);
+        currentDocIR = execution.workbook;
+        xlsxWorkbookChanged = true;
+    }
+    currentDocIR.calculation = execution.workbook.calculation;
+    if (Number.isInteger(execution.active_sheet)
+        && execution.active_sheet >= 0 && execution.active_sheet < currentDocIR.sheets.length) {
+        currentXlsxSheetIndex = execution.active_sheet;
+    }
+    if (changed || previousSheet !== currentXlsxSheetIndex) renderEditableXlsx(currentDocIR);
+}
+
 let vbaProcedureRefreshTimer = null;
+const vbaEditorSettings = bindVbaEditorSettings({
+    hostCodePage: document.getElementById('vbaHostCodePage'),
+    errorLanguage: document.getElementById('vbaErrorLanguage'),
+    helpFile: document.getElementById('vbaHelpFile'),
+    sourceInput: document.getElementById('vbaSource'),
+    loadSourceButton: document.getElementById('vbaLoadSource'),
+    readProjectSource: codePage => {
+        if (!wasmReady || !currentFileBytes) throw new Error('Open a workbook first.');
+        return spreadsheet_vba_source(new Uint8Array(currentFileBytes), codePage);
+    },
+    onSourceLoaded: (before, source) => {
+        recordVbaSourceChange(before, source);
+        currentXlsxVbaSource = source;
+        xlsxVbaSourceBound = true;
+        xlsxVbaSourceBaseline = source;
+        xlsxVbaSourceDirty = false;
+        xlsxVbaSourceRevision++;
+        refreshVbaProcedures(true);
+    },
+    onProfileChange: () => {
+        if (currentXlsxVbaSource) currentXlsxVbaSource = document.getElementById('vbaSource').value;
+        closeVbaProject();
+    },
+    report: (message, bad) => {
+        const result = document.getElementById('vbaResult');
+        result.textContent = message;
+        result.classList.toggle('error', Boolean(bad));
+    },
+    messages: { noSource: () => 'No VBA source found in this workbook.',
+        loaded: () => 'Workbook source loaded. Choose a procedure to run.' },
+});
 
 function refreshVbaProcedures(selectFallback = false) {
     if (!wasmReady) return;
@@ -2534,7 +2633,9 @@ function refreshVbaProcedures(selectFallback = false) {
     const input = document.getElementById('vbaProcedure');
     const list = document.getElementById('vbaProcedureList');
     try {
-        const procedures = list_spreadsheet_vba_procedures(source);
+        const procedures = vbaProjectApi.list_spreadsheet_vba_project_procedures
+            ? vbaProjectApi.list_spreadsheet_vba_project_procedures(source, new Uint8Array(currentFileBytes || []))
+            : list_spreadsheet_vba_procedures(source);
         list.replaceChildren(...procedures.map(procedure => {
             const option = document.createElement('option');
             option.value = procedure.name;
@@ -2546,7 +2647,7 @@ function refreshVbaProcedures(selectFallback = false) {
         if (selectFallback
             && procedures.length
             && !procedures.some(procedure => procedure.name.toLowerCase() === input.value.toLowerCase())) {
-            input.value = procedures[0].name;
+            input.value = preferredVbaProcedure(procedures).name;
         }
     } catch {
         list.replaceChildren();
@@ -2585,13 +2686,16 @@ async function executeVbaFromDialog() {
     }
 
     runButton.disabled = true;
+    document.getElementById('vbaCompile').disabled = true;
+    const endVbaOperation = vbaEditorSettings.beginOperation();
     resultElement.classList.remove('error');
     resultElement.textContent = 'Running...';
     await new Promise(resolve => requestAnimationFrame(resolve));
+    let before;
     try {
         const args = parseVbaArguments(document.getElementById('vbaArguments').value);
         syncPendingXlsxEditsToIr();
-        const before = currentDocIR;
+        before = currentDocIR;
         const execution = await runVbaInWorker(
             currentDocIR,
             source,
@@ -2599,11 +2703,11 @@ async function executeVbaFromDialog() {
             args,
             currentXlsxSheetIndex,
             currentFileName,
+            vbaEditorSettings.options(),
+            currentFileBytes ? new Uint8Array(currentFileBytes) : undefined,
         );
-        recordVbaWorkbookChanges(before, execution.workbook);
-        currentDocIR = execution.workbook;
-        xlsxWorkbookChanged = true;
-        renderEditableXlsx(currentDocIR);
+        currentXlsxVbaSource = source;
+        applyVbaExecution(execution, before);
         resultElement.textContent = formatVbaExecution(execution);
         showStatus('VBA macro completed.', 'info');
     } catch (error) {
@@ -2613,17 +2717,42 @@ async function executeVbaFromDialog() {
             return;
         }
         const message = error?.message || String(error);
-        resultElement.textContent = message;
+        if (error?.execution) {
+            currentXlsxVbaSource = source;
+            applyVbaExecution(error.execution, before);
+        }
+        resultElement.textContent = error?.execution ? formatVbaExecution(error.execution) : message;
         resultElement.classList.add('error');
         showStatus('VBA error: ' + message, 'error');
         console.error(error);
     } finally {
         runButton.disabled = false;
+        document.getElementById('vbaCompile').disabled = false;
+        endVbaOperation();
     }
 }
 
 document.getElementById('vbaClose').addEventListener('click', closeVbaRunner);
 document.getElementById('vbaRun').addEventListener('click', executeVbaFromDialog);
+async function compileVbaFromDialog() {
+    const compileButton = document.getElementById('vbaCompile');
+    const runButton = document.getElementById('vbaRun');
+    const result = document.getElementById('vbaResult');
+    if (compileButton.disabled || runButton.disabled) return;
+    compileButton.disabled = runButton.disabled = true;
+    const endVbaOperation = vbaEditorSettings.beginOperation();
+    result.classList.remove('error');
+    result.textContent = 'Compiling...';
+    try {
+        await compileVbaInWorker(document.getElementById('vbaSource').value, vbaEditorSettings.options(), currentDocIR,
+            currentFileBytes ? new Uint8Array(currentFileBytes) : undefined);
+        result.textContent = 'Compilation succeeded.';
+    } catch (error) {
+        result.textContent = error?.message || String(error);
+        result.classList.add('error');
+    } finally { compileButton.disabled = runButton.disabled = false; endVbaOperation(); }
+}
+document.getElementById('vbaCompile').addEventListener('click', compileVbaFromDialog);
 document.getElementById('vbaDialogBackdrop').addEventListener('click', event => {
     if (event.target.id === 'vbaDialogBackdrop') closeVbaRunner();
 });
@@ -2633,7 +2762,17 @@ document.getElementById('vbaSource').addEventListener('keydown', event => {
         executeVbaFromDialog();
     }
 });
+let vbaSourceBeforeInput;
+document.getElementById('vbaSource').addEventListener('beforeinput', () => {
+    const input = document.getElementById('vbaSource');
+    vbaSourceBeforeInput = { source: input.value, start: input.selectionStart, end: input.selectionEnd };
+});
 document.getElementById('vbaSource').addEventListener('input', () => {
+    if (vbaSourceBeforeInput) recordVbaSourceChange(vbaSourceBeforeInput.source, document.getElementById('vbaSource').value, vbaSourceBeforeInput);
+    vbaSourceBeforeInput = undefined;
+    currentXlsxVbaSource = document.getElementById('vbaSource').value;
+    xlsxVbaSourceRevision++;
+    xlsxVbaSourceDirty = xlsxVbaSourceBound && currentXlsxVbaSource !== xlsxVbaSourceBaseline;
     clearTimeout(vbaProcedureRefreshTimer);
     vbaProcedureRefreshTimer = setTimeout(() => refreshVbaProcedures(), 150);
 });
@@ -2667,7 +2806,7 @@ const MIME_TYPES = {
     pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
 
-function downloadEdited() {
+async function downloadEdited() {
     if (!currentFileBytes || !currentFileType) return;
 
     // A typed cell lives in the page until something asks for it; the
@@ -2680,7 +2819,9 @@ function downloadEdited() {
     else if (currentFileType === 'pptx') edits = collectPptxEdits();
     else return;
 
-    const wholeWorkbook = currentFileType === 'xlsx' && xlsxWorkbookChanged;
+    let wholeWorkbook = currentFileType === 'xlsx' && (xlsxWorkbookChanged || xlsxVbaSourceDirty
+        || (currentDocIR.calculation?.mode ?? 'auto') !== currentXlsxSavedCalculation.mode
+        || (currentDocIR.calculation?.on_save ?? true) !== currentXlsxSavedCalculation.on_save);
     if (edits.length === 0 && !wholeWorkbook) {
         showStatus(t('noChanges'), 'info');
         return;
@@ -2688,17 +2829,39 @@ function downloadEdited() {
 
     try {
         const data = new Uint8Array(currentFileBytes);
+        const saveFileBytes = currentFileBytes;
+        const saveRevision = xlsxVbaSourceRevision;
+        let sourceData = data;
+        if (currentFileType === 'xlsx' && (currentXlsxVbaSource || /\.xlsm$/i.test(currentFileName || '') || currentDocIR.calculation?.mode === 'manual'
+            || currentDocIR.calculation?.mode === 'autoNoTable' || currentDocIR.calculation?.on_save === false)) {
+            const before = currentDocIR;
+            const endVbaOperation = vbaEditorSettings.beginOperation();
+            try {
+                const saveSource = xlsxVbaSourceBound ? document.getElementById('vbaSource').value : getVbaSourceForSave(currentXlsxVbaSource);
+                if (xlsxVbaSourceBound) sourceData = save_spreadsheet_vba_source(data, saveSource, vbaEditorSettings.options().hostAnsiCodePage);
+                const prepared = await prepareVbaSaveInWorker(currentDocIR, saveSource, currentXlsxSheetIndex, currentFileName, vbaEditorSettings.options(), data);
+                if (currentFileBytes !== saveFileBytes) return;
+                applyVbaExecution(prepared, before);
+                if (xlsxVbaSourceRevision === saveRevision) currentXlsxVbaSource = saveSource;
+            } catch (error) {
+                if (error?.execution) applyVbaExecution(error.execution, before);
+                throw error;
+            } finally { endVbaOperation(); }
+            wholeWorkbook = true;
+        }
         let editedBytes;
         if (currentFileType === 'docx') editedBytes = edit_docx(data, edits);
-        else if (wholeWorkbook) editedBytes = edit_xlsx_from_workbook(data, currentDocIR);
+        else if (wholeWorkbook) editedBytes = edit_xlsx_from_workbook(sourceData, currentDocIR);
         else if (currentFileType === 'xlsx') editedBytes = edit_xlsx(data, edits);
         else if (currentFileType === 'pptx') editedBytes = edit_pptx(data, edits);
 
-        const blob = new Blob([editedBytes], { type: MIME_TYPES[currentFileType] });
+        const savedExtension = currentFileType === 'xlsx' && /\.xlsm$/i.test(currentFileName || '') ? 'xlsm' : currentFileType;
+        const mimeType = savedExtension === 'xlsm' ? 'application/vnd.ms-excel.sheet.macroEnabled.12' : MIME_TYPES[currentFileType];
+        const blob = new Blob([editedBytes], { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `edited.${currentFileType}`;
+        a.download = `edited.${savedExtension}`;
         a.click();
         URL.revokeObjectURL(url);
         showStatus(
@@ -3815,6 +3978,13 @@ function colName(idx) {
 }
 
 // Number formatting helper
+function cellUtf16Text(units) {
+    const pieces = [];
+    for (let at = 0; at < units.length; at += 8192)
+        pieces.push(String.fromCharCode(...units.slice(at, at + 8192)));
+    return pieces.join('');
+}
+
 function formatCellValue(val, style) {
     // Numbers are rendered by the engine, so a cell reads the same here as it
     // does anywhere else that asks what a sheet shows.
@@ -3822,6 +3992,7 @@ function formatCellValue(val, style) {
     let isNumber = false;
     if (typeof val === 'object' && val !== null) {
         if ('String' in val) raw = val.String;
+        else if ('Utf16' in val) raw = cellUtf16Text(val.Utf16);
         else if ('Number' in val) { raw = val.Number; isNumber = true; }
         else if ('Boolean' in val) return val.Boolean ? 'TRUE' : 'FALSE';
         else if ('Error' in val) return val.Error;
@@ -3949,6 +4120,11 @@ function renderEditableXlsx(workbook) {
         tabs.children[idx].classList.add('active');
 
         const sheet = workbook.sheets[idx];
+        // Band styles also apply to cells absent from the sparse workbook IR.
+        // Entries are arrays so they survive the worker's JSON round trip.
+        const bands = sheet.band_styles || {};
+        const rowStyles = new Map(bands.rows || []);
+        const columnStyles = new Map(bands.columns || []);
         const dataColCount = sheet.col_count || 1;
         const colCount = Math.max(dataColCount, 26);
         const { covered, origins } = buildMergeInfo(sheet.merge_cells);
@@ -4023,27 +4199,29 @@ function renderEditableXlsx(workbook) {
                 }
 
                 const cell = cellMap[c];
+                const style = cell ? cell.style
+                    : rowStyles.get(r) || columnStyles.get(c) || bands.sheet;
                 let display = '';
                 if (cell) {
-                    display = formatCellValue(cell.value, cell.style);
-                    if (cell.style) {
-                        if (cell.style.bold) td.style.fontWeight = 'bold';
-                        if (cell.style.italic) td.style.fontStyle = 'italic';
-                        if (cell.style.font_color) td.style.color = '#' + cell.style.font_color;
-                        if (cell.style.bg_color) td.style.background = '#' + cell.style.bg_color;
-                        if (cell.style.horizontal_align) td.style.textAlign = cell.style.horizontal_align;
-                        if (cell.style.border_top) td.style.borderTop = '1px solid #333';
-                        if (cell.style.border_bottom) td.style.borderBottom = '1px solid #333';
-                        if (cell.style.border_left) td.style.borderLeft = '1px solid #333';
-                        if (cell.style.border_right) td.style.borderRight = '1px solid #333';
-                        if (cell.style.font_size) td.style.fontSize = cell.style.font_size + 'pt';
-                    }
+                    display = formatCellValue(cell.value, style);
                     // Numbers default right-align
                     if (cell.value && typeof cell.value === 'object' && 'Number' in cell.value) {
-                        if (!cell.style || !cell.style.horizontal_align) {
+                        if (!style || !style.horizontal_align) {
                             td.style.textAlign = 'right';
                         }
                     }
+                }
+                if (style) {
+                    if (style.bold) td.style.fontWeight = 'bold';
+                    if (style.italic) td.style.fontStyle = 'italic';
+                    if (style.font_color) td.style.color = '#' + style.font_color;
+                    if (style.bg_color) td.style.background = '#' + style.bg_color;
+                    if (style.horizontal_align) td.style.textAlign = style.horizontal_align;
+                    if (style.border_top) td.style.borderTop = '1px solid #333';
+                    if (style.border_bottom) td.style.borderBottom = '1px solid #333';
+                    if (style.border_left) td.style.borderLeft = '1px solid #333';
+                    if (style.border_right) td.style.borderRight = '1px solid #333';
+                    if (style.font_size) td.style.fontSize = style.font_size + 'pt';
                 }
                 td.textContent = display;
                 td.dataset.original = display;
@@ -4448,7 +4626,8 @@ function buildSlideContent(container, slide, slideIdx, scale, editable) {
 
 // === FILE HANDLER ===
 async function handleFile(file) {
-    const ext = file.name.split('.').pop().toLowerCase();
+    const fileExtension = file.name.split('.').pop().toLowerCase();
+    const ext = fileExtension === 'xlsm' ? 'xlsx' : fileExtension;
     if (!['docx', 'xlsx', 'pptx', 'pdf'].includes(ext)) {
         showStatus(t('unsupported'), 'error');
         return;
@@ -4459,9 +4638,10 @@ async function handleFile(file) {
     }
 
     showStatus(t('parsing'), 'info');
+    closeVbaProject();
     currentFileType = ext;
     currentFileName = file.name;
-    btnDownload.textContent = `${t('download')} .${ext}`;
+    btnDownload.textContent = `${t('download')} .${fileExtension}`;
 
     toolbar.classList.add('visible');
     buildRibbon(ext);
@@ -4493,7 +4673,13 @@ async function handleFile(file) {
             currentXlsxSheetIndex = 0;
             xlsxVbaEdits.clear();
             xlsxWorkbookChanged = false;
+            currentXlsxVbaSource = '';
+            xlsxVbaSourceBound = false;
+            xlsxVbaSourceBaseline = '';
+            xlsxVbaSourceDirty = false;
+            xlsxVbaSourceRevision++;
             currentDocIR = parse_spreadsheet(data);
+            currentXlsxSavedCalculation = { mode: currentDocIR.calculation?.mode ?? 'auto', on_save: currentDocIR.calculation?.on_save ?? true };
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalRows = 0;
             for (const s of currentDocIR.sheets) totalRows += s.rows.length;

@@ -96,15 +96,10 @@ fn reword_formulas(workbook: &mut Workbook, sheet: &str, band: Band, at: u32, co
         };
         for row in &mut other.rows {
             for cell in &mut row.cells {
-                let Some(formula) = cell.formula.as_deref() else {
-                    continue;
-                };
                 // A formula this cannot read is left exactly as it was. Half a
                 // rewrite is worse than none: it would move some references
                 // and not others.
-                if let Ok(moved) = shift_formula_references(formula, &shift) {
-                    cell.formula = Some(moved);
-                }
+                let _ = cell.rewrite_formula(|formula| shift_formula_references(formula, &shift));
             }
         }
     }
@@ -182,6 +177,13 @@ fn move_columns(sheet: &mut Sheet, at: u32, count: i64) {
     }
 
     // A column's width belongs to the column, so it moves with it.
+    sheet.col_custom_widths = sheet.col_custom_widths.iter()
+        .filter(|(col, _)| count > 0 || **col < at || **col >= at + (-count) as u32)
+        .map(|(col, custom)| (if *col >= at { shifted_zero(*col, at, count) } else { *col }, *custom))
+        .collect();
+    if count > 0 {
+        for column in at..at + count as u32 { sheet.col_custom_widths.insert(column, false); }
+    }
     let place = (at as usize).min(sheet.col_widths.len());
     if count > 0 {
         let width = sheet.default_col_width;

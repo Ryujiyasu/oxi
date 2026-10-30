@@ -76,11 +76,14 @@ pub fn caught(workbook: &Workbook, sheet: usize) -> Vec<Caught> {
         .iter()
         .any(needs_a_formula)
         .then(|| {
-            crate::formula::assemble_for_evaluation(
+            let mut book=crate::formula::assemble_for_evaluation(
                 &workbook.sheets,
                 &workbook.defined_names,
                 &workbook.external_books,
-            )
+            );
+            book.set_compatibility_version(workbook.calculation.compatibility_version);
+            book.set_dbcs_language(workbook.calculation.dbcs_language.unwrap_or(true));
+            book
         });
     let name = held.name.clone();
 
@@ -370,6 +373,7 @@ fn cell_is(
         Some(CellValue::Number(held)) => oxicells_calc::Value::Number(*held),
         Some(CellValue::Boolean(held)) => oxicells_calc::Value::Logical(*held),
         Some(CellValue::String(held)) => oxicells_calc::Value::Text(held.clone()),
+        Some(CellValue::Utf16(units)) => oxicells_calc::Value::Utf16(units.clone()),
         // A rule tests what is there; an empty cell is not tested at all,
         // which is what Excel does with every operator but `notEqual`.
         _ => {

@@ -285,9 +285,12 @@ impl<'a> Lexer<'a> {
         });
     }
 
-    /// A `_` continues the line only when nothing but whitespace (and possibly
-    /// a comment) separates it from the newline.
+    /// A continuation underscore needs preceding horizontal whitespace and
+    /// only whitespace between it and the following newline.
     fn is_line_continuation(&self) -> bool {
+        if self.pos == 0 || !matches!(self.bytes.get(self.pos - 1), Some(b' ' | b'\t')) {
+            return false;
+        }
         let mut i = self.pos + 1;
         while matches!(self.bytes.get(i), Some(b' ') | Some(b'\t') | Some(b'\r')) {
             i += 1;

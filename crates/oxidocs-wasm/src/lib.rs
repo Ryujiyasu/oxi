@@ -14,9 +14,26 @@ mod macro_safety;
 #[cfg(feature = "suite")]
 pub use macro_safety::{read_macro_safety, read_macro_safety_native};
 #[cfg(feature = "suite")]
+mod vba_project;
+#[cfg(feature = "suite")]
+mod vba_module_directory;
+#[cfg(feature = "suite")]
+mod vba_compression;
+#[cfg(feature = "suite")]
+mod vba_source_writer;
+#[cfg(feature = "suite")]
+mod vba_compound;
+#[cfg(feature = "suite")]
+pub use vba_project::{spreadsheet_vba_document_modules, spreadsheet_vba_project_name, spreadsheet_vba_source, save_spreadsheet_vba_source};
+#[cfg(feature = "suite")]
 mod spreadsheet_vba;
 #[cfg(feature = "suite")]
-pub use spreadsheet_vba::{list_spreadsheet_vba_procedures, run_spreadsheet_vba};
+mod vba_automation;
+#[cfg(feature = "suite")]
+pub use spreadsheet_vba::{
+    list_spreadsheet_vba_procedures, list_spreadsheet_vba_project_procedures, run_spreadsheet_vba, run_spreadsheet_vba_with_options,
+    run_spreadsheet_vba_with_outcome, prepare_spreadsheet_vba_save, compile_spreadsheet_vba, SpreadsheetVbaSession,
+};
 
 // Thread-local cached document for fast re-layout during editing
 thread_local! {

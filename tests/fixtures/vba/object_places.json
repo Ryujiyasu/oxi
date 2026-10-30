@@ -1,0 +1,704 @@
+[
+  {
+    "name": "array_workerclass",
+    "source": "object_place_array_workerclass.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7"
+      }
+    ]
+  },
+  {
+    "name": "array_object",
+    "source": "object_place_array_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7"
+      }
+    ]
+  },
+  {
+    "name": "array_variant",
+    "source": "object_place_array_variant.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Integer"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Integer"
+      }
+    ]
+  },
+  {
+    "name": "array_nothing_workerclass",
+    "source": "object_place_array_nothing_workerclass.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "91:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "91:True"
+      }
+    ]
+  },
+  {
+    "name": "record_workerclass",
+    "source": "object_place_record_workerclass.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "array_nothing_object",
+    "source": "object_place_array_nothing_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "91:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "91:True"
+      }
+    ]
+  },
+  {
+    "name": "record_object",
+    "source": "object_place_record_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "field_workerclass",
+    "source": "object_place_field_workerclass.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7"
+      }
+    ]
+  },
+  {
+    "name": "field_object",
+    "source": "object_place_field_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7"
+      }
+    ]
+  },
+  {
+    "name": "field_variant",
+    "source": "object_place_field_variant.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Integer"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Integer"
+      }
+    ]
+  },
+  {
+    "name": "byref_workerclass",
+    "source": "object_place_byref_workerclass.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "byref_object",
+    "source": "object_place_byref_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "byref_variant",
+    "source": "object_place_byref_variant.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "byval_object",
+    "source": "object_place_byval_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "array_parameter",
+    "source": "object_place_array_parameter.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "boxed_object_array",
+    "source": "object_place_boxed_object_array.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7:7"
+      }
+    ]
+  },
+  {
+    "name": "paramarray_class",
+    "source": "object_place_paramarray_class.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "range_array_range",
+    "source": "object_place_range_array_range.bas",
+    "procedure": "DriverModule.Probe",
+    "host": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Range:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Range:7"
+      }
+    ]
+  },
+  {
+    "name": "range_array_object",
+    "source": "object_place_range_array_object.bas",
+    "procedure": "DriverModule.Probe",
+    "host": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Range:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Range:7"
+      }
+    ]
+  },
+  {
+    "name": "range_array_variant",
+    "source": "object_place_range_array_variant.bas",
+    "procedure": "DriverModule.Probe",
+    "host": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Integer:"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Integer:"
+      }
+    ]
+  },
+  {
+    "name": "nothing_assign_workerclass",
+    "source": "object_place_nothing_assign_workerclass.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "nothing_assign_object",
+    "source": "object_place_nothing_assign_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "91"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "91"
+      }
+    ]
+  },
+  {
+    "name": "nothing_assign_variant",
+    "source": "object_place_nothing_assign_variant.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "91"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "91"
+      }
+    ]
+  },
+  {
+    "name": "nothing_assign_long",
+    "source": "object_place_nothing_assign_long.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "nothing_assign_string",
+    "source": "object_place_nothing_assign_string.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "nothing_group",
+    "source": "object_place_nothing_group.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "nothing_cstr",
+    "source": "object_place_nothing_cstr.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "nothing_clng",
+    "source": "object_place_nothing_clng.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "nothing_not",
+    "source": "object_place_nothing_not.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "nothing_concat",
+    "source": "object_place_nothing_concat.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "nothing_iif",
+    "source": "object_place_nothing_iif.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "91:Empty"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "91:Empty"
+      }
+    ]
+  },
+  {
+    "name": "nothing_argument_object",
+    "source": "object_place_nothing_argument_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True"
+      }
+    ]
+  },
+  {
+    "name": "nothing_argument_variant",
+    "source": "object_place_nothing_argument_variant.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True"
+      }
+    ]
+  },
+  {
+    "name": "nothing_set",
+    "source": "object_place_nothing_set.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True"
+      }
+    ]
+  },
+  {
+    "name": "nothing_is",
+    "source": "object_place_nothing_is.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True"
+      }
+    ]
+  },
+  {
+    "name": "nothing_variable_rhs",
+    "source": "object_place_nothing_variable_rhs.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "91:3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "91:3"
+      }
+    ]
+  },
+  {
+    "name": "object_variant_let",
+    "source": "object_place_object_variant_let.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7"
+      }
+    ]
+  },
+  {
+    "name": "object_paramarray_let",
+    "source": "object_place_object_paramarray_let.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:7"
+      }
+    ]
+  },
+  {
+    "name": "variant_paramarray_let",
+    "source": "object_place_variant_paramarray_let.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Integer"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Integer"
+      }
+    ]
+  },
+  {
+    "name": "unmarked_field",
+    "source": "object_place_unmarked_field.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438"
+      }
+    ]
+  },
+  {
+    "name": "unmarked_property",
+    "source": "object_place_unmarked_property.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438"
+      }
+    ]
+  },
+  {
+    "name": "variant_byref_let",
+    "source": "object_place_variant_byref_let.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Integer"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Integer"
+      }
+    ]
+  },
+  {
+    "name": "variant_byval_let",
+    "source": "object_place_variant_byval_let.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:0"
+      }
+    ]
+  },
+  {
+    "name": "class_byval_variant_let",
+    "source": "object_place_class_byval_variant_let.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:0"
+      }
+    ]
+  },
+  {
+    "name": "class_forced_variant_let",
+    "source": "object_place_class_forced_variant_let.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:WorkerClass:0"
+      }
+    ]
+  },
+  {
+    "name": "set_group_nothing_object",
+    "source": "object_place_set_group_nothing_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "set_group_nothing_variant",
+    "source": "object_place_set_group_nothing_variant.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "set_group_object",
+    "source": "object_place_set_group_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "型が一致しません。"
+  },
+  {
+    "name": "let_group_object",
+    "source": "object_place_let_group_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Long"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:Long"
+      }
+    ]
+  },
+  {
+    "name": "argument_group_object",
+    "source": "object_place_argument_group_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "型が一致しません。"
+  },
+  {
+    "name": "argument_group_nothing",
+    "source": "object_place_argument_group_nothing.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  }
+]

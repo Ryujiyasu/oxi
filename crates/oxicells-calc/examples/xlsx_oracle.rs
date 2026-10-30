@@ -66,7 +66,7 @@ fn type_name(v: &Value) -> &'static str {
     match v {
         Value::Blank => "blank",
         Value::Number(_) => "number",
-        Value::Text(_) => "text",
+        Value::Text(_) | Value::Utf16(_) => "text",
         Value::Logical(_) => "logical",
         Value::Error(_) => "error",
     }
@@ -137,6 +137,7 @@ fn to_value(v: &CellValue) -> Value {
     match v {
         CellValue::Empty => Value::Blank,
         CellValue::String(s) => Value::Text(s.clone()),
+        CellValue::Utf16(units) => Value::Utf16(units.clone()),
         CellValue::Number(n) => Value::Number(*n),
         CellValue::Boolean(b) => Value::Logical(*b),
         CellValue::Error(s) => Value::Error(parse_error_text(s)),

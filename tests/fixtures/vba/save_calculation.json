@@ -1,0 +1,274 @@
+{
+  "saves": [
+    {
+      "kind": "save",
+      "initial": -4105,
+      "target": true,
+      "udf": false,
+      "before": 14.0,
+      "after": 14.0,
+      "saved": true,
+      "calcPr": {},
+      "cached": 14.0,
+      "formula": "A1*2"
+    },
+    {
+      "kind": "save",
+      "initial": -4105,
+      "target": true,
+      "udf": true,
+      "before": 14.0,
+      "after": 14.0,
+      "saved": true,
+      "calcPr": {},
+      "cached": 14.0,
+      "formula": "Twice(A1)"
+    },
+    {
+      "kind": "save",
+      "initial": -4105,
+      "target": false,
+      "udf": false,
+      "before": 14.0,
+      "after": 14.0,
+      "saved": true,
+      "calcPr": {
+        "calcOnSave": "0"
+      },
+      "cached": 14.0,
+      "formula": "A1*2"
+    },
+    {
+      "kind": "save",
+      "initial": -4105,
+      "target": false,
+      "udf": true,
+      "before": 14.0,
+      "after": 14.0,
+      "saved": true,
+      "calcPr": {
+        "calcOnSave": "0"
+      },
+      "cached": 14.0,
+      "formula": "Twice(A1)"
+    },
+    {
+      "kind": "save",
+      "initial": -4135,
+      "target": true,
+      "udf": false,
+      "before": 2.0,
+      "after": 14.0,
+      "saved": true,
+      "calcPr": {
+        "calcMode": "manual"
+      },
+      "cached": 14.0,
+      "formula": "A1*2"
+    },
+    {
+      "kind": "save",
+      "initial": -4135,
+      "target": true,
+      "udf": true,
+      "before": 2.0,
+      "after": 14.0,
+      "saved": true,
+      "calcPr": {
+        "calcMode": "manual"
+      },
+      "cached": 14.0,
+      "formula": "Twice(A1)"
+    },
+    {
+      "kind": "save",
+      "initial": -4135,
+      "target": false,
+      "udf": false,
+      "before": 2.0,
+      "after": 2.0,
+      "saved": true,
+      "calcPr": {
+        "calcMode": "manual",
+        "calcCompleted": "0",
+        "calcOnSave": "0"
+      },
+      "cached": 2.0,
+      "formula": "A1*2"
+    },
+    {
+      "kind": "save",
+      "initial": -4135,
+      "target": false,
+      "udf": true,
+      "before": 2.0,
+      "after": 2.0,
+      "saved": true,
+      "calcPr": {
+        "calcMode": "manual",
+        "calcCompleted": "0",
+        "calcOnSave": "0"
+      },
+      "cached": 2.0,
+      "formula": "Twice(A1)"
+    },
+    {
+      "kind": "save",
+      "initial": 2,
+      "target": true,
+      "udf": false,
+      "before": 14.0,
+      "after": 14.0,
+      "saved": true,
+      "calcPr": {
+        "calcMode": "autoNoTable"
+      },
+      "cached": 14.0,
+      "formula": "A1*2"
+    },
+    {
+      "kind": "save",
+      "initial": 2,
+      "target": true,
+      "udf": true,
+      "before": 14.0,
+      "after": 14.0,
+      "saved": true,
+      "calcPr": {
+        "calcMode": "autoNoTable"
+      },
+      "cached": 14.0,
+      "formula": "Twice(A1)"
+    },
+    {
+      "kind": "save",
+      "initial": 2,
+      "target": false,
+      "udf": false,
+      "before": 14.0,
+      "after": 14.0,
+      "saved": true,
+      "calcPr": {
+        "calcMode": "autoNoTable",
+        "calcOnSave": "0"
+      },
+      "cached": 14.0,
+      "formula": "A1*2"
+    },
+    {
+      "kind": "save",
+      "initial": 2,
+      "target": false,
+      "udf": true,
+      "before": 14.0,
+      "after": 14.0,
+      "saved": true,
+      "calcPr": {
+        "calcMode": "autoNoTable",
+        "calcOnSave": "0"
+      },
+      "cached": 14.0,
+      "formula": "Twice(A1)"
+    }
+  ],
+  "modes": [
+    {
+      "kind": "mode",
+      "initial": -4105,
+      "target": -4105,
+      "udf": false,
+      "saved": false
+    },
+    {
+      "kind": "mode",
+      "initial": -4105,
+      "target": -4135,
+      "udf": false,
+      "saved": false
+    },
+    {
+      "kind": "mode",
+      "initial": -4105,
+      "target": 2,
+      "udf": false,
+      "saved": false
+    },
+    {
+      "kind": "mode",
+      "initial": -4135,
+      "target": -4105,
+      "udf": false,
+      "saved": false
+    },
+    {
+      "kind": "mode",
+      "initial": -4135,
+      "target": -4135,
+      "udf": false,
+      "saved": false
+    },
+    {
+      "kind": "mode",
+      "initial": -4135,
+      "target": 2,
+      "udf": false,
+      "saved": false
+    },
+    {
+      "kind": "mode",
+      "initial": 2,
+      "target": -4105,
+      "udf": false,
+      "saved": false
+    },
+    {
+      "kind": "mode",
+      "initial": 2,
+      "target": -4135,
+      "udf": false,
+      "saved": false
+    },
+    {
+      "kind": "mode",
+      "initial": 2,
+      "target": 2,
+      "udf": false,
+      "saved": false
+    }
+  ],
+  "on_save": [
+    {
+      "kind": "on_save",
+      "initial": true,
+      "target": true,
+      "udf": false,
+      "saved": true
+    },
+    {
+      "kind": "on_save",
+      "initial": true,
+      "target": false,
+      "udf": false,
+      "saved": true
+    },
+    {
+      "kind": "on_save",
+      "initial": false,
+      "target": true,
+      "udf": false,
+      "saved": true
+    },
+    {
+      "kind": "on_save",
+      "initial": false,
+      "target": false,
+      "udf": false,
+      "saved": true
+    }
+  ],
+  "environment": {
+    "version": "16.0",
+    "build": 20430.0,
+    "ui": 1041
+  }
+}

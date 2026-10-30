@@ -1,0 +1,10 @@
+Attribute VB_Name = "DriverModule"
+Option Explicit
+
+Public Function Probe() As String
+On Error Resume Next
+Probe = Consume(Nothing)
+End Function
+Private Function Consume(ByVal value As Variant) As String
+Consume = CStr(value Is Nothing)
+End Function

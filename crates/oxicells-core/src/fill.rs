@@ -28,8 +28,27 @@ use crate::translate_formula_references;
 pub struct Seed {
     pub number: Option<f64>,
     pub text: String,
+    /// Original text units when its display contains replacement characters.
+    pub text_utf16: Option<Vec<u16>>,
+    pub boolean: Option<bool>,
+    pub error: Option<String>,
     pub formula: Option<String>,
+    /// Original formula units when its text contains unpaired surrogates.
+    pub formula_utf16: Option<Vec<u16>>,
     pub number_format: Option<String>,
+}
+
+impl Seed {
+    fn text_units(&self) -> Vec<u16> {
+        self.text_utf16.as_ref().filter(|units| String::from_utf16_lossy(units) == self.text)
+            .cloned().unwrap_or_else(|| self.text.encode_utf16().collect())
+    }
+
+    fn formula_units(&self) -> Option<Vec<u16>> {
+        self.formula.as_ref().map(|formula| self.formula_utf16.as_ref()
+            .filter(|units| String::from_utf16_lossy(units) == *formula)
+            .cloned().unwrap_or_else(|| formula.encode_utf16().collect()))
+    }
 }
 
 /// `Range.AutoFill`'s `Type`, and what the fill handle does without one.
@@ -67,7 +86,20 @@ pub enum Filled {
     Empty,
     Number(f64),
     Text(String),
+    Utf16Text(Vec<u16>),
+    Boolean(bool),
+    Error(String),
     Formula(String),
+    Utf16Formula(Vec<u16>),
+}
+
+impl Filled {
+    fn text(units: Vec<u16>) -> Self {
+        match String::from_utf16(&units) {
+            Ok(text) => Self::Text(text),
+            Err(_) => Self::Utf16Text(units),
+        }
+    }
 }
 
 /// One step of the fill: what the cell gets, and which cell of the line it
@@ -109,7 +141,8 @@ const LISTS: &[&[&str]] = &[
 enum Kind {
     Number,
     List(usize),
-    Counted(String),
+    Counted(Vec<u16>, Vec<u16>),
+    Ordinal(Vec<u16>),
     Text,
     Formula,
 }
@@ -121,11 +154,13 @@ fn kind_of(seed: &Seed) -> Kind {
     if seed.number.is_some() {
         return Kind::Number;
     }
+    if seed.boolean.is_some() || seed.error.is_some() { return Kind::Text; }
     if let Some((list, _)) = in_list(&seed.text) {
         return Kind::List(list);
     }
-    match counted_parts(&seed.text) {
-        Some((before, _, after)) => Kind::Counted(format!("{before}\u{0}{after}")),
+    match counted_parts(&seed.text_units()) {
+        Some((before, _, after)) if before.is_empty() && !after.is_empty() => Kind::Ordinal(after[2..].to_vec()),
+        Some((before, _, after)) => Kind::Counted(before.to_vec(), after.to_vec()),
         None => Kind::Text,
     }
 }
@@ -139,29 +174,28 @@ fn in_list(text: &str) -> Option<(usize, usize)> {
 
 /// Text ending in digits, split before them: `Item 12` is `("Item ", "12")`.
 /// The digits have to be at the END: `2026年度` has none there.
-fn tail_digits(text: &str) -> Option<(&str, &str)> {
-    let cut = text.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+fn tail_digits(text: &[u16]) -> Option<(&[u16], &[u16])> {
+    let cut = text.iter().rposition(|unit| !(48..=57).contains(unit)).map_or(0, |at| at + 1);
     if cut == text.len() {
         return None;
     }
     Some((&text[..cut], &text[cut..]))
 }
 
-/// Text that counts: digits at the end, or digits followed by an ordinal
-/// suffix. Measured: `1st` runs 2nd, 3rd, 4th (`1ST` too, the suffix
-/// written anew in lower case), `20th` 21st, 22nd, `101st` 102nd, while
-/// `Item 1st` keeps its suffix and runs Item 2st.
-fn counted_parts(text: &str) -> Option<(&str, &str, &str)> {
-    if let Some((before, digits)) = tail_digits(text) {
-        return Some((before, digits, ""));
+/// Text that counts: digits at the end, or a valid leading ordinal token.
+/// Excel continues `1st item` as `2nd item`, but repeats `Item 1st`, `1nd`,
+/// and `1st-item`. An ordinal token ends at an ASCII space or the cell end.
+fn counted_parts(text: &[u16]) -> Option<(&[u16], &[u16], &[u16])> {
+    let digits = text.iter().position(|unit| !(48..=57).contains(unit)).unwrap_or(text.len());
+    let end = digits + 2;
+    if digits > 0 && end <= text.len() && (end == text.len() || text[end] == u16::from(b' ')) {
+        let last_two = text[digits.saturating_sub(2)..digits].iter().fold(0i64, |n, unit| n * 10 + i64::from(*unit - 48));
+        if text[digits..end].iter().zip(ordinal_suffix(last_two).bytes())
+            .all(|(actual, expected)| (*actual | 0x20) == u16::from(expected)) {
+            return Some((&[], &text[..digits], &text[digits..]));
+        }
     }
-    let cut = text.len().checked_sub(2)?;
-    let suffix = text.get(cut..)?;
-    if !["st", "nd", "rd", "th"].iter().any(|one| suffix.eq_ignore_ascii_case(one)) {
-        return None;
-    }
-    let (before, digits) = tail_digits(&text[..cut])?;
-    Some((before, digits, suffix))
+    tail_digits(text).map(|(before, digits)| (before, digits, &[][..]))
 }
 
 /// The suffix an ordinal takes: 1st, 2nd, 3rd, 4th, 11th, 12th, 13th, 21st.
@@ -333,8 +367,8 @@ enum Plan {
     Weekdays { from: f64, step: i64 },
     List { list: usize, at: usize, stride: i64 },
     Counted {
-        before: String,
-        after: String,
+        before: Vec<u16>,
+        after: Vec<u16>,
         width: usize,
         padded: bool,
         slope: f64,
@@ -346,7 +380,7 @@ enum Plan {
         quarter: bool,
     },
     Repeat(Vec<Filled>),
-    Formula(Vec<Option<String>>),
+    Formula(Vec<Option<Vec<u16>>>),
 }
 
 struct Run {
@@ -373,22 +407,24 @@ fn plan_run(run: &Run, line: &[Seed], alone: bool, how: How) -> Plan {
         Plan::Repeat(
             cells
                 .iter()
-                .map(|seed| match seed.number {
-                    Some(number) => Filled::Number(number),
-                    None if seed.text.is_empty() => Filled::Empty,
-                    None => Filled::Text(seed.text.clone()),
+                .map(|seed| match (seed.number, seed.boolean, seed.error.as_ref()) {
+                    (Some(number), _, _) => Filled::Number(number),
+                    (_, Some(value), _) => Filled::Boolean(value),
+                    (_, _, Some(error)) => Filled::Error(error.clone()),
+                    _ if seed.text.is_empty() => Filled::Empty,
+                    _ => Filled::text(seed.text_units()),
                 })
                 .collect(),
         )
     };
     if how == How::Copy {
         return match run.kind {
-            Kind::Formula => Plan::Formula(cells.iter().map(|seed| seed.formula.clone()).collect()),
+            Kind::Formula => Plan::Formula(cells.iter().map(Seed::formula_units).collect()),
             _ => repeat(),
         };
     }
     match &run.kind {
-        Kind::Formula => Plan::Formula(cells.iter().map(|seed| seed.formula.clone()).collect()),
+        Kind::Formula => Plan::Formula(cells.iter().map(Seed::formula_units).collect()),
         Kind::Number => {
             let values: Vec<f64> = cells.iter().map(|seed| seed.number.unwrap_or(0.0)).collect();
             let unit = unit_of(cells[0].number_format.as_deref());
@@ -474,25 +510,28 @@ fn plan_run(run: &Run, line: &[Seed], alone: bool, how: How) -> Plan {
                 repeat()
             }
         }
-        Kind::Counted(_) => {
-            let (before, _, after) = counted_parts(&cells[0].text).unwrap_or(("", "", ""));
-            let (before, after) = (before.to_string(), after.to_string());
-            let parts: Vec<&str> = cells.iter().filter_map(|seed| counted_parts(&seed.text).map(|(_, digits, _)| digits)).collect();
-            let numbers: Vec<f64> = parts.iter().map(|digits| digits.parse::<f64>().unwrap_or(0.0)).collect();
+        Kind::Counted(_, _) | Kind::Ordinal(_) => {
+            let texts: Vec<_> = cells.iter().map(Seed::text_units).collect();
+            let (before, _, after) = counted_parts(&texts[0]).unwrap_or_default();
+            let (before, after) = (before.to_vec(), after.to_vec());
+            let parts: Vec<&[u16]> = texts.iter().filter_map(|text| counted_parts(text).map(|(_, digits, _)| digits)).collect();
+            let numbers: Vec<f64> = parts.iter().map(|digits| String::from_utf16(digits)
+                .expect("counted suffix contains only ASCII digits").parse::<f64>().unwrap_or(0.0)).collect();
             let (slope, base) = fit_line(&numbers);
             // Numbered text always counts up, even on its own: "Item 1"
             // pulled down gives Item 2.
             let slope = if numbers.len() == 1 { 1.0 } else { slope };
+            let ordinal = before.is_empty() && !after.is_empty();
             let quarter = after.is_empty()
-                && (before == "Q" || before == "q")
+                && before.len() == 1 && (before[0] == u16::from(b'Q') || before[0] == u16::from(b'q'))
                 && numbers.iter().all(|number| (1.0..=4.0).contains(number));
             Plan::Counted {
-                ordinal: before.is_empty() && !after.is_empty(),
+                ordinal,
                 quarter,
                 before,
                 after,
                 width: parts[0].len(),
-                padded: parts[0].starts_with('0'),
+                padded: !ordinal && parts[0].first() == Some(&u16::from(b'0')),
                 slope,
                 base,
             }
@@ -533,14 +572,17 @@ fn run_value(plan: &Plan, index: i64, len: usize, delta: i64, along: Along) -> F
             if *quarter {
                 next = wrapped(next - 1, 4) as i64 + 1;
             }
-            let after = if *ordinal { ordinal_suffix(next) } else { after.as_str() };
             let digits = next.to_string();
             let digits = if *padded && digits.len() < *width {
                 format!("{}{}", "0".repeat(width - digits.len()), digits)
             } else {
                 digits
             };
-            Filled::Text(format!("{before}{digits}{after}"))
+            let mut text = before.clone();
+            text.extend(digits.encode_utf16());
+            if *ordinal { text.extend(ordinal_suffix(next).encode_utf16()); text.extend_from_slice(&after[2..]); }
+            else { text.extend_from_slice(after); }
+            Filled::text(text)
         }
         Plan::Repeat(values) => values[wrapped(index, values.len())].clone(),
         Plan::Formula(formulas) => match &formulas[wrapped(index, formulas.len())] {
@@ -550,10 +592,17 @@ fn run_value(plan: &Plan, index: i64, len: usize, delta: i64, along: Along) -> F
                     Along::Rows => (delta, 0),
                     Along::Columns => (0, delta),
                 };
-                let text = if formula.starts_with('=') { formula.clone() } else { format!("={formula}") };
+                let mut text = formula.clone();
+                if text.first() != Some(&(b'=' as u16)) { text.insert(0, b'=' as u16); }
                 // A formula the engine cannot read is left exactly as it was
                 // rather than moved by guesswork.
-                Filled::Formula(translate_formula_references(&text, rows, columns).unwrap_or(text))
+                let translated = oxicells_calc::parser::transform_utf16_formula(&text, |formula| {
+                    translate_formula_references(formula, rows, columns)
+                }).unwrap_or(text);
+                match String::from_utf16(&translated) {
+                    Ok(formula) => Filled::Formula(formula),
+                    Err(_) => Filled::Utf16Formula(translated),
+                }
             }
         },
     }
@@ -652,6 +701,44 @@ mod tests {
     }
 
     #[test]
+    fn text_fill_preserves_utf16_prefixes_and_separates_replacement_characters() {
+        let seed = |units: Vec<u16>| Seed { text: String::from_utf16_lossy(&units), text_utf16: Some(units), ..Default::default() };
+        let numbered = |unit, digits: &str| [97, unit].into_iter().chain(digits.encode_utf16()).collect::<Vec<_>>();
+        for units in [vec![97,0xD83D,98],vec![97,0xDE00,98],vec![0,0xE000,0xD83D,0xFFFD,0xDB80,0xDC00,0xDE00]] {
+            for how in [How::Copy,How::Default] {
+                assert_eq!(down(&[seed(units.clone())],2,how),vec![Filled::Utf16Text(units.clone()),Filled::Utf16Text(units.clone())]);
+            }
+        }
+        assert_eq!(down(&[seed(numbered(0xD83D,"001"))],2,How::Default),
+            vec![Filled::Utf16Text(numbered(0xD83D,"002")),Filled::Utf16Text(numbered(0xD83D,"003"))]);
+        let up=continue_line(&[seed(numbered(0xDE00,"003"))],2,false,How::Default,Along::Rows);
+        assert_eq!(values(&up),vec![Filled::Utf16Text(numbered(0xDE00,"002")),Filled::Utf16Text(numbered(0xDE00,"001"))]);
+        let mixed=down(&[seed(numbered(0xD83D,"001")),text("a\u{fffd}001")],4,How::Default);
+        assert_eq!(mixed,vec![Filled::Utf16Text(numbered(0xD83D,"002")),Filled::Text("a\u{fffd}002".into()),
+            Filled::Utf16Text(numbered(0xD83D,"003")),Filled::Text("a\u{fffd}003".into())]);
+        let mut stale=seed(numbered(0xD83D,"001"));stale.text="Item 1".into();
+        assert_eq!(down(&[stale],1,How::Default),vec![Filled::Text("Item 2".into())]);
+        assert_eq!(down(&[text("1ST")],2,How::Default),vec![Filled::Text("2nd".into()),Filled::Text("3rd".into())]);
+        assert_eq!(down(&[text("Item 1ST")],1,How::Default),vec![Filled::Text("Item 1ST".into())]);
+        assert_eq!(down(&[text("Item 1st")],1,How::Default),vec![Filled::Text("Item 1st".into())]);
+        assert_eq!(down(&[text("1st item1")],1,How::Default),vec![Filled::Text("2nd item1".into())]);
+        assert_eq!(down(&[text("001st")],1,How::Default),vec![Filled::Text("2nd".into())]);
+        assert_eq!(down(&[text("1nd")],1,How::Default),vec![Filled::Text("1nd".into())]);
+        assert_eq!(down(&[text("1st\titem")],1,How::Default),vec![Filled::Text("1st\titem".into())]);
+        assert_eq!(down(&[text("1st"),text("2nd")],2,How::Default),vec![Filled::Text("3rd".into()),Filled::Text("4th".into())]);
+        assert_eq!(down(&[text("Q3")],3,How::Default),vec![Filled::Text("Q4".into()),Filled::Text("Q1".into()),Filled::Text("Q2".into())]);
+    }
+
+    #[test]
+    fn fill_preserves_boolean_and_error_types_among_plain_text() {
+        let line=[Seed {boolean:Some(true),text:"TRUE".into(),..Default::default()},
+            Seed {error:Some("#N/A".into()),text:"#N/A".into(),..Default::default()},text("TRUE")];
+        for how in [How::Copy,How::Default,How::Series] {
+            assert_eq!(down(&line,3,how),vec![Filled::Boolean(true),Filled::Error("#N/A".into()),Filled::Text("TRUE".into())]);
+        }
+    }
+
+    #[test]
     fn dates_follow_the_calendar() {
         let jan31 = 45_322.0;
         // A lone date moves a day; a lone time an hour.
@@ -692,5 +779,22 @@ mod tests {
         assert_eq!(down(&[seed.clone()], 2, How::Default), vec![Filled::Formula("=A2*2".into()), Filled::Formula("=A3*2".into())]);
         let right = continue_line(&[seed], 1, true, How::Default, Along::Columns);
         assert_eq!(values(&right), vec![Filled::Formula("=B1*2".into())]);
+    }
+
+    #[test]
+    fn formula_fills_preserve_utf16_literals_in_both_directions() {
+        let units = |reference: &str| reference.encode_utf16().chain("&\"a".encode_utf16())
+            .chain([0xD83D, 0xE000, 0xDB80, 0xDC00, 0xDE00])
+            .chain("_xD83D_\"".encode_utf16()).collect::<Vec<_>>();
+        let original = units("B2");
+        let seed = Seed { formula: Some(String::from_utf16_lossy(&original)), formula_utf16: Some(original), ..Default::default() };
+        for how in [How::Default, How::Copy, How::Series] {
+            assert_eq!(down(&[seed.clone()], 1, how), vec![Filled::Utf16Formula(units("=B3"))]);
+            let backwards = continue_line(&[seed.clone()], 1, false, how, Along::Columns);
+            assert_eq!(values(&backwards), vec![Filled::Utf16Formula(units("=A2"))]);
+        }
+        let mut stale = seed;
+        stale.formula = Some("A1*2".into());
+        assert_eq!(down(&[stale], 1, How::Copy), vec![Filled::Formula("=A2*2".into())]);
     }
 }

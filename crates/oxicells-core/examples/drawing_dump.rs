@@ -56,7 +56,7 @@ fn main() {
         );
         for drawn in sheet.drawings.iter().take(3) {
             let what = match &drawn.kind {
-                DrawingKind::Picture { bytes } => format!("picture, {} bytes", bytes.len()),
+                DrawingKind::Picture { bytes, .. } => format!("picture, {} bytes", bytes.len()),
                 DrawingKind::Shape(shape) => format!(
                     "{} filled {:?} ruled {:?}",
                     shape.geometry,

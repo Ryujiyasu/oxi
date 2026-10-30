@@ -1,0 +1,357 @@
+[
+  {
+    "name": "context_worksheet",
+    "source": "project_compile_context_worksheet.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_range",
+    "source": "project_compile_context_range.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_collection",
+    "source": "project_compile_context_collection.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_office_enum",
+    "source": "project_compile_context_office_enum.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_excel_enum",
+    "source": "project_compile_context_excel_enum.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_stdole",
+    "source": "project_compile_context_stdole.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_unknown_qualified",
+    "source": "project_compile_context_unknown_qualified.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "ユーザ定義型は定義されていません。"
+  },
+  {
+    "name": "context_unknown_local",
+    "source": "project_compile_context_unknown_local.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "ユーザ定義型は定義されていません。"
+  },
+  {
+    "name": "context_decimal",
+    "source": "project_compile_context_decimal.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "context_date_bad",
+    "source": "project_compile_context_date_bad.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "型が一致しません。"
+  },
+  {
+    "name": "context_date_valid",
+    "source": "project_compile_context_date_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_bound_abs",
+    "source": "project_compile_context_bound_abs.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_bound_constant",
+    "source": "project_compile_context_bound_constant.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "context_bound_host",
+    "source": "project_compile_context_bound_host.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "context_global_range",
+    "source": "project_compile_context_global_range.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_sheet_alias",
+    "source": "project_compile_context_sheet_alias.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {
+      "referenceSymbols": [
+        {
+          "name": "Sheet1"
+        }
+      ]
+    },
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_implicit_variable",
+    "source": "project_compile_context_implicit_variable.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_undefined_function",
+    "source": "project_compile_context_undefined_function.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "syntax_known_function",
+    "source": "project_compile_syntax_known_function.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "syntax_known_sub",
+    "source": "project_compile_syntax_known_sub.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "syntax_explicit_unknown",
+    "source": "project_compile_syntax_explicit_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "Sub または Function が定義されていません。"
+  },
+  {
+    "name": "syntax_bare_unknown",
+    "source": "project_compile_syntax_bare_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "Sub または Function が定義されていません。"
+  },
+  {
+    "name": "syntax_expression_unknown",
+    "source": "project_compile_syntax_expression_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "Sub または Function が定義されていません。"
+  },
+  {
+    "name": "syntax_builtin_noarg",
+    "source": "project_compile_syntax_builtin_noarg.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "syntax_member_noarg",
+    "source": "project_compile_syntax_member_noarg.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "compilation_options": {},
+    "outcome": "compile",
+    "message": "構文エラー"
+  }
+]

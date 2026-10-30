@@ -1,0 +1,2484 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "source": "file_attributes_edges.bas",
+  "package": "file_attributes_edges.xlsm",
+  "package_sha256": "ff777bf30cb48adcfdd523b0ba940adad80e4be512a2e9b83a756d6132d4adbe",
+  "initial_directory_state": {
+    "currentDrive": "C",
+    "directories": [
+      "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+      "D:\\"
+    ]
+  },
+  "native_evidence": {
+    "raw_report_sha256": "9b67e59933ccad82e275adf3b7cf81179ca30254066101cc66799400502759b8",
+    "cases_sha256": "8437b866bf558e11185188fb5b50623b74e7ce9596d6ef4f951e6f34232208e9",
+    "identity": 2026102073,
+    "owned_excel_exit_code": 0,
+    "actual_controller_exit_code": 0,
+    "input_packages_unchanged": true
+  },
+  "cases": [
+    {
+      "kind": 52,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        52,
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs"
+      ],
+      "expected": "70|VBAProject|書き込みできません。|result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:False|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs\\nonempty"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-52\\fs\\nonempty",
+          "value": 17,
+          "windows_attributes": 17
+        }
+      ]
+    },
+    {
+      "kind": 53,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        53,
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs"
+      ],
+      "expected": "0|||result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:False|leaf:False|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs\\empty"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-53\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 54,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        54,
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs"
+      ],
+      "expected": "70|VBAProject|書き込みできません。|result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\nonempty\\child",
+          "value": 17,
+          "windows_attributes": 17
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-54\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 55,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        55,
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs"
+      ],
+      "expected": "75|VBAProject|パス名が無効です。|result:|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-55\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 56,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        56,
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs"
+      ],
+      "expected": "75|VBAProject|パス名が無効です。|result:|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-56\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 57,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        57,
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs"
+      ],
+      "expected": "0|||result:|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-57\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 58,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        58,
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs"
+      ],
+      "expected": "75|VBAProject|パス名が無効です。|result:|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-58\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 59,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        59,
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs"
+      ],
+      "expected": "0|||result:|trace:|get-file:0|get-folder:16|fso-file:0|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\held.txt",
+          "value": 0,
+          "windows_attributes": 128
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-59\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 60,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        60,
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs"
+      ],
+      "expected": "55|VBAProject|ファイルは既に開かれています。|result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-60\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 61,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        61,
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs"
+      ],
+      "expected": "0|||result:|trace:|get-file:|get-folder:16|fso-file:|fso-folder:16|nonempty:True|leaf:True|snapshot-error:53",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-61\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 62,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        62,
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs"
+      ],
+      "expected": "0|||result:|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\held.txt",
+          "bytes": []
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-62\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 63,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        63,
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs"
+      ],
+      "expected": "0|||result:|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_attributes_edges_native_20261020\\case-63\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    }
+  ]
+}

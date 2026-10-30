@@ -52,6 +52,15 @@ impl TypeName {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Module {
     pub items: Vec<ModuleItem>,
+    /// Byte ranges terminated by lexer Eol tokens. Continued physical lines
+    /// share one range; colon-separated statements remain in that range.
+    pub logical_lines: Vec<Span>,
+    /// Known syntax failures outside procedures, retained alongside recovered source.
+    pub syntax_errors: Vec<Span>,
+    /// Standard modules of a parsed project. `items` retains the flattened
+    /// source order for analysis; execution uses these separate namespaces.
+    /// Ordinary modules and class modules leave this empty.
+    pub standard_modules: Vec<(String, Module)>,
 }
 
 /// Kept as a flat ordered list: the order of declarations is part of what a
@@ -156,6 +165,8 @@ pub struct VarItem {
     /// `Dim a(1 To 10)`. Empty bounds mean a dynamic array: `Dim a()`.
     pub array_bounds: Option<Vec<ArrayBound>>,
     pub type_name: TypeName,
+    /// An explicit As clause or type character, retained for constant checking.
+    pub explicit_type: bool,
     /// `WithEvents obj As Worksheet`.
     pub with_events: bool,
     /// Only for `Const`.
@@ -215,6 +226,8 @@ pub struct Procedure {
     pub params: Vec<Param>,
     pub return_type: Option<TypeName>,
     pub body: Vec<Statement>,
+    /// Known syntax failures in this procedure, including unreachable statements.
+    pub syntax_errors: Vec<Span>,
     pub span: Span,
 }
 
@@ -738,6 +751,11 @@ pub enum Literal {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(Literal, Span),
+    /// Parentheses force a value expression, including an object's default member.
+    Group {
+        expression: Box<Expr>,
+        span: Span,
+    },
     /// Excel's `[A1]` shorthand for `Evaluate("A1")`.
     EvaluateShortcut {
         text: String,
@@ -823,10 +841,67 @@ pub struct Argument {
     pub force_by_value: bool,
 }
 
+impl Statement {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Assign { span, .. }
+            | Self::SetAssign { span, .. }
+            | Self::Call { span, .. }
+            | Self::ReDim { span, .. }
+            | Self::Erase { span, .. }
+            | Self::Close { span, .. }
+            | Self::FileWidth { span, .. }
+            | Self::FileReset { span }
+            | Self::While { span, .. }
+            | Self::With { span, .. }
+            | Self::Resume { span, .. }
+            | Self::GoTo { span, .. }
+            | Self::GoSub { span, .. }
+            | Self::Return { span }
+            | Self::Exit { span, .. }
+            | Self::Label { span, .. }
+            | Self::LineNumber { span, .. }
+            | Self::End { span }
+            | Self::Stop { span }
+            | Self::Comment { span, .. }
+            | Self::Directive { span, .. }
+            | Self::Unknown { span, .. } => *span,
+            Self::Dim(s) => s.span,
+            Self::Open(s) => s.span,
+            Self::FileOutput(s) => s.span,
+            Self::FileInput(s) => s.span,
+            Self::FileTransfer(s) => s.span,
+            Self::FileSeek(s) => s.span,
+            Self::FileRecordLock(s) => s.span,
+            Self::MidAssign(s) => s.span,
+            Self::AlignedAssign(s) => s.span,
+            Self::If(s) => s.span,
+            Self::SelectCase(s) => s.span,
+            Self::For(s) => s.span,
+            Self::ForEach(s) => s.span,
+            Self::Do(s) => s.span,
+            Self::OnBranch(s) => s.span,
+            Self::RaiseEvent(s) => s.span,
+            Self::OnError(
+                OnError::Goto { span, .. }
+                | OnError::Disable { span }
+                | OnError::ResumeNext { span },
+            ) => *span,
+            Self::FileSystem(
+                FileSystemStmt::Rename { span, .. }
+                | FileSystemStmt::Copy { span, .. }
+                | FileSystemStmt::Unary { span, .. }
+                | FileSystemStmt::SetAttr { span, .. },
+            ) => *span,
+        }
+    }
+}
+
 impl Expr {
     pub fn span(&self) -> Span {
         match self {
-            Expr::Literal(_, s)
+            Expr::Group { span: s, .. }
+            | Expr::Literal(_, s)
             | Expr::EvaluateShortcut { span: s, .. }
             | Expr::Ident(_, s)
             | Expr::TypedIdent { span: s, .. }
@@ -843,8 +918,16 @@ impl Expr {
         }
     }
 
+    /// The underlying syntax for intrinsic operations that retain storage semantics.
+    pub fn without_groups(&self) -> &Expr {
+        match self {
+            Expr::Group { expression, .. } => expression.without_groups(),
+            other => other,
+        }
+    }
+
     /// Walk the expression, parents before children.
-    pub fn visit(&self, f: &mut impl FnMut(&Expr)) {
+    pub fn visit<'e>(&'e self, f: &mut impl FnMut(&'e Expr)) {
         f(self);
         match self {
             Expr::Member { object, .. } | Expr::Bang { object, .. } => object.visit(f),
@@ -856,6 +939,7 @@ impl Expr {
                     }
                 }
             }
+            Expr::Group { expression, .. } => expression.visit(f),
             Expr::Unary { operand, .. } | Expr::TypeOf { operand, .. } => operand.visit(f),
             Expr::Binary { lhs, rhs, .. } => {
                 lhs.visit(f);

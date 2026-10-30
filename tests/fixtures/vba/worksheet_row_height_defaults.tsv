@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: CC-BY-SA-4.0
+# Exact Native source/input; normal-zero owned processes; selected pure API entrypoints only.
+# version	method	arguments_json	expected
+1	HeightDefaultState	[0]	15|15|False|True
+1	HeightDefaultState	[1]	0|0|True|True
+1	HeightDefaultState	[2]	0|0|True|True
+1	HeightDefaultState	[3]	15|15|False|True
+1	HeightDefaultState	[4]	15|15|False|True
+1	HeightDefaultState	[5]	19.5|19.5|False|False
+1	HeightDefaultState	[6]	19.5|19.5|False|False
+1	HeightDefaultState	[7]	0.25|0|True|False
+1	HeightDefaultState	[8]	0.25|0|True|False
+1	HeightDefaultState	[9]	15|15|False|True
+1	HeightDefaultState	[10]	15|15|False|True
+1	HeightDefaultState	[11]	0|0|True|True
+1	HeightDefaultState	[12]	0|0|True|False
+1	HeightDefaultState	[13]	15|15|False|False

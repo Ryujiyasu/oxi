@@ -153,6 +153,7 @@ fn parse_xlsx_empty_bytes_returns_err() {
 
 fn make_cell(col: u32, value: CellValue, formula: Option<&str>) -> Cell {
     Cell {
+        formula_utf16: None,
         array_block: None,
         spill: Default::default(),
         col,
@@ -191,15 +192,22 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         })
         .collect();
     Sheet {
+        kind: Default::default(),
         visibility: Default::default(),
         name: "TestSheet".to_string(),
         rows,
         col_count: 10,
         col_widths: vec![],
+        col_custom_widths: Default::default(),
+        cached_spills: None,
+        pending_used_bounds: None,
+        column_width_font: None,
         default_col_width: 8.43,
+        default_col_width_explicit: false,
         default_row_height: 15.0,
         default_row_custom: false,
         col_fonts: vec![],
+        band_styles: Default::default(),
         normal_font: None,
         first_font: None,
         frozen_rows: 0,
@@ -211,6 +219,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         tables: Vec::new(),
             drawings: Vec::new(),
             comments: Vec::new(),
+            threaded_comments: Vec::new(),
         unsupported_elements: vec![],
         hyperlinks: vec![],
         protected: false,

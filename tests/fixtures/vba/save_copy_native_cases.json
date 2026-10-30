@@ -1,0 +1,2977 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "groups": [
+    {
+      "name": "vba_row_height_boundaries_20261020-boundaries",
+      "source": "worksheet_row_height_state.bas",
+      "package": "row_height_state.xlsm",
+      "source_sha256": "e07fcc09cf7f78d12b15061ca1433d4e45400c75bb0bd4622683894203b157c5",
+      "package_sha256": "3581e9ae8ef6f9ebc3962d3be380df5e7a20a4611c0aa4784d79653180f9ab79",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\input.xlsm",
+      "read_only": true,
+      "display_alerts": false,
+      "cases": [
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            -1,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-0.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-0.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "91ab3c6916eb79d9001302cff29cea25a071494a31872803fa32242461a464cb",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-1.xlsm"
+          ],
+          "expected": "0|0|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-1.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "c8124d44a74f911ca50c9f5e53ee1f9e8e2521eacb2a76dd687785c09d03344d",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "hidden": "1",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.5,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-2.xlsm"
+          ],
+          "expected": "0|409.5|409.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-2.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "82d9b1a9cbca5c7951075d594f7696667c25fd727fa94480911aae49901227bd",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "409.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.50000001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-3.xlsm"
+          ],
+          "expected": "0|409.5|409.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-3.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "acf587cd441298cb5d8b4fcac82af92052ed80ba1ab571d1f506e1363b454df1",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "409.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.55,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-4.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-4.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "1997883f1836e112aa1bcbc2fe0258d8134c33123f414fd2d3963873c4149af5",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.59,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-5.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-5.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "7ecb3423c98a1cb51b2363ccf49114b592e68ecc7ac42f87372430f97cf8279f",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.6,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-6.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-6.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "104b1e5f50f5984da6f6cc45178d81a38c0f66d5c155024e638361f1ca9af32e",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.12,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-7.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-7.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "bad0939018cc86376426f4b619766ac98b84a453e3d455dc6057b00670cc9641",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.3,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-8.xlsm"
+          ],
+          "expected": "0|20.25|20.25|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-8.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "89447849935e74c7e7847ea01ad4c0968e1755e914bb0de74a99a0a532a25d55",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.25",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.0937499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-9.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-9.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "f92faa684eb11679981fb3b63bb9b66e0f37639775e33a65f98f77b03fdc7412",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.09375,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-10.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-10.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "586e724f80b4ae831643e3f963c940ceaedba8e0148f270127b8264bc2ea3109",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.0937500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-11.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-11.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "34f0f394806c59acc68bf0daa92b7283ba91781a7d9c3fcd4ba766c46563eede",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.2812499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-12.xlsm"
+          ],
+          "expected": "0|0.5|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-12.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "401d184b8d5f437ad86687e387b885b2b17fa7c9f0c9d835a2ef3907fbf5ce2c",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.4",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.28125,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-13.xlsm"
+          ],
+          "expected": "0|0.5|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-13.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "37933a8cb54ec1d182a6640f84aff077195b619c4d4399ad345d946eb27d7de2",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.4",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.2812500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-14.xlsm"
+          ],
+          "expected": "0|0.5|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-14.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "861a11365bf2587ad3e24027c257e4952300aac28d7e220d21285b9eade4d98b",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.4",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.4687499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-15.xlsm"
+          ],
+          "expected": "0|0.5|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-15.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "37ef515ed02536e80c02f62350d30cf6cdffd30ceab3bb0ab91d790f55025419",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.4",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.46875,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-16.xlsm"
+          ],
+          "expected": "0|0.5|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-16.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "be598479c8860cde18208136cbfcc313852f878c72130950ffe85f497e08d3fe",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.4",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.4687500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-17.xlsm"
+          ],
+          "expected": "0|0.5|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-17.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "d0db0bdb28d8dfef93782704e1603b4d2d4af80b8866bcb1f7528029409c7b0d",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.4",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.6562499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-18.xlsm"
+          ],
+          "expected": "0|0.5|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-18.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "8a3ce5716983dd1f118f745158c7874258a9ba2ff376b61ec262e9199aeae8d6",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.6",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.65625,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-19.xlsm"
+          ],
+          "expected": "0|0.5|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-19.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "ab0468a4b465e7344f3f843c27b9dd6fbbd5019713513f499fe8f12082283d05",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.6",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.6562500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-20.xlsm"
+          ],
+          "expected": "0|0.5|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-20.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "5663953b80d1c8332b797d112c569449eec03e9384a77b5acd68e5ede2fa52a2",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.6",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            1.0312499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-21.xlsm"
+          ],
+          "expected": "0|1.25|0.75|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-21.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "435f30df99b8afdc49b817c914cc24ed61070b5ac5361cbbe621460fec9fb4b2",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "1.1499999999999999",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            1.03125,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-22.xlsm"
+          ],
+          "expected": "0|1.25|0.75|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-22.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "1cd2eb387811ef84fe37f923c3f392ad8bc99da848109327da8ea2c28ea6216f",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "1.1499999999999999",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            1.0312500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-23.xlsm"
+          ],
+          "expected": "0|1.25|0.75|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-23.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "cd67791e02b2e49fd0cb94783daff001e529c5aeba7f4c62698ec7d3c9046163",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "1.1499999999999999",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            1.2187499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-24.xlsm"
+          ],
+          "expected": "0|1.25|0.75|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-24.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "68c15e2040ddc8fd2f211b1d00cf602a2a832976f93c53606d678f91e89abccb",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "1.1499999999999999",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            1.21875,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-25.xlsm"
+          ],
+          "expected": "0|1.25|0.75|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-25.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "36392b9e5bac4a6bd8a9cd76abf7f29f69a2820856a4c30dc7826382a2a3c1fc",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "1.1499999999999999",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            1.2187500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-26.xlsm"
+          ],
+          "expected": "0|1.25|0.75|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-26.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "9568833a94d96c68c5e9e831bf3bbd93185b988e15dec6596688b9b8e62c50ad",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "1.1499999999999999",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            19.9687499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-27.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-27.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "76cda4b588effc1f12eea34f95b380f765ecc01ffa8c79786a82b1e2e43cd3ac",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.899999999999999",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            19.96875,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-28.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-28.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "c83b6c3975f32d597fa4208fab5c604b1f1a60f81b9b33a229d47cf470cc239f",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.899999999999999",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            19.9687500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-29.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-29.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "e3e5a0da48a740709b51368ea39cb3270048e504e1bce87c13de6c0f16d729f7",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.899999999999999",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.1562499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-30.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-30.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "90e8697d40b9390dc8f42583c74d2640c689a0d9530e59fe2af9490a8b7c6d05",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.15625,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-31.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-31.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "9cfd6a26768f0bbcd265cf3d950ebf5171793bfe4c046eea8f6a6d0d11cc5323",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.1562500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-32.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-32.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "57d114740f420514b05855bf54ea9226c27eba1daa9fa15e891bd6cf60d4d607",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.5937499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-33.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-33.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "07340e2170461552017e422572e8a4cdc5773324d3b087e1ccd183629d81fc7a",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.59375,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-34.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-34.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "a84a3c64eb80e8e30c13d3ec47f02450e156d445b6b2225d5193dd528b06a105",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.5937500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-35.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved\\height-35.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "ae39689b1c4269d97485683202e5bba0f3f58cbf3a5adb935f85740150ff318b",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        }
+      ],
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_boundaries_20261020\\boundaries\\saved"
+      ],
+      "initial_files": []
+    },
+    {
+      "name": "vba_row_height_twip_boundaries_20261020-twip-boundaries",
+      "source": "worksheet_row_height_state.bas",
+      "package": "row_height_state.xlsm",
+      "source_sha256": "e07fcc09cf7f78d12b15061ca1433d4e45400c75bb0bd4622683894203b157c5",
+      "package_sha256": "3581e9ae8ef6f9ebc3962d3be380df5e7a20a4611c0aa4784d79653180f9ab79",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\input.xlsm",
+      "read_only": true,
+      "display_alerts": false,
+      "cases": [
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            -1e-10,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-0.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-0.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "7a9554af87a844955d0922b7f55963b1e595c71d9755baa9994371c560a64145",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            -0.001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-1.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-1.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "456e9397fcf5c2ed91e97543e951b79c87234701f7b924330c7249cb7a9df2ab",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            -0.0249,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-2.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-2.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "19c79d3dca197c4941bdd8a03f3aa81445842584f3b78955b7fda5e01558373b",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.52,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-3.xlsm"
+          ],
+          "expected": "0|409.5|409.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-3.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "9a7f9dc4d855a5fb53ce07dbd7c5acf261b79dae971debe62bb9e34996d052b5",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "409.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.5249,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-4.xlsm"
+          ],
+          "expected": "0|409.5|409.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-4.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "e98a3ae65f1f4e8063c070a43420bf745e4cdf936deb6819b9cc87856828553b",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "409.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.5251,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-5.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-5.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "bc332802da897a2c0a45db723aa5b33a319c94f66ea5248daa5de7d578ad2cde",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.53,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-6.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-6.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "837e8c80226ebfcfc679b0dbe81700e9673c239728dec3757536f21831bca107",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.02499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-7.xlsm"
+          ],
+          "expected": "0|0|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-7.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "e5fa8eaf4b06c876543ebf7770b6a697a4a68407b74068a65385dc585f7377bd",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "hidden": "1",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.0249999999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-8.xlsm"
+          ],
+          "expected": "0|0|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-8.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "54edf6d7fbd079f81dae2991d41e33cc6725c0ebf78f690d92b707fd1e5d1712",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "hidden": "1",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.025,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-9.xlsm"
+          ],
+          "expected": "0|0|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-9.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "ed796a2202e5d3b76a25e570cc05bb80d3ac5662df7ba08c228679943314295d",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "hidden": "1",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.025000000100000003,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-10.xlsm"
+          ],
+          "expected": "0|0|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-10.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "6c1012fd1a3a39fd64c2e3b8a9d3ac8fac17962ed7b90e1f64c9021c655a3674",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "hidden": "1",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.025000010000000003,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-11.xlsm"
+          ],
+          "expected": "0|0|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-11.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "5ad78527d0bf742cda0f1447e2d3a30be8c2ee5e79ec6449bcafb12c6d56d988",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "hidden": "1",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.07499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-12.xlsm"
+          ],
+          "expected": "0|0|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-12.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "13ae5a51aa528d32a78559d668ce87a2c265a803d0124c75de65d8ad3a743085",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "hidden": "1",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.0749999999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-13.xlsm"
+          ],
+          "expected": "0|0|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-13.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "b38944eadcb208a5df55d88f97c3fc9def4c4c0bc107753c37afb02bd495a90d",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "hidden": "1",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.075,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-14.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-14.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "967aeff4efffcf3031001eb426163908fa703696f9558bb3ee92a1e4fe145346",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.07500000009999999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-15.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-15.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "81566e25fa99c9d397aba642a414603c122de86f5750d65a5d86cffe90ebfa16",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.07500000999999999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-16.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-16.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "3ac667075c1f79d27cae376bfc62fc97c5e51261f73c8817e35fb45c7d054602",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.12499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-17.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-17.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "8fc4835a3bb4961314777930424d0a4eeaf8a16f7f0367764d3cce4e4daf122e",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.1249999999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-18.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-18.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "1c0c1f8871e837c2dd95e29b1a4ecce2ccee145dd6daf9bb3f729f6341ab72a5",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.125,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-19.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-19.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "b0f320484d632bb197b14e68a118b1991177a2408243cee5cd8aadc2f0232b12",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.1250000001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-20.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-20.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "c9d5f9e182c25e681063f123ed08a35c187e44f3ed6c738f24fcad7cfb634cd9",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.12500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-21.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-21.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "407307fea9410c9707685902d22cf69f2407fd524d723a9eb8461121a230a14b",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.17499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-22.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-22.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "291c9443743a3db466f34468f8eca4d9f10cbefd17d03ab80bad101d9ecd7c90",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.17499999989999998,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-23.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-23.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "3cf683da13c12f7a4e402572632a5188f89d6765a8c88e601b1847b2241805d7",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.175,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-24.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-24.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "9f871cf8623d417a38f0135e7412803f65e25ab6f99235ed3a0799100605ce53",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.1750000001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-25.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-25.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "b2dd4838eea48ac0e45f2bf2718d53aa6053622623c51054f6d9b41a4034280b",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.17500000999999998,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-26.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-26.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "42f6bc399e061ef465478f78941039f48cafbc9c4156dacd66a8a341c71e7693",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.22499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-27.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-27.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "6ab529b133fb5af5cbd26455becd0fcf0be2b9340834efd986caa0443bc8de4a",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.2249999999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-28.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-28.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "4f068b6610a04aebf31086898cce2526f4710e5edf7f3727f322788e97af4fe3",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.225,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-29.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-29.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "1a3dc451bb093a2ce166ec530334ba073c325d8c5de2702785f2363ea1490815",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.2250000001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-30.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-30.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "e12c6bd6f8545b3ff27d3755a5b1e3adb958b5ecc1130496dcfa21a170d8a71a",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.22500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-31.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-31.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "b3d70b10da006fd3cb337c4a5638eb4a6aeba31fd6966b3a5da2c4ba0e42d45c",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.27499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-32.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-32.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "97a58c5a690736ec371d5fbba4fc1a5c27c7d366f9af6bca3e7f80334711e3ea",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.2749999999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-33.xlsm"
+          ],
+          "expected": "0|0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-33.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "a377e63e57fdcfa14c5767744782e92c1ed8d4733153681c5c825d51eba96757",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.275,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-34.xlsm"
+          ],
+          "expected": "0|0.5|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-34.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "e43182e3eb52ea41776d54e8c789d6433931bea475984e4240ff486fcf3fcc01",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.4",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.27500000010000003,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-35.xlsm"
+          ],
+          "expected": "0|0.5|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-35.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "a19c3943ab2164d3d8b11c5e1644eb59ccb091728a79a74c4bf405362876cb42",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.4",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            0.27500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-36.xlsm"
+          ],
+          "expected": "0|0.5|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-36.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "c0b96eaf3730a2f61c6691bd59c7b08f04c9384ad6029f9222ca67a868a48e61",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.4",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.024999989999998,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-37.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-37.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "8171e715360043fbc7f63a619f1cc2e899e6d0115b5124f35482d5564885f8ba",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.0249999999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-38.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-38.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "d15bbe3446850c860a94d7f3077c4815da9373122369d970c50627aae78864fe",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.025,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-39.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-39.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "a696c1d38c007330fa03daf8d04b30c59d5ee7c7f944433a35a2496fe8af821b",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.025000000099997,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-40.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-40.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "7606297210ff81d03141346b256e21372bcb365511d45e19bb5cb1677db96ca5",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.02500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-41.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-41.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "5073ddc66387f4de4c0026f4fa4733a20c29287bb0da0cc4f1f82c1fd7e76827",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.12499999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-42.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-42.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "b00a3aa8091ed8cf9081a904ee6801a17936280d134655f990c8914a6d7ed40e",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.1249999999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-43.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-43.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "a94d5812e44ed6bbb38f3909493b3a5fa7fe0a1cf11679156cb76a6a22ab4d5a",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.125,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-44.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-44.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "dbcef8fc4834c28c1104f2f6d50d44427d884541551458d13727cb11e38eb693",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.1250000001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-45.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-45.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "48425cbc6614bf30094eed1b3f9a978208b011cd01dcae55b67e6fb25bb3dd1a",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            20.12500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-46.xlsm"
+          ],
+          "expected": "0|20|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-46.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "1c6f8bd2d9106b783f16a096c92d89c05afaaca7c11b55ef69d2426b5616477d",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "20.100000000000001",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.52499998999997,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-47.xlsm"
+          ],
+          "expected": "0|409.5|409.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-47.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "45f5b713318d1fa2a0b32320d676f23c512cc5f1aefd6ca00e2d202888ff346c",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "409.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.5249999999,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-48.xlsm"
+          ],
+          "expected": "0|409.5|409.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-48.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "3e748b39c2e2a2a6a88506db99345f07a539642505ac8fdc402225c12aa81ab7",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "409.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.525,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-49.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-49.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "a8e0b34577c19c0eef71f3e7ee77cd3e05231aee9d1bbb3a068975f707aed7bd",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.52500000009996,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-50.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-50.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "07060eb5d8386afe7be0108e758eacdf92ccaae1a04c46612158f1a71d049570",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "HeightBoundary",
+          "arguments": [
+            409.52500001,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-51.xlsm"
+          ],
+          "expected": "1004|19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved\\height-51.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "b565179da01551a844d7944a42d499dd856fa74691d2103e6a2f773c0ed57261",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        }
+      ],
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_twip_boundaries_20261020\\twip-boundaries\\saved"
+      ],
+      "initial_files": []
+    },
+    {
+      "name": "vba_row_height_defaults_20261020-defaults",
+      "source": "worksheet_row_height_defaults.bas",
+      "package": "row_height_defaults.xlsm",
+      "source_sha256": "c6e184893d5dbbb050d88807aabdd15261239475621274f21d2e452cd0b20e68",
+      "package_sha256": "5484fd06278f1b181fd47ed8af83b0899dd908084f53af7635a116a573c2fc9a",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\input.xlsm",
+      "read_only": true,
+      "display_alerts": false,
+      "cases": [
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            0,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-0.xlsm"
+          ],
+          "expected": "15|15|False|True",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-0.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "c9891bbc209a14fb00d15b2b7f5b0d776d16af250fe4d839eaa4d0172410ea32",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            1,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-1.xlsm"
+          ],
+          "expected": "0|0|True|True",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-1.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "df26a16ce1063df9a6d5a1e052b56fdeb916fd5d89f53251e08d174393041594",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "hidden": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            2,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-2.xlsm"
+          ],
+          "expected": "0|0|True|True",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-2.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "00f959ab0de9354e71ca97a1ee6567884709b623a3f11a088e681c26e9f3078b",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "hidden": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            3,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-3.xlsm"
+          ],
+          "expected": "15|15|False|True",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-3.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "adfc86f5dfc18936a55dd17b21878324ab68420804f8ab5a605e2c4bed9b59d5",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            4,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-4.xlsm"
+          ],
+          "expected": "15|15|False|True",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-4.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "146862c6f7df79651b620fe9ccfe2f009f3094f0551e24670b1aeeb3b65ba736",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            5,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-5.xlsm"
+          ],
+          "expected": "19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-5.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "ccf41a6461ed507f9104e3fccce32a5087b227a4c7430c530e9ddf027995097c",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            6,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-6.xlsm"
+          ],
+          "expected": "19.5|19.5|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-6.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "585816f52167daa4bd740e6ed596d40e8cf72b39a7418060577387e88add7f26",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            7,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-7.xlsm"
+          ],
+          "expected": "0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-7.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "e41f91d2067d5aa350a2815e76bc5458f3e3a8431ad914709596f3a594e0cb56",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            8,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-8.xlsm"
+          ],
+          "expected": "0.25|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-8.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "f259efc8e1fdcc079b972999c8816791d9964ce5844bd0e0723035c1e69bd7ac",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "0.2",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            9,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-9.xlsm"
+          ],
+          "expected": "15|15|False|True",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-9.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "12b8c9b6ce56263f5ad6b0dc3ac157a00747a9d337f5c0bcc8e4c2d9a6614aeb",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            10,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-10.xlsm"
+          ],
+          "expected": "15|15|False|True",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-10.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "82e9ed0477037bebc0cee0064eb02041c44bdef50733d13b5356bdfa3feb5554",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            11,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-11.xlsm"
+          ],
+          "expected": "0|0|True|True",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-11.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "d9b5377671f107748d0488beae2530cdd40f4d1f58fd12fa07c4437c59e2df3c",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "hidden": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            12,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-12.xlsm"
+          ],
+          "expected": "0|0|True|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-12.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "85612746322e5b4d0899375a845382286f593b86e22fecdb3314c88423cf3aea",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "19.5",
+              "hidden": "1",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "SaveHeightDefaultState",
+          "arguments": [
+            13,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-13.xlsm"
+          ],
+          "expected": "15|15|False|False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved\\state-13.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "94d459e3916335415997196f493332fc05c0148eb84ba4ffd681653dba6e99fe",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "ht": "15",
+              "customHeight": "1",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": false
+        }
+      ],
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_defaults_20261020\\defaults\\saved"
+      ],
+      "initial_files": []
+    },
+    {
+      "name": "vba_save_copy_calculation_20261020-calculation",
+      "source": "save_copy_calculation.bas",
+      "package": "save_copy_calculation.xlsm",
+      "source_sha256": "cbcbaef77ffc9840f9dae533365fd4aa773094e19ecc449662cd75fbaa0b8c2e",
+      "package_sha256": "a87101119530b953a180366917ad06090301fb9c2aa030d21b5dae1c71a6e39e",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_calculation_20261020\\calculation\\input.xlsm",
+      "read_only": true,
+      "display_alerts": false,
+      "cases": [
+        {
+          "procedure": "CopyCalculation",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_calculation_20261020\\calculation\\outputs\\copy-false-false.xlsm",
+            false,
+            false
+          ],
+          "expected": "0|2:False:-4135:False|2:False:-4135:False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_calculation_20261020\\calculation\\outputs\\copy-false-false.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "38dfee5bc8d45193761aae9b434cd0e2a8ed84917aeca18feefa0435e8a43cd3",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true,
+            "b2_formula": "B1*2",
+            "b2_value": 2.0
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyCalculation",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_calculation_20261020\\calculation\\outputs\\copy-false-true.xlsm",
+            false,
+            true
+          ],
+          "expected": "0|2:True:-4135:False|2:True:-4135:False",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_calculation_20261020\\calculation\\outputs\\copy-false-true.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "b1fcad28b15c6123f71a1cdb1f6abffc11b5da7e5abd53070f0c9b5932b32ef7",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true,
+            "b2_formula": "B1*2",
+            "b2_value": 2.0
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyCalculation",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_calculation_20261020\\calculation\\outputs\\copy-true-false.xlsm",
+            true,
+            false
+          ],
+          "expected": "0|2:False:-4135:True|18:False:-4135:True",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_calculation_20261020\\calculation\\outputs\\copy-true-false.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "90c049629f12ee3c5b85fc6bf0f01628630b958ac59bf656da184d1e2f944c0c",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true,
+            "b2_formula": "B1*2",
+            "b2_value": 18.0
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyCalculation",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_calculation_20261020\\calculation\\outputs\\copy-true-true.xlsm",
+            true,
+            true
+          ],
+          "expected": "0|2:True:-4135:True|18:True:-4135:True",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_calculation_20261020\\calculation\\outputs\\copy-true-true.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "6952e87078f40de331ae1b6991508e331dbba189c2f7f7a32dcf81ab101ac176",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true,
+            "b2_formula": "B1*2",
+            "b2_value": 18.0
+          },
+          "result_includes_file_length": false
+        }
+      ],
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_calculation_20261020\\calculation\\outputs"
+      ],
+      "initial_files": []
+    },
+    {
+      "name": "vba_save_copy_semantics_20261020-copy",
+      "source": "save_copy_lifecycle.bas",
+      "package": "save_copy_lifecycle.xlsm",
+      "source_sha256": "8458528661294e39528cd8174e45e298def7809ebbbfbf22903e07824975c29d",
+      "package_sha256": "2c930c1e0a98703f7ba0473c1bfda3117735e34266233b3c84211fb6de2e0816",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\input.xlsm",
+      "read_only": true,
+      "display_alerts": false,
+      "cases": [
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs\\clean.xlsm",
+            0
+          ],
+          "expected": "0|||before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\input.xlsm|True|True|52|size:17544",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs\\clean.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "f51777414d1d5bcb40d313c4d45015e2e08cdefffc45216a4c8f9f775d9f27ec",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": true
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs\\dirty.xlsm",
+            1
+          ],
+          "expected": "0|||before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\input.xlsm|False|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\input.xlsm|False|True|52|size:17542",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs\\dirty.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "aae5ccd6aae747ceb984cae52402cb009660082ff38f66080371a928514e69b7",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": true
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs\\existing.xlsm",
+            2
+          ],
+          "expected": "0|||before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\input.xlsm|True|True|52|size:17543",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs\\existing.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "90b719fd86a1e61545d2689b70f5981a46d1cee119a04930105bce6ba4fd5991",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": true
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs\\extension.xlsx",
+            3
+          ],
+          "expected": "0|||before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\input.xlsm|True|True|52|size:17542",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs\\extension.xlsx",
+          "copied": true,
+          "saved": {
+            "sha256": "5276f6ba7df3fa06934c6434ac0649fc9257461559cac2a42c8f177054993e1f",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": true
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs\\missing-parent\\copy.xlsm",
+            4
+          ],
+          "expected": "1004|Microsoft Excel|ファイル 'C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs\\missing-parent\\copy.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs\\missing-parent\\copy.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        }
+      ],
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs"
+      ],
+      "initial_files": [
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_semantics_20261020\\copy\\outputs\\existing.xlsm",
+          "bytes": [
+            111,
+            119,
+            110,
+            101,
+            100,
+            32,
+            112,
+            108,
+            97,
+            99,
+            101,
+            104,
+            111,
+            108,
+            100,
+            101,
+            114
+          ]
+        }
+      ],
+      "setup_sha256": "a0e9f4197afd92a080bab95f09cae4331cabef05d8a6b5fef3b00a4e6c7e223a"
+    },
+    {
+      "name": "vba_save_copy_path_errors_20261020-paths",
+      "source": "save_copy_lifecycle.bas",
+      "package": "save_copy_lifecycle.xlsm",
+      "source_sha256": "8458528661294e39528cd8174e45e298def7809ebbbfbf22903e07824975c29d",
+      "package_sha256": "2c930c1e0a98703f7ba0473c1bfda3117735e34266233b3c84211fb6de2e0816",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm",
+      "read_only": true,
+      "display_alerts": false,
+      "cases": [
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\question?.xlsm",
+            10
+          ],
+          "expected": "1004|Microsoft Excel|申し訳ございません。C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\question?.xlsmが見つかりません。名前が変更されたか、移動や削除が行われた可能性があります。|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\question?.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\star*.xlsm",
+            11
+          ],
+          "expected": "1004|Microsoft Excel|申し訳ございません。C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\star*.xlsmが見つかりません。名前が変更されたか、移動や削除が行われた可能性があります。|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\star*.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\colon:name.xlsm",
+            12
+          ],
+          "expected": "1004|Microsoft Excel|申し訳ございません。C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\colon:name.xlsmが見つかりません。名前が変更されたか、移動や削除が行われた可能性があります。|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\colon:name.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\quote\"name.xlsm",
+            13
+          ],
+          "expected": "1004|Microsoft Excel|申し訳ございません。C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\quote\"name.xlsmが見つかりません。名前が変更されたか、移動や削除が行われた可能性があります。|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\quote\"name.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\less<name.xlsm",
+            14
+          ],
+          "expected": "1004|Microsoft Excel|申し訳ございません。C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\less<name.xlsmが見つかりません。名前が変更されたか、移動や削除が行われた可能性があります。|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\less<name.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\greater>name.xlsm",
+            15
+          ],
+          "expected": "1004|Microsoft Excel|申し訳ございません。C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\greater>name.xlsmが見つかりません。名前が変更されたか、移動や削除が行われた可能性があります。|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\greater>name.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\pipe|name.xlsm",
+            16
+          ],
+          "expected": "1004|Microsoft Excel|申し訳ございません。C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\pipe|name.xlsmが見つかりません。名前が変更されたか、移動や削除が行われた可能性があります。|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\pipe|name.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            17
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        }
+      ],
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_errors_20261020\\paths\\outputs"
+      ],
+      "initial_files": []
+    },
+    {
+      "name": "vba_save_copy_path_lengths_20261020-paths",
+      "source": "save_copy_lifecycle.bas",
+      "package": "save_copy_lifecycle.xlsm",
+      "source_sha256": "8458528661294e39528cd8174e45e298def7809ebbbfbf22903e07824975c29d",
+      "package_sha256": "2c930c1e0a98703f7ba0473c1bfda3117735e34266233b3c84211fb6de2e0816",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm",
+      "read_only": true,
+      "display_alerts": false,
+      "cases": [
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            30
+          ],
+          "expected": "0|||before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|size:17529",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "6cd2e25d56e346c84373f9d616e734e1a1390f96f925e4a2027ccaf6ed3de58f",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": true
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            31
+          ],
+          "expected": "0|||before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|size:17534",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "1b5f90d7c7ec4c849ba6bb92c7b448be0bce89f61791819213935a2405a48c37",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": true
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            32
+          ],
+          "expected": "0|||before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|size:17530",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "5cd2ee5b2671c39d3b338ad5d70d2ad1819201af0605a15e1b438c6c3052a945",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": true
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            33
+          ],
+          "expected": "0|||before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|size:17533",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "ca5e82193542f8b8adbcf603a6ea08944a71a652c6fbc30247ce4a548fa6cbe3",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": true
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            34
+          ],
+          "expected": "0|||before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|size:17525",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "151997a96ae5b18c6452d3c646e630f088e8dcca1e9284c15a7efa5ea04ea947",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": true
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            35
+          ],
+          "expected": "0|||before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|size:17532",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "dea4d4b5a18ef8f5c7e31eed0773ff8f76e74073552533a3cc5b20c1db726d15",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true
+          },
+          "result_includes_file_length": true
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            36
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            37
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            38
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        }
+      ],
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_lengths_20261020\\paths\\outputs"
+      ],
+      "initial_files": []
+    },
+    {
+      "name": "vba_save_copy_path_gap_20261020-paths",
+      "source": "save_copy_lifecycle.bas",
+      "package": "save_copy_lifecycle.xlsm",
+      "source_sha256": "8458528661294e39528cd8174e45e298def7809ebbbfbf22903e07824975c29d",
+      "package_sha256": "2c930c1e0a98703f7ba0473c1bfda3117735e34266233b3c84211fb6de2e0816",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\input.xlsm",
+      "read_only": true,
+      "display_alerts": false,
+      "cases": [
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            50
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            51
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyLifecycle",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+            52
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|before:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\input.xlsm|True|True|52|after:input.xlsm|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\input.xlsm|True|True|52|size:0",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\outputs\\xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xlsm",
+          "copied": false,
+          "saved": null,
+          "result_includes_file_length": false
+        }
+      ],
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_path_gap_20261020\\paths\\outputs"
+      ],
+      "initial_files": []
+    },
+    {
+      "name": "vba_save_copy_udf_20261020-calculation",
+      "source": "save_copy_udf.bas",
+      "package": "save_copy_udf.xlsm",
+      "source_sha256": "0197f0c1b35a2fa2e8e08f73fe010c30a23cacd117ac8d717374cd2e944ae3e1",
+      "package_sha256": "137ed114bc9496980d08fe4cd04d409c513bf9b000064f6ba43be6c9107954a5",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_udf_20261020\\calculation\\input.xlsm",
+      "read_only": true,
+      "display_alerts": false,
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_udf_20261020\\calculation\\outputs"
+      ],
+      "initial_files": [],
+      "cases": [
+        {
+          "procedure": "CopyUdf",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_udf_20261020\\calculation\\outputs\\copy-false-false.xlsm",
+            false,
+            false
+          ],
+          "expected": "0|2:0:False:-4135|2:0:False:-4135",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_udf_20261020\\calculation\\outputs\\copy-false-false.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "da7e297a36c781b8c17a5b9a405bd3846e96eb7f900a82b7d440d2ba45d3d266",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true,
+            "b2_formula": "CopyTwice(B1)",
+            "b2_value": 2.0
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyUdf",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_udf_20261020\\calculation\\outputs\\copy-false-true.xlsm",
+            false,
+            true
+          ],
+          "expected": "0|2:0:True:-4135|2:0:True:-4135",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_udf_20261020\\calculation\\outputs\\copy-false-true.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "725a4a762fdb99d0ec2aadd9fdd45ba2df1d438b828facd5f6402dc4222781dd",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true,
+            "b2_formula": "CopyTwice(B1)",
+            "b2_value": 2.0
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyUdf",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_udf_20261020\\calculation\\outputs\\copy-true-false.xlsm",
+            true,
+            false
+          ],
+          "expected": "0|2:0:False:-4135|18:1:False:-4135",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_udf_20261020\\calculation\\outputs\\copy-true-false.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "5edc6be68b893339408c47faf47c8ebe3923ce9a28c9e9fb657f523042f494d7",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true,
+            "b2_formula": "CopyTwice(B1)",
+            "b2_value": 18.0
+          },
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "CopyUdf",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_udf_20261020\\calculation\\outputs\\copy-true-true.xlsm",
+            true,
+            true
+          ],
+          "expected": "0|2:0:True:-4135|18:1:True:-4135",
+          "target": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_udf_20261020\\calculation\\outputs\\copy-true-true.xlsm",
+          "copied": true,
+          "saved": {
+            "sha256": "45562fb13d2649806c415a89810245e74d70131380f2e941ea3dd75f5cf46c54",
+            "row4_attributes": {
+              "r": "4",
+              "spans": "1:7",
+              "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+            },
+            "has_vba": true,
+            "b2_formula": "CopyTwice(B1)",
+            "b2_value": 18.0
+          },
+          "result_includes_file_length": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,884 @@
+[
+  {
+    "name": "early_worksheet_member",
+    "source": "reference_compile_early_worksheet_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "late_object_member",
+    "source": "reference_compile_late_object_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "late_variant_member",
+    "source": "reference_compile_late_variant_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "application_member",
+    "source": "reference_compile_application_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "thisworkbook_member",
+    "source": "reference_compile_thisworkbook_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "builtin_missing_argument",
+    "source": "reference_compile_builtin_missing_argument.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "qualified_builtin_missing_argument",
+    "source": "reference_compile_qualified_builtin_missing_argument.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "builtin_extra_argument",
+    "source": "reference_compile_builtin_extra_argument.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "host_missing_argument",
+    "source": "reference_compile_host_missing_argument.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "early_collection_member",
+    "source": "reference_compile_early_collection_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "typed_workbook_missing",
+    "source": "reference_compile_typed_workbook_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "typed_application_missing",
+    "source": "reference_compile_typed_application_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "typed_range_missing",
+    "source": "reference_compile_typed_range_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "worksheetfunction_missing",
+    "source": "reference_compile_worksheetfunction_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "range_chain_missing",
+    "source": "reference_compile_range_chain_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "worksheet_index_missing",
+    "source": "reference_compile_worksheet_index_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "typed_collection_add_missing",
+    "source": "reference_compile_typed_collection_add_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "typed_worksheet_range_missing",
+    "source": "reference_compile_typed_worksheet_range_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "abs_missing",
+    "source": "reference_compile_abs_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "abs_extra",
+    "source": "reference_compile_abs_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "cint_missing",
+    "source": "reference_compile_cint_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "cint_extra",
+    "source": "reference_compile_cint_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "left_missing",
+    "source": "reference_compile_left_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "mid_missing",
+    "source": "reference_compile_mid_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "len_named",
+    "source": "reference_compile_len_named.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "qualified_len_extra",
+    "source": "reference_compile_qualified_len_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数の数が一致していません。または不正なプロパティを指定しています。",
+    "steps": []
+  },
+  {
+    "name": "qualified_len_named",
+    "source": "reference_compile_qualified_len_named.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "qualified_len_bad_named",
+    "source": "reference_compile_qualified_len_bad_named.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "名前付き引数が見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "len_bare_value",
+    "source": "reference_compile_len_bare_value.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "abs_bare_value",
+    "source": "reference_compile_abs_bare_value.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "qualified_len_bare_value",
+    "source": "reference_compile_qualified_len_bare_value.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "qualified_len_call_missing",
+    "source": "reference_compile_qualified_len_call_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "len_call_missing",
+    "source": "reference_compile_len_call_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "sumif_bare",
+    "source": "reference_compile_sumif_bare.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "sumif_omitted",
+    "source": "reference_compile_sumif_omitted.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "sumif_extra",
+    "source": "reference_compile_sumif_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数の数が一致していません。または不正なプロパティを指定しています。",
+    "steps": []
+  },
+  {
+    "name": "with_worksheet_missing",
+    "source": "reference_compile_with_worksheet_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "with_application_missing",
+    "source": "reference_compile_with_application_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "worksheet_method_extra",
+    "source": "reference_compile_worksheet_method_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数の数が一致していません。または不正なプロパティを指定しています。",
+    "steps": []
+  },
+  {
+    "name": "worksheet_method_valid",
+    "source": "reference_compile_worksheet_method_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "qualified_abs_missing",
+    "source": "reference_compile_qualified_abs_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "qualified_abs_valid",
+    "source": "reference_compile_qualified_abs_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "host_range_missing",
+    "source": "reference_compile_host_range_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "host_range_valid",
+    "source": "reference_compile_host_range_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unary_int_missing",
+    "source": "reference_compile_unary_int_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_int_extra",
+    "source": "reference_compile_unary_int_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_fix_missing",
+    "source": "reference_compile_unary_fix_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_fix_extra",
+    "source": "reference_compile_unary_fix_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_sgn_missing",
+    "source": "reference_compile_unary_sgn_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_sgn_extra",
+    "source": "reference_compile_unary_sgn_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cbool_missing",
+    "source": "reference_compile_unary_cbool_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cbool_extra",
+    "source": "reference_compile_unary_cbool_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cbyte_missing",
+    "source": "reference_compile_unary_cbyte_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cbyte_extra",
+    "source": "reference_compile_unary_cbyte_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_ccur_missing",
+    "source": "reference_compile_unary_ccur_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_ccur_extra",
+    "source": "reference_compile_unary_ccur_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cdate_missing",
+    "source": "reference_compile_unary_cdate_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cdate_extra",
+    "source": "reference_compile_unary_cdate_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cdbl_missing",
+    "source": "reference_compile_unary_cdbl_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cdbl_extra",
+    "source": "reference_compile_unary_cdbl_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_clng_missing",
+    "source": "reference_compile_unary_clng_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_clng_extra",
+    "source": "reference_compile_unary_clng_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_clnglng_missing",
+    "source": "reference_compile_unary_clnglng_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_clnglng_extra",
+    "source": "reference_compile_unary_clnglng_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_clngptr_missing",
+    "source": "reference_compile_unary_clngptr_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_clngptr_extra",
+    "source": "reference_compile_unary_clngptr_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_csng_missing",
+    "source": "reference_compile_unary_csng_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_csng_extra",
+    "source": "reference_compile_unary_csng_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cstr_missing",
+    "source": "reference_compile_unary_cstr_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cstr_extra",
+    "source": "reference_compile_unary_cstr_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cvar_missing",
+    "source": "reference_compile_unary_cvar_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cvar_extra",
+    "source": "reference_compile_unary_cvar_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "unary_cdec_missing",
+    "source": "reference_compile_unary_cdec_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "unary_cdec_extra",
+    "source": "reference_compile_unary_cdec_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数の数が一致していません。または不正なプロパティを指定しています。",
+    "steps": []
+  },
+  {
+    "name": "unary_qualified_cdec_missing",
+    "source": "reference_compile_unary_qualified_cdec_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "unary_qualified_cdec_valid",
+    "source": "reference_compile_unary_qualified_cdec_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unary_qualified_cint_missing",
+    "source": "reference_compile_unary_qualified_cint_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "unary_qualified_cint_valid",
+    "source": "reference_compile_unary_qualified_cint_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unary_cdec_named",
+    "source": "reference_compile_unary_cdec_named.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unary_cdec_bare",
+    "source": "reference_compile_unary_cdec_bare.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  }
+]

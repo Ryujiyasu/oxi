@@ -1,0 +1,547 @@
+[
+  {
+    "name": "unicode_standard",
+    "source": "unicode_modules_unicode_standard.bas",
+    "package_fixture": "unicode_modules_unicode_standard.xlsm",
+    "procedure": "計算.Probe",
+    "source_code_page": 932,
+    "host_context": {
+      "book_name": "unicode_standard.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "outcome": "values",
+    "expected": "売上 & 利益",
+    "measurement": {
+      "modules": [
+        {
+          "name": "計算",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Probe = \"売上 & 利益\"\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "chart": false
+    }
+  },
+  {
+    "name": "unicode_class",
+    "source": "unicode_modules_unicode_class.bas",
+    "package_fixture": "unicode_modules_unicode_class.xlsm",
+    "procedure": "Driver.Probe",
+    "source_code_page": 932,
+    "host_context": {
+      "book_name": "unicode_class.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "outcome": "values",
+    "expected": "日本語顧客|顧客",
+    "measurement": {
+      "modules": [
+        {
+          "name": "顧客",
+          "body": "Option Explicit\nPublic Title As String\nPublic Function Label() As String\n    Label = Title & \"|\" & TypeName(Me)\nEnd Function",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim item As 顧客\n    Set item = New 顧客\n    item.Title = \"日本語顧客\"\n    Probe = item.Label()\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "chart": false
+    }
+  },
+  {
+    "name": "unicode_sheet",
+    "source": "unicode_modules_unicode_sheet.bas",
+    "package_fixture": "unicode_modules_unicode_sheet.xlsm",
+    "procedure": "Driver.Probe",
+    "source_code_page": 932,
+    "host_context": {
+      "book_name": "unicode_sheet.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "売上表",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "売上表",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "売上表"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "売上表",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "売上表"
+        }
+      ]
+    },
+    "outcome": "values",
+    "expected": "Worksheet|Sheet1|売上表",
+    "measurement": {
+      "modules": [
+        {
+          "name": "売上表",
+          "body": "Option Explicit\nPublic Function ReadText() As String\n    ReadText = TypeName(Me) & \"|\" & Me.Name\nEnd Function",
+          "kind": 100,
+          "old": "Sheet1"
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Probe = 売上表.ReadText() & \"|\" & 売上表.CodeName\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "chart": false
+    }
+  },
+  {
+    "name": "unicode_workbook",
+    "source": "unicode_modules_unicode_workbook.bas",
+    "package_fixture": "unicode_modules_unicode_workbook.xlsm",
+    "procedure": "Driver.Probe",
+    "source_code_page": 932,
+    "host_context": {
+      "book_name": "unicode_workbook.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "日本語台帳",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "日本語台帳",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "outcome": "values",
+    "expected": "Workbook|unicode_workbook.xlsm|1",
+    "measurement": {
+      "modules": [
+        {
+          "name": "日本語台帳",
+          "body": "Option Explicit\nPublic Function ReadText() As String\n    ReadText = TypeName(Me) & \"|\" & Me.Name\nEnd Function",
+          "kind": 100,
+          "old": "ThisWorkbook"
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Probe = 日本語台帳.ReadText() & \"|\" & CStr(日本語台帳.Worksheets.Count)\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "chart": false
+    }
+  },
+  {
+    "name": "unicode_chart",
+    "source": "unicode_modules_unicode_chart.bas",
+    "package_fixture": "unicode_modules_unicode_chart.xlsm",
+    "procedure": "Driver.Probe",
+    "source_code_page": 932,
+    "host_context": {
+      "book_name": "unicode_chart.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "ChartTab",
+          "code_name": "売上図",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Sheet1"
+      },
+      {
+        "name": "売上図",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "売上図"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Sheet1"
+        },
+        {
+          "name": "売上図",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "売上図"
+        }
+      ]
+    },
+    "outcome": "values",
+    "expected": "Chart|ChartTab|売上図",
+    "measurement": {
+      "modules": [
+        {
+          "name": "売上図",
+          "body": "Option Explicit\nPublic Function ReadText() As String\n    ReadText = TypeName(Me) & \"|\" & Me.Name\nEnd Function",
+          "kind": 100,
+          "old": "@chart"
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Probe = 売上図.ReadText() & \"|\" & 売上図.CodeName\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "chart": true
+    }
+  },
+  {
+    "name": "unicode_renamed_standard",
+    "source": "unicode_modules_unicode_renamed_standard.bas",
+    "package_fixture": "unicode_modules_unicode_renamed_standard.xlsm",
+    "procedure": "再命名.Probe",
+    "source_code_page": 932,
+    "host_context": {
+      "book_name": "unicode_renamed_standard.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "outcome": "values",
+    "expected": "名前を変更",
+    "measurement": {
+      "modules": [
+        {
+          "name": "再命名",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Probe = \"名前を変更\"\nEnd Function",
+          "kind": 1,
+          "old": "Original"
+        }
+      ],
+      "chart": false
+    }
+  },
+  {
+    "name": "unicode_multiple_standard",
+    "source": "unicode_modules_unicode_multiple_standard.bas",
+    "package_fixture": "unicode_modules_unicode_multiple_standard.xlsm",
+    "procedure": "Driver.Probe",
+    "source_code_page": 932,
+    "host_context": {
+      "book_name": "unicode_multiple_standard.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "outcome": "values",
+    "expected": "売上|利益",
+    "measurement": {
+      "modules": [
+        {
+          "name": "売上",
+          "body": "Option Explicit\nPublic Function Label() As String\n    Label = \"売上\"\nEnd Function",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "利益",
+          "body": "Option Explicit\nPublic Function Label() As String\n    Label = \"利益\"\nEnd Function",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Probe = 売上.Label() & \"|\" & 利益.Label()\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "chart": false
+    }
+  },
+  {
+    "name": "unicode_mixed",
+    "source": "unicode_modules_unicode_mixed.bas",
+    "package_fixture": "unicode_modules_unicode_mixed.xlsm",
+    "procedure": "集計.Probe",
+    "source_code_page": 932,
+    "host_context": {
+      "book_name": "unicode_mixed.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "帳票",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "帳票",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "帳票"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "帳票",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "帳票"
+        }
+      ]
+    },
+    "outcome": "values",
+    "expected": "明細|帳票|日本語",
+    "measurement": {
+      "modules": [
+        {
+          "name": "帳票",
+          "body": "Option Explicit\nPublic Function ReadText() As String\n    ReadText = Me.CodeName\nEnd Function",
+          "kind": 100,
+          "old": "Sheet1"
+        },
+        {
+          "name": "明細",
+          "body": "Option Explicit\nPublic Function ReadText() As String\n    ReadText = TypeName(Me) & \"|\" & 帳票.ReadText()\nEnd Function",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "集計",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim item As 明細\n    Set item = New 明細\n    Probe = item.ReadText() & \"|\" & \"日本語\"\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "chart": false
+    }
+  }
+]

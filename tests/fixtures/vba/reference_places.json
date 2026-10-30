@@ -1,0 +1,240 @@
+[
+  {
+    "name": "qualified_array_byref",
+    "source": "reference_qualified_array_byref.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4"
+      }
+    ]
+  },
+  {
+    "name": "implicit_deflng",
+    "source": "reference_implicit_deflng.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:1"
+      }
+    ]
+  },
+  {
+    "name": "qualified_record",
+    "source": "reference_qualified_record.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "array_alias",
+    "source": "reference_array_alias.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2:2|12"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2:2|12"
+      }
+    ]
+  },
+  {
+    "name": "array_force_value",
+    "source": "reference_array_force_value.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:6"
+      }
+    ]
+  },
+  {
+    "name": "array_locked",
+    "source": "reference_array_locked.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "10:2:1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "10:2:1"
+      }
+    ]
+  },
+  {
+    "name": "array_error",
+    "source": "reference_array_error.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "513:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "513:2"
+      }
+    ]
+  },
+  {
+    "name": "record_alias",
+    "source": "reference_record_alias.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2:2|12"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2:2|12"
+      }
+    ]
+  },
+  {
+    "name": "record_with",
+    "source": "reference_record_with.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:abcd:1:Long"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4:abcd:2:Long"
+      }
+    ]
+  },
+  {
+    "name": "def_defaults",
+    "source": "reference_def_defaults.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:0|Boolean:False|String:0|Empty|Integer"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:0|Boolean:False|String:0|Empty|Integer"
+      }
+    ]
+  },
+  {
+    "name": "def_byref",
+    "source": "reference_def_byref.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:1"
+      }
+    ]
+  },
+  {
+    "name": "def_static",
+    "source": "reference_def_static.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:2"
+      }
+    ]
+  },
+  {
+    "name": "def_variant_static",
+    "source": "reference_def_variant_static.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Integer:1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Integer:2"
+      }
+    ]
+  },
+  {
+    "name": "variant_lock",
+    "source": "reference_variant_lock.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "10:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "10:2"
+      }
+    ]
+  },
+  {
+    "name": "fixed_erase",
+    "source": "reference_fixed_erase.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:1"
+      }
+    ]
+  },
+  {
+    "name": "lock_release",
+    "source": "reference_lock_release.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:2"
+      }
+    ]
+  },
+  {
+    "name": "special_arguments",
+    "source": "reference_special_arguments.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Date:CounterClass"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Date:CounterClass"
+      }
+    ]
+  }
+]

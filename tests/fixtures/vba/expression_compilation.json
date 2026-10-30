@@ -1,0 +1,1100 @@
+[
+  {
+    "name": "receiver_receiver_extra_missing_member",
+    "source": "expression_phase_receiver_receiver_extra_missing_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "receiver_receiver_extra_missing_argument",
+    "source": "expression_phase_receiver_receiver_extra_missing_argument.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "receiver_receiver_missing_missing_member",
+    "source": "expression_phase_receiver_receiver_missing_missing_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_receiver_missing_valid_member",
+    "source": "expression_phase_receiver_receiver_missing_valid_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_receiver_extra_unknown_argument",
+    "source": "expression_phase_receiver_receiver_extra_unknown_argument.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_receiver_unknown_missing_argument",
+    "source": "expression_phase_receiver_receiver_unknown_missing_argument.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_receiver_unknown_bad_intrinsic",
+    "source": "expression_phase_receiver_receiver_unknown_bad_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "receiver_receiver_bad_intrinsic_unknown",
+    "source": "expression_phase_receiver_receiver_bad_intrinsic_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "receiver_receiver_missing_bad_intrinsic",
+    "source": "expression_phase_receiver_receiver_missing_bad_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "receiver_receiver_unknown_missing_member",
+    "source": "expression_phase_receiver_receiver_unknown_missing_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_receiver_missing_object_operand",
+    "source": "expression_phase_receiver_receiver_missing_object_operand.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。",
+    "steps": []
+  },
+  {
+    "name": "receiver_receiver_valid_missing_member",
+    "source": "expression_phase_receiver_receiver_valid_missing_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_receiver_valid_missing_argument",
+    "source": "expression_phase_receiver_receiver_valid_missing_argument.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_receiver_valid_value",
+    "source": "expression_phase_receiver_receiver_valid_value.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "receiver_assign_member_rhs_unknown",
+    "source": "expression_phase_receiver_assign_member_rhs_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_assign_member_rhs_required",
+    "source": "expression_phase_receiver_assign_member_rhs_required.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_assign_member_rhs_intrinsic",
+    "source": "expression_phase_receiver_assign_member_rhs_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "receiver_assign_property_rhs_unknown",
+    "source": "expression_phase_receiver_assign_property_rhs_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_assign_property_rhs_required",
+    "source": "expression_phase_receiver_assign_property_rhs_required.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_assign_property_rhs_intrinsic",
+    "source": "expression_phase_receiver_assign_property_rhs_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "receiver_assign_receiver_rhs_required",
+    "source": "expression_phase_receiver_assign_receiver_rhs_required.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_assign_receiver_rhs_intrinsic",
+    "source": "expression_phase_receiver_assign_receiver_rhs_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "receiver_with_member_rhs_required",
+    "source": "expression_phase_receiver_with_member_rhs_required.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_with_member_rhs_intrinsic",
+    "source": "expression_phase_receiver_with_member_rhs_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "receiver_assign_known_rhs_unknown",
+    "source": "expression_phase_receiver_assign_known_rhs_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "receiver_assign_valid",
+    "source": "expression_phase_receiver_assign_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_binary_unknown_intrinsic",
+    "source": "expression_phase_boundary_binary_unknown_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_intrinsic_unknown",
+    "source": "expression_phase_boundary_binary_intrinsic_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_unknown_object",
+    "source": "expression_phase_boundary_binary_unknown_object.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_object_unknown",
+    "source": "expression_phase_boundary_binary_object_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_required_intrinsic",
+    "source": "expression_phase_boundary_binary_required_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_required_object",
+    "source": "expression_phase_boundary_binary_required_object.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_object_intrinsic",
+    "source": "expression_phase_boundary_binary_object_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_intrinsic_object",
+    "source": "expression_phase_boundary_binary_intrinsic_object.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_required_unknown",
+    "source": "expression_phase_boundary_binary_required_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_unknown_required",
+    "source": "expression_phase_boundary_binary_unknown_required.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_factory_extra_bare",
+    "source": "expression_phase_boundary_factory_extra_bare.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_factory_extra_two_member",
+    "source": "expression_phase_boundary_factory_extra_two_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_factory_extra_named_member",
+    "source": "expression_phase_boundary_factory_extra_named_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "名前付き引数が見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_factory_extra_value_member",
+    "source": "expression_phase_boundary_factory_extra_value_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_required_extra_member",
+    "source": "expression_phase_boundary_required_extra_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数の数が一致していません。または不正なプロパティを指定しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_required_extra_bare",
+    "source": "expression_phase_boundary_required_extra_bare.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数の数が一致していません。または不正なプロパティを指定しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_optional_extra_member",
+    "source": "expression_phase_boundary_optional_extra_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数の数が一致していません。または不正なプロパティを指定しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_variant_extra_member",
+    "source": "expression_phase_boundary_variant_extra_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_object_extra_member",
+    "source": "expression_phase_boundary_object_extra_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_scalar_extra_member",
+    "source": "expression_phase_boundary_scalar_extra_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数の数が一致していません。または不正なプロパティを指定しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_factory_member_extra",
+    "source": "expression_phase_boundary_factory_member_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数の数が一致していません。または不正なプロパティを指定しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_factory_index_missing_member",
+    "source": "expression_phase_boundary_factory_index_missing_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_receiver_unknown_outer_required",
+    "source": "expression_phase_boundary_receiver_unknown_outer_required.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_receiver_required_outer_unknown",
+    "source": "expression_phase_boundary_receiver_required_outer_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_lines_unknown_intrinsic",
+    "source": "expression_phase_boundary_lines_unknown_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_lines_required_intrinsic",
+    "source": "expression_phase_boundary_lines_required_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_lines_unknown_object",
+    "source": "expression_phase_boundary_lines_unknown_object.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_assign_left_intrinsic_right_unknown",
+    "source": "expression_phase_boundary_assign_left_intrinsic_right_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_assign_left_unknown_right_intrinsic",
+    "source": "expression_phase_boundary_assign_left_unknown_right_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_assign_left_object_right_unknown",
+    "source": "expression_phase_boundary_assign_left_object_right_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_assign_left_unknown_right_object",
+    "source": "expression_phase_boundary_assign_left_unknown_right_object.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。",
+    "steps": []
+  },
+  {
+    "name": "boundary_assign_left_intrinsic_right_object",
+    "source": "expression_phase_boundary_assign_left_intrinsic_right_object.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_assign_left_object_right_intrinsic",
+    "source": "expression_phase_boundary_assign_left_object_right_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_assign_left_unknown_right_required",
+    "source": "expression_phase_boundary_assign_left_unknown_right_required.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_assign_left_required_right_unknown",
+    "source": "expression_phase_boundary_assign_left_required_right_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_assign_left_unknown_receiver_right_required",
+    "source": "expression_phase_boundary_assign_left_unknown_receiver_right_required.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_assign_left_extra_factory",
+    "source": "expression_phase_boundary_assign_left_extra_factory.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_set_extra_factory",
+    "source": "expression_phase_boundary_set_extra_factory.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_assign_both_missing_calls",
+    "source": "expression_phase_boundary_assign_both_missing_calls.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_assign_missing_member_left_unknown_right_required",
+    "source": "expression_phase_boundary_assign_missing_member_left_unknown_right_required.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_assign_missing_member_left_required_right_unknown",
+    "source": "expression_phase_boundary_assign_missing_member_left_required_right_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_member_unknown",
+    "source": "expression_phase_boundary_binary_member_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_unknown_member",
+    "source": "expression_phase_boundary_binary_unknown_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_receiver_required_object",
+    "source": "expression_phase_boundary_binary_receiver_required_object.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_object_receiver_required",
+    "source": "expression_phase_boundary_binary_object_receiver_required.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。",
+    "steps": []
+  },
+  {
+    "name": "boundary_binary_receiver_unknown_object",
+    "source": "expression_phase_boundary_binary_receiver_unknown_object.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "indices_factory_named_index",
+    "source": "expression_phase_indices_factory_named_index.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "名前付き引数が見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "indices_factory_named_arbitrary",
+    "source": "expression_phase_indices_factory_named_arbitrary.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "名前付き引数が見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "indices_factory_omitted_index",
+    "source": "expression_phase_indices_factory_omitted_index.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "indices_factory_qualified_extra",
+    "source": "expression_phase_indices_factory_qualified_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "indices_typed_factory_missing_member",
+    "source": "expression_phase_indices_typed_factory_missing_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "indices_typed_factory_valid_member",
+    "source": "expression_phase_indices_typed_factory_valid_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "indices_typed_factory_missing_arg",
+    "source": "expression_phase_indices_typed_factory_missing_arg.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "indices_typed_variable_missing_member",
+    "source": "expression_phase_indices_typed_variable_missing_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "indices_getter_extra_missing_member",
+    "source": "expression_phase_indices_getter_extra_missing_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "indices_zero_sub_extra",
+    "source": "expression_phase_indices_zero_sub_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数の数が一致していません。または不正なプロパティを指定しています。",
+    "steps": []
+  },
+  {
+    "name": "indices_zero_sub_named_extra",
+    "source": "expression_phase_indices_zero_sub_named_extra.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数の数が一致していません。または不正なプロパティを指定しています。",
+    "steps": []
+  },
+  {
+    "name": "indices_runtime_factory_missing_default",
+    "source": "expression_phase_indices_runtime_factory_missing_default.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "error:438"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "error:438"
+      }
+    ]
+  },
+  {
+    "name": "indices_runtime_factory_missing_method_arg",
+    "source": "expression_phase_indices_runtime_factory_missing_method_arg.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "error:438"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "error:438"
+      }
+    ]
+  },
+  {
+    "name": "indices_runtime_typed_factory_valid",
+    "source": "expression_phase_indices_runtime_typed_factory_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "value:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "value:7"
+      }
+    ]
+  },
+  {
+    "name": "indices_runtime_typed_factory_missing_member",
+    "source": "expression_phase_indices_runtime_typed_factory_missing_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "evaluation_typed_default_evaluation",
+    "source": "expression_phase_evaluation_typed_default_evaluation.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "AFD|value:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "AFD|value:7"
+      }
+    ]
+  },
+  {
+    "name": "evaluation_missing_default_evaluation",
+    "source": "expression_phase_evaluation_missing_default_evaluation.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "AF|error:438"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "AF|error:438"
+      }
+    ]
+  },
+  {
+    "name": "evaluation_failing_index_evaluation",
+    "source": "expression_phase_evaluation_failing_index_evaluation.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "A|error:5"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "A|error:5"
+      }
+    ]
+  },
+  {
+    "name": "evaluation_variant_array_evaluation",
+    "source": "expression_phase_evaluation_variant_array_evaluation.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "AF|value:5"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "AF|value:5"
+      }
+    ]
+  },
+  {
+    "name": "access_runtime_typed_getter",
+    "source": "expression_phase_access_runtime_typed_getter.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "value:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "value:7"
+      }
+    ]
+  },
+  {
+    "name": "access_runtime_typed_method",
+    "source": "expression_phase_access_runtime_typed_method.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "value:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "value:7"
+      }
+    ]
+  },
+  {
+    "name": "access_runtime_missing_getter_default",
+    "source": "expression_phase_access_runtime_missing_getter_default.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "error:438"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "error:438"
+      }
+    ]
+  },
+  {
+    "name": "access_runtime_typed_variable",
+    "source": "expression_phase_access_runtime_typed_variable.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "value:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "value:7"
+      }
+    ]
+  }
+]

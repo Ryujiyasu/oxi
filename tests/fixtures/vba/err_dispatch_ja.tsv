@@ -1,0 +1,420 @@
+Number	1	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	1	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	1	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	1	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	1	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	1	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	1	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	2	0	ok|Long|0|0||||0
+Number	2	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	2	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	2	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	2	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	2	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	2	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	4	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+Number	4	1	ok|Empty||6||||0
+Number	4	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	4	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	4	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	4	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	4	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	8	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+Number	8	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	8	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	8	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	8	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	8	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	8	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	0	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	0	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	0	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	0	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	0	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	0	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	0	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Number	3	0	ok|Long|0|0||||0
+Number	3	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	3	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	3	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	3	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	3	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Number	3	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	1	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	1	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	1	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	1	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	1	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	1	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	1	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	2	0	ok|String||0||||0
+Description	2	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	2	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	2	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	2	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	2	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	2	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	4	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+Description	4	1	ok|Empty||0||6||0
+Description	4	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	4	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	4	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	4	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	4	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	8	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+Description	8	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	8	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	8	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	8	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	8	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	8	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	0	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	0	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	0	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	0	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	0	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	0	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	0	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Description	3	0	ok|String||0||||0
+Description	3	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	3	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	3	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	3	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	3	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Description	3	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	1	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	1	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	1	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	1	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	1	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	1	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	1	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	2	0	ok|String||0||||0
+Source	2	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	2	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	2	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	2	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	2	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	2	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	4	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+Source	4	1	ok|Empty||0|6|||0
+Source	4	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	4	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	4	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	4	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	4	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	8	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+Source	8	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	8	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	8	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	8	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	8	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	8	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	0	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	0	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	0	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	0	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	0	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	0	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	0	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Source	3	0	ok|String||0||||0
+Source	3	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	3	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	3	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	3	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	3	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Source	3	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	1	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	1	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	1	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	1	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	1	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	1	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	1	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	2	0	ok|String||0||||0
+HelpFile	2	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	2	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	2	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	2	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	2	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	2	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	4	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+HelpFile	4	1	ok|Empty||0|||6|0
+HelpFile	4	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	4	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	4	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	4	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	4	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	8	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+HelpFile	8	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	8	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	8	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	8	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	8	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	8	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	0	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	0	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	0	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	0	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	0	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	0	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	0	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpFile	3	0	ok|String||0||||0
+HelpFile	3	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	3	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	3	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	3	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	3	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpFile	3	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	1	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	1	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	1	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	1	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	1	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	1	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	1	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	2	0	ok|Long|0|0||||0
+HelpContext	2	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	2	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	2	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	2	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	2	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	2	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	4	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+HelpContext	4	1	ok|Empty||0||||6
+HelpContext	4	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	4	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	4	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	4	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	4	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	8	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+HelpContext	8	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	8	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	8	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	8	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	8	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	8	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	0	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	0	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	0	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	0	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	0	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	0	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	0	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+HelpContext	3	0	ok|Long|0|0||||0
+HelpContext	3	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	3	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	3	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	3	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	3	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+HelpContext	3	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Erl	1	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	1	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	1	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	1	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	1	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	1	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	1	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	2	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	2	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	2	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	2	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	2	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	2	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	2	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	4	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+Erl	4	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	4	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	4	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	4	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	4	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	4	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	8	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+Erl	8	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	8	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	8	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	8	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	8	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	8	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	0	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	0	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	0	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	0	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	0	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	0	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	0	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	3	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	3	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	3	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	3	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	3	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	3	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Erl	3	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	1	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	1	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	1	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	1	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	1	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	1	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	1	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	2	0	ok|Long|0|0||||0
+LastDllError	2	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+LastDllError	2	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+LastDllError	2	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+LastDllError	2	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+LastDllError	2	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+LastDllError	2	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+LastDllError	4	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+LastDllError	4	1	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+LastDllError	4	2	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+LastDllError	4	3	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+LastDllError	4	4	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+LastDllError	4	5	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+LastDllError	4	6	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+LastDllError	8	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+LastDllError	8	1	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+LastDllError	8	2	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+LastDllError	8	3	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+LastDllError	8	4	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+LastDllError	8	5	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+LastDllError	8	6	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+LastDllError	0	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	0	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	0	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	0	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	0	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	0	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	0	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+LastDllError	3	0	ok|Long|0|0||||0
+LastDllError	3	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+LastDllError	3	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+LastDllError	3	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+LastDllError	3	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+LastDllError	3	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+LastDllError	3	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Clear	1	0	ok|Empty||0||||0
+Clear	1	1	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+Clear	1	2	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+Clear	1	3	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+Clear	1	4	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+Clear	1	5	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+Clear	1	6	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+Clear	2	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	2	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	2	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	2	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	2	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	2	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	2	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	4	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+Clear	4	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	4	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	4	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	4	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	4	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	4	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	8	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+Clear	8	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	8	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	8	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	8	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	8	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	8	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	0	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	0	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	0	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	0	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	0	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	0	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	0	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Clear	3	0	ok|Empty||0||||0
+Clear	3	1	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Clear	3	2	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Clear	3	3	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Clear	3	4	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Clear	3	5	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Clear	3	6	error|451|VBAProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|{VBA_HELP}|1000451
+Raise	1	0	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+Raise	1	1	error|6|VBAProject|オーバーフローしました。|{VBA_HELP}|1000006
+Raise	1	2	error|6|VBAProject|オーバーフローしました。|{VBA_HELP}|1000006
+Raise	1	3	error|6|VBAProject|オーバーフローしました。|{VBA_HELP}|1000006
+Raise	1	4	error|6|VBAProject|オーバーフローしました。|{VBA_HELP}|1000006
+Raise	1	5	error|6|VBAProject|オーバーフローしました。|{VBA_HELP}|1000006
+Raise	1	6	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+Raise	2	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	2	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	2	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	2	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	2	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	2	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	2	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	4	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+Raise	4	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	4	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	4	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	4	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	4	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	4	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	8	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+Raise	8	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	8	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	8	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	8	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	8	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	8	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	0	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	0	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	0	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	0	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	0	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	0	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	0	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+Raise	3	0	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+Raise	3	1	error|6|VBAProject|オーバーフローしました。|{VBA_HELP}|1000006
+Raise	3	2	error|6|VBAProject|オーバーフローしました。|{VBA_HELP}|1000006
+Raise	3	3	error|6|VBAProject|オーバーフローしました。|{VBA_HELP}|1000006
+Raise	3	4	error|6|VBAProject|オーバーフローしました。|{VBA_HELP}|1000006
+Raise	3	5	error|6|VBAProject|オーバーフローしました。|{VBA_HELP}|1000006
+Raise	3	6	error|450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|{VBA_HELP}|1000450
+MissingMember	1	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	1	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	1	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	1	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	1	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	1	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	1	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	2	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	2	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	2	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	2	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	2	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	2	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	2	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	4	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+MissingMember	4	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	4	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	4	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	4	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	4	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	4	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	8	0	error|446|VBAProject|オブジェクトは名前付き引数をサポートしていません。|{VBA_HELP}|1000446
+MissingMember	8	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	8	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	8	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	8	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	8	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	8	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	0	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	0	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	0	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	0	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	0	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	0	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	0	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	3	0	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	3	1	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	3	2	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	3	3	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	3	4	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	3	5	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438
+MissingMember	3	6	error|438|VBAProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|{VBA_HELP}|1000438

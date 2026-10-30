@@ -1,0 +1,66 @@
+class_array_lifetime	storage_type_class_array_lifetime.bas	DriverModule.Probe	values	IBCTA|True
+class_array_lifetime	storage_type_class_array_lifetime.bas	DriverModule.Probe	values	IBCTA|True
+standard_setter_byref	storage_type_standard_setter_byref.bas	DriverModule.Probe	values	11
+standard_setter_byref	storage_type_standard_setter_byref.bas	DriverModule.Probe	values	11
+private_me_len	storage_type_private_me_len.bas	DriverModule.Probe	compile	メソッドまたはデータ メンバーが見つかりません。
+private_me_len	storage_type_private_me_len.bas	DriverModule.Probe	compile	メソッドまたはデータ メンバーが見つかりません。
+class_field_narrowing	storage_type_class_field_narrowing.bas	DriverModule.Probe	values	Long:3:13:3
+class_field_narrowing	storage_type_class_field_narrowing.bas	DriverModule.Probe	values	Long:3:13:3
+array_boxed	storage_type_array_boxed.bas	DriverModule.Probe	values	IBCA|False:True
+array_boxed	storage_type_array_boxed.bas	DriverModule.Probe	values	IBCA|False:True
+array_object	storage_type_array_object.bas	DriverModule.Probe	values	IBTCA|True
+array_object	storage_type_array_object.bas	DriverModule.Probe	values	IBTCA|True
+array_redim	storage_type_array_redim.bas	DriverModule.Probe	values	IBCTA|True
+array_redim	storage_type_array_redim.bas	DriverModule.Probe	values	IBCTA|True
+array_module	storage_type_array_module.bas	DriverModule.Probe	values	IBCTA|True
+array_module	storage_type_array_module.bas	DriverModule.Probe	values	IBCTA|True
+array_receiver	storage_type_array_receiver.bas	DriverModule.Probe	values	FSC
+array_receiver	storage_type_array_receiver.bas	DriverModule.Probe	values	FSC
+field_byte	storage_type_field_byte.bas	DriverModule.Probe	values	Byte:3:13:3
+field_byte	storage_type_field_byte.bas	DriverModule.Probe	values	Byte:3:13:3
+field_integer	storage_type_field_integer.bas	DriverModule.Probe	values	Integer:3:13:3
+field_integer	storage_type_field_integer.bas	DriverModule.Probe	values	Integer:3:13:3
+field_single	storage_type_field_single.bas	DriverModule.Probe	values	Single:2.6:13:2.6
+field_single	storage_type_field_single.bas	DriverModule.Probe	values	Single:2.6:13:2.6
+field_currency	storage_type_field_currency.bas	DriverModule.Probe	values	Currency:2.6:13:2.6
+field_currency	storage_type_field_currency.bas	DriverModule.Probe	values	Currency:2.6:13:2.6
+field_string	storage_type_field_string.bas	DriverModule.Probe	values	String:2.6:0:bad
+field_string	storage_type_field_string.bas	DriverModule.Probe	values	String:2.6:0:bad
+field_boolean	storage_type_field_boolean.bas	DriverModule.Probe	values	Boolean:True:13:True
+field_boolean	storage_type_field_boolean.bas	DriverModule.Probe	values	Boolean:True:13:True
+field_variant	storage_type_field_variant.bas	DriverModule.Probe	values	Double:2.6:0:bad
+field_variant	storage_type_field_variant.bas	DriverModule.Probe	values	Double:2.6:0:bad
+private_read	storage_type_private_read.bas	DriverModule.Probe	compile	メソッドまたはデータ メンバーが見つかりません。
+private_read	storage_type_private_read.bas	DriverModule.Probe	compile	メソッドまたはデータ メンバーが見つかりません。
+private_write	storage_type_private_write.bas	DriverModule.Probe	compile	メソッドまたはデータ メンバーが見つかりません。
+private_write	storage_type_private_write.bas	DriverModule.Probe	compile	メソッドまたはデータ メンバーが見つかりません。
+public_read	storage_type_public_read.bas	DriverModule.Probe	values	123
+public_read	storage_type_public_read.bas	DriverModule.Probe	values	123
+private_other	storage_type_private_other.bas	DriverModule.Probe	compile	メソッドまたはデータ メンバーが見つかりません。
+private_other	storage_type_private_other.bas	DriverModule.Probe	compile	メソッドまたはデータ メンバーが見つかりません。
+private_method_me	storage_type_private_method_me.bas	DriverModule.Probe	compile	メソッドまたはデータ メンバーが見つかりません。
+private_method_me	storage_type_private_method_me.bas	DriverModule.Probe	compile	メソッドまたはデータ メンバーが見つかりません。
+standard_alias	storage_type_standard_alias.bas	DriverModule.Probe	values	4
+standard_alias	storage_type_standard_alias.bas	DriverModule.Probe	values	4
+standard_named	storage_type_standard_named.bas	DriverModule.Probe	values	4
+standard_named	storage_type_standard_named.bas	DriverModule.Probe	values	4
+standard_qualified	storage_type_standard_qualified.bas	DriverModule.Probe	values	4
+standard_qualified	storage_type_standard_qualified.bas	DriverModule.Probe	values	4
+standard_parentheses	storage_type_standard_parentheses.bas	DriverModule.Probe	values	3
+standard_parentheses	storage_type_standard_parentheses.bas	DriverModule.Probe	values	3
+standard_optional	storage_type_standard_optional.bas	DriverModule.Probe	values	3:9
+standard_optional	storage_type_standard_optional.bas	DriverModule.Probe	values	3:9
+standard_error	storage_type_standard_error.bas	DriverModule.Probe	values	513:11
+standard_error	storage_type_standard_error.bas	DriverModule.Probe	values	513:11
+standard_named_order	storage_type_standard_named_order.bas	DriverModule.Probe	values	FSVC
+standard_named_order	storage_type_standard_named_order.bas	DriverModule.Probe	values	FSVC
+boxed_only_lifetime	storage_type_boxed_only_lifetime.bas	DriverModule.Probe	values	IBTCA|True:True
+boxed_only_lifetime	storage_type_boxed_only_lifetime.bas	DriverModule.Probe	values	IBTCA|True:True
+array_typename	storage_type_array_typename.bas	DriverModule.Probe	values	Object():Object():8201
+array_typename	storage_type_array_typename.bas	DriverModule.Probe	values	Object():Object():8201
+cross_module_setter	storage_type_cross_module_setter.bas	DriverModule.Probe	values	11:50
+cross_module_setter	storage_type_cross_module_setter.bas	DriverModule.Probe	values	11:50
+standard_setter_object	storage_type_standard_setter_object.bas	DriverModule.Probe	values	11:True
+standard_setter_object	storage_type_standard_setter_object.bas	DriverModule.Probe	values	11:True
+private_method_bare	storage_type_private_method_bare.bas	DriverModule.Probe	values	ok
+private_method_bare	storage_type_private_method_bare.bas	DriverModule.Probe	values	ok

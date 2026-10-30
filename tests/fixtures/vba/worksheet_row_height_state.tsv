@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: CC-BY-SA-4.0
+# Exact Native source/input; normal-zero owned processes; selected pure API entrypoints only.
+# version	method	arguments_json	expected
+1	HeightStateChange	[0,false]	0|False|3>3|15|True|False|-4105
+1	HeightStateChange	[1,false]	0|False|3>3|19.5|False|False|-4105
+1	HeightStateChange	[2,false]	0|False|3>3|19.5|False|False|-4105
+1	HeightStateChange	[3,false]	0|False|3>3|19.5|False|False|-4105
+1	HeightStateChange	[4,false]	13|True|3>3|19.5|False|False|-4105
+1	HeightStateChange	[5,false]	0|False|3>3|19.5|False|False|-4105
+1	HeightStateChange	[6,false]	0|False|3>1|0|False|True|-4105
+1	HeightStateChange	[7,false]	0|False|3>3|15|False|False|-4105
+1	HeightStateChange	[8,false]	0|False|3>3|19.5|False|False|-4105
+1	HeightStateChange	[9,false]	0|False|3>1|0|False|True|-4105
+1	HeightStateChange	[10,false]	0|False|3>3|0.5|False|True|-4105
+1	HeightStateChange	[11,false]	0|False|3>3|1|False|False|-4105
+1	HeightStateChange	[12,false]	5|True|3>3|19.5|False|False|-4105
+1	HeightStateChange	[13,false]	0|False|3>3|0.25|False|True|-4105
+1	HeightStateChange	[14,false]	0|False|3>3|409.5|False|False|-4105
+1	HeightStateChange	[0,true]	0|False|1>3|15|True|False|-4105
+1	HeightStateChange	[1,true]	0|False|1>1|0|False|True|-4105
+1	HeightStateChange	[2,true]	0|False|1>1|0|False|True|-4105
+1	HeightStateChange	[3,true]	0|False|1>1|0|False|True|-4105
+1	HeightStateChange	[4,true]	13|True|1>1|0|False|True|-4105
+1	HeightStateChange	[5,true]	0|False|1>3|19.5|False|False|-4105
+1	HeightStateChange	[6,true]	0|False|1>1|0|False|True|-4105
+1	HeightStateChange	[7,true]	0|False|1>3|15|False|False|-4105
+1	HeightStateChange	[8,true]	0|False|1>1|0|False|True|-4105
+1	HeightStateChange	[9,true]	0|False|1>1|0|False|True|-4105
+1	HeightStateChange	[10,true]	0|False|1>3|0.5|False|True|-4105
+1	HeightStateChange	[11,true]	0|False|1>3|1|False|False|-4105
+1	HeightStateChange	[12,true]	5|True|1>1|0|False|True|-4105
+1	HeightStateChange	[13,true]	0|False|1>3|0.25|False|True|-4105
+1	HeightStateChange	[14,true]	0|False|1>3|409.5|False|False|-4105

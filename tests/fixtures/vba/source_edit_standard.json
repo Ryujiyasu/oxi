@@ -1,0 +1,487 @@
+[
+  {
+    "name": "comment",
+    "old": "Option Explicit",
+    "new": "Option Explicit ' edited comment",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 1,
+        "deleteLines": 1,
+        "text": "Option Explicit ' edited comment"
+      }
+    ],
+    "source": "Option Explicit ' edited comment\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "body",
+    "old": "Counter = stored",
+    "new": "Counter = stored + 10",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "123|False|14|A1:9",
+    "edits": [
+      {
+        "line": 7,
+        "deleteLines": 1,
+        "text": "    Counter = stored + 10"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored + 10\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "module_declaration",
+    "old": "Private moduleValue As Long",
+    "new": "Private moduleValue As Long\nPrivate extra As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 2,
+        "deleteLines": 1,
+        "text": "Private moduleValue As Long\nPrivate extra As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate extra As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "module_type",
+    "old": "Private moduleValue As Long",
+    "new": "Private moduleValue As Double",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 2,
+        "deleteLines": 1,
+        "text": "Private moduleValue As Double"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Double\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "read_local",
+    "old": "Dim reference As String",
+    "new": "Dim reference As String\nDim extraLocal As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "123|False|4|A1:9",
+    "edits": [
+      {
+        "line": 10,
+        "deleteLines": 1,
+        "text": "    Dim reference As String\nDim extraLocal As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\nDim extraLocal As Long\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "counter_local",
+    "old": "Static stored As Long",
+    "new": "Static stored As Long\nDim extraLocal As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 5,
+        "deleteLines": 1,
+        "text": "    Static stored As Long\nDim extraLocal As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\nDim extraLocal As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "counter_static_add",
+    "old": "Static stored As Long",
+    "new": "Static stored As Long\nStatic extraStatic As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 5,
+        "deleteLines": 1,
+        "text": "    Static stored As Long\nStatic extraStatic As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\nStatic extraStatic As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "counter_static_type",
+    "old": "Static stored As Long",
+    "new": "Static stored As Double",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 5,
+        "deleteLines": 1,
+        "text": "    Static stored As Double"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Double\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "counter_dynamic",
+    "old": "Static stored As Long",
+    "new": "Dim stored As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 5,
+        "deleteLines": 1,
+        "text": "    Dim stored As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Dim stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "procedure_static",
+    "old": "Private Function Counter() As Long",
+    "new": "Private Static Function Counter() As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 4,
+        "deleteLines": 1,
+        "text": "Private Static Function Counter() As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Static Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "procedure_return",
+    "old": "Private Function Counter() As Long",
+    "new": "Private Function Counter() As Double",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 4,
+        "deleteLines": 1,
+        "text": "Private Function Counter() As Double"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Double\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "procedure_parameter",
+    "old": "Private Function Counter() As Long",
+    "new": "Private Function Counter(Optional ByVal ignored As Long = 0) As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 4,
+        "deleteLines": 1,
+        "text": "Private Function Counter(Optional ByVal ignored As Long = 0) As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter(Optional ByVal ignored As Long = 0) As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "uncalled_parameter",
+    "old": "Prime(ByVal exitKind As Long)",
+    "new": "Prime(ByVal exitKind As Variant)",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 18,
+        "deleteLines": 1,
+        "text": "Public Function Prime(ByVal exitKind As Variant) As String"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Variant) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "constant_add",
+    "old": "Private moduleValue As Long",
+    "new": "Private moduleValue As Long\nPrivate Const extraConstant As Long = 7",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 2,
+        "deleteLines": 1,
+        "text": "Private moduleValue As Long\nPrivate Const extraConstant As Long = 7"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate Const extraConstant As Long = 7\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "enum_add",
+    "old": "Private moduleValue As Long",
+    "new": "Private moduleValue As Long\nPrivate Enum ExtraEnum\nExtraOne = 1\nEnd Enum",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 2,
+        "deleteLines": 1,
+        "text": "Private moduleValue As Long\nPrivate Enum ExtraEnum\nExtraOne = 1\nEnd Enum"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate Enum ExtraEnum\nExtraOne = 1\nEnd Enum\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "type_add",
+    "old": "Private moduleValue As Long",
+    "new": "Private moduleValue As Long\nPrivate Type ExtraType\nfield As Long\nEnd Type",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 2,
+        "deleteLines": 1,
+        "text": "Private moduleValue As Long\nPrivate Type ExtraType\nfield As Long\nEnd Type"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate Type ExtraType\nfield As Long\nEnd Type\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "module_visibility",
+    "old": "Private moduleValue As Long",
+    "new": "Public moduleValue As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 2,
+        "deleteLines": 1,
+        "text": "Public moduleValue As Long"
+      }
+    ],
+    "source": "Option Explicit\nPublic moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "module_case",
+    "old": "Private moduleValue As Long",
+    "new": "Private MODULEVALUE As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 2,
+        "deleteLines": 1,
+        "text": "Private MODULEVALUE As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate MODULEVALUE As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "module_spacing",
+    "old": "Private moduleValue As Long",
+    "new": "Private   moduleValue    As   Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 2,
+        "deleteLines": 1,
+        "text": "Private   moduleValue    As   Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate   moduleValue    As   Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "option_base",
+    "old": "Option Explicit",
+    "new": "Option Explicit\nOption Base 1",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 1,
+        "deleteLines": 1,
+        "text": "Option Explicit\nOption Base 1"
+      }
+    ],
+    "source": "Option Explicit\nOption Base 1\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "option_compare",
+    "old": "Option Explicit",
+    "new": "Option Explicit\nOption Compare Text",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 1,
+        "deleteLines": 1,
+        "text": "Option Explicit\nOption Compare Text"
+      }
+    ],
+    "source": "Option Explicit\nOption Compare Text\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "local_const",
+    "old": "Static stored As Long",
+    "new": "Static stored As Long\nConst extraLocal As Long = 7",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 5,
+        "deleteLines": 1,
+        "text": "    Static stored As Long\nConst extraLocal As Long = 7"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\nConst extraLocal As Long = 7\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "local_case",
+    "old": "Static stored As Long",
+    "new": "Static STORED As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 5,
+        "deleteLines": 1,
+        "text": "    Static STORED As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static STORED As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "local_array",
+    "old": "Static stored As Long",
+    "new": "Static stored As Long\nDim localArray(1 To 2) As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 5,
+        "deleteLines": 1,
+        "text": "    Static stored As Long\nDim localArray(1 To 2) As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\nDim localArray(1 To 2) As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "static_array",
+    "old": "Static stored As Long",
+    "new": "Static stored As Long\nStatic staticArray(1 To 2) As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 5,
+        "deleteLines": 1,
+        "text": "    Static stored As Long\nStatic staticArray(1 To 2) As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\nStatic staticArray(1 To 2) As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "procedure_visibility",
+    "old": "Private Function Counter() As Long",
+    "new": "Public Function Counter() As Long",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 4,
+        "deleteLines": 1,
+        "text": "Public Function Counter() As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPublic Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "procedure_add",
+    "append": "Public Function ExtraFunction() As Long\nExtraFunction = 7\nEnd Function",
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 41,
+        "deleteLines": 0,
+        "text": "Public Function ExtraFunction() As Long\nExtraFunction = 7\nEnd Function"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static stored As Long\n    stored = stored + 1\n    Counter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\nPublic Function ExtraFunction() As Long\nExtraFunction = 7\nEnd Function\n"
+  },
+  {
+    "name": "static_rename",
+    "old": "stored",
+    "new": "renamed",
+    "replace_all": true,
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 7,
+        "deleteLines": 1,
+        "text": "    Counter = renamed"
+      },
+      {
+        "line": 6,
+        "deleteLines": 1,
+        "text": "    renamed = renamed + 1"
+      },
+      {
+        "line": 5,
+        "deleteLines": 1,
+        "text": "    Static renamed As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function Counter() As Long\n    Static renamed As Long\n    renamed = renamed + 1\n    Counter = renamed\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(Counter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  },
+  {
+    "name": "procedure_rename",
+    "old": "Counter",
+    "new": "RenamedCounter",
+    "replace_all": true,
+    "prime": "123|False|2|A1:5",
+    "before": "123|False|3|A1:5",
+    "after": "0|True|1|none",
+    "edits": [
+      {
+        "line": 16,
+        "deleteLines": 1,
+        "text": "    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(RenamedCounter()) & \"|\" & reference"
+      },
+      {
+        "line": 7,
+        "deleteLines": 1,
+        "text": "    RenamedCounter = stored"
+      },
+      {
+        "line": 4,
+        "deleteLines": 1,
+        "text": "Private Function RenamedCounter() As Long"
+      }
+    ],
+    "source": "Option Explicit\nPrivate moduleValue As Long\nPrivate moduleObject As Object\nPrivate Function RenamedCounter() As Long\n    Static stored As Long\n    stored = stored + 1\n    RenamedCounter = stored\nEnd Function\nPublic Function ReadGlobals() As String\n    Dim reference As String\n    If moduleObject Is Nothing Then\n        reference = \"none\"\n    Else\n        reference = moduleObject.Address(False, False) & \":\" & CStr(moduleObject.Value)\n    End If\n    ReadGlobals = CStr(moduleValue) & \"|\" & CStr(moduleObject Is Nothing) & \"|\" & CStr(RenamedCounter()) & \"|\" & reference\nEnd Function\nPublic Function Prime(ByVal exitKind As Long) As String\n    moduleValue = 123\n    Set moduleObject = Range(\"A1\")\n    Range(\"A1\").Value = 5\n    Range(\"D1\").Value = ReadGlobals()\n    Select Case exitKind\n    Case 1\n        Error 11\n    Case 2\n        Error 40040\n    Case 3\n        On Error Resume Next\n        Error 11\n    Case 4\n        Err.Raise 513, \"own\", \"failure\"\n    Case 6\n        End\n    Case 5\n        Dim value As Variant\n        value = Range(\"A1\").Offset(-1, 0).Value\n    End Select\n    Prime = ReadGlobals()\nEnd Function\n"
+  }
+]

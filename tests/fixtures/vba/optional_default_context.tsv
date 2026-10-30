@@ -1,0 +1,12 @@
+# Self-authored native Excel optional default contexts. CC BY-SA 4.0.
+procedure	type	value
+VEmpty	string	10|True
+VLong	long	7
+VText	string	cache
+InternalEmpty	string	0|False
+RunEmpty	string	10|True
+ExplicitEmpty	string	0|False
+ExplicitNull	string	1|False
+ForwardLong	long	7
+ForwardText	string	cache
+ExplicitEmptyLong	long	0

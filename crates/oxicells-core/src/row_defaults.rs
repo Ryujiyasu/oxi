@@ -408,7 +408,7 @@ pub fn font_default_row_px(face: &str, size: f32) -> Option<u16> {
     found(face, size).map(|(_, _, px, _)| *px).or_else(|| {
         // Past the sizes the full table was measured at, the row alone:
         // the height depends on the em's whole pixels and nothing else.
-        (face == "游ゴシック").then(|| {
+        (face == "Yu Gothic" || face == "游ゴシック").then(|| {
             let em = em_pixels(size);
             YU_GOTHIC_ROW_PX_BY_EM.iter().find(|(held, _)| *held == em).map(|(_, px)| *px)
         })?

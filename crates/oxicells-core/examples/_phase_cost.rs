@@ -80,6 +80,7 @@ fn as_value(value: &oxicells_core::ir::CellValue) -> oxicells_calc::Value {
     match value {
         CellValue::Number(n) => oxicells_calc::Value::Number(*n),
         CellValue::String(s) => oxicells_calc::Value::text(s.clone()),
+        CellValue::Utf16(units) => oxicells_calc::Value::Utf16(units.clone()),
         CellValue::Boolean(b) => oxicells_calc::Value::Logical(*b),
         _ => oxicells_calc::Value::Blank,
     }

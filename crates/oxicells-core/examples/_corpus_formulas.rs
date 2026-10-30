@@ -119,6 +119,7 @@ fn brief(value: Option<&CellValue>) -> String {
     match value {
         Some(CellValue::Number(n)) => format!("{n}"),
         Some(CellValue::String(s)) => s.chars().take(24).collect(),
+        Some(CellValue::Utf16(units)) => format!("UTF16:{:?}", &units[..units.len().min(24)]),
         Some(CellValue::Boolean(b)) => format!("{b}"),
         Some(CellValue::Error(e)) => e.clone(),
         Some(CellValue::Empty) | None => "(empty)".to_string(),

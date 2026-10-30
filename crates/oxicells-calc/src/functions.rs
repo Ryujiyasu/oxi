@@ -14,15 +14,52 @@ use crate::reference::RangeRef;
 use crate::value::{compare, ExcelError, Value};
 use std::cmp::Ordering;
 
+/// Whether a block denotes cells or an array value. Its size does not
+/// determine its kind: an array can contain exactly one element.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum BlockOrigin {
+    #[default]
+    Range,
+    Array,
+    /// A one-dimensional array supplied by a worksheet function.
+    Vector,
+    Cells { sheet: String, range: RangeRef },
+}
+
 /// A materialised rectangular block of values, row-major.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RangeData {
+    pub origin: BlockOrigin,
     pub width: usize,
     pub height: usize,
     pub cells: Vec<Value>,
 }
 
 impl RangeData {
+    pub fn is_array(&self) -> bool { matches!(self.origin, BlockOrigin::Array | BlockOrigin::Vector) }
+    pub fn is_vector(&self) -> bool { matches!(self.origin, BlockOrigin::Vector) }
+    /// Scalar operations retain a vector's rank; any matrix input promotes it.
+    pub fn value_origin<'a>(blocks: impl IntoIterator<Item = &'a RangeData>) -> BlockOrigin {
+        let mut vector = false;
+        for block in blocks {
+            if block.is_vector() { vector = true; }
+            else if block.is_array() || block.cells.len() > 1 { return BlockOrigin::Array; }
+        }
+        if vector { BlockOrigin::Vector } else { BlockOrigin::Array }
+    }
+    pub fn cell_reference(&self) -> Option<(String, RangeRef)> {
+        match &self.origin { BlockOrigin::Cells { sheet, range } => Some((sheet.clone(), *range)), _ => None }
+    }
+    pub fn slice_origin(&self, col: usize, row: usize, width: usize, height: usize) -> BlockOrigin {
+        match &self.origin {
+            BlockOrigin::Cells { sheet, range } => {
+                let start = crate::reference::CellRef::new(range.start.col + col as u32, range.start.row + row as u32);
+                BlockOrigin::Cells { sheet: sheet.clone(), range: RangeRef::normalised(start, crate::reference::CellRef::new(start.col + width as u32 - 1, start.row + height as u32 - 1)) }
+            }
+            other => other.clone(),
+        }
+    }
+
     pub fn at(&self, col: usize, row: usize) -> Value {
         self.cells
             .get(row * self.width + col)
@@ -37,7 +74,7 @@ impl RangeData {
         for (col, row) in range.iter() {
             cells.push(read(col, row));
         }
-        RangeData {
+        RangeData {origin: BlockOrigin::Range,
             width,
             height,
             cells,
@@ -90,10 +127,10 @@ impl Arg {
         }
     }
 
-    fn as_range(&self) -> RangeData {
+    pub(crate) fn as_range(&self) -> RangeData {
         match self {
             Arg::Range(r) => r.clone(),
-            Arg::Value(v) => RangeData {
+            Arg::Value(v) => RangeData {origin: BlockOrigin::Range,
                 width: 1,
                 height: 1,
                 cells: vec![v.clone()],
@@ -254,7 +291,7 @@ pub(crate) fn numeric_operands(args: &[Arg]) -> Result<Vec<f64>, ExcelError> {
             Arg::Value(v) => match v {
                 Value::Error(e) => return Err(*e),
                 Value::Blank => {}
-                Value::Text(_) | Value::Logical(_) | Value::Number(_) => out.push(v.to_number()?),
+                Value::Text(_) | Value::Utf16(_) | Value::Logical(_) | Value::Number(_) => out.push(v.to_number()?),
             },
             Arg::Range(r) => {
                 for v in &r.cells {
@@ -303,6 +340,15 @@ pub(crate) fn block_of(arg: &Arg) -> RangeData {
     arg.as_range()
 }
 
+/// Text functions measured to map every argument over individual elements.
+pub(crate) fn text_one_at_a_time(name: &str) -> bool {
+    matches!(
+        name,
+        "LEN" | "LEFT" | "RIGHT" | "MID" | "FIND" | "SEARCH" | "REPLACE"
+            | "LENB" | "LEFTB" | "RIGHTB" | "MIDB" | "FINDB" | "SEARCHB" | "REPLACEB"
+    )
+}
+
 /// Whether every argument this function takes is a single value.
 ///
 /// Named one by one, and deliberately so. The first version of this asked the
@@ -315,6 +361,9 @@ pub(crate) fn block_of(arg: &Arg) -> RangeData {
 /// on it is applied hundreds of times to the wrong things and says nothing
 /// about it, so the cost of the two mistakes is not remotely equal.
 fn one_at_a_time(name: &str) -> bool {
+    if text_one_at_a_time(name) {
+        return true;
+    }
     matches!(
         name,
         // arithmetic on one number
@@ -341,7 +390,7 @@ fn one_at_a_time(name: &str) -> bool {
             | "ISNUMBER" | "ISTEXT" | "NOT"
         // and the ones that pick between two answers, which is what makes
         // `IF(A1:A10>5, 1, 0)` a column of ten rather than one #VALUE!
-            | "IF" | "IFERROR" | "IFNA"
+            | "IF" | "IFERROR" | "IFNA" | "CHOOSE" | "IFS" | "SWITCH"
     )
 }
 
@@ -381,28 +430,48 @@ fn taken_one_at_a_time(name: &str, at: usize) -> bool {
 /// Call `name`, applying it a cell at a time when it has been handed a block
 /// and only knows what to do with one value.
 pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
+    call_arg_with_compatibility(name, args, 1)
+}
+
+pub fn call_arg_with_compatibility(name: &str, args: &[Arg], version: u8) -> Arg {
+    call_arg_with_text_context(name,args,version,true)
+}
+
+pub fn call_arg_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_language: bool) -> Arg {
     let name = plain(name);
     // An INDEX missing one of its two indexes means a whole line rather than
     // one cell, and a whole line is an array — which `call` has no way to
     // return.
     if name == "INDEX" {
+        // Dynamic cell formulas select one value per row/column index.
+        // Evaluate reduces its index blocks at the engine boundary instead.
+        if (2..=3).contains(&args.len()) && args.iter().skip(1).any(|arg| matches!(arg, Arg::Range(block) if block.is_array() || block.cells.len() > 1)) {
+            let indexes: Vec<RangeData> = args.iter().skip(1).map(Arg::as_range).collect();
+            let width = indexes.iter().map(|block| block.width).max().unwrap_or(1);
+            let height = indexes.iter().map(|block| block.height).max().unwrap_or(1);
+            let table = args[0].as_range();
+            let table_height = table.cell_reference().map_or(table.height, |(_, range)| range.height() as usize);
+            let mut cells = Vec::with_capacity(width * height);
+            for row in 0..height {
+                for col in 0..width {
+                    let mut selected = vec![args[0].clone()];
+                    for index in &indexes {
+                        let x = if index.width == 1 { 0 } else { col };
+                        let y = if index.height == 1 { 0 } else { row };
+                        selected.push(Arg::Value(if x < index.width && y < index.height { index.at(x, y) } else { Value::Error(ExcelError::NA) }));
+                    }
+                    if selected.len() == 2 && table.cell_reference().is_some_and(|(_, range)| range.height() > 1 && range.width() > 1) {
+                        cells.push(Value::Error(ExcelError::Ref));
+                        continue;
+                    }
+                    if selected.len() == 2 && table_height > 1 { selected.push(Arg::Value(Value::Number(1.0))); }
+                    cells.push(match call_arg("INDEX", &selected) { Arg::Value(value) => value, Arg::Range(block) => block.cells.first().cloned().unwrap_or(Value::Blank) });
+                }
+            }
+            return Arg::Range(RangeData { origin: BlockOrigin::Array, width, height, cells });
+        }
         if let Some(line) = a_whole_line(args) {
             return line;
-        }
-        // Indexes handed as an array pick one cell each: measured,
-        // Evaluate("INDEX({1;2},{1;2})") is an array.
-        if let [table, Arg::Range(rows)] = args {
-            if rows.cells.len() > 1 {
-                let cells = rows
-                    .cells
-                    .iter()
-                    .map(|row| match call_arg("INDEX", &[table.clone(), Arg::Value(row.clone()), Arg::Value(Value::Number(1.0))]) {
-                        Arg::Value(value) => value,
-                        Arg::Range(block) => block.cells.first().cloned().unwrap_or(Value::Blank),
-                    })
-                    .collect();
-                return Arg::Range(RangeData { width: rows.width, height: rows.height, cells });
-            }
         }
         // One index into an array of several rows is that whole row, a
         // column's one cell included: measured, `SUM(INDEX({1,2;3,4},2))`
@@ -413,9 +482,11 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
             let table = table.as_range();
             if table.height > 1 {
                 return match row.scalar().to_number() {
+                    Ok(0.0) => Arg::Range(table),
+                    Ok(row) if row < 0.0 => Arg::Value(Value::Error(ExcelError::Value)),
                     Ok(row) if row >= 1.0 && (row as usize) <= table.height => {
                         let at = row as usize - 1;
-                        Arg::Range(RangeData {
+                        Arg::Range(RangeData {origin: table.origin.clone(),
                             width: table.width,
                             height: 1,
                             cells: (0..table.width).map(|col| table.at(col, at)).collect(),
@@ -471,7 +542,7 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
                 cells.push(Value::Number(*one));
             }
         }
-        return Arg::Range(RangeData { width: 1, height: cells.len(), cells });
+        return Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: cells.len(), cells });
     }
     if let Some(block) = crate::functions_more::call_block(name, args) {
         return block;
@@ -519,20 +590,24 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
                 cells.push(Value::Number(sum));
             }
         }
-        return Arg::Range(RangeData { width: b.width, height: a.height, cells });
+        return Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: b.width, height: a.height, cells });
     }
     // TRANSPOSE turns its one block on its side, which is the whole of it:
     // `{=TRANSPOSE(A1:A2)}` across F1:G1 is 1 and 2.
     if name == "TRANSPOSE" {
         return match args {
-            [block] => Arg::Range(on_its_side(&block.as_range())),
+            [block] => {
+                let data = block.as_range();
+                if data.cells.len() == 1 && !data.is_array() { Arg::Value(data.cells[0].clone()) }
+                else { let mut output = on_its_side(&data); output.origin = BlockOrigin::Array; Arg::Range(output) }
+            },
             _ => Arg::Value(Value::Error(ExcelError::Value)),
         };
     }
     // The shape of the answer comes from the arguments taken a cell at a time;
     // the ones read whole say nothing about it.
     let spread: Vec<bool> = (0..args.len())
-        .map(|at| taken_one_at_a_time(name, at))
+        .map(|at| taken_one_at_a_time(name, at) || (name == "N" && matches!(&args[at], Arg::Range(block) if block.is_array())))
         .collect();
     if spread.iter().any(|one| *one) {
         let sized = |pick: fn(&RangeData) -> usize| {
@@ -545,7 +620,7 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
         };
         let width = sized(|block| block.width);
         let height = sized(|block| block.height);
-        if width * height > 1 {
+        if width * height > 1 || args.iter().zip(&spread).any(|(arg, taken)| *taken && matches!(arg, Arg::Range(b) if b.is_array())) {
             let blocks: Vec<RangeData> = args.iter().map(block_of).collect();
             let mut cells = Vec::with_capacity(width * height);
             for row in 0..height {
@@ -564,17 +639,18 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
                             }
                         })
                         .collect();
-                    cells.push(call(name, &picked));
+                    cells.push(call_with_text_context(name, &picked, version, dbcs_language));
                 }
             }
-            return Arg::Range(RangeData {
+            let origin = RangeData::value_origin(blocks.iter().zip(&spread).filter_map(|(block, spread)| spread.then_some(block)));
+            return Arg::Range(RangeData {origin,
                 width,
                 height,
                 cells,
             });
         }
     }
-    Arg::Value(call(name, args))
+    Arg::Value(call_with_text_context(name, args, version, dbcs_language))
 }
 
 /// The name without the prefixes a file writes and Excel does not show.
@@ -621,7 +697,7 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "DURATION", "DVAR", "DVARP", "ECMA.CEILING", "EDATE", "EFFECT", "ENCODEURL", "EOMONTH", "ERF",
     "ERF.PRECISE", "ERFC", "ERFC.PRECISE", "ERROR.TYPE", "EVEN", "EXACT", "EXP", "EXPAND",
     "EXPON.DIST", "EXPONDIST", "F.DIST", "F.DIST.RT", "F.INV", "F.INV.RT", "F.TEST", "FACT",
-    "FACTDOUBLE", "FALSE", "FDIST", "FIND", "FINDB", "FINV", "FISHER", "FISHERINV", "FIXED",
+    "FACTDOUBLE", "FALSE", "FDIST", "FILTER", "FIND", "FINDB", "FINV", "FISHER", "FISHERINV", "FIXED",
     "FLOOR", "FLOOR.MATH", "FLOOR.PRECISE", "FORECAST", "FORECAST.LINEAR", "FORMULATEXT", "FTEST",
     "FV", "FVSCHEDULE", "GAMMA", "GAMMA.DIST", "GAMMA.INV", "GAMMADIST", "GAMMAINV", "GAMMALN",
     "GAMMALN.PRECISE", "GAUSS", "GCD", "GEOMEAN", "GESTEP", "GROUPBY", "GROWTH", "HARMEAN",
@@ -655,7 +731,7 @@ const KNOWN_FUNCTIONS: &[&str] = &[
     "SUMX2PY2", "SUMXMY2", "SWITCH", "SYD", "T", "T.DIST", "T.DIST.2T", "T.DIST.RT", "T.INV",
     "T.INV.2T", "T.TEST", "TAKE", "TAN", "TANH", "TBILLEQ", "TBILLPRICE", "TBILLYIELD", "TDIST",
     "TEXT", "TEXTAFTER", "TEXTBEFORE", "TEXTJOIN", "TEXTSPLIT", "TIME", "TIMEVALUE", "TINV",
-    "TOCOL", "TODAY", "TOROW", "TRIM", "TRIMMEAN", "TRIMRANGE", "TRUE", "TRUNC", "TTEST", "TYPE",
+    "TOCOL", "TODAY", "TOROW", "TRANSPOSE", "TREND", "TRIM", "TRIMMEAN", "TRIMRANGE", "TRUE", "TRUNC", "TTEST", "TYPE",
     "UNICHAR", "UNICODE", "UNIQUE", "UPPER", "VALUE", "VALUETOTEXT", "VAR", "VAR.P", "VAR.S",
     "VARA", "VARP", "VARPA", "VDB", "VLOOKUP", "VSTACK", "WEEKDAY", "WEEKNUM", "WEIBULL",
     "WEIBULL.DIST", "WORKDAY", "WORKDAY.INTL", "WRAPCOLS", "WRAPROWS", "XIRR", "XLOOKUP", "XMATCH",
@@ -670,7 +746,17 @@ pub fn is_known_function(name: &str) -> bool {
 }
 
 pub fn call(name: &str, args: &[Arg]) -> Value {
+    call_with_compatibility(name, args, 1)
+}
+
+pub fn call_with_compatibility(name: &str, args: &[Arg], version: u8) -> Value {
+    call_with_text_context(name,args,version,true)
+}
+
+pub fn call_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_language: bool) -> Value {
     let name = plain(name);
+    if let Some(result) = crate::utf16::call(name, args, version) { return result.unwrap_or_else(Value::Error); }
+    if let Some(result) = crate::utf16_extended::call(name, args, dbcs_language) { return result.unwrap_or_else(Value::Error); }
     match dispatch(name, args) {
         Ok(v) => v,
         Err(e) => Value::Error(e),
@@ -781,7 +867,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                         sum += f64::from(b);
                         count += 1;
                     }
-                    Value::Text(_) => count += 1,
+                    Value::Text(_) | Value::Utf16(_) => count += 1,
                     Value::Blank => {}
                 }
             }
@@ -1276,7 +1362,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         // ---- information -------------------------------------------------
         "ISBLANK" => Ok(Value::Logical(args.first().map(|a| a.scalar().is_blank()).unwrap_or(false))),
         "ISNUMBER" => Ok(Value::Logical(matches!(one_value(args), Value::Number(_)))),
-        "ISTEXT" => Ok(Value::Logical(matches!(one_value(args), Value::Text(_)))),
+        "ISTEXT" => Ok(Value::Logical(matches!(one_value(args), Value::Text(_) | Value::Utf16(_)))),
         "ISLOGICAL" => Ok(Value::Logical(matches!(one_value(args), Value::Logical(_)))),
         "ISERROR" => Ok(Value::Logical(one_value(args).is_error())),
         "ISERR" => Ok(Value::Logical(matches!(
@@ -1299,13 +1385,14 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             Value::Logical(b) => Value::Number(f64::from(b)),
             _ => Value::Number(0.0),
         }),
-        // 1 number, 2 text, 4 logical, 16 error, 64 an array of more than one.
+        // An array has type64 even when it contains exactly one element.
         "TYPE" => {
             let arg = one_arg(args)?;
             Ok(Value::Number(match arg {
-                Arg::Range(block) if block.cells.len() > 1 => 64.0,
+                Arg::Range(block) if block.is_array() || block.cells.len() > 1
+                    || block.cell_reference().is_some_and(|(_, range)| !range.is_single()) => 64.0,
                 _ => match arg.scalar() {
-                    Value::Text(_) => 2.0,
+                    Value::Text(_) | Value::Utf16(_) => 2.0,
                     Value::Logical(_) => 4.0,
                     Value::Error(_) => 16.0,
                     _ => 1.0,
@@ -1982,7 +2069,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                     Value::Error(e) => return Err(e),
                     Value::Number(n) => n,
                     Value::Logical(b) => f64::from(b),
-                    Value::Text(_) => 0.0,
+                    Value::Text(_) | Value::Utf16(_) => 0.0,
                     Value::Blank => continue,
                 };
                 best = Some(match best {
@@ -2000,7 +2087,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                     Value::Error(e) => return Err(e),
                     Value::Number(n) => values.push(n),
                     Value::Logical(b) => values.push(f64::from(b)),
-                    Value::Text(_) => values.push(0.0),
+                    Value::Text(_) | Value::Utf16(_) => values.push(0.0),
                     Value::Blank => {}
                 }
             }
@@ -2137,7 +2224,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                         Value::Number(n) => *n,
                         // A Boolean counts for nothing, as text does:
                         // measured, TRUE among the cells adds 0.
-                        Value::Logical(_) | Value::Blank | Value::Text(_) => 0.0,
+                        Value::Logical(_) | Value::Blank | Value::Text(_) | Value::Utf16(_) => 0.0,
                         Value::Error(e) => return Err(*e),
                     };
                     if running == 0.0 {
@@ -2345,7 +2432,8 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                     if b { "TRUE" } else { "FALSE" },
                     &format,
                 ))),
-                Value::Blank => Ok(Value::Text(String::new())),
+                Value::Blank => Ok(Value::Text(crate::numfmt::format_number(0.0, &format))),
+                Value::Utf16(_) => Err(ExcelError::Value),
                 Value::Error(e) => Err(e),
             }
         }
@@ -3110,9 +3198,15 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::Value);
             }
             let table = args[0].as_range();
-            let row = num(&args[1])? as usize;
+            let row_number = num(&args[1])?;
+            if row_number < 0.0 { return Err(ExcelError::Value); }
+            let row = row_number as usize;
             let col = match args.get(2) {
-                Some(a) => num(a)? as usize,
+                Some(a) => {
+                    let column = num(a)?;
+                    if column < 0.0 { return Err(ExcelError::Value); }
+                    column as usize
+                }
                 None => {
                     // With one index, a single row or column is addressed linearly.
                     if table.height == 1 {
@@ -3376,7 +3470,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                     .flat_map(|one| one.flatten())
                     .filter(|held| !held.is_error())
                     .collect();
-                vec![Arg::Range(RangeData {
+                vec![Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,
                     width: 1,
                     height: kept.len(),
                     cells: kept,
@@ -3827,7 +3921,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             let before: String = within.chars().take(at as usize - 1).collect();
             Ok(Value::Number((bytes_of(&before) + 1) as f64))
         }
-        "ISNONTEXT" => Ok(Value::Logical(!matches!(one_value(args), Value::Text(_)))),
+        "ISNONTEXT" => Ok(Value::Logical(!matches!(one_value(args), Value::Text(_) | Value::Utf16(_)))),
         "DELTA" => {
             let a = one(args)?;
             let b = match args.get(1) {
@@ -4908,7 +5002,7 @@ fn sorted_position(count: usize, descending: bool, value_at: impl Fn(usize) -> V
     // 5, "apple", "Banana", "b*n", TRUE, 7}, 1) is 8.
     let kind = |value: &Value| match value {
         Value::Number(_) => 0,
-        Value::Text(_) => 1,
+        Value::Text(_) | Value::Utf16(_) => 1,
         Value::Logical(_) => 2,
         _ => 3,
     };
@@ -5307,7 +5401,7 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
     }
     let width = rows[0].len();
     let height = rows.len();
-    let block = RangeData {
+    let block = RangeData {origin: crate::functions::BlockOrigin::Array,
         width,
         height,
         cells: rows.into_iter().flatten().collect(),
@@ -5347,7 +5441,7 @@ fn in_order(left: &Value, right: &Value, descending: bool) -> Ordering {
 fn sorting_rank(value: &Value) -> u8 {
     match value {
         Value::Number(_) => 0,
-        Value::Text(_) => 1,
+        Value::Text(_) | Value::Utf16(_) => 1,
         Value::Logical(_) => 2,
         Value::Error(_) => 3,
         // Handled before the rank is asked for.
@@ -5364,7 +5458,7 @@ fn with_a_column(block: &RangeData, beside: &[Value]) -> RangeData {
         }
         cells.push(alongside.clone());
     }
-    RangeData {
+    RangeData {origin: crate::functions::BlockOrigin::Array,
         width: block.width + 1,
         height: block.height,
         cells,
@@ -5379,7 +5473,7 @@ fn on_its_side(block: &RangeData) -> RangeData {
             cells.push(block.at(col, row));
         }
     }
-    RangeData {
+    RangeData {origin: crate::functions::BlockOrigin::Array,
         width: block.height,
         height: block.width,
         cells,
@@ -5419,13 +5513,14 @@ fn a_whole_line(args: &[Arg]) -> Option<Arg> {
     let (row, col) = (a_missing_index(&args[1])?, a_missing_index(&args[2])?);
     let taken = |rows: std::ops::Range<usize>, cols: std::ops::Range<usize>| {
         let (width, height) = (cols.len(), rows.len());
+        let origin = table.slice_origin(cols.start, rows.start, width, height);
         let mut cells = Vec::with_capacity(width * height);
         for r in rows {
             for c in cols.clone() {
                 cells.push(table.at(c, r));
             }
         }
-        Arg::Range(RangeData {
+        Arg::Range(RangeData {origin,
             width,
             height,
             cells,
@@ -5454,9 +5549,11 @@ fn a_missing_index(arg: &Arg) -> Option<usize> {
 }
 
 fn index_at(table: &RangeData, row: usize, col: usize) -> Result<Value, ExcelError> {
-    if row < 1 || col < 1 || row > table.height || col > table.width {
+    let (height, width) = table.cell_reference().map_or((table.height, table.width), |(_, range)| (range.height() as usize, range.width() as usize));
+    if row < 1 || col < 1 || row > height || col > width {
         return Err(ExcelError::Ref);
     }
+    if row > table.height || col > table.width { return Ok(Value::Blank); }
     Ok(table.at(col - 1, row - 1))
 }
 
@@ -5467,7 +5564,7 @@ fn block_from_rows(rows: Vec<Vec<Value>>) -> Result<RangeData, ExcelError> {
     if height == 0 || width == 0 {
         return Err(ExcelError::Value);
     }
-    Ok(RangeData { width, height, cells: rows.into_iter().flatten().collect() })
+    Ok(RangeData {origin: crate::functions::BlockOrigin::Array,  width, height, cells: rows.into_iter().flatten().collect() })
 }
 
 fn rows_of(block: &RangeData) -> Vec<Vec<Value>> {
@@ -5552,7 +5649,7 @@ fn reshaped(name: &str, args: &[Arg]) -> Result<RangeData, ExcelError> {
                 return Err(ExcelError::Value);
             }
             let (rows, cols) = (rows as usize, cols as usize);
-            Ok(RangeData {
+            Ok(RangeData {origin: crate::functions::BlockOrigin::Array,
                 width: cols,
                 height: rows,
                 cells: (0..rows * cols).map(|at| Value::Number(start + step * at as f64)).collect(),
@@ -5564,11 +5661,14 @@ fn reshaped(name: &str, args: &[Arg]) -> Result<RangeData, ExcelError> {
             let take = name == "TAKE";
             let rows = kept(block.height, optional_count(args, 1)?, take)?;
             let cols = kept(block.width, optional_count(args, 2)?, take)?;
-            block_from_rows(
+            let origin = block.slice_origin(cols[0], rows[0], cols.len(), rows.len());
+            let mut output = block_from_rows(
                 rows.iter()
                     .map(|row| cols.iter().map(|col| block.at(*col, *row)).collect())
                     .collect(),
-            )
+            )?;
+            output.origin = origin;
+            Ok(output)
         }
         "CHOOSEROWS" | "CHOOSECOLS" => {
             expect(args, 2)?;
@@ -5649,9 +5749,9 @@ fn reshaped(name: &str, args: &[Arg]) -> Result<RangeData, ExcelError> {
             }
             let n = values.len();
             Ok(if name == "TOCOL" {
-                RangeData { width: 1, height: n, cells: values }
+                RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: n, cells: values }
             } else {
-                RangeData { width: n, height: 1, cells: values }
+                RangeData {origin: crate::functions::BlockOrigin::Array,  width: n, height: 1, cells: values }
             })
         }
         "WRAPROWS" | "WRAPCOLS" => {
@@ -5951,7 +6051,7 @@ fn trend(args: &[Arg]) -> Result<RangeData, ExcelError> {
             }
         },
     };
-    Ok(RangeData {
+    Ok(RangeData {origin: crate::functions::BlockOrigin::Array,
         width,
         height,
         cells: new_xs.iter().map(|x| Value::Number(intercept + slope * x)).collect(),
@@ -5982,7 +6082,7 @@ fn frequency(args: &[Arg]) -> Result<RangeData, ExcelError> {
             None => counts[bins.len()] += 1.0,
         }
     }
-    Ok(RangeData {
+    Ok(RangeData {origin: crate::functions::BlockOrigin::Array,
         width: 1,
         height: counts.len(),
         cells: counts.into_iter().map(Value::Number).collect(),
@@ -6554,7 +6654,7 @@ impl Criteria {
         // own `>` would put every text above every number.
         let kind = |value: &Value| match value {
             Value::Number(_) => 0,
-            Value::Text(_) => 1,
+            Value::Text(_) | Value::Utf16(_) => 1,
             Value::Logical(_) => 2,
             _ => 3,
         };
@@ -6628,7 +6728,7 @@ mod tests {
     fn no_function_panics_on_odd_arguments() {
         let block = |cells: Vec<Value>, width: usize| {
             let height = if width == 0 { 0 } else { cells.len() / width };
-            Arg::Range(RangeData { width, height, cells })
+            Arg::Range(RangeData {origin: Default::default(),  width, height, cells })
         };
         let kinds: Vec<Arg> = vec![
             Arg::Value(Value::text("")),
@@ -6669,7 +6769,7 @@ mod tests {
         Arg::Value(Value::text(s))
     }
     fn range(values: &[Value], width: usize) -> Arg {
-        Arg::Range(RangeData {
+        Arg::Range(RangeData {origin: Default::default(),
             width,
             height: values.len() / width,
             cells: values.to_vec(),
@@ -7047,12 +7147,12 @@ mod tests {
         ] {
             assert_eq!(call(name, &args), Value::text(want), "{name}");
         }
-        let a = Arg::Range(RangeData {
+        let a = Arg::Range(RangeData {origin: Default::default(),
             width: 1,
             height: 6,
             cells: [3.0, 7.0, 7.0, 1.0, 9.0, 4.0].map(Value::Number).to_vec(),
         });
-        let b = Arg::Range(RangeData {
+        let b = Arg::Range(RangeData {origin: Default::default(),
             width: 1,
             height: 6,
             cells: vec![v(2.0).scalar(), v(5.0).scalar(), Value::text("x"), v(1.0).scalar(), v(8.0).scalar(), v(3.0).scalar()],
@@ -7070,7 +7170,7 @@ mod tests {
         close(call("KURT", &[a.clone()]), -1.34119207860588);
         close(call("HARMEAN", &[a]), 3.03006012024048);
         // The reshaping functions, every answer Excel's (A1:C4 = 1..12).
-        let grid = Arg::Range(RangeData {
+        let grid = Arg::Range(RangeData {origin: Default::default(),
             width: 3,
             height: 4,
             cells: (1..=12).map(|n| Value::Number(n as f64)).collect(),
@@ -7086,7 +7186,7 @@ mod tests {
         assert_eq!(flat(call_arg("CHOOSECOLS", &[grid.clone(), v(3.0), v(1.0)])).2[..2], nums(&[3.0, 1.0])[..]);
         assert_eq!(flat(call_arg("TOCOL", &[grid.clone(), v(0.0), l(true)])).2[..3], nums(&[1.0, 4.0, 7.0])[..]);
         let wrapped = flat(call_arg("WRAPCOLS", &[
-            Arg::Range(RangeData { width: 1, height: 6, cells: nums(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]) }),
+            Arg::Range(RangeData {origin: Default::default(),  width: 1, height: 6, cells: nums(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]) }),
             v(4.0),
             Arg::Value(Value::text("-")),
         ]));

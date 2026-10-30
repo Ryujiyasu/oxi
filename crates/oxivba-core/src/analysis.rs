@@ -2016,6 +2016,7 @@ fn collect_names(expr: &Expr, with_subject: Option<&str>, out: &mut Vec<(String,
         }
         Expr::New { type_name, span } => out.push((type_name.clone(), span.line)),
         Expr::AddressOf { procedure, span } => out.push((procedure.clone(), span.line)),
+        Expr::Group { expression, .. } => collect_names(expression,with_subject,out),
         Expr::Unary { operand, .. } | Expr::TypeOf { operand, .. } => {
             collect_names(operand, with_subject, out)
         }

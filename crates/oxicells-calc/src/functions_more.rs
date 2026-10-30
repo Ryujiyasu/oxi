@@ -254,7 +254,7 @@ pub(crate) fn call(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                                 Value::Error(e) => return Err(*e),
                                 Value::Number(n) => values.push(*n),
                                 Value::Logical(b) => values.push(f64::from(*b)),
-                                Value::Text(_) => values.push(0.0),
+                                Value::Text(_) | Value::Utf16(_) => values.push(0.0),
                                 Value::Blank => {}
                             }
                         }
@@ -764,13 +764,13 @@ pub(crate) fn call(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             }
             Ok(Value::Text(out))
         }
-        // PHONETIC reads the reading stored with a cell; a cell with none
-        // shows its text, and text handed over directly is #VALUE!.
+        // A cell reference with no supplied phonetic reading returns #N/A.
+        // The displayed value is not a substitute for missing reading data.
         "PHONETIC" => {
             count(args, 1, 1)?;
             match &args[0] {
-                Arg::Range(block) => Ok(Value::Text(block.cells.first().cloned().unwrap_or(Value::Blank).to_text()?)),
-                Arg::Value(_) => Err(ExcelError::Value),
+                Arg::Range(block) if !block.is_array() => Err(ExcelError::NA),
+                Arg::Range(_) | Arg::Value(_) => Err(ExcelError::Value),
             }
         }
         // The French depreciation of the analysis add-in: AMORLINC straight
@@ -855,7 +855,7 @@ pub(crate) fn call_block(name: &str, args: &[Arg]) -> Option<Arg> {
             let cells = (0..size * size)
                 .map(|i| Value::Number(if i / size == i % size { 1.0 } else { 0.0 }))
                 .collect();
-            Ok(RangeData { width: size, height: size, cells })
+            Ok(RangeData {origin: crate::functions::BlockOrigin::Array,  width: size, height: size, cells })
         })(),
         "LINEST" | "LOGEST" => regression_block(name == "LOGEST", args),
         // REGEXEXTRACT(text, pattern, [mode], [case]): 0 the first match,
@@ -880,12 +880,12 @@ pub(crate) fn call_block(name: &str, args: &[Arg]) -> Option<Arg> {
                             return Err(ExcelError::NA);
                         }
                         let cells: Vec<Value> = all.iter().map(|caps| piece(caps[0])).collect();
-                        Ok(Arg::Range(RangeData { width: cells.len(), height: 1, cells }))
+                        Ok(Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: cells.len(), height: 1, cells }))
                     }
                     2 => {
                         let caps = regex.find_at(&text, 0).ok_or(ExcelError::NA)?;
                         let cells: Vec<Value> = if caps.len() > 1 { caps[1..].iter().map(|c| piece(*c)).collect() } else { vec![piece(caps[0])] };
-                        Ok(Arg::Range(RangeData { width: cells.len(), height: 1, cells }))
+                        Ok(Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: cells.len(), height: 1, cells }))
                     }
                     _ => Err(ExcelError::Value),
                 }
@@ -988,7 +988,7 @@ fn inverse(mut m: Vec<Vec<f64>>) -> Result<RangeData, ExcelError> {
             }
         }
     }
-    Ok(RangeData { width: n, height: n, cells: out.into_iter().flatten().map(Value::Number).collect() })
+    Ok(RangeData {origin: crate::functions::BlockOrigin::Array,  width: n, height: n, cells: out.into_iter().flatten().map(Value::Number).collect() })
 }
 
 fn flows_and_dates(flows: &Arg, dates: &Arg) -> Result<(Vec<f64>, Vec<f64>), ExcelError> {
@@ -1124,7 +1124,7 @@ fn observations(args: &[Arg], logs: bool) -> Result<(Vec<f64>, Vec<Vec<f64>>), E
     let n = ys.len();
     let x_block = match given(1) {
         Some(arg) => block_of(arg),
-        None => RangeData { width: 1, height: n, cells: (1..=n).map(|i| Value::Number(i as f64)).collect() },
+        None => RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: n, cells: (1..=n).map(|i| Value::Number(i as f64)).collect() },
     };
     let number = |value: &Value| match value {
         Value::Number(n) => Ok(*n),
@@ -1218,7 +1218,7 @@ fn regression_block(logs: bool, args: &[Arg]) -> Result<RangeData, ExcelError> {
     let mut cells: Vec<Value> = slopes.iter().rev().map(|m| shown(*m)).collect();
     cells.push(shown(intercept));
     if !stats {
-        return Ok(RangeData { width, height: 1, cells });
+        return Ok(RangeData {origin: crate::functions::BlockOrigin::Array,  width, height: 1, cells });
     }
     let fitted: Vec<f64> =
         rows.iter().map(|r| intercept + r.iter().zip(&slopes).map(|(x, m)| x * m).sum::<f64>()).collect();
@@ -1256,7 +1256,7 @@ fn regression_block(logs: bool, args: &[Arg]) -> Result<RangeData, ExcelError> {
         }
         cells.extend(row.into_iter().take(width));
     }
-    Ok(RangeData { width, height: 5, cells })
+    Ok(RangeData {origin: crate::functions::BlockOrigin::Array,  width, height: 5, cells })
 }
 
 /// TREND with several x variables, the one-variable case being left to
@@ -1295,9 +1295,9 @@ pub(crate) fn trend_many(args: &[Arg]) -> Option<Result<RangeData, ExcelError>> 
             cells.push(Value::Number(fitted));
         }
         Ok(if across {
-            RangeData { width: 1, height: points, cells }
+            RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: points, cells }
         } else {
-            RangeData { width: points, height: 1, cells }
+            RangeData {origin: crate::functions::BlockOrigin::Array,  width: points, height: 1, cells }
         })
     })())
 }
@@ -1321,7 +1321,7 @@ fn growth(args: &[Arg]) -> Result<RangeData, ExcelError> {
         block_of(&args[1])
     } else {
         let y = block_of(&args[0]);
-        RangeData { width: y.width, height: y.height, cells: (1..=y.cells.len()).map(|i| Value::Number(i as f64)).collect() }
+        RangeData {origin: crate::functions::BlockOrigin::Array,  width: y.width, height: y.height, cells: (1..=y.cells.len()).map(|i| Value::Number(i as f64)).collect() }
     };
     let number = |value: &Value| match value {
         Value::Number(n) => Ok(*n),
@@ -1334,7 +1334,7 @@ fn growth(args: &[Arg]) -> Result<RangeData, ExcelError> {
             .iter()
             .map(|x| number(x).map(|x| Value::Number((intercept + slopes[0] * x).exp())))
             .collect::<Result<Vec<_>, _>>()?;
-        return Ok(RangeData { width: new_block.width, height: new_block.height, cells });
+        return Ok(RangeData {origin: crate::functions::BlockOrigin::Array,  width: new_block.width, height: new_block.height, cells });
     }
     let (points, across) = if new_block.width == k { (new_block.height, true) } else { (new_block.width, false) };
     let mut cells = Vec::with_capacity(points);
@@ -1349,8 +1349,8 @@ fn growth(args: &[Arg]) -> Result<RangeData, ExcelError> {
         cells.push(Value::Number(fitted));
     }
     Ok(if across {
-        RangeData { width: 1, height: points, cells }
+        RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: points, cells }
     } else {
-        RangeData { width: points, height: 1, cells }
+        RangeData {origin: crate::functions::BlockOrigin::Array,  width: points, height: 1, cells }
     })
 }

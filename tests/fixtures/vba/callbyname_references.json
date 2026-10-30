@@ -1,0 +1,209 @@
+[
+  {
+    "name": "callbyname_reference_matrix",
+    "source": "callbyname_reference_matrix.bas",
+    "procedure": "Driver.Probe",
+    "expected": "long=0~42~Long~Long\ninteger=13~40~Integer~\ndouble=13~40.5~Double~\nstring=13~40~String~\nvariant_integer=13~40~Integer~\nvariant_long=13~40~Long~\nvariant_string=13~40~String~\ninteger_overflow=13~40~Integer~\nlong_to_variant=13~40~Long~body\nlong_error=5~12~Long~body\ninteger_error=13~40~Integer~\nlong_alias=0~8~Long~7\ndouble_alias=13~40.5~Double~\nvariant_alias=0~8~Integer~7\nparentheses=0~40~Long~Long\nexpression=0~40~Long~Long\nnull=13~Null~\nerror_variant=13~Error~\narray_element=0~42~Long~Long\nclass_field=0~40~Long~Long\nobject=0~Nothing~body\nrange=0~Nothing~body\n",
+    "measured_cases": 22,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "callbyname_reference_matrix.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "callbyname_reference_matrix",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic Trace As String\nPublic Number As Long\nPublic Sub BumpLong(ByRef value As Long)\n    Trace = TypeName(value)\n    value = value + 2\nEnd Sub\nPublic Sub SetLarge(ByRef value As Long)\n    Trace = \"body\"\n    value = 40000\nEnd Sub\nPublic Sub ChangeVariant(ByRef value As Variant)\n    Trace = \"body\"\n    value = \"changed\"\nEnd Sub\nPublic Sub MutateRaise(ByRef value As Long)\n    value = 12\n    Trace = \"body\"\n    Err.Raise 5\nEnd Sub\nPublic Sub AliasLong(ByRef first As Long, ByRef second As Long)\n    first = 7\n    Trace = CStr(second)\n    second = second + 1\nEnd Sub\nPublic Sub AliasVariant(ByRef first As Variant, ByRef second As Variant)\n    first = 7\n    Trace = CStr(second)\n    second = second + 1\nEnd Sub\nPublic Sub ClearObject(ByRef value As Object)\n    Set value = Nothing\n    Trace = \"body\"\nEnd Sub\n"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPrivate Function Case0() As String\n    Dim obj As New Item\n    Dim n As Long\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, n\n    Case0 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case1() As String\n    Dim obj As New Item\n    Dim n As Integer\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, n\n    Case1 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case2() As String\n    Dim obj As New Item\n    Dim n As Double\n    n = 40.5\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, n\n    Case2 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case3() As String\n    Dim obj As New Item\n    Dim n As String\n    n = \"40\"\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, n\n    Case3 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case4() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, n\n    Case4 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case5() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CLng(40)\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, n\n    Case5 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case6() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = \"40\"\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, n\n    Case6 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case7() As String\n    Dim obj As New Item\n    Dim n As Integer\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"SetLarge\", VbMethod, n\n    Case7 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case8() As String\n    Dim obj As New Item\n    Dim n As Long\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"ChangeVariant\", VbMethod, n\n    Case8 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case9() As String\n    Dim obj As New Item\n    Dim n As Long\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"MutateRaise\", VbMethod, n\n    Case9 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case10() As String\n    Dim obj As New Item\n    Dim n As Integer\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"MutateRaise\", VbMethod, n\n    Case10 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case11() As String\n    Dim obj As New Item\n    Dim n As Long\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"AliasLong\", VbMethod, n, n\n    Case11 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case12() As String\n    Dim obj As New Item\n    Dim n As Double\n    n = 40.5\n    On Error Resume Next\n    CallByName obj, \"AliasLong\", VbMethod, n, n\n    Case12 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case13() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"AliasVariant\", VbMethod, n, n\n    Case13 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case14() As String\n    Dim obj As New Item\n    Dim n As Long\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, (n)\n    Case14 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case15() As String\n    Dim obj As New Item\n    Dim n As Long\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, n + 0\n    Case15 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case16() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = Null\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, n\n    Case16 = CStr(Err.Number) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case17() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CVErr(5)\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, n\n    Case17 = CStr(Err.Number) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case18() As String\n    Dim obj As New Item\n    Dim n(0 To 1) As Long\n    n(0) = 40\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, n(0)\n    Case18 = CStr(Err.Number) & \"~\" & CStr(n(0)) & \"~\" & TypeName(n(0)) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case19() As String\n    Dim obj As New Item\n    Dim holder As New Item\n    holder.Number = 40\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, holder.Number\n    Case19 = CStr(Err.Number) & \"~\" & CStr(holder.Number) & \"~\" & TypeName(holder.Number) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case20() As String\n    Dim obj As New Item\n    Dim n As Object\n    Set n = Range(\"A1\")\n    On Error Resume Next\n    CallByName obj, \"ClearObject\", VbMethod, n\n    Case20 = CStr(Err.Number) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case21() As String\n    Dim obj As New Item\n    Dim n As Range\n    Set n = Range(\"A1\")\n    On Error Resume Next\n    CallByName obj, \"ClearObject\", VbMethod, n\n    Case21 = CStr(Err.Number) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPublic Function Probe() As String\n    Dim report As String\n    report = report & \"long=\" & Case0() & vbLf\n    report = report & \"integer=\" & Case1() & vbLf\n    report = report & \"double=\" & Case2() & vbLf\n    report = report & \"string=\" & Case3() & vbLf\n    report = report & \"variant_integer=\" & Case4() & vbLf\n    report = report & \"variant_long=\" & Case5() & vbLf\n    report = report & \"variant_string=\" & Case6() & vbLf\n    report = report & \"integer_overflow=\" & Case7() & vbLf\n    report = report & \"long_to_variant=\" & Case8() & vbLf\n    report = report & \"long_error=\" & Case9() & vbLf\n    report = report & \"integer_error=\" & Case10() & vbLf\n    report = report & \"long_alias=\" & Case11() & vbLf\n    report = report & \"double_alias=\" & Case12() & vbLf\n    report = report & \"variant_alias=\" & Case13() & vbLf\n    report = report & \"parentheses=\" & Case14() & vbLf\n    report = report & \"expression=\" & Case15() & vbLf\n    report = report & \"null=\" & Case16() & vbLf\n    report = report & \"error_variant=\" & Case17() & vbLf\n    report = report & \"array_element=\" & Case18() & vbLf\n    report = report & \"class_field=\" & Case19() & vbLf\n    report = report & \"object=\" & Case20() & vbLf\n    report = report & \"range=\" & Case21() & vbLf\n    Probe = report\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "callbyname_reference_type_aliases",
+    "source": "callbyname_reference_type_aliases.bas",
+    "procedure": "Driver.Probe",
+    "expected": "enum_to_long=0~42~Long~Long\nlong_to_enum=0~42~Long~Long\nenum_to_enum=0~42~Long~Long\npointer_to_longlong=0~42~LongLong~LongLong\nlonglong_to_pointer=0~42~LongLong~LongLong\npointer_to_pointer=0~42~LongLong~LongLong\n",
+    "measured_cases": 6,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "callbyname_reference_type_aliases.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "callbyname_reference_type_aliases",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic Trace As String\nPublic Sub BumpLong(ByRef value As Long)\n    Trace = TypeName(value)\n    value = value + 2\nEnd Sub\nPublic Sub BumpLongLong(ByRef value As LongLong)\n    Trace = TypeName(value)\n    value = value + 2\nEnd Sub\nPublic Sub BumpLongPtr(ByRef value As LongPtr)\n    Trace = TypeName(value)\n    value = value + 2\nEnd Sub\nPublic Sub BumpEnum(ByRef value As Shade)\n    Trace = TypeName(value)\n    value = value + 2\nEnd Sub\n"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPublic Enum Shade\n    Dark = 1\nEnd Enum\nPrivate Function Case0() As String\n    Dim obj As New Item\n    Dim n As Shade\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"BumpLong\", VbMethod, n\n    Case0 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case1() As String\n    Dim obj As New Item\n    Dim n As Long\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"BumpEnum\", VbMethod, n\n    Case1 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case2() As String\n    Dim obj As New Item\n    Dim n As Shade\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"BumpEnum\", VbMethod, n\n    Case2 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case3() As String\n    Dim obj As New Item\n    Dim n As LongPtr\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"BumpLongLong\", VbMethod, n\n    Case3 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case4() As String\n    Dim obj As New Item\n    Dim n As LongLong\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"BumpLongPtr\", VbMethod, n\n    Case4 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case5() As String\n    Dim obj As New Item\n    Dim n As LongPtr\n    n = 40\n    On Error Resume Next\n    CallByName obj, \"BumpLongPtr\", VbMethod, n\n    Case5 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPublic Function Probe() As String\n    Dim report As String\n    report = report & \"enum_to_long=\" & Case0() & vbLf\n    report = report & \"long_to_enum=\" & Case1() & vbLf\n    report = report & \"enum_to_enum=\" & Case2() & vbLf\n    report = report & \"pointer_to_longlong=\" & Case3() & vbLf\n    report = report & \"longlong_to_pointer=\" & Case4() & vbLf\n    report = report & \"pointer_to_pointer=\" & Case5() & vbLf\n    Probe = report\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "callbyname_reference_scalars",
+    "source": "callbyname_reference_scalars.bas",
+    "procedure": "Driver.Probe",
+    "expected": "Byte_typed=0~41~Byte~Byte\nByte_variant=13~40~Byte~\nByte_parentheses=0~40~Byte~Byte\nByte_wrong_type=13~40~String~\nInteger_typed=0~41~Integer~Integer\nInteger_variant=13~40~Integer~\nInteger_parentheses=0~40~Integer~Integer\nInteger_wrong_type=13~40~String~\nLong_typed=0~41~Long~Long\nLong_variant=13~40~Long~\nLong_parentheses=0~40~Long~Long\nLong_wrong_type=13~40~String~\nLongLong_typed=0~41~LongLong~LongLong\nLongLong_variant=13~40~LongLong~\nLongLong_parentheses=0~40~LongLong~LongLong\nLongLong_wrong_type=13~40~String~\nLongPtr_typed=0~41~LongLong~LongLong\nLongPtr_variant=13~40~LongLong~\nLongPtr_parentheses=0~40~LongLong~LongLong\nLongPtr_wrong_type=13~40~String~\nSingle_typed=0~41.5~Single~Single\nSingle_variant=13~40.5~Single~\nSingle_parentheses=0~40.5~Single~Single\nSingle_wrong_type=13~40~String~\nDouble_typed=0~41.5~Double~Double\nDouble_variant=13~40.5~Double~\nDouble_parentheses=0~40.5~Double~Double\nDouble_wrong_type=13~40~String~\nCurrency_typed=0~41.5~Currency~Currency\nCurrency_variant=13~40.5~Currency~\nCurrency_parentheses=0~40.5~Currency~Currency\nCurrency_wrong_type=13~40~String~\nDate_typed=0~43833~Date~Date\nDate_variant=13~43832~Date~\nDate_parentheses=0~43832~Date~Date\nDate_wrong_type=13~40~String~\nBoolean_typed=0~False~Boolean~Boolean\nBoolean_variant=13~True~Boolean~\nBoolean_parentheses=0~True~Boolean~Boolean\nBoolean_wrong_type=13~40~String~\nString_typed=0~abcx~String~String\nString_variant=13~abc~String~\nString_parentheses=0~abc~String~String\nString_wrong_type=13~40~Long~\n",
+    "measured_cases": 44,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "callbyname_reference_scalars.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "callbyname_reference_scalars",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic Trace As String\nPublic Sub ChangeByte(ByRef value As Byte)\n    Trace = TypeName(value)\n    value = value + 1\nEnd Sub\nPublic Sub ChangeInteger(ByRef value As Integer)\n    Trace = TypeName(value)\n    value = value + 1\nEnd Sub\nPublic Sub ChangeLong(ByRef value As Long)\n    Trace = TypeName(value)\n    value = value + 1\nEnd Sub\nPublic Sub ChangeLongLong(ByRef value As LongLong)\n    Trace = TypeName(value)\n    value = value + 1\nEnd Sub\nPublic Sub ChangeLongPtr(ByRef value As LongPtr)\n    Trace = TypeName(value)\n    value = value + 1\nEnd Sub\nPublic Sub ChangeSingle(ByRef value As Single)\n    Trace = TypeName(value)\n    value = value + 1\nEnd Sub\nPublic Sub ChangeDouble(ByRef value As Double)\n    Trace = TypeName(value)\n    value = value + 1\nEnd Sub\nPublic Sub ChangeCurrency(ByRef value As Currency)\n    Trace = TypeName(value)\n    value = value + 1\nEnd Sub\nPublic Sub ChangeDate(ByRef value As Date)\n    Trace = TypeName(value)\n    value = value + 1\nEnd Sub\nPublic Sub ChangeBoolean(ByRef value As Boolean)\n    Trace = TypeName(value)\n    value = Not value\nEnd Sub\nPublic Sub ChangeString(ByRef value As String)\n    Trace = TypeName(value)\n    value = value & \"x\"\nEnd Sub\n"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPrivate Function Case0() As String\n    Dim obj As New Item\n    Dim n As Byte\n    n = CByte(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeByte\", VbMethod, n\n    Case0 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case1() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CByte(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeByte\", VbMethod, n\n    Case1 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case2() As String\n    Dim obj As New Item\n    Dim n As Byte\n    n = CByte(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeByte\", VbMethod, (n)\n    Case2 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case3() As String\n    Dim obj As New Item\n    Dim n As String\n    n = \"40\"\n    On Error Resume Next\n    CallByName obj, \"ChangeByte\", VbMethod, n\n    Case3 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case4() As String\n    Dim obj As New Item\n    Dim n As Integer\n    n = CInt(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeInteger\", VbMethod, n\n    Case4 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case5() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CInt(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeInteger\", VbMethod, n\n    Case5 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case6() As String\n    Dim obj As New Item\n    Dim n As Integer\n    n = CInt(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeInteger\", VbMethod, (n)\n    Case6 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case7() As String\n    Dim obj As New Item\n    Dim n As String\n    n = \"40\"\n    On Error Resume Next\n    CallByName obj, \"ChangeInteger\", VbMethod, n\n    Case7 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case8() As String\n    Dim obj As New Item\n    Dim n As Long\n    n = CLng(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeLong\", VbMethod, n\n    Case8 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case9() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CLng(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeLong\", VbMethod, n\n    Case9 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case10() As String\n    Dim obj As New Item\n    Dim n As Long\n    n = CLng(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeLong\", VbMethod, (n)\n    Case10 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case11() As String\n    Dim obj As New Item\n    Dim n As String\n    n = \"40\"\n    On Error Resume Next\n    CallByName obj, \"ChangeLong\", VbMethod, n\n    Case11 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case12() As String\n    Dim obj As New Item\n    Dim n As LongLong\n    n = CLngLng(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeLongLong\", VbMethod, n\n    Case12 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case13() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CLngLng(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeLongLong\", VbMethod, n\n    Case13 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case14() As String\n    Dim obj As New Item\n    Dim n As LongLong\n    n = CLngLng(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeLongLong\", VbMethod, (n)\n    Case14 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case15() As String\n    Dim obj As New Item\n    Dim n As String\n    n = \"40\"\n    On Error Resume Next\n    CallByName obj, \"ChangeLongLong\", VbMethod, n\n    Case15 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case16() As String\n    Dim obj As New Item\n    Dim n As LongPtr\n    n = CLngPtr(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeLongPtr\", VbMethod, n\n    Case16 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case17() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CLngPtr(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeLongPtr\", VbMethod, n\n    Case17 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case18() As String\n    Dim obj As New Item\n    Dim n As LongPtr\n    n = CLngPtr(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeLongPtr\", VbMethod, (n)\n    Case18 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case19() As String\n    Dim obj As New Item\n    Dim n As String\n    n = \"40\"\n    On Error Resume Next\n    CallByName obj, \"ChangeLongPtr\", VbMethod, n\n    Case19 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case20() As String\n    Dim obj As New Item\n    Dim n As Single\n    n = CSng(40.5)\n    On Error Resume Next\n    CallByName obj, \"ChangeSingle\", VbMethod, n\n    Case20 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case21() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CSng(40.5)\n    On Error Resume Next\n    CallByName obj, \"ChangeSingle\", VbMethod, n\n    Case21 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case22() As String\n    Dim obj As New Item\n    Dim n As Single\n    n = CSng(40.5)\n    On Error Resume Next\n    CallByName obj, \"ChangeSingle\", VbMethod, (n)\n    Case22 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case23() As String\n    Dim obj As New Item\n    Dim n As String\n    n = \"40\"\n    On Error Resume Next\n    CallByName obj, \"ChangeSingle\", VbMethod, n\n    Case23 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case24() As String\n    Dim obj As New Item\n    Dim n As Double\n    n = CDbl(40.5)\n    On Error Resume Next\n    CallByName obj, \"ChangeDouble\", VbMethod, n\n    Case24 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case25() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CDbl(40.5)\n    On Error Resume Next\n    CallByName obj, \"ChangeDouble\", VbMethod, n\n    Case25 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case26() As String\n    Dim obj As New Item\n    Dim n As Double\n    n = CDbl(40.5)\n    On Error Resume Next\n    CallByName obj, \"ChangeDouble\", VbMethod, (n)\n    Case26 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case27() As String\n    Dim obj As New Item\n    Dim n As String\n    n = \"40\"\n    On Error Resume Next\n    CallByName obj, \"ChangeDouble\", VbMethod, n\n    Case27 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case28() As String\n    Dim obj As New Item\n    Dim n As Currency\n    n = CCur(40.5)\n    On Error Resume Next\n    CallByName obj, \"ChangeCurrency\", VbMethod, n\n    Case28 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case29() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CCur(40.5)\n    On Error Resume Next\n    CallByName obj, \"ChangeCurrency\", VbMethod, n\n    Case29 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case30() As String\n    Dim obj As New Item\n    Dim n As Currency\n    n = CCur(40.5)\n    On Error Resume Next\n    CallByName obj, \"ChangeCurrency\", VbMethod, (n)\n    Case30 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case31() As String\n    Dim obj As New Item\n    Dim n As String\n    n = \"40\"\n    On Error Resume Next\n    CallByName obj, \"ChangeCurrency\", VbMethod, n\n    Case31 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case32() As String\n    Dim obj As New Item\n    Dim n As Date\n    n = CDate(DateSerial(2020, 1, 2))\n    On Error Resume Next\n    CallByName obj, \"ChangeDate\", VbMethod, n\n    Case32 = CStr(Err.Number) & \"~\" & CStr(CDbl(n)) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case33() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CDate(DateSerial(2020, 1, 2))\n    On Error Resume Next\n    CallByName obj, \"ChangeDate\", VbMethod, n\n    Case33 = CStr(Err.Number) & \"~\" & CStr(CDbl(n)) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case34() As String\n    Dim obj As New Item\n    Dim n As Date\n    n = CDate(DateSerial(2020, 1, 2))\n    On Error Resume Next\n    CallByName obj, \"ChangeDate\", VbMethod, (n)\n    Case34 = CStr(Err.Number) & \"~\" & CStr(CDbl(n)) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case35() As String\n    Dim obj As New Item\n    Dim n As String\n    n = \"40\"\n    On Error Resume Next\n    CallByName obj, \"ChangeDate\", VbMethod, n\n    Case35 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case36() As String\n    Dim obj As New Item\n    Dim n As Boolean\n    n = CBool(-1)\n    On Error Resume Next\n    CallByName obj, \"ChangeBoolean\", VbMethod, n\n    Case36 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case37() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CBool(-1)\n    On Error Resume Next\n    CallByName obj, \"ChangeBoolean\", VbMethod, n\n    Case37 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case38() As String\n    Dim obj As New Item\n    Dim n As Boolean\n    n = CBool(-1)\n    On Error Resume Next\n    CallByName obj, \"ChangeBoolean\", VbMethod, (n)\n    Case38 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case39() As String\n    Dim obj As New Item\n    Dim n As String\n    n = \"40\"\n    On Error Resume Next\n    CallByName obj, \"ChangeBoolean\", VbMethod, n\n    Case39 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case40() As String\n    Dim obj As New Item\n    Dim n As String\n    n = CStr(\"abc\")\n    On Error Resume Next\n    CallByName obj, \"ChangeString\", VbMethod, n\n    Case40 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case41() As String\n    Dim obj As New Item\n    Dim n As Variant\n    n = CStr(\"abc\")\n    On Error Resume Next\n    CallByName obj, \"ChangeString\", VbMethod, n\n    Case41 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case42() As String\n    Dim obj As New Item\n    Dim n As String\n    n = CStr(\"abc\")\n    On Error Resume Next\n    CallByName obj, \"ChangeString\", VbMethod, (n)\n    Case42 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPrivate Function Case43() As String\n    Dim obj As New Item\n    Dim n As Long\n    n = CLng(40)\n    On Error Resume Next\n    CallByName obj, \"ChangeString\", VbMethod, n\n    Case43 = CStr(Err.Number) & \"~\" & CStr(n) & \"~\" & TypeName(n) & \"~\" & obj.Trace\nEnd Function\nPublic Function Probe() As String\n    Dim report As String\n    report = report & \"Byte_typed=\" & Case0() & vbLf\n    report = report & \"Byte_variant=\" & Case1() & vbLf\n    report = report & \"Byte_parentheses=\" & Case2() & vbLf\n    report = report & \"Byte_wrong_type=\" & Case3() & vbLf\n    report = report & \"Integer_typed=\" & Case4() & vbLf\n    report = report & \"Integer_variant=\" & Case5() & vbLf\n    report = report & \"Integer_parentheses=\" & Case6() & vbLf\n    report = report & \"Integer_wrong_type=\" & Case7() & vbLf\n    report = report & \"Long_typed=\" & Case8() & vbLf\n    report = report & \"Long_variant=\" & Case9() & vbLf\n    report = report & \"Long_parentheses=\" & Case10() & vbLf\n    report = report & \"Long_wrong_type=\" & Case11() & vbLf\n    report = report & \"LongLong_typed=\" & Case12() & vbLf\n    report = report & \"LongLong_variant=\" & Case13() & vbLf\n    report = report & \"LongLong_parentheses=\" & Case14() & vbLf\n    report = report & \"LongLong_wrong_type=\" & Case15() & vbLf\n    report = report & \"LongPtr_typed=\" & Case16() & vbLf\n    report = report & \"LongPtr_variant=\" & Case17() & vbLf\n    report = report & \"LongPtr_parentheses=\" & Case18() & vbLf\n    report = report & \"LongPtr_wrong_type=\" & Case19() & vbLf\n    report = report & \"Single_typed=\" & Case20() & vbLf\n    report = report & \"Single_variant=\" & Case21() & vbLf\n    report = report & \"Single_parentheses=\" & Case22() & vbLf\n    report = report & \"Single_wrong_type=\" & Case23() & vbLf\n    report = report & \"Double_typed=\" & Case24() & vbLf\n    report = report & \"Double_variant=\" & Case25() & vbLf\n    report = report & \"Double_parentheses=\" & Case26() & vbLf\n    report = report & \"Double_wrong_type=\" & Case27() & vbLf\n    report = report & \"Currency_typed=\" & Case28() & vbLf\n    report = report & \"Currency_variant=\" & Case29() & vbLf\n    report = report & \"Currency_parentheses=\" & Case30() & vbLf\n    report = report & \"Currency_wrong_type=\" & Case31() & vbLf\n    report = report & \"Date_typed=\" & Case32() & vbLf\n    report = report & \"Date_variant=\" & Case33() & vbLf\n    report = report & \"Date_parentheses=\" & Case34() & vbLf\n    report = report & \"Date_wrong_type=\" & Case35() & vbLf\n    report = report & \"Boolean_typed=\" & Case36() & vbLf\n    report = report & \"Boolean_variant=\" & Case37() & vbLf\n    report = report & \"Boolean_parentheses=\" & Case38() & vbLf\n    report = report & \"Boolean_wrong_type=\" & Case39() & vbLf\n    report = report & \"String_typed=\" & Case40() & vbLf\n    report = report & \"String_variant=\" & Case41() & vbLf\n    report = report & \"String_parentheses=\" & Case42() & vbLf\n    report = report & \"String_wrong_type=\" & Case43() & vbLf\n    Probe = report\nEnd Function"
+        }
+      ]
+    }
+  }
+]

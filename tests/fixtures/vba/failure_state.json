@@ -1,0 +1,490 @@
+{
+  "environment": {
+    "version": "16.0",
+    "build": 20430.0,
+    "ui": 1041
+  },
+  "cases": [
+    {
+      "procedure": "Success",
+      "failed": false,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "after",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "SuccessNoWrite",
+      "failed": false,
+      "state": {
+        "a1": 1.0,
+        "b1": 2.0,
+        "b1_formula": "=A1*2",
+        "c1": null,
+        "bold": false,
+        "number_format": "General",
+        "calculation": -4105,
+        "saved": true,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "DivideFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "RaiseFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "AbortFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "ManualFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 2.0,
+        "b1_formula": "=A1*2",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4135,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "FormulaFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 21.0,
+        "b1_formula": "=A1*3",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "ReadThenFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "FormatFailure",
+      "failed": true,
+      "state": {
+        "a1": 1.0,
+        "b1": 2.0,
+        "b1_formula": "=A1*2",
+        "c1": null,
+        "bold": true,
+        "number_format": "0.000",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "StatusFailure",
+      "failed": true,
+      "state": {
+        "a1": 1.0,
+        "b1": 2.0,
+        "b1_formula": "=A1*2",
+        "c1": null,
+        "bold": false,
+        "number_format": "General",
+        "status_bar": "status-only",
+        "calculation": -4105,
+        "saved": true,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "NoWriteFailure",
+      "failed": true,
+      "state": {
+        "a1": 1.0,
+        "b1": 2.0,
+        "b1_formula": "=A1*2",
+        "c1": null,
+        "bold": false,
+        "number_format": "General",
+        "calculation": -4105,
+        "saved": true,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "HostFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "AddSheetFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2",
+          "Created"
+        ],
+        "active_sheet": 2,
+        "row2_hidden": false,
+        "created_d1": "kept",
+        "names": {}
+      }
+    },
+    {
+      "procedure": "DeleteSheetFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "RenameSheetFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Renamed"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "ActivateFailure",
+      "failed": true,
+      "state": {
+        "a1": 1.0,
+        "b1": 2.0,
+        "b1_formula": "=A1*2",
+        "c1": null,
+        "bold": false,
+        "number_format": "General",
+        "calculation": -4105,
+        "saved": true,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 1,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "NameFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {
+          "kept": "=Sheet1!$A$1"
+        }
+      }
+    },
+    {
+      "procedure": "HiddenRowFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": true,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "ResumeNextSuccess",
+      "failed": false,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "after",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "HandlerSuccess",
+      "failed": false,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "caught",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    },
+    {
+      "procedure": "NestedFailure",
+      "failed": true,
+      "state": {
+        "a1": 7.0,
+        "b1": 14.0,
+        "b1_formula": "=A1*2",
+        "c1": "before",
+        "bold": true,
+        "number_format": "0.000",
+        "status_bar": "before-error",
+        "calculation": -4105,
+        "saved": false,
+        "sheets": [
+          "Sheet1",
+          "Sheet2"
+        ],
+        "active_sheet": 0,
+        "row2_hidden": false,
+        "created_d1": null,
+        "names": {}
+      }
+    }
+  ]
+}

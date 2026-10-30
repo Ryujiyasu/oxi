@@ -112,6 +112,91 @@ jobs:
           for suite in page grid formula bands save row-model; do
             node "$suite.test.mjs"
           done
+      - name: Excel VBA error compatibility through the WASM API
+        run: |
+          node web/vba-errors.test.mjs pkg
+          node web/vba-failure-state.test.mjs pkg
+          node web/vba-filesystem-state.test.mjs pkg
+          node web/vba-folder-operations.test.mjs pkg
+          node web/vba-file-attributes.test.mjs pkg
+          node web/vba-file-modes.test.mjs pkg
+          node web/vba-directory-enumeration.test.mjs pkg
+          node web/vba-file-sharing.test.mjs pkg
+          node web/vba-file-operations.test.mjs pkg
+          node web/vba-rand-replay.test.mjs pkg
+          node web/vba-conditional-reads.test.mjs pkg
+          node web/vba-udf-value-readiness.test.mjs pkg
+          node web/vba-udf-scalar-host.test.mjs pkg
+          node web/vba-udf-reference-spill.test.mjs pkg
+          node web/vba-spill-metadata.test.mjs pkg
+          node web/vba-spill-reference.test.mjs pkg
+          node web/vba-constant-aliases.test.mjs pkg
+          node web/vba-phonetic-reference.test.mjs pkg
+          node web/vba-phonetic-arrays.test.mjs pkg
+          node web/vba-formula-reference-assignment.test.mjs pkg
+          node web/vba-scalar-replay.test.mjs pkg
+          node web/vba-main-page.test.mjs pkg
+          node web/vba-editor-settings.test.mjs pkg
+          node web/vba-entry-points.test.mjs pkg
+          node web/vba-macro-arguments.test.mjs pkg
+          node web/vba-macro-named.test.mjs pkg
+          node web/vba-macro-copyback.test.mjs pkg
+          node web/vba-application-state.test.mjs pkg
+          node web/vba-save.test.mjs pkg
+          node web/vba-project-state.test.mjs pkg
+          node web/vba-source-edits.test.mjs pkg
+          node web/vba-static-storage.test.mjs pkg
+          node web/vba-standard-modules.test.mjs pkg
+          node web/vba-reference-places.test.mjs pkg
+          node web/vba-paramarray.test.mjs pkg
+          node web/vba-compile-storage.test.mjs pkg
+          node web/vba-class-arguments.test.mjs pkg
+          node web/vba-property-bindings.test.mjs pkg
+          node web/vba-storage-types.test.mjs pkg
+          node web/vba-array-access.test.mjs pkg
+          node web/vba-default-lifetime.test.mjs pkg
+          node web/vba-object-places.test.mjs pkg
+          node web/vba-value-contexts.test.mjs pkg
+          node web/vba-call-preparation.test.mjs pkg
+          node web/vba-dispatch-arguments.test.mjs pkg
+          node web/vba-declaration-syntax.test.mjs pkg
+          node web/vba-constant-bounds.test.mjs pkg
+          node web/vba-const-contexts.test.mjs pkg
+          node web/vba-constant-types.test.mjs pkg
+          node web/vba-module-initialization.test.mjs pkg
+          node web/vba-project-compilation.test.mjs pkg
+          node web/vba-automation-names.test.mjs pkg
+          node web/vba-callbyname-binding.test.mjs pkg
+          node web/vba-callbyname-references.test.mjs pkg
+          node web/vba-callbyname-coercion.test.mjs pkg
+          node web/vba-cell-utf16.test.mjs pkg
+          node web/vba-utf16-semantics.test.mjs pkg
+          node web/vba-text-extensions.test.mjs pkg
+          node web/vba-byte-boundaries.test.mjs pkg
+          node web/vba-byte-arrays.test.mjs pkg
+          node web/vba-array-values.test.mjs pkg
+          node web/vba-byte-scalars.test.mjs pkg
+          node web/vba-reference-evaluation.test.mjs pkg
+          node web/vba-index-contexts.test.mjs pkg
+          node web/vba-udf-evaluation.test.mjs pkg
+          node web/vba-dirty-calculation.test.mjs pkg
+          node web/vba-calculation-state.test.mjs pkg
+            node web/vba-cell-width.test.mjs pkg
+            node web/vba-cell-width-controls.test.mjs pkg
+            node web/vba-width-boundaries.test.mjs pkg
+            node web/vba-array-argument-rank.test.mjs pkg
+            node web/vba-width-coercion.test.mjs pkg
+            node web/vba-width-use.test.mjs pkg
+            node web/vba-width-late.test.mjs pkg
+            node web/vba-nothing-receiver.test.mjs pkg
+            node web/vba-nothing-errors.test.mjs pkg
+            node web/vba-row-height-types.test.mjs pkg
+            node web/vba-row-height-late.test.mjs pkg
+            node web/vba-row-height-state.test.mjs pkg
+            node web/vba-row-height-defaults.test.mjs pkg
+            node web/vba-row-height-loaded.test.mjs pkg
+            node web/vba-save-copy.test.mjs pkg
+            node web/vba-file-downloads.test.mjs
       - name: Word vertical text rendering and WASM orientation
         run: |
           node --test web/vertical-text.test.mjs

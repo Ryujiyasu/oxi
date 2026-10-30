@@ -1,0 +1,79 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "source_identity": 2026102092,
+  "source_packet_sha256": "9c4fb0332270257c4afec47ee380a486c3eade6c1e339b4400e56c8089fe965d",
+  "excel_module_sha256": "368e548f9b5a96a47b834cc8b7e0b6354b876f830ce500240f25055b974006f9",
+  "scope": "Complete ordinary Excel macro returns from six fresh normal applications. This current cohort is separate from the retained historical conditional_reads.json observations; no output adjustment or cross-cohort union.",
+  "groups": [
+    {
+      "source": "conditional_reads.bas",
+      "package": "conditional_reads.xlsm",
+      "cases": [
+        {
+          "id": 0,
+          "steps": [
+            {
+              "procedure": "ConditionalCounts",
+              "arguments": [
+                0
+              ],
+              "expected": "entered:3[5:1,5:1,5:1]|calculated:8[5:1,5:1,5:1]|again:8[5:1,5:1,5:1]|full:11[5:1,5:1,5:1]|rebuilt:14[5:1,5:1,5:1]"
+            }
+          ],
+          "native_observations": [
+            {
+              "id": 1100,
+              "return_value": "entered:3[5:1,5:1,5:1]|calculated:8[5:1,5:1,5:1]|again:8[5:1,5:1,5:1]|full:11[5:1,5:1,5:1]|rebuilt:14[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "id": 1102,
+              "return_value": "entered:3[5:1,5:1,5:1]|calculated:8[5:1,5:1,5:1]|again:8[5:1,5:1,5:1]|full:11[5:1,5:1,5:1]|rebuilt:14[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "id": 1104,
+              "return_value": "entered:3[5:1,5:1,5:1]|calculated:8[5:1,5:1,5:1]|again:8[5:1,5:1,5:1]|full:11[5:1,5:1,5:1]|rebuilt:14[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "steps": [
+            {
+              "procedure": "ConditionalCounts",
+              "arguments": [
+                1
+              ],
+              "expected": "entered:3[5:1,5:1,5:1]|calculated:8[5:1,5:1,5:1]|again:8[5:1,5:1,5:1]|full:11[5:1,5:1,5:1]|rebuilt:14[5:1,5:1,5:1]"
+            }
+          ],
+          "native_observations": [
+            {
+              "id": 1101,
+              "return_value": "entered:3[5:1,5:1,5:1]|calculated:8[5:1,5:1,5:1]|again:8[5:1,5:1,5:1]|full:11[5:1,5:1,5:1]|rebuilt:14[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "id": 1103,
+              "return_value": "entered:3[5:1,5:1,5:1]|calculated:8[5:1,5:1,5:1]|again:8[5:1,5:1,5:1]|full:11[5:1,5:1,5:1]|rebuilt:14[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "id": 1105,
+              "return_value": "entered:3[5:1,5:1,5:1]|calculated:8[5:1,5:1,5:1]|again:8[5:1,5:1,5:1]|full:11[5:1,5:1,5:1]|rebuilt:14[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

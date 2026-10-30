@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: CC-BY-SA-4.0
+# Self-authored Excel B5/Win64 ByRef Double observations. Raw instruction spans only.
+# Swapped execution-cache control retains its original displayed source.
+id	module_pcode	runtime_assignment	input	displayed_source_result	native_result	observed_slot
+probe-ordered-reopen-Alpha	20004e02ac0002000f0027005602	ed02080000007206a901f600bd02f8ffffff	7	14	14	1
+probe-ordered-reopen-Beta	20004e02ac0003000f0027005402	ed02080000007306a901f600bd02f8ffffff	7	21	21	2
+probe-ordered-reopen-Gamma	20004e02ac0004000f0027005802	ed02080000007406a901f600bd02f8ffffff	7	28	28	3
+probe-reordered-reopen-Gamma	20004e02ac0004000f0027005602	ed02080000007406a901f600bd02f8ffffff	7	28	28	1
+probe-reordered-reopen-Alpha	20004e02ac0002000f0027005802	ed02080000007206a901f600bd02f8ffffff	7	14	14	2
+probe-reordered-reopen-Beta	20004e02ac0003000f0027005402	ed02080000007306a901f600bd02f8ffffff	7	21	21	3
+swapped-reopen-Gamma	20004e02ac0004000f0027005602	ed02080000007406a901f600bd02f8ffffff	7	28	28	1
+swapped-reopen-Alpha	20004e02ac0002000f0027005802	ed02080000007306a901f600bd02f8ffffff	7	14	21	2
+swapped-reopen-Beta	20004e02ac0003000f0027005402	ed02080000007206a901f600bd02f8ffffff	7	21	14	3

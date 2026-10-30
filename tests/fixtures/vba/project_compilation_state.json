@@ -1,0 +1,50 @@
+[
+  {
+    "name": "compile_success_state",
+    "source": "project_compile_success_state.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "warmup_steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      }
+    ],
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "compile_failure_state",
+    "source": "project_compile_failure_state.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "warmup_steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      }
+    ],
+    "message": "変数が定義されていません。",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  }
+]

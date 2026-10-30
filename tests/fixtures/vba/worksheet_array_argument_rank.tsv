@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: CC-BY-SA-4.0
+# Excel 16.0 build 20430; only normally terminated owned Native processes are included.
+# compatibility_version	method	arguments_json	expected
+1	RankRoot	["CELL(\"width\",D1)"]	Variant():False|A1:1:2|5:8|11:True
+1	RankRoot	["RankArgument(CELL(\"width\",D1))"]	String:False|V|S:34:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:49:58:49:58:50:124:53:58:56:124:49:49:58:84:114:117:101
+1	RankRoot	["+CELL(\"width\",D1)"]	Variant():False|A1:1:2|5:8|11:True
+1	RankRoot	["RankArgument(+CELL(\"width\",D1))"]	String:False|V|S:34:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:49:58:49:58:50:124:53:58:56:124:49:49:58:84:114:117:101
+1	RankRoot	["N(CELL(\"width\",D1))"]	Variant():False|A1:1:2|5:8|5:1
+1	RankRoot	["RankArgument(N(CELL(\"width\",D1)))"]	String:False|V|S:30:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:49:58:49:58:50:124:53:58:56:124:53:58:49
+1	RankRoot	["CELL(\"width\",D1)+0"]	Variant():False|A1:1:2|5:8|5:1
+1	RankRoot	["RankArgument(CELL(\"width\",D1)+0)"]	String:False|V|S:30:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:49:58:49:58:50:124:53:58:56:124:53:58:49
+1	RankRoot	["CELL(\"width\",D1)*1"]	Variant():False|A1:1:2|5:8|5:1
+1	RankRoot	["RankArgument(CELL(\"width\",D1)*1)"]	String:False|V|S:30:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:49:58:49:58:50:124:53:58:56:124:53:58:49
+1	RankRoot	["TRANSPOSE(CELL(\"width\",D1))"]	Variant():False|A2:1:2:1:1|5:8|11:True
+1	RankRoot	["RankArgument(TRANSPOSE(CELL(\"width\",D1)))"]	String:False|V|S:38:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:50:58:49:58:50:58:49:58:49:124:53:58:56:124:49:49:58:84:114:117:101
+1	RankRoot	["INDEX(CELL(\"width\",D1),1,0)"]	Variant():False|A1:1:2|5:8|11:True
+1	RankRoot	["RankArgument(INDEX(CELL(\"width\",D1),1,0))"]	String:False|V|S:34:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:49:58:49:58:50:124:53:58:56:124:49:49:58:84:114:117:101
+1	RankRoot	["IF(TRUE,CELL(\"width\",D1),0)"]	Variant():False|A1:1:2|5:8|11:True
+1	RankRoot	["RankArgument(IF(TRUE,CELL(\"width\",D1),0))"]	String:False|V|S:34:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:49:58:49:58:50:124:53:58:56:124:49:49:58:84:114:117:101
+1	RankRoot	["CHOOSE(1,CELL(\"width\",D1),0)"]	Variant():False|A1:1:2|5:8|11:True
+1	RankRoot	["RankArgument(CHOOSE(1,CELL(\"width\",D1),0))"]	String:False|V|S:34:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:49:58:49:58:50:124:53:58:56:124:49:49:58:84:114:117:101
+1	RankRoot	["HSTACK(CELL(\"width\",D1),7)"]	Variant():False|A1:1:3|5:8|11:True|5:7
+1	RankRoot	["RankArgument(HSTACK(CELL(\"width\",D1),7))"]	String:False|V|S:38:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:49:58:49:58:51:124:53:58:56:124:49:49:58:84:114:117:101:124:53:58:55
+1	RankRoot	["VSTACK(CELL(\"width\",D1),7)"]	Variant():False|A2:1:2:1:2|5:8|11:True|5:7|E:エラー 2042
+1	RankRoot	["RankArgument(VSTACK(CELL(\"width\",D1),7))"]	String:False|V|S:53:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:50:58:49:58:50:58:49:58:50:124:53:58:56:124:49:49:58:84:114:117:101:124:53:58:55:124:69:58:12456:12521:12540:32:50:48:52:50
+1	RankRoot	["ISNUMBER(CELL(\"width\",D1))"]	Variant():False|A1:1:2|11:True|11:False
+1	RankRoot	["RankArgument(ISNUMBER(CELL(\"width\",D1)))"]	String:False|V|S:39:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:49:58:49:58:50:124:49:49:58:84:114:117:101:124:49:49:58:70:97:108:115:101
+1	RankRoot	["HSTACK(CELL(\"width\",D1),{7,8})"]	Variant():False|A1:1:4|5:8|11:True|5:7|5:8
+1	RankRoot	["RankArgument(HSTACK(CELL(\"width\",D1),{7,8}))"]	String:False|V|S:42:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:49:58:49:58:52:124:53:58:56:124:49:49:58:84:114:117:101:124:53:58:55:124:53:58:56
+1	RankRoot	["{1,2}"]	Variant():False|A1:1:2|5:1|5:2
+1	RankRoot	["RankArgument({1,2})"]	String:False|V|S:30:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:49:58:49:58:50:124:53:58:49:124:53:58:50
+1	RankRoot	["{1;2}"]	Variant():False|A2:1:2:1:1|5:1|5:2
+1	RankRoot	["RankArgument({1;2})"]	String:False|V|S:34:86:97:114:105:97:110:116:40:41:58:70:97:108:115:101:124:65:50:58:49:58:50:58:49:58:49:124:53:58:49:124:53:58:50

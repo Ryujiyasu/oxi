@@ -1,0 +1,61 @@
+VbaDefaultHelpFile	{VBA_HELP}
+Cleared	0				0
+NumberOnly	6				0
+DivideZero	11	VBAProject	0 で除算しました。	{VBA_HELP}	1000011
+Overflow	6	VBAProject	オーバーフローしました。	{VBA_HELP}	1000006
+TypeMismatch	13	VBAProject	型が一致しません。	{VBA_HELP}	1000013
+InvalidNull	94	VBAProject	Null の使い方が不正です。	{VBA_HELP}	1000094
+Domain	5	VBAProject	プロシージャの呼び出し、または引数が不正です。	{VBA_HELP}	1000005
+ArrayBounds	9	VBAProject	インデックスが有効範囲にありません。	{VBA_HELP}	1000009
+CollectionDuplicate	457	VBAProject	このキーは既にこのコレクションの要素に割り当てられています。	{VBA_HELP}	1000457
+RaiseBuiltin	6	VBAProject	オーバーフローしました。	{VBA_HELP}	1000006
+RaiseUnknown	513	VBAProject	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+RaiseNegative	-5	VBAProject	オートメーション エラーです。	{VBA_HELP}	1000440
+RaiseZero	5	VBAProject	プロシージャの呼び出し、または引数が不正です。	{VBA_HELP}	1000005
+RaiseHelpOverflow	-2147352566	VBAProject	オートメーション エラーです。\n範囲外です。 	{VBA_HELP}	1000440
+RaiseNamed	513	VBAProject	独自の説明	{VBA_HELP}	1000513
+RaiseEnglishWords	513	custom	Overflow	{VBA_HELP}	1000513
+RaiseEmptyWords	513	VBAProject		{VBA_HELP}	1000513
+RaiseEnglishGenericWords	513	VBAProject	Application-defined or object-defined error	{VBA_HELP}	1000513
+RaiseCatalogWords	513	VBAProject	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000513
+RaiseExplicitHelp	513	custom	description	guide.chm	42
+RaiseExplicitEmptyHelp	6	VBAProject	オーバーフローしました。		1000006
+RaiseAssignedEmptyHelp	6	VBAProject	オーバーフローしました。		1000006
+RaiseAssignedCustomHelp	6	VBAProject	オーバーフローしました。	manual.chm	1000006
+RaiseContextOnly	513	VBAProject	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	42
+RaiseAssignedEmptyDescription	513	VBAProject		{VBA_HELP}	1000513
+RaiseAssignedEmptySource	513		アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+RaiseAfterClear	6	VBAProject	オーバーフローしました。	{VBA_HELP}	1000006
+InternalAfterCustomHelp	11	VBAProject	0 で除算しました。	{VBA_HELP}	1000011
+ErrorStatement	11	VBAProject	0 で除算しました。	{VBA_HELP}	1000011
+ErrorStatementAfterCustom	513	VBAProject	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+ClearAfterRaise	0				0
+ClearFileAfterRaise	6	VBAProject	オーバーフローしました。		1000006
+ClearContextAfterRaise	6	VBAProject	オーバーフローしました。	{VBA_HELP}	0
+CallByNameBuiltin	6	VBAProject	オーバーフローしました。	{VBA_HELP}	1000006
+CallByNameUnknown	513	VBAProject	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+NestedRaise	513	VBAProject	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+NestedEmptyHelp	513	VBAProject	アプリケーション定義またはオブジェクト定義のエラーです。		1000095
+HostRangeOffset	1004	VBAProject	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+HostWorksheetIndex	9	VBAProject	インデックスが有効範囲にありません。	{VBA_HELP}	1000009
+HostWorksheetFunction	1004	Microsoft Excel	WorksheetFunction クラスの Match プロパティを取得できません。	xlmain11.chm	1001004
+SourceVba	513	VBA	custom	{VBA_HELP}	1000513
+SourceCollection	513	Collection	custom	{VBA_HELP}	1000513
+SourceExcel	513	Microsoft Excel	custom	{VBA_HELP}	1000513
+SourceLowercase	513	vba	custom	{VBA_HELP}	1000513
+SourceBuiltinDefault	6	VBA	オーバーフローしました。	{VBA_HELP}	1000006
+SourceAssigned	513	VBA	custom	{VBA_HELP}	1000513
+SourceNamed	513	Collection	custom	{VBA_HELP}	1000513
+SourceEmptyWords	513	VBA		{VBA_HELP}	1000513
+SourceNested	513	Collection	custom	{VBA_HELP}	1000513
+SourceWithHelp	513	Collection	custom	guide.chm	42
+CollectionMissingIndex	9	VBAProject	インデックスが有効範囲にありません。	{VBA_HELP}	1000009
+CollectionMissingKey	5	VBAProject	プロシージャの呼び出し、または引数が不正です。	{VBA_HELP}	1000005
+FileMissing	53	VBAProject	ファイルが見つかりません。	{VBA_HELP}	1000053
+DictionaryDuplicate	457	VBAProject	このキーは既にこのコレクションの要素に割り当てられています。	{VBA_HELP}	1000457
+DictionaryMissingKey	32811	VBAProject	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+SourceControlDescription	513	VBA	beforeafter	{VBA_HELP}	1000513
+CustomControlDescription	513	custom	beforeafter	{VBA_HELP}	1000513
+CallByNameVariantNumber	424	VBAProject	オブジェクトが必要です。	{VBA_HELP}	1000424
+DictionaryUnknownNamed	448	VBAProject	名前付き引数が見つかりません。	{VBA_HELP}	1000448
+CollectionUnknownNamed	448	VBAProject	名前付き引数が見つかりません。	{VBA_HELP}	1000448

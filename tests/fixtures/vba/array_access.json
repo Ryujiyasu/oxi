@@ -1,0 +1,521 @@
+[
+  {
+    "name": "whole_array_argument",
+    "source": "array_access_whole_array_argument.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11"
+      }
+    ]
+  },
+  {
+    "name": "late_private_members",
+    "source": "array_access_late_private_members.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:0:438:"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:0:438:"
+      }
+    ]
+  },
+  {
+    "name": "class_field_assignability",
+    "source": "array_access_class_field_assignability.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "13:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "13:True"
+      }
+    ]
+  },
+  {
+    "name": "whole_value",
+    "source": "array_access_whole_value.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True:0:1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True:0:1"
+      }
+    ]
+  },
+  {
+    "name": "whole_copy",
+    "source": "array_access_whole_copy.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:9"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:9"
+      }
+    ]
+  },
+  {
+    "name": "whole_assignment",
+    "source": "array_access_whole_assignment.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:4"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:4"
+      }
+    ]
+  },
+  {
+    "name": "whole_unallocated",
+    "source": "array_access_whole_unallocated.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True"
+      }
+    ]
+  },
+  {
+    "name": "whole_qualified",
+    "source": "array_access_whole_qualified.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11"
+      }
+    ]
+  },
+  {
+    "name": "whole_forced",
+    "source": "array_access_whole_forced.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "型が一致しません: 配列またはユーザー定義型を指定してください。"
+  },
+  {
+    "name": "private_read",
+    "source": "array_access_private_read.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:"
+      }
+    ]
+  },
+  {
+    "name": "friend_early",
+    "source": "array_access_friend_early.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:ok"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:ok"
+      }
+    ]
+  },
+  {
+    "name": "friend_late",
+    "source": "array_access_friend_late.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:"
+      }
+    ]
+  },
+  {
+    "name": "public_late",
+    "source": "array_access_public_late.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:ok"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:ok"
+      }
+    ]
+  },
+  {
+    "name": "private_field_read",
+    "source": "array_access_private_field_read.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:0"
+      }
+    ]
+  },
+  {
+    "name": "private_property",
+    "source": "array_access_private_property.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:0"
+      }
+    ]
+  },
+  {
+    "name": "interface_early",
+    "source": "array_access_interface_early.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "interface"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "interface"
+      }
+    ]
+  },
+  {
+    "name": "interface_late",
+    "source": "array_access_interface_late.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "own"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "own"
+      }
+    ]
+  },
+  {
+    "name": "interface_own",
+    "source": "array_access_interface_own.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "own"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "own"
+      }
+    ]
+  },
+  {
+    "name": "wrong_local",
+    "source": "array_access_wrong_local.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "13:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "13:True"
+      }
+    ]
+  },
+  {
+    "name": "same_local",
+    "source": "array_access_same_local.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:False"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:False"
+      }
+    ]
+  },
+  {
+    "name": "interface_local",
+    "source": "array_access_interface_local.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:False"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:False"
+      }
+    ]
+  },
+  {
+    "name": "wrong_parameter",
+    "source": "array_access_wrong_parameter.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "13:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "13:True"
+      }
+    ]
+  },
+  {
+    "name": "wrong_return",
+    "source": "array_access_wrong_return.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "13:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "13:True"
+      }
+    ]
+  },
+  {
+    "name": "friend_bare_early",
+    "source": "array_access_friend_bare_early.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:ok"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:ok"
+      }
+    ]
+  },
+  {
+    "name": "friend_bare_late",
+    "source": "array_access_friend_bare_late.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:"
+      }
+    ]
+  },
+  {
+    "name": "friend_property_early",
+    "source": "array_access_friend_property_early.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:ok"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:ok"
+      }
+    ]
+  },
+  {
+    "name": "friend_property_late",
+    "source": "array_access_friend_property_late.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:"
+      }
+    ]
+  },
+  {
+    "name": "whole_record",
+    "source": "array_access_whole_record.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11"
+      }
+    ]
+  },
+  {
+    "name": "whole_other_module",
+    "source": "array_access_whole_other_module.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "10"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "20"
+      }
+    ]
+  },
+  {
+    "name": "friend_setter_early",
+    "source": "array_access_friend_setter_early.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "friend_setter_late",
+    "source": "array_access_friend_setter_late.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:0"
+      }
+    ]
+  },
+  {
+    "name": "interface_property_early",
+    "source": "array_access_interface_property_early.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "17"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "17"
+      }
+    ]
+  },
+  {
+    "name": "interface_property_late",
+    "source": "array_access_interface_property_late.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "107"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "107"
+      }
+    ]
+  }
+]

@@ -1,0 +1,666 @@
+[
+  {
+    "name": "const_conversion_overflow",
+    "source": "const_ctx_const_conversion_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "const_user_function",
+    "source": "const_ctx_const_user_function.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "const_forward",
+    "source": "const_ctx_const_forward.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "width_double_suffix",
+    "source": "const_ctx_width_double_suffix.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "width_large_const",
+    "source": "const_ctx_width_large_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "固定長文字列の長さが不正です。"
+  },
+  {
+    "name": "bound_qualified_conversion",
+    "source": "const_ctx_bound_qualified_conversion.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "bound_date",
+    "source": "const_ctx_bound_date.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "bound_qualified_const",
+    "source": "const_ctx_bound_qualified_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "initializer_literal",
+    "source": "const_ctx_initializer_literal.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "initializer_arithmetic",
+    "source": "const_ctx_initializer_arithmetic.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "5"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "5"
+      }
+    ]
+  },
+  {
+    "name": "initializer_group",
+    "source": "const_ctx_initializer_group.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "5"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "5"
+      }
+    ]
+  },
+  {
+    "name": "initializer_cint",
+    "source": "const_ctx_initializer_cint.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "initializer_clng",
+    "source": "const_ctx_initializer_clng.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "initializer_abs",
+    "source": "const_ctx_initializer_abs.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "initializer_len",
+    "source": "const_ctx_initializer_len.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "initializer_qualified",
+    "source": "const_ctx_initializer_qualified.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "initializer_builtin_constant",
+    "source": "const_ctx_initializer_builtin_constant.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      }
+    ]
+  },
+  {
+    "name": "initializer_division_zero",
+    "source": "const_ctx_initializer_division_zero.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "0 で除算しました。"
+  },
+  {
+    "name": "initializer_integer_division_zero",
+    "source": "const_ctx_initializer_integer_division_zero.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "0 で除算しました。"
+  },
+  {
+    "name": "initializer_call_error",
+    "source": "const_ctx_initializer_call_error.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "initializer_bare_abs",
+    "source": "const_ctx_initializer_bare_abs.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "initializer_bare_date",
+    "source": "const_ctx_initializer_bare_date.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "initializer_bare_second",
+    "source": "const_ctx_initializer_bare_second.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "initializer_variable",
+    "source": "const_ctx_initializer_variable.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "initializer_forward",
+    "source": "const_ctx_initializer_forward.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "変数が定義されていません。"
+  },
+  {
+    "name": "width_suffix_integer",
+    "source": "const_ctx_width_suffix_integer.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "width_suffix_long",
+    "source": "const_ctx_width_suffix_long.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "width_suffix_longlong",
+    "source": "const_ctx_width_suffix_longlong.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "固定長文字列の長さが不正です。"
+  },
+  {
+    "name": "width_suffix_single",
+    "source": "const_ctx_width_suffix_single.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "width_suffix_double",
+    "source": "const_ctx_width_suffix_double.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "width_suffix_currency",
+    "source": "const_ctx_width_suffix_currency.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "width_typed_const",
+    "source": "const_ctx_width_typed_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "array_vba_abs",
+    "source": "const_ctx_array_vba_abs.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "array_vba_len",
+    "source": "const_ctx_array_vba_len.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "array_date_bare",
+    "source": "const_ctx_array_date_bare.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "array_now",
+    "source": "const_ctx_array_now.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "array_timer",
+    "source": "const_ctx_array_timer.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "array_sqr",
+    "source": "const_ctx_array_sqr.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "array_left",
+    "source": "const_ctx_array_left.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "array_division_zero",
+    "source": "const_ctx_array_division_zero.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "0 で除算しました。"
+  },
+  {
+    "name": "array_integer_division_zero",
+    "source": "const_ctx_array_integer_division_zero.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "0 で除算しました。"
+  },
+  {
+    "name": "array_shadow_scalar",
+    "source": "const_ctx_array_shadow_scalar.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "array_shadow_array",
+    "source": "const_ctx_array_shadow_array.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "module_negative",
+    "source": "const_ctx_module_negative.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "module_positive",
+    "source": "const_ctx_module_positive.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "module_dependent",
+    "source": "const_ctx_module_dependent.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "module_private",
+    "source": "const_ctx_module_private.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "initializer_module",
+    "source": "const_ctx_initializer_module.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "module_parameter_shadow",
+    "source": "const_ctx_module_parameter_shadow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "module_local_shadow",
+    "source": "const_ctx_module_local_shadow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "variable_len",
+    "source": "const_ctx_variable_len.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "variable_abs",
+    "source": "const_ctx_variable_abs.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "variable_second",
+    "source": "const_ctx_variable_second.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "variable_clng",
+    "source": "const_ctx_variable_clng.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "constant_second",
+    "source": "const_ctx_constant_second.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "parameter_len",
+    "source": "const_ctx_parameter_len.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Sub または Function が定義されていません。"
+  },
+  {
+    "name": "width_const_longlong",
+    "source": "const_ctx_width_const_longlong.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "固定長文字列の長さが不正です。"
+  },
+  {
+    "name": "width_const_longptr",
+    "source": "const_ctx_width_const_longptr.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "固定長文字列の長さが不正です。"
+  },
+  {
+    "name": "width_const_literal_longlong",
+    "source": "const_ctx_width_const_literal_longlong.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "固定長文字列の長さが不正です。"
+  },
+  {
+    "name": "bare_cint",
+    "source": "const_ctx_bare_cint.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "bare_clng",
+    "source": "const_ctx_bare_clng.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "bare_len",
+    "source": "const_ctx_bare_len.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "bare_abs_empty",
+    "source": "const_ctx_bare_abs_empty.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "bare_second_empty",
+    "source": "const_ctx_bare_second_empty.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "intrinsic_int",
+    "source": "const_ctx_intrinsic_int.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      }
+    ]
+  },
+  {
+    "name": "intrinsic_fix",
+    "source": "const_ctx_intrinsic_fix.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      }
+    ]
+  },
+  {
+    "name": "intrinsic_sgn",
+    "source": "const_ctx_intrinsic_sgn.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "intrinsic_cstr",
+    "source": "const_ctx_intrinsic_cstr.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "intrinsic_cvar",
+    "source": "const_ctx_intrinsic_cvar.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "intrinsic_cdate",
+    "source": "const_ctx_intrinsic_cdate.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "intrinsic_chr",
+    "source": "const_ctx_intrinsic_chr.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "intrinsic_hex",
+    "source": "const_ctx_intrinsic_hex.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "intrinsic_round",
+    "source": "const_ctx_intrinsic_round.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  }
+]

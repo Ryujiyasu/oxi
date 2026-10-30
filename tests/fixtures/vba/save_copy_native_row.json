@@ -1,0 +1,22 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "source": "worksheet_row_height_state.bas",
+  "package": "row_height_state.xlsm",
+  "source_sha256": "e07fcc09cf7f78d12b15061ca1433d4e45400c75bb0bd4622683894203b157c5",
+  "package_sha256": "3581e9ae8ef6f9ebc3962d3be380df5e7a20a4611c0aa4784d79653180f9ab79",
+  "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_legacy_assertion_20261020\\height22\\input.xlsm",
+  "read_only": true,
+  "procedure": "HeightBoundary",
+  "arguments": [
+    22,
+    "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_row_height_legacy_assertion_20261020\\height22\\saved\\height22.xlsm"
+  ],
+  "expected": "0|22|21.75|False|False",
+  "row4_attributes": {
+    "r": "4",
+    "spans": "1:7",
+    "ht": "21.95",
+    "customHeight": "1",
+    "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac}dyDescent": "0.25"
+  }
+}

@@ -1,0 +1,5 @@
+ambiguous_function	negative_ambiguous_function.bas	DriverModule.Probe	名前が適切ではありません: Clash
+private_qualified_function	negative_private_qualified_function.bas	DriverModule.Probe	メソッドまたはデータ メンバーが見つかりません。
+private_unqualified_function	negative_private_unqualified_function.bas	DriverModule.Probe	Sub または Function が定義されていません。
+private_qualified_field	negative_private_qualified_field.bas	DriverModule.Probe	メソッドまたはデータ メンバーが見つかりません。
+private_unqualified_field	negative_private_unqualified_field.bas	DriverModule.Probe	変数が定義されていません。

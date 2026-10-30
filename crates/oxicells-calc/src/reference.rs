@@ -97,6 +97,17 @@ impl RangeRef {
         self.start.coord() == self.end.coord()
     }
 
+    /// Defined names store relative coordinates against A1. Instantiation at
+    /// a caller wraps each relative half around Excel's worksheet limits.
+    pub fn for_defined_name(&self, at: (u32, u32)) -> Self {
+        let place = |mut cell: CellRef| {
+            if !cell.col_absolute { cell.col = (cell.col + at.0) % (MAX_COL + 1); }
+            if !cell.row_absolute { cell.row = (cell.row + at.1) % (MAX_ROW + 1); }
+            cell
+        };
+        Self::normalised(place(self.start), place(self.end))
+    }
+
     pub fn contains(&self, col: u32, row: u32) -> bool {
         col >= self.start.col && col <= self.end.col && row >= self.start.row && row <= self.end.row
     }

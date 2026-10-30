@@ -1,0 +1,203 @@
+[
+  {
+    "name": "cstr_errors",
+    "source": "cstr_errors.bas",
+    "package_fixture": "cstr_errors.xlsm",
+    "procedure": "Driver.Probe",
+    "expected": "missing=エラー 448\nerror0=エラー 0\nerror1=エラー 1\nerror13=エラー 13\nerror448=エラー 448\nerror2015=エラー 2015\nerror2042=エラー 2042\nerror65535=エラー 65535\n",
+    "measured_cases": 8,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "cstr_errors.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932,
+      "errorLanguage": "ja-JP"
+    },
+    "measurement": {
+      "modules": [
+        {
+          "kind": 1,
+          "name": "Driver",
+          "old": "",
+          "body": "Option Explicit\nPrivate Function MissingText(Optional value As Variant) As String\nMissingText = CStr(value)\nEnd Function\nPublic Function Probe() As String\nDim report As String\nreport = \"missing=\" & MissingText() & vbLf\nreport = report & \"error0=\" & CStr(CVErr(0)) & vbLf\nreport = report & \"error1=\" & CStr(CVErr(1)) & vbLf\nreport = report & \"error13=\" & CStr(CVErr(13)) & vbLf\nreport = report & \"error448=\" & CStr(CVErr(448)) & vbLf\nreport = report & \"error2015=\" & CStr(CVErr(2015)) & vbLf\nreport = report & \"error2042=\" & CStr(CVErr(2042)) & vbLf\nreport = report & \"error65535=\" & CStr(CVErr(65535)) & vbLf\nProbe = report\nEnd Function\n"
+        }
+      ]
+    }
+  },
+  {
+    "name": "run_signature_runtime",
+    "source": "run_signature_runtime.bas",
+    "package_fixture": "run_signature_runtime.xlsm",
+    "procedure": "Driver.Probe",
+    "expected": "positional=0|String|1|B\nnamed_macro=0|String|1|B\nnamed_arg=0|String|1|B\nnamed_reverse=0|String|1|B\nnamed_global=0|String|1|B\nnamed_early=0|String|1|B\nnamed_late=0|String|1|B\npositional30=0|String|30|B\nlate31=450|Empty||\n",
+    "measured_cases": 9,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "run_signature_runtime.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932,
+      "errorLanguage": "ja-JP"
+    },
+    "measurement": {
+      "modules": [
+        {
+          "name": "Targets",
+          "kind": 1,
+          "old": "",
+          "body": "Public Function Echo(ParamArray args() As Variant) As String\nDriver.Trace = Driver.Trace & \"B\"\nEcho = CStr(UBound(args) + 1)\nEnd Function\n"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": "",
+          "body": "Option Explicit\nPublic Trace As String\nPrivate Function Try0() As String\nDim value As Variant\nDim failure As Long\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Application.Run(\"Targets.Echo\", 7)\nfailure = Err.Number\nTry0 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try1() As String\nDim value As Variant\nDim failure As Long\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Application.Run(Macro:=\"Targets.Echo\", Arg1:=7)\nfailure = Err.Number\nTry1 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try2() As String\nDim value As Variant\nDim failure As Long\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Application.Run(\"Targets.Echo\", Arg1:=7)\nfailure = Err.Number\nTry2 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try3() As String\nDim value As Variant\nDim failure As Long\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Application.Run(Arg1:=7, Macro:=\"Targets.Echo\")\nfailure = Err.Number\nTry3 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try4() As String\nDim value As Variant\nDim failure As Long\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Run(Macro:=\"Targets.Echo\", Arg1:=7)\nfailure = Err.Number\nTry4 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try5() As String\nDim value As Variant\nDim failure As Long\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nDim app As Excel.Application\nSet app = Application\nvalue = app.Run(Macro:=\"Targets.Echo\", Arg1:=7)\nfailure = Err.Number\nTry5 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try6() As String\nDim value As Variant\nDim failure As Long\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nDim app As Object\nSet app = Application\nvalue = app.Run(Macro:=\"Targets.Echo\", Arg1:=7)\nfailure = Err.Number\nTry6 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try7() As String\nDim value As Variant\nDim failure As Long\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Application.Run(\"Targets.Echo\",1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1)\nfailure = Err.Number\nTry7 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try9() As String\nDim value As Variant\nDim failure As Long\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nDim app As Object\nSet app = Application\nvalue = app.Run(\"Targets.Echo\",1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1)\nfailure = Err.Number\nTry9 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPublic Function Probe() As String\nDim report As String\nreport = report & \"positional=\" & Try0() & vbLf\nreport = report & \"named_macro=\" & Try1() & vbLf\nreport = report & \"named_arg=\" & Try2() & vbLf\nreport = report & \"named_reverse=\" & Try3() & vbLf\nreport = report & \"named_global=\" & Try4() & vbLf\nreport = report & \"named_early=\" & Try5() & vbLf\nreport = report & \"named_late=\" & Try6() & vbLf\nreport = report & \"positional30=\" & Try7() & vbLf\nreport = report & \"late31=\" & Try9() & vbLf\nProbe = report\nEnd Function\n"
+        }
+      ]
+    }
+  },
+  {
+    "name": "run_named_edges",
+    "source": "run_named_edges.bas",
+    "package_fixture": "run_named_edges.xlsm",
+    "procedure": "Driver.Probe",
+    "expected": "arg2=0|String|2|B\narg30=0|String|30|B\nmixed=0|String|2|B\nfold=0|String|1|B\nunknown=438|Empty||\narg31_name=438|Empty||\nmissing_macro=5|Empty||\nempty31=450|Empty||\nerror31=450|Empty||\nnothing31=450|Empty||\nlate_eval=0|String|1|ANB\nearly_eval=0|String|1|NAB\nglobal_eval=0|String|1|NAB\nwith_eval=0|String|1|NAB\nextra31_eval=450|Empty||NAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\narg0_name=438|Empty||\narg01_name=438|Empty||\n",
+    "measured_cases": 17,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "run_named_edges.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932,
+      "errorLanguage": "ja-JP"
+    },
+    "measurement": {
+      "modules": [
+        {
+          "name": "Targets",
+          "kind": 1,
+          "old": "",
+          "body": "Public Function Echo(ParamArray args() As Variant) As String\nDriver.Trace = Driver.Trace & \"B\"\nEcho = CStr(UBound(args) + 1)\nEnd Function\n"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": "",
+          "body": "Option Explicit\nPublic Trace As String\nPrivate Function GetName() As String\nTrace = Trace & \"N\"\nGetName = \"Targets.Echo\"\nEnd Function\nPrivate Function GetArgument() As Variant\nTrace = Trace & \"A\"\nGetArgument = CLng(7)\nEnd Function\nPrivate Function Try0() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(Macro:=\"Targets.Echo\", Arg2:=9)\nfailure = Err.Number\nTry0 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try1() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(Macro:=\"Targets.Echo\", Arg30:=9)\nfailure = Err.Number\nTry1 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try2() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(\"Targets.Echo\", Arg2:=9)\nfailure = Err.Number\nTry2 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try3() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(aRg1:=7, mAcRo:=\"Targets.Echo\")\nfailure = Err.Number\nTry3 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try4() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(Unknown:=\"Targets.Echo\", Arg1:=7)\nfailure = Err.Number\nTry4 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try5() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(Macro:=\"Targets.Echo\", Arg31:=7)\nfailure = Err.Number\nTry5 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try6() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(Arg1:=7)\nfailure = Err.Number\nTry6 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try7() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(Empty,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1)\nfailure = Err.Number\nTry7 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try8() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(CVErr(2042),1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1)\nfailure = Err.Number\nTry8 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try9() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(Nothing,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1)\nfailure = Err.Number\nTry9 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try10() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(Arg1:=GetArgument(), Macro:=GetName())\nfailure = Err.Number\nTry10 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try11() As String\nDim value As Variant\nDim failure As Long\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Application.Run(Arg1:=GetArgument(), Macro:=GetName())\nfailure = Err.Number\nTry11 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try12() As String\nDim value As Variant\nDim failure As Long\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Run(Arg1:=GetArgument(), Macro:=GetName())\nfailure = Err.Number\nTry12 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try13() As String\nDim value As Variant\nDim failure As Long\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nWith Application\nvalue = .Run(Arg1:=GetArgument(), Macro:=GetName())\nEnd With\nfailure = Err.Number\nTry13 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try14() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(GetName(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument(),GetArgument())\nfailure = Err.Number\nTry14 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try15() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(Macro:=\"Targets.Echo\", Arg0:=7)\nfailure = Err.Number\nTry15 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPrivate Function Try16() As String\nDim value As Variant\nDim failure As Long\nDim app As Object\nSet app = Application\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = app.Run(Macro:=\"Targets.Echo\", Arg01:=7)\nfailure = Err.Number\nTry16 = CStr(failure) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPublic Function Probe() As String\nDim report As String\nreport = report & \"arg2=\" & Try0() & vbLf\nreport = report & \"arg30=\" & Try1() & vbLf\nreport = report & \"mixed=\" & Try2() & vbLf\nreport = report & \"fold=\" & Try3() & vbLf\nreport = report & \"unknown=\" & Try4() & vbLf\nreport = report & \"arg31_name=\" & Try5() & vbLf\nreport = report & \"missing_macro=\" & Try6() & vbLf\nreport = report & \"empty31=\" & Try7() & vbLf\nreport = report & \"error31=\" & Try8() & vbLf\nreport = report & \"nothing31=\" & Try9() & vbLf\nreport = report & \"late_eval=\" & Try10() & vbLf\nreport = report & \"early_eval=\" & Try11() & vbLf\nreport = report & \"global_eval=\" & Try12() & vbLf\nreport = report & \"with_eval=\" & Try13() & vbLf\nreport = report & \"extra31_eval=\" & Try14() & vbLf\nreport = report & \"arg0_name=\" & Try15() & vbLf\nreport = report & \"arg01_name=\" & Try16() & vbLf\nProbe = report\nEnd Function\n"
+        }
+      ]
+    }
+  }
+]

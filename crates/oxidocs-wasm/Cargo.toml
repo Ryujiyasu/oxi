@@ -26,13 +26,18 @@ serde-wasm-bindgen = "0.6"
 console_error_panic_hook = "0.1"
 oxidocs-common = { version = "0.8.9", path = "../oxidocs-common", optional = true }
 ovba = { version = "0.7.1", optional = true }
+codepage = { version = "0.1.2", optional = true }
+cfb = { version = "0.10", optional = true }
+uuid = { version = "1", optional = true }
+zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
+quick-xml = { version = "0.37", optional = true }
 serde_json = "1.0.151"
 
 [features]
 default = []
 # Full-suite bindings (spreadsheet/presentation/generic-PDF/hanko) used by the
 # in-repo web editor; the published npm package is the default docs-only build.
-suite = ["dep:oxicells-core", "dep:oxicells-calc", "dep:oxivba-core", "dep:oxislides-core", "dep:oxihanko", "dep:oxidocs-common", "dep:ovba"]
+suite = ["dep:oxicells-core", "dep:oxicells-calc", "dep:oxivba-core", "dep:oxislides-core", "dep:oxihanko", "dep:oxidocs-common", "dep:ovba", "dep:codepage", "dep:quick-xml", "dep:cfb", "dep:uuid", "dep:zip"]
 oxidocs-common = ["dep:oxidocs-common"]
 ovba = ["dep:ovba"]
 # Leave the ~34 MB per-face metric catalog out of the module; the page fetches

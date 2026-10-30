@@ -1,0 +1,27 @@
+Attribute VB_Name = "DriverModule"
+Option Explicit
+Public Log As String
+Public Function Probe() As String
+Log = ""
+Dim worker As New WorkerClass
+Dim held As CounterClass
+Set held = New CounterClass
+Log = Log & "B"
+worker.Change held
+Log = Log & "A"
+Probe = Log & "|" & CStr(held Is Nothing)
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "WorkerClass"
+Public Sub Change(ByRef value As CounterClass)
+Set value = Nothing
+DriverModule.Log = DriverModule.Log & "C"
+End Sub
+VERSION 1.0 CLASS
+Attribute VB_Name = "CounterClass"
+Private Sub Class_Initialize()
+DriverModule.Log = DriverModule.Log & "I"
+End Sub
+Private Sub Class_Terminate()
+DriverModule.Log = DriverModule.Log & "T"
+End Sub

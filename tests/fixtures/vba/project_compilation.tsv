@@ -1,0 +1,47 @@
+valid	project_compile_valid.bas	DriverModule.Probe	values		ran	ran
+uncalled_undefined	project_compile_uncalled_undefined.bas	DriverModule.Probe	compile	変数が定義されていません。
+uncalled_bound	project_compile_uncalled_bound.bas	DriverModule.Probe	compile	定数式が必要です。
+dead_branch	project_compile_dead_branch.bas	DriverModule.Probe	compile	変数が定義されていません。
+uncalled_type_mismatch	project_compile_uncalled_type_mismatch.bas	DriverModule.Probe	compile	型が一致しません。
+uncalled_syntax	project_compile_uncalled_syntax.bas	DriverModule.Probe	compile	構文エラー
+global_byte	project_compile_global_byte.bas	DriverModule.Probe	compile	オーバーフローしました。
+global_null	project_compile_global_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+global_nothing	project_compile_global_nothing.bas	DriverModule.Probe	compile	定数のデータ型が不正です。
+global_call	project_compile_global_call.bas	DriverModule.Probe	compile	定数式が必要です。
+global_division	project_compile_global_division.bas	DriverModule.Probe	compile	0 で除算しました。
+global_array	project_compile_global_array.bas	DriverModule.Probe	compile	値が有効範囲にありません。
+global_width	project_compile_global_width.bas	DriverModule.Probe	compile	固定長文字列の長さが不正です。
+global_unknown_type	project_compile_global_unknown_type.bas	DriverModule.Probe	compile	ユーザ定義型は定義されていません。
+global_enum_overflow	project_compile_global_enum_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+global_enum_valid	project_compile_global_enum_valid.bas	DriverModule.Probe	values		ran	ran
+unused_class_private_const	project_compile_unused_class_private_const.bas	DriverModule.Probe	compile	オーバーフローしました。
+unused_class_public_const	project_compile_unused_class_public_const.bas	DriverModule.Probe	compile	定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。
+unused_class_procedure	project_compile_unused_class_procedure.bas	DriverModule.Probe	compile	変数が定義されていません。
+unused_module_procedure	project_compile_unused_module_procedure.bas	DriverModule.Probe	compile	変数が定義されていません。
+builtin_name	project_compile_builtin_name.bas	DriverModule.Probe	compile	構文エラー
+precedence_driver	project_compile_precedence_driver.bas	DriverModule.Probe	compile	オーバーフローしました。
+precedence_alpha	project_compile_precedence_alpha.bas	DriverModule.Probe	compile	オーバーフローしました。
+precedence_beta	project_compile_precedence_beta.bas	DriverModule.Probe	compile	オーバーフローしました。
+valid_auto_new	project_compile_valid_auto_new.bas	DriverModule.Probe	values		0	0
+precedence_reverse_driver	project_compile_precedence_reverse_driver.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+precedence_reverse_alpha	project_compile_precedence_reverse_alpha.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+class_precedence_driver	project_compile_class_precedence_driver.bas	DriverModule.Probe	compile	オーバーフローしました。
+class_precedence_alpha	project_compile_class_precedence_alpha.bas	DriverModule.Probe	compile	オーバーフローしました。
+class_before_standard	project_compile_class_before_standard.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+enum_null	project_compile_enum_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+enum_abs	project_compile_enum_abs.bas	DriverModule.Probe	values		ran	ran
+enum_cint	project_compile_enum_cint.bas	DriverModule.Probe	values		ran	ran
+enum_min	project_compile_enum_min.bas	DriverModule.Probe	values		ran	ran
+enum_implicit_overflow	project_compile_enum_implicit_overflow.bas	DriverModule.Probe	values		ran	ran
+enum_abs_bound	project_compile_enum_abs_bound.bas	DriverModule.Probe	values		2:2	2:2
+enum_cint_bound	project_compile_enum_cint_bound.bas	DriverModule.Probe	values		2:2	2:2
+enum_len_bound	project_compile_enum_len_bound.bas	DriverModule.Probe	values		2:2	2:2
+enum_vba_abs_bound	project_compile_enum_vba_abs_bound.bas	DriverModule.Probe	compile	定数式が必要です。
+enum_fraction	project_compile_enum_fraction.bas	DriverModule.Probe	values		2:3	2:3
+enum_implicit_value	project_compile_enum_implicit_value.bas	DriverModule.Probe	values		2147483647:-2147483648:3	2147483647:-2147483648:3
+enum_custom_call	project_compile_enum_custom_call.bas	DriverModule.Probe	compile	モジュール間で循環参照が定義されています。
+enum_date	project_compile_enum_date.bas	DriverModule.Probe	compile	定数式が必要です。
+global_before_driver_body	project_compile_global_before_driver_body.bas	DriverModule.Probe	compile	オーバーフローしました。
+global_before_driver_body_focus_helper	project_compile_global_before_driver_body_focus_helper.bas	DriverModule.Probe	compile	オーバーフローしました。
+class_global_before_driver_body	project_compile_class_global_before_driver_body.bas	DriverModule.Probe	compile	オーバーフローしました。
+body_module_order	project_compile_body_module_order.bas	DriverModule.Probe	compile	型が一致しません。

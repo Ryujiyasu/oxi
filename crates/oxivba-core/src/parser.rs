@@ -32,32 +32,62 @@ use crate::lexer::{tokenize, LexError, Punct, Span, Token, TokenKind};
 
 /// A source holding several modules the way the VBE exports them, one after
 /// another: a class starts with `VERSION 1.0 CLASS`, and every module names
-/// itself with `Attribute VB_Name`. The standard modules are read as one
-/// module -- their Public procedures and variables see one another -- and
-/// each class module on its own, by its name.
-pub fn parse_project(source: &str) -> Result<(Module, Vec<(String, Module)>), LexError> {
-    struct Block {
-        class: bool,
-        named: Option<String>,
-        text: String,
-    }
-    let mut blocks = vec![Block { class: false, named: None, text: String::new() }];
-    for line in source.split_inclusive('\n') {
+/// itself with `Attribute VB_Name`. Standard and class modules retain their
+/// own declaration namespaces and module options.
+#[derive(Debug, Clone)]
+pub struct ProjectSource {
+    pub class: bool,
+    pub named: Option<String>,
+    pub text: String,
+    pub line: usize,
+}
+
+/// Read exported module boundaries without flattening their owners or source
+/// positions. A host supplies any document identities for class modules.
+pub fn source_modules(source: &str) -> Vec<ProjectSource> {
+    project_blocks(source).into_iter().filter(|module| !module.text.trim().is_empty()).collect()
+}
+
+pub(crate) fn project_blocks(source: &str) -> Vec<ProjectSource> {
+    let mut blocks = vec![ProjectSource {
+        class: false,
+        named: None,
+        text: String::new(),
+        line: 1,
+    }];
+    for (index, line) in source.split_inclusive('\n').enumerate() {
         let trimmed = line.trim();
         let upper = trimmed.to_ascii_uppercase();
         let names = upper.starts_with("ATTRIBUTE VB_NAME");
         if upper.starts_with("VERSION ") && upper.contains("CLASS") {
-            blocks.push(Block { class: true, named: None, text: String::new() });
+            blocks.push(ProjectSource {
+                class: true,
+                named: None,
+                text: String::new(),
+                line: index + 1,
+            });
         } else if names && blocks.last().is_some_and(|block| block.named.is_some()) {
-            blocks.push(Block { class: false, named: None, text: String::new() });
+            blocks.push(ProjectSource {
+                class: false,
+                named: None,
+                text: String::new(),
+                line: index + 1,
+            });
         }
         let block = blocks.last_mut().expect("there is always a block");
         if names && block.named.is_none() {
-            let value = trimmed.split_once('=').map(|(_, value)| value.trim().trim_matches('"').to_string());
+            let value = trimmed
+                .split_once('=')
+                .map(|(_, value)| value.trim().trim_matches('"').to_string());
             block.named = value;
         }
         block.text.push_str(line);
     }
+    blocks
+}
+
+pub(crate) fn project_sources(source: &str) -> (String, Vec<(String, String)>) {
+    let blocks = project_blocks(source);
     let mut standard = String::new();
     let mut class_sources = Vec::new();
     for block in blocks {
@@ -69,6 +99,37 @@ pub fn parse_project(source: &str) -> Result<(Module, Vec<(String, Module)>), Le
                 standard.push('\n');
             }
         }
+    }
+    (standard, class_sources)
+}
+
+/// Component order is significant to explicit whole-project compilation.
+pub(crate) fn project_components(source: &str) -> Vec<(bool, String, String)> {
+    project_blocks(source)
+        .into_iter()
+        .filter(|block| !block.text.trim().is_empty())
+        .map(|block| (block.class, block.named.unwrap_or_default(), block.text))
+        .collect()
+}
+
+/// Parse concatenated standard and class module exports as one VBA project.
+pub fn parse_project(source: &str) -> Result<(Module, Vec<(String, Module)>), LexError> {
+    let (standard, class_sources) = project_sources(source);
+    // Blank preceding standard-module bytes to retain aggregate spans, while
+    // parsing each scope with fresh DefType / conditional compilation state.
+    let mut standard_sources = Vec::new();
+    let mut prefix = String::new();
+    for block in project_blocks(&standard) {
+        let mut text = prefix.clone();
+        text.push_str(&block.text);
+        standard_sources.push((block.named.unwrap_or_default(), text));
+        prefix.extend(block.text.bytes().map(|byte| {
+            if byte == b'\n' || byte == b'\r' {
+                char::from(byte)
+            } else {
+                ' '
+            }
+        }));
     }
     // An Enum is a type every module may declare with, so each module is read
     // knowing all of them: a class's `As Fruit` is a Long like the standard
@@ -83,16 +144,40 @@ pub fn parse_project(source: &str) -> Result<(Module, Vec<(String, Module)>), Le
         }
         Ok(module)
     };
-    let mut main = read(&standard)?;
+    let mut scopes = Vec::new();
+    for (name, text) in &standard_sources {
+        scopes.push((name.clone(), read(text)?));
+    }
     let mut classes = Vec::new();
     for (name, text) in &class_sources {
         classes.push((name.clone(), read(text)?));
     }
     if !enums.is_empty() {
-        main = parse_module_knowing(&standard, &enums)?;
+        for ((_, module), (_, text)) in scopes.iter_mut().zip(&standard_sources) {
+            *module = parse_module_knowing(text, &enums)?;
+        }
         for ((_, module), (_, text)) in classes.iter_mut().zip(&class_sources) {
             *module = parse_module_knowing(text, &enums)?;
         }
+    }
+    let mut main = Module {
+        logical_lines: if scopes.len() == 1 {
+            scopes[0].1.logical_lines.clone()
+        } else {
+            Vec::new()
+        },
+        items: scopes
+            .iter()
+            .flat_map(|(_, module)| module.items.iter().cloned())
+            .collect(),
+        syntax_errors: scopes
+            .iter()
+            .flat_map(|(_, module)| module.syntax_errors.iter().copied())
+            .collect(),
+        standard_modules: Vec::new(),
+    };
+    if scopes.len() > 1 || scopes.first().is_some_and(|(name, _)| !name.is_empty()) {
+        main.standard_modules = scopes;
     }
     Ok((main, classes))
 }
@@ -102,7 +187,7 @@ pub fn parse_module(source: &str) -> Result<Module, LexError> {
 }
 
 /// A module read knowing the Enums other modules declare.
-fn parse_module_knowing(source: &str, enums: &[String]) -> Result<Module, LexError> {
+pub(crate) fn module_tokens(source: &str) -> Result<Vec<Token>, LexError> {
     // A form's designer block carries a `{GUID}` the lexer has no token for,
     // and a class's `BEGIN ... END` block is not VBA either. Blank the region
     // out -- same length, same newlines, so every span still points into
@@ -111,16 +196,20 @@ fn parse_module_knowing(source: &str, enums: &[String]) -> Result<Module, LexErr
     let blanked;
     let code = match &header {
         Some((_, span)) => {
-            blanked = source
-                .char_indices()
-                .map(|(index, ch)| {
-                    if index < span.end && ch != '\n' && ch != '\r' {
-                        ' '
+            let bytes = source
+                .bytes()
+                .enumerate()
+                .map(|(index, byte)| {
+                    if index < span.end && byte != b'\n' && byte != b'\r' {
+                        b' '
                     } else {
-                        ch
+                        byte
                     }
                 })
-                .collect::<String>();
+                .collect::<Vec<_>>();
+            // Replacing the complete header with ASCII spaces leaves the
+            // remaining UTF-8 unchanged, including every byte offset.
+            blanked = String::from_utf8(bytes).expect("blanked source remains UTF-8");
             blanked.as_str()
         }
         None => source,
@@ -130,7 +219,12 @@ fn parse_module_knowing(source: &str, enums: &[String]) -> Result<Module, LexErr
     // allowed to reach the lexer. `live_source` blanks the dead lines the same
     // way the designer block above is blanked, keeping every byte position.
     let live = crate::precompile::live_source(code);
-    let tokens = tokenize(&live)?;
+    tokenize(&live)
+}
+
+fn parse_module_knowing(source: &str, enums: &[String]) -> Result<Module, LexError> {
+    let header = designer_header(source);
+    let tokens = module_tokens(source)?;
     let mut parser = Parser {
         src: source,
         tokens,
@@ -138,10 +232,14 @@ fn parse_module_knowing(source: &str, enums: &[String]) -> Result<Module, LexErr
         terminated: true,
         pending_next_counters: Vec::new(),
         enum_names: enums.to_vec(),
+        default_types: [None; 26],
+        syntax_errors: Vec::new(),
     };
     let mut module = parser.parse_module();
     if let Some((text, span)) = header {
-        module.items.insert(0, ModuleItem::DesignerHeader { text, span });
+        module
+            .items
+            .insert(0, ModuleItem::DesignerHeader { text, span });
     }
     Ok(module)
 }
@@ -203,6 +301,26 @@ fn designer_header(source: &str) -> Option<(String, Span)> {
     None
 }
 
+fn logical_line_spans(tokens: &[Token]) -> Vec<Span> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut line = 1;
+    for token in tokens {
+        if matches!(token.kind, TokenKind::Eol | TokenKind::Eof) {
+            if token.span.end > start {
+                lines.push(Span {
+                    line,
+                    start,
+                    end: token.span.end,
+                });
+            }
+            start = token.span.end;
+            line = token.span.line + 1;
+        }
+    }
+    lines
+}
+
 struct Parser<'a> {
     src: &'a str,
     tokens: Vec<Token>,
@@ -220,9 +338,22 @@ struct Parser<'a> {
     /// The module's Enums so far, which come before any procedure that
     /// names one.
     enum_names: Vec<String>,
+    default_types: [Option<&'static str>; 26],
+    syntax_errors: Vec<Span>,
 }
 
 impl<'a> Parser<'a> {
+    fn default_type(&self, name: &str) -> Option<TypeName> {
+        let first = name.bytes().next()?.to_ascii_uppercase();
+        if !first.is_ascii_uppercase() {
+            return None;
+        }
+        let name = self.default_types[usize::from(first - b'A')]?;
+        Some(TypeName {
+            name: name.to_string(),
+            ..TypeName::implicit()
+        })
+    }
     // -- token access -----------------------------------------------------
 
     fn kind(&self) -> &TokenKind {
@@ -408,11 +539,17 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Module { items }
+        Module {
+            items,
+            logical_lines: logical_line_spans(&self.tokens),
+            syntax_errors: std::mem::take(&mut self.syntax_errors),
+            standard_modules: Vec::new(),
+        }
     }
 
     fn parse_module_item(&mut self) -> Option<ModuleItem> {
         let span = self.span();
+        let statement_start = self.pos;
 
         if let TokenKind::Comment(text) = self.kind() {
             let text = text.clone();
@@ -470,9 +607,13 @@ impl<'a> Parser<'a> {
                 .map(ModuleItem::Procedure);
         }
         if self.at_kw("dim") || self.at_kw("const") || visibility != Visibility::Default {
-            return self
+            let declaration = self
                 .parse_var_decl(visibility, is_static, span)
                 .map(ModuleItem::Variables);
+            if declaration.is_none() {
+                self.pos = statement_start;
+            }
+            return declaration;
         }
 
         None
@@ -584,7 +725,14 @@ impl<'a> Parser<'a> {
         let params = self.parse_param_list();
         let return_type = self
             .parse_as_type()
-            .or_else(|| name_suffix.map(type_name_from_suffix));
+            .or_else(|| name_suffix.map(type_name_from_suffix))
+            .or_else(|| {
+                if is_function {
+                    self.default_type(&name)
+                } else {
+                    None
+                }
+            });
         self.end_statement();
         Some(ModuleItem::ExternalProc(ExternalProc {
             visibility,
@@ -620,7 +768,7 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let before = self.pos;
-            if let Some(item) = self.parse_var_item() {
+            if let Some(item) = self.parse_var_item(false) {
                 fields.push(item);
             }
             self.end_statement();
@@ -693,11 +841,23 @@ impl<'a> Parser<'a> {
             }
         };
         let (name, name_suffix) = self.parse_typed_ident()?;
+        let outer_errors = std::mem::take(&mut self.syntax_errors);
         let params = self.parse_param_list();
         let return_type = self
             .parse_as_type()
-            .or_else(|| name_suffix.map(type_name_from_suffix));
+            .or_else(|| name_suffix.map(type_name_from_suffix))
+            .or_else(|| {
+                if matches!(kind, ProcKind::Function | ProcKind::PropertyGet) {
+                    self.default_type(&name)
+                } else {
+                    None
+                }
+            });
         self.end_statement();
+        if !self.terminated {
+            self.syntax_errors.push(span);
+            self.consume_line();
+        }
 
         let terminator = match kind {
             ProcKind::Sub => "end sub",
@@ -715,6 +875,7 @@ impl<'a> Parser<'a> {
             params,
             return_type,
             body,
+            syntax_errors: std::mem::replace(&mut self.syntax_errors, outer_errors),
             span,
         })
     }
@@ -754,6 +915,7 @@ impl<'a> Parser<'a> {
             let type_name = self
                 .parse_as_type()
                 .or_else(|| name_suffix.map(type_name_from_suffix))
+                .or_else(|| self.default_type(&name))
                 .unwrap_or_else(TypeName::implicit);
             let default = if self.eat_punct(Punct::Eq) {
                 self.parse_expr()
@@ -785,9 +947,41 @@ impl<'a> Parser<'a> {
         let name = self.parse_qualified_name()?;
         // A variable of an Enum's type is a Long: measured, TypeName of one
         // is Long and VarType 3, and it starts at 0.
-        let name = if self.enum_names.contains(&name.to_ascii_lowercase()) { "Long".to_string() } else { name };
+        let name = if self.enum_names.contains(&name.to_ascii_lowercase()) {
+            "Long".to_string()
+        } else {
+            name
+        };
         let fixed_length = if name.eq_ignore_ascii_case("String") && self.eat_punct(Punct::Star) {
-            self.parse_expr()
+            let start = self.pos;
+            // An initializer's '=' belongs to the declaration, not to the
+            // fixed length. Compound lengths still fail the shape check below.
+            let length = self.parse_concat()?;
+            let valid = match &length {
+                Expr::Ident(..) | Expr::TypedIdent { .. } => true,
+                Expr::Literal(
+                    Literal::Number(number)
+                    | Literal::TypedNumber {
+                        value: number,
+                        suffix: '%' | '&' | '^',
+                    },
+                    span,
+                ) => {
+                    let written = self.src.get(span.start..span.end).unwrap_or_default();
+                    *number >= 0.0
+                        && *number <= 65_535.0
+                        && (written.starts_with("&H")
+                            || written.starts_with("&h")
+                            || written.starts_with("&O")
+                            || written.starts_with("&o")
+                            || written.bytes().all(|byte| byte.is_ascii_digit()))
+                }
+                _ => false,
+            };
+            if !valid {
+                self.syntax_errors.push(self.tokens[start].span);
+            }
+            Some(length)
         } else {
             None
         };
@@ -858,13 +1052,15 @@ impl<'a> Parser<'a> {
         is_static: bool,
         span: Span,
     ) -> Option<VarDecl> {
+        let prior_errors = self.syntax_errors.len();
         let is_const = self.eat_kw("const");
         if !is_const {
             self.eat_kw("dim");
         }
         let mut items = Vec::new();
         loop {
-            let Some(item) = self.parse_var_item() else {
+            let Some(item) = self.parse_var_item(is_const) else {
+                self.syntax_errors.push(span);
                 break;
             };
             items.push(item);
@@ -873,7 +1069,10 @@ impl<'a> Parser<'a> {
             }
         }
         self.end_statement();
-        if items.is_empty() {
+        if !self.terminated && self.syntax_errors.last() != Some(&span) {
+            self.syntax_errors.push(span);
+        }
+        if items.is_empty() || self.syntax_errors.len() != prior_errors {
             return None;
         }
         Some(VarDecl {
@@ -885,7 +1084,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_var_item(&mut self) -> Option<VarItem> {
+    fn parse_var_item(&mut self, is_const: bool) -> Option<VarItem> {
         let with_events = self.eat_kw("withevents");
         let (name, name_suffix) = self.parse_typed_ident()?;
         let array_bounds = if self.at_punct(Punct::LParen) {
@@ -893,19 +1092,37 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let type_name = self
-            .parse_as_type()
-            .or_else(|| name_suffix.map(type_name_from_suffix))
-            .unwrap_or_else(TypeName::implicit);
+        let explicit_type = self.at_kw("as") || name_suffix.is_some();
+        let type_name = if self.at_kw("as") {
+            // Const's As clause accepts intrinsic types. In particular an
+            // Enum name is invalid here, before parse_as_type lowers ordinary
+            // Enum variable declarations to Long.
+            if is_const
+                && !matches!(self.kind_at(1), TokenKind::Ident(kind) if matches!(kind.to_ascii_lowercase().as_str(),
+                    "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double" | "currency" | "date" | "boolean" | "string" | "variant" | "object"))
+            {
+                self.syntax_errors.push(self.span());
+            }
+            self.parse_as_type()?
+        } else {
+            name_suffix
+                .map(type_name_from_suffix)
+                .or_else(|| self.default_type(&name))
+                .unwrap_or_else(TypeName::implicit)
+        };
         let value = if self.eat_punct(Punct::Eq) {
-            self.parse_expr()
+            Some(self.parse_expr()?)
         } else {
             None
         };
+        if is_const && (with_events || array_bounds.is_some() || type_name.is_array) {
+            self.syntax_errors.push(self.span());
+        }
         Some(VarItem {
             name,
             array_bounds,
             type_name,
+            explicit_type,
             with_events,
             value,
         })
@@ -913,6 +1130,7 @@ impl<'a> Parser<'a> {
 
     fn parse_array_bounds(&mut self) -> Vec<ArrayBound> {
         let mut bounds = Vec::new();
+        let span = self.span();
         self.eat_punct(Punct::LParen);
         if self.eat_punct(Punct::RParen) {
             return bounds; // dynamic array: Dim a()
@@ -939,7 +1157,9 @@ impl<'a> Parser<'a> {
             if self.eat_punct(Punct::Comma) {
                 continue;
             }
-            self.eat_punct(Punct::RParen);
+            if !self.eat_punct(Punct::RParen) {
+                self.syntax_errors.push(span);
+            }
             break;
         }
         bounds
@@ -978,6 +1198,12 @@ impl<'a> Parser<'a> {
 
             // The line was only partly understood. Record it whole rather than
             // keeping a fragment and re-reading the rest as new statements.
+            if matches!(self.kind(), TokenKind::Ident(name) if name == "_")
+                || self.at_kw("else")
+                || self.at_kw("elseif")
+            {
+                self.syntax_errors.push(self.span());
+            }
             let (_, tail) = self.consume_line();
             let span = Span {
                 line: line_start.line,
@@ -994,6 +1220,14 @@ impl<'a> Parser<'a> {
 
     fn parse_statement(&mut self) -> Statement {
         let span = self.span();
+        if self.at_kw("end") && self.word_at(1).as_deref() == Some("if") {
+            let end = self.tokens[self.pos + 1].span.end;
+            self.pos += 2;
+            let span = Span { end, ..span };
+            let text = self.text_of(span);
+            self.end_statement();
+            return Statement::Unknown { text, span };
+        }
 
         if let TokenKind::Comment(text) = self.kind() {
             let text = text.clone();
@@ -1035,10 +1269,14 @@ impl<'a> Parser<'a> {
 
         match self.word_at(0).as_deref() {
             Some("dim") | Some("const") | Some("static") => {
+                let statement_start = self.pos;
                 let is_static = self.eat_kw("static");
                 if let Some(decl) = self.parse_var_decl(Visibility::Default, is_static, span) {
                     return Statement::Dim(decl);
                 }
+                self.pos = statement_start;
+                let (text, span) = self.consume_line();
+                return Statement::Unknown { text, span };
             }
             Some("redim") => return self.parse_redim(span),
             Some("erase") => {
@@ -1142,7 +1380,11 @@ impl<'a> Parser<'a> {
                     ResumeTarget::Next
                 } else if let Some(label) = self.parse_label_ref() {
                     // `Resume 0` is plain Resume, as `GoTo 0` is no label.
-                    if label == "0" { ResumeTarget::Same } else { ResumeTarget::Label(label) }
+                    if label == "0" {
+                        ResumeTarget::Same
+                    } else {
+                        ResumeTarget::Label(label)
+                    }
                 } else {
                     ResumeTarget::Same
                 };
@@ -1247,6 +1489,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_assign_or_call(&mut self, span: Span) -> Statement {
+        let target_start = self.pos;
         // `=` is both assignment and equality in VBA, told apart only by
         // position. Parsing the target as a full expression would let the
         // comparison level eat the `=` and turn `x = 1` into a comparison that
@@ -1273,8 +1516,14 @@ impl<'a> Parser<'a> {
             };
         }
 
+        // With no assignment, a separated dot starts a With argument rather
+        // than extending the callee: `Debug.Print .Name` / `Bump .amount`.
+        // Read assignments first so spaced member assignment remains valid.
+        self.pos = target_start;
+        let first = self.parse_postfix_mode(true).unwrap_or(first);
         // A bare call with unparenthesised arguments: `MsgBox "hi", vbOK`.
-        if !self.at_eol() && !self.at_punct(Punct::Colon) {
+        // In a single-line If, Else can follow a call with no arguments.
+        if !self.at_eol() && !self.at_punct(Punct::Colon) && !self.at_kw("else") {
             let mut args = vec![Argument {
                 name: None,
                 value: None,
@@ -1393,11 +1642,7 @@ impl<'a> Parser<'a> {
         } else {
             let (name, suffix) = self.parse_typed_ident()?;
             match suffix {
-                Some(suffix) => Expr::TypedIdent {
-                    name,
-                    suffix,
-                    span,
-                },
+                Some(suffix) => Expr::TypedIdent { name, suffix, span },
                 None => Expr::Ident(name, span),
             }
         };
@@ -1455,6 +1700,9 @@ impl<'a> Parser<'a> {
                 start
             };
             ranges.push(LetterRange { start, end });
+            for letter in start..=end {
+                self.default_types[letter as usize - 'A' as usize] = Some(type_name);
+            }
             if !self.eat_punct(Punct::Comma) {
                 break;
             }
@@ -1906,6 +2154,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_if(&mut self, span: Span) -> Statement {
+        let logical_end = self.tokens[self.pos..]
+            .iter()
+            .position(|token| matches!(token.kind, TokenKind::Eol | TokenKind::Eof))
+            .map(|offset| self.pos + offset)
+            .unwrap_or(self.tokens.len());
         self.pos += 1;
         let condition = self
             .parse_expr()
@@ -1920,16 +2173,26 @@ impl<'a> Parser<'a> {
         if !self.at_eol() && !matches!(self.kind(), TokenKind::Comment(_)) {
             let mut then_body = Vec::new();
             let mut else_body = None;
-            while self.span().line == span.line && !self.at_eol() && !self.at_kw("else") {
+            let leading_colon = self.at_punct(Punct::Colon);
+            while self.pos < logical_end && !self.at_eol() && !self.at_kw("else") {
+                if self.eat_punct(Punct::Colon) {
+                    continue;
+                }
                 let before = self.pos;
                 then_body.push(self.parse_statement());
                 if self.pos == before {
                     break;
                 }
             }
-            if self.span().line == span.line && self.eat_kw("else") {
+            if self.pos < logical_end && self.eat_kw("else") {
                 let mut body = Vec::new();
-                while self.span().line == span.line && !self.at_eol() {
+                if leading_colon || self.at_punct(Punct::Colon) {
+                    self.syntax_errors.push(self.span());
+                }
+                while self.pos < logical_end && !self.at_eol() {
+                    if self.eat_punct(Punct::Colon) {
+                        continue;
+                    }
                     let before = self.pos;
                     body.push(self.parse_statement());
                     if self.pos == before {
@@ -1973,7 +2236,9 @@ impl<'a> Parser<'a> {
             }
             break;
         }
-        self.consume_line();
+        self.eat_kw("end");
+        self.eat_kw("if");
+        self.end_statement();
 
         Statement::If(IfStmt {
             condition,
@@ -2019,7 +2284,9 @@ impl<'a> Parser<'a> {
             let body = self.parse_block(&["case", "end select"]);
             cases.push(CaseClause { labels, body });
         }
-        self.consume_line();
+        self.eat_kw("end");
+        self.eat_kw("select");
+        self.end_statement();
 
         Statement::SelectCase(SelectCaseStmt {
             subject,
@@ -2186,7 +2453,8 @@ impl<'a> Parser<'a> {
             .unwrap_or(Expr::Literal(Literal::Empty, span));
         self.end_statement();
         let body = self.parse_block(&["wend"]);
-        self.consume_line();
+        self.eat_kw("wend");
+        self.end_statement();
         Statement::While {
             condition,
             body,
@@ -2201,7 +2469,9 @@ impl<'a> Parser<'a> {
             .unwrap_or(Expr::Literal(Literal::Empty, span));
         self.end_statement();
         let body = self.parse_block(&["end with"]);
-        self.consume_line();
+        self.eat_kw("end");
+        self.eat_kw("with");
+        self.end_statement();
         Statement::With {
             subject,
             body,
@@ -2224,7 +2494,10 @@ impl<'a> Parser<'a> {
             {
                 self.pos += 2;
                 self.end_statement();
-                return Statement::OnError(OnError::Goto { label: "-1".to_string(), span });
+                return Statement::OnError(OnError::Goto {
+                    label: "-1".to_string(),
+                    span,
+                });
             }
             let target = self.parse_label_ref().unwrap_or_default();
             self.end_statement();
@@ -2465,10 +2738,25 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_postfix(&mut self) -> Option<Expr> {
+        self.parse_postfix_mode(false)
+    }
+
+    fn parse_postfix_mode(&mut self, bare_callee: bool) -> Option<Expr> {
         let mut expr = self.parse_primary()?;
         loop {
             let span = self.span();
             if self.at_punct(Punct::Dot) {
+                if bare_callee
+                    && self
+                        .tokens
+                        .get(self.pos.saturating_sub(1))
+                        .is_some_and(|previous| {
+                            previous.span.end < span.start
+                                && !self.src[previous.span.end..span.start].contains(['\n', '\r'])
+                        })
+                {
+                    break;
+                }
                 // Brackets round a member name are how VBA spells one that is
                 // not a legal identifier: `coll.[_NewEnum]`, whose leading
                 // underscore no plain name may carry, or `Me.[Order Date]`
@@ -2513,12 +2801,55 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if self.at_punct(Punct::LParen) {
-                let force_by_value = self
-                    .tokens
-                    .get(self.pos.saturating_sub(1))
-                    .is_some_and(|previous| previous.span.end < span.start);
+                let mut force_by_value = bare_callee;
+                if bare_callee && force_by_value {
+                    // `Method (first), second` groups only its first bare
+                    // argument. It is not a call returning a second callee.
+                    let mut depth = 0;
+                    let mut after = None;
+                    for (offset, token) in self.tokens[self.pos..].iter().enumerate() {
+                        match token.kind {
+                            TokenKind::Punct(Punct::LParen) => depth += 1,
+                            TokenKind::Punct(Punct::RParen) => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    after = Some(self.pos + offset + 1);
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if after.is_some_and(|position| {
+                        matches!(
+                            self.tokens.get(position).map(|token| &token.kind),
+                            Some(TokenKind::Punct(Punct::Comma))
+                        )
+                    }) {
+                        break;
+                    }
+                    if after.is_some_and(|position| {
+                        matches!(
+                            self.tokens.get(position).map(|token| &token.kind),
+                            Some(TokenKind::Punct(Punct::Dot | Punct::Bang | Punct::LParen))
+                        )
+                    }) {
+                        force_by_value = false;
+                    }
+                }
                 self.pos += 1;
-                let args = self.parse_arguments();
+                let mut args = self.parse_arguments();
+                if force_by_value {
+                    for argument in &mut args {
+                        if let Some(value) = argument.value.take() {
+                            let span = value.span();
+                            argument.value = Some(Expr::Group {
+                                expression: Box::new(value),
+                                span,
+                            });
+                        }
+                    }
+                }
                 expr = Expr::Index {
                     target: Box::new(expr),
                     args,
@@ -2547,6 +2878,15 @@ impl<'a> Parser<'a> {
                     file_number: false,
                     force_by_value: false,
                 });
+                if self.at_punct(Punct::RParen) {
+                    args.push(Argument {
+                        name: None,
+                        value: None,
+                        file_number: false,
+                        force_by_value: false,
+                    });
+                    break;
+                }
                 continue;
             }
             match self.parse_argument() {
@@ -2554,6 +2894,18 @@ impl<'a> Parser<'a> {
                 None => break,
             }
             if self.eat_punct(Punct::Comma) {
+                // Preserve a trailing missing argument instead of silently
+                // accepting the source as a call without the final comma.
+                // Procedure compilation reports the resulting syntax error.
+                if self.at_punct(Punct::RParen) {
+                    args.push(Argument {
+                        name: None,
+                        value: None,
+                        file_number: false,
+                        force_by_value: false,
+                    });
+                    break;
+                }
                 continue;
             }
             break;
@@ -2622,7 +2974,12 @@ impl<'a> Parser<'a> {
                 let exact_long_long = exact_longlong_value(source, suffix);
                 // A Currency literal is kept to its last ten-thousandth: a
                 // Double cannot hold 922337203685476.5807.
-                let exact_currency = if suffix == Some('@') && source.split('.').next().is_some_and(|whole| whole.len() > 11) {
+                let exact_currency = if suffix == Some('@')
+                    && source
+                        .split('.')
+                        .next()
+                        .is_some_and(|whole| whole.len() > 11)
+                {
                     exact_currency_units(source)
                 } else {
                     None
@@ -2641,8 +2998,14 @@ impl<'a> Parser<'a> {
                     // hex or octal one past four hex digits' worth a Long:
                     // measured, TypeName(1E+3) and (1D+3) are Double and
                     // TypeName(&HFFFFFFFF) is Long though it is -1.
-                    None if literal_is_double(source) => Literal::TypedNumber { value: n, suffix: '#' },
-                    None if radix_literal_is_long(source) => Literal::TypedNumber { value: n, suffix: '&' },
+                    None if literal_is_double(source) => Literal::TypedNumber {
+                        value: n,
+                        suffix: '#',
+                    },
+                    None if radix_literal_is_long(source) => Literal::TypedNumber {
+                        value: n,
+                        suffix: '&',
+                    },
                     None => Literal::Number(n),
                 };
                 Some(Expr::Literal(literal, span))
@@ -2663,7 +3026,10 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 let inner = self.parse_expr()?;
                 self.eat_punct(Punct::RParen);
-                Some(inner)
+                Some(Expr::Group {
+                    expression: Box::new(inner),
+                    span,
+                })
             }
             // `.Value` with no object: a member of the enclosing `With`.
             // Brackets permit a member name that is not a legal identifier,
@@ -2758,6 +3124,55 @@ fn binary(op: BinaryOp, lhs: Expr, rhs: Expr) -> Expr {
         lhs: Box::new(lhs),
         rhs: Box::new(rhs),
         span,
+    }
+}
+
+#[cfg(test)]
+mod declaration_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_declarations_preserve_source_following_statements_and_diagnostic_scope() {
+        for declaration in [
+            "Dim",
+            "Dim value As",
+            "Dim value As Long,",
+            "Dim [value] As Long",
+            "Dim value(1 To 2 As Long",
+        ] {
+            let source = format!(
+                "Public Function Probe() As Long\n{declaration}\nProbe = 7\nEnd Function\n\
+                 Public Function Reader() As Long\nReader = 9\nEnd Function\n"
+            );
+            let module = parse_module(&source).unwrap();
+            let procedures: Vec<_> = module
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    ModuleItem::Procedure(procedure) => Some(procedure),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(procedures.len(), 2, "{declaration}");
+            assert!(!procedures[0].syntax_errors.is_empty(), "{declaration}");
+            assert_eq!(procedures[0].body.len(), 2, "{declaration}");
+            assert!(
+                matches!(&procedures[0].body[0], Statement::Unknown { text, .. } if text == declaration)
+            );
+            assert!(matches!(&procedures[0].body[1], Statement::Assign { .. }));
+            assert!(procedures[1].syntax_errors.is_empty());
+            assert!(module.syntax_errors.is_empty());
+        }
+        let module = parse_module(
+            "Public value As\nPublic Function Probe() As Long\nProbe = 7\nEnd Function\n",
+        )
+        .unwrap();
+        assert!(
+            matches!(&module.items[0], ModuleItem::Unknown { text, .. } if text == "Public value As")
+        );
+        assert!(!module.syntax_errors.is_empty());
+        assert!(module.items.iter().any(|item| matches!(item,
+            ModuleItem::Procedure(procedure) if procedure.syntax_errors.is_empty())));
     }
 }
 
@@ -3065,6 +3480,38 @@ mod tests {
         let followed = only_proc("Sub T()\nIf a Then Exit For\nresult = 1\nEnd Sub");
         assert_eq!(followed.body.len(), 2);
         assert!(matches!(followed.body[1], Statement::Assign { .. }));
+    }
+
+    #[test]
+    fn single_line_if_keeps_else_after_a_call_without_arguments() {
+        for source in [
+            "Sub T()\nIf a Then Foo Else Bar\nEnd Sub",
+            "Sub T()\nIf a Then Rows(1).Insert Else Columns(1).Insert\nEnd Sub",
+            "Sub T()\nIf a Then Debug.Print Else Debug.Print 1\nEnd Sub",
+        ] {
+            let procedure = only_proc(source);
+            assert!(procedure.syntax_errors.is_empty(), "{source}");
+            let Statement::If(branch) = &procedure.body[0] else { panic!("expected If: {source}"); };
+            assert_eq!(branch.then_body.len(), 1, "{source}");
+            assert_eq!(branch.else_body.as_ref().map(Vec::len), Some(1), "{source}");
+            let Statement::Call { target, .. } = &branch.then_body[0] else { panic!("expected call: {source}"); };
+            assert!(!matches!(target, Expr::Index { .. }), "Else became a call argument: {source}");
+        }
+    }
+
+    #[test]
+    fn continued_single_line_if_retains_branches_and_next_statement() {
+        let procedure = only_proc(
+            "Function F() As Long\nIf True Then _\nF = 1 Else _\nF = 2\nF = F + 4\nEnd Function",
+        );
+        assert_eq!(procedure.body.len(), 2);
+        let Statement::If(branch) = &procedure.body[0] else {
+            panic!("expected If");
+        };
+        assert!(branch.single_line);
+        assert_eq!(branch.then_body.len(), 1);
+        assert_eq!(branch.else_body.as_ref().unwrap().len(), 1);
+        assert!(matches!(procedure.body[1], Statement::Assign { .. }));
     }
 
     #[test]
@@ -4035,10 +4482,15 @@ mod tests {
 /// plain decimal of four places or fewer.
 fn exact_currency_units(source: &str) -> Option<String> {
     let (whole, fraction) = source.split_once('.').unwrap_or((source, ""));
-    if whole.is_empty() || fraction.len() > 4 || !whole.bytes().all(|b| b.is_ascii_digit()) || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+    if whole.is_empty()
+        || fraction.len() > 4
+        || !whole.bytes().all(|b| b.is_ascii_digit())
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+    {
         return None;
     }
-    let units = whole.parse::<i128>().ok()? * 10_000 + format!("{fraction:0<4}").parse::<i128>().ok()?;
+    let units =
+        whole.parse::<i128>().ok()? * 10_000 + format!("{fraction:0<4}").parse::<i128>().ok()?;
     i64::try_from(units).ok().map(|units| units.to_string())
 }
 
@@ -4047,7 +4499,10 @@ fn exact_currency_units(source: &str) -> Option<String> {
 /// measured, TypeName(0.0), (1.0), (1.) and (100000.0) are all Double, and
 /// Int(-0.0) is -0.
 fn literal_is_double(source: &str) -> bool {
-    !source.starts_with('&') && source.bytes().any(|b| matches!(b, b'e' | b'E' | b'd' | b'D' | b'.'))
+    !source.starts_with('&')
+        && source
+            .bytes()
+            .any(|b| matches!(b, b'e' | b'E' | b'd' | b'D' | b'.'))
 }
 
 /// Whether an `&H`/`&O` literal spells more than 0xFFFF, which makes it a

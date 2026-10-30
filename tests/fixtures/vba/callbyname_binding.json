@@ -1,0 +1,542 @@
+[
+  {
+    "name": "callbyname_binding_matrix",
+    "source": "callbyname_binding_callbyname_binding_matrix.bas",
+    "procedure": "Driver.Probe",
+    "expected": "HeldValue_noargs_1=438~Empty~~Empty\nHeldValue_noargs_2=0~Empty~~Empty\nHeldValue_noargs_3=0~Empty~~Empty\nHeldValue_noargs_4=446~Empty~~Empty\nHeldValue_noargs_8=446~Empty~~Empty\nMethodCall_noargs_1=0~String~~Empty\nMethodCall_noargs_2=450~Empty~~Empty\nMethodCall_noargs_3=0~String~~Empty\nMethodCall_noargs_4=446~Empty~~Empty\nMethodCall_noargs_8=446~Empty~~Empty\nReadOnlyProp_noargs_1=450~Empty~~Empty\nReadOnlyProp_noargs_2=0~String~~Empty\nReadOnlyProp_noargs_3=0~String~~Empty\nReadOnlyProp_noargs_4=446~Empty~~Empty\nReadOnlyProp_noargs_8=446~Empty~~Empty\nOnlyLetProp_noargs_1=450~Empty~~Empty\nOnlyLetProp_noargs_2=450~Empty~~Empty\nOnlyLetProp_noargs_3=450~Empty~~Empty\nOnlyLetProp_noargs_4=446~Empty~~Empty\nOnlyLetProp_noargs_8=446~Empty~~Empty\nOnlySetProp_noargs_1=450~Empty~~Empty\nOnlySetProp_noargs_2=450~Empty~~Empty\nOnlySetProp_noargs_3=450~Empty~~Empty\nOnlySetProp_noargs_4=446~Empty~~Empty\nOnlySetProp_noargs_8=446~Empty~~Empty\nBothProp_noargs_1=450~Empty~~Empty\nBothProp_noargs_2=450~Empty~~Empty\nBothProp_noargs_3=450~Empty~~Empty\nBothProp_noargs_4=446~Empty~~Empty\nBothProp_noargs_8=446~Empty~~Empty\nIndexedProp_noargs_1=450~Empty~~Empty\nIndexedProp_noargs_2=449~Empty~~Empty\nIndexedProp_noargs_3=449~Empty~~Empty\nIndexedProp_noargs_4=446~Empty~~Empty\nIndexedProp_noargs_8=446~Empty~~Empty\nHeldValue_4_1=0~Empty~~String\nHeldValue_4_2=0~Empty~~Empty\nHeldValue_8_1=13~Empty~~Empty\nHeldValue_8_2=0~Empty~~Range\nOnlyLetProp_4_1=0~Empty~let:String~Empty\nOnlyLetProp_4_2=0~Empty~let:Range~Empty\nOnlyLetProp_8_1=450~Empty~~Empty\nOnlyLetProp_8_2=450~Empty~~Empty\nOnlySetProp_4_1=450~Empty~~Empty\nOnlySetProp_4_2=450~Empty~~Empty\nOnlySetProp_8_1=0~Empty~set:String~Empty\nOnlySetProp_8_2=0~Empty~set:Range~Empty\nBothProp_4_1=0~Empty~let:String~Empty\nBothProp_4_2=0~Empty~let:Range~Empty\nBothProp_8_1=0~Empty~set:String~Empty\nBothProp_8_2=0~Empty~set:Range~Empty\nIndexedProp_indexed_1=450~Empty~~Empty\nIndexedProp_indexed_2=450~Empty~~Empty\nIndexedProp_indexed_3=450~Empty~~Empty\nIndexedProp_indexed_4=0~Empty~index:2:String~Empty\nIndexedProp_indexed_8=450~Empty~~Empty\nflag_coercion_1.5=0~String~~Empty\nflag_coercion_2.5=0~String~~Empty\nflag_coercion_0=438~Empty~~Empty\nflag_coercion_-1=438~Empty~~Empty\nflag_coercion_16=438~Empty~~Empty\nflag_coercion_Null=94~Empty~~Empty\nflag_coercion_\"2\"=0~String~~Empty\nflag_coercion_\"bad\"=13~Empty~~Empty\n",
+    "measured_cases": 64,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "callbyname_binding_matrix.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "callbyname_binding_matrix",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic HeldValue As Variant\nPublic Trace As String\nPublic Function MethodCall() As String\n    MethodCall = \"method\"\nEnd Function\nPublic Property Get ReadOnlyProp() As Variant\n    ReadOnlyProp = \"get\"\nEnd Property\nPublic Property Let OnlyLetProp(ByVal value As Variant)\n    Trace = \"let:\" & TypeName(value)\nEnd Property\nPublic Property Set OnlySetProp(ByVal value As Variant)\n    Trace = \"set:\" & TypeName(value)\nEnd Property\nPublic Property Let BothProp(ByVal value As Variant)\n    Trace = \"let:\" & TypeName(value)\nEnd Property\nPublic Property Set BothProp(ByVal value As Variant)\n    Trace = \"set:\" & TypeName(value)\nEnd Property\nPublic Property Get IndexedProp(ByVal index As Long) As Variant\n    IndexedProp = \"get:\" & CStr(index)\nEnd Property\nPublic Property Let IndexedProp(ByVal index As Long, ByVal value As Variant)\n    Trace = \"index:\" & CStr(index) & \":\" & TypeName(value)\nEnd Property\n"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPrivate Function DoCase(ByVal member As String, ByVal flag As Variant, ByVal scenario As Long) As String\n    Dim obj As New Item\n    Dim result As Variant\n    On Error Resume Next\n    Select Case scenario\n    Case 0\n        result = CallByName(obj, member, flag)\n    Case 1\n        result = CallByName(obj, member, flag, \"x\")\n    Case 2\n        result = CallByName(obj, member, flag, Range(\"A1\"))\n    Case 3\n        result = CallByName(obj, member, flag, 2, \"x\")\n    End Select\n    DoCase = CStr(Err.Number) & \"~\" & TypeName(result) & \"~\" & obj.Trace & \"~\" & TypeName(obj.HeldValue)\nEnd Function\nPublic Function Probe() As String\n    Dim result As String\n    result = result & \"HeldValue_noargs_1=\" & DoCase(\"HeldValue\", 1, 0) & vbLf\n    result = result & \"HeldValue_noargs_2=\" & DoCase(\"HeldValue\", 2, 0) & vbLf\n    result = result & \"HeldValue_noargs_3=\" & DoCase(\"HeldValue\", 3, 0) & vbLf\n    result = result & \"HeldValue_noargs_4=\" & DoCase(\"HeldValue\", 4, 0) & vbLf\n    result = result & \"HeldValue_noargs_8=\" & DoCase(\"HeldValue\", 8, 0) & vbLf\n    result = result & \"MethodCall_noargs_1=\" & DoCase(\"MethodCall\", 1, 0) & vbLf\n    result = result & \"MethodCall_noargs_2=\" & DoCase(\"MethodCall\", 2, 0) & vbLf\n    result = result & \"MethodCall_noargs_3=\" & DoCase(\"MethodCall\", 3, 0) & vbLf\n    result = result & \"MethodCall_noargs_4=\" & DoCase(\"MethodCall\", 4, 0) & vbLf\n    result = result & \"MethodCall_noargs_8=\" & DoCase(\"MethodCall\", 8, 0) & vbLf\n    result = result & \"ReadOnlyProp_noargs_1=\" & DoCase(\"ReadOnlyProp\", 1, 0) & vbLf\n    result = result & \"ReadOnlyProp_noargs_2=\" & DoCase(\"ReadOnlyProp\", 2, 0) & vbLf\n    result = result & \"ReadOnlyProp_noargs_3=\" & DoCase(\"ReadOnlyProp\", 3, 0) & vbLf\n    result = result & \"ReadOnlyProp_noargs_4=\" & DoCase(\"ReadOnlyProp\", 4, 0) & vbLf\n    result = result & \"ReadOnlyProp_noargs_8=\" & DoCase(\"ReadOnlyProp\", 8, 0) & vbLf\n    result = result & \"OnlyLetProp_noargs_1=\" & DoCase(\"OnlyLetProp\", 1, 0) & vbLf\n    result = result & \"OnlyLetProp_noargs_2=\" & DoCase(\"OnlyLetProp\", 2, 0) & vbLf\n    result = result & \"OnlyLetProp_noargs_3=\" & DoCase(\"OnlyLetProp\", 3, 0) & vbLf\n    result = result & \"OnlyLetProp_noargs_4=\" & DoCase(\"OnlyLetProp\", 4, 0) & vbLf\n    result = result & \"OnlyLetProp_noargs_8=\" & DoCase(\"OnlyLetProp\", 8, 0) & vbLf\n    result = result & \"OnlySetProp_noargs_1=\" & DoCase(\"OnlySetProp\", 1, 0) & vbLf\n    result = result & \"OnlySetProp_noargs_2=\" & DoCase(\"OnlySetProp\", 2, 0) & vbLf\n    result = result & \"OnlySetProp_noargs_3=\" & DoCase(\"OnlySetProp\", 3, 0) & vbLf\n    result = result & \"OnlySetProp_noargs_4=\" & DoCase(\"OnlySetProp\", 4, 0) & vbLf\n    result = result & \"OnlySetProp_noargs_8=\" & DoCase(\"OnlySetProp\", 8, 0) & vbLf\n    result = result & \"BothProp_noargs_1=\" & DoCase(\"BothProp\", 1, 0) & vbLf\n    result = result & \"BothProp_noargs_2=\" & DoCase(\"BothProp\", 2, 0) & vbLf\n    result = result & \"BothProp_noargs_3=\" & DoCase(\"BothProp\", 3, 0) & vbLf\n    result = result & \"BothProp_noargs_4=\" & DoCase(\"BothProp\", 4, 0) & vbLf\n    result = result & \"BothProp_noargs_8=\" & DoCase(\"BothProp\", 8, 0) & vbLf\n    result = result & \"IndexedProp_noargs_1=\" & DoCase(\"IndexedProp\", 1, 0) & vbLf\n    result = result & \"IndexedProp_noargs_2=\" & DoCase(\"IndexedProp\", 2, 0) & vbLf\n    result = result & \"IndexedProp_noargs_3=\" & DoCase(\"IndexedProp\", 3, 0) & vbLf\n    result = result & \"IndexedProp_noargs_4=\" & DoCase(\"IndexedProp\", 4, 0) & vbLf\n    result = result & \"IndexedProp_noargs_8=\" & DoCase(\"IndexedProp\", 8, 0) & vbLf\n    result = result & \"HeldValue_4_1=\" & DoCase(\"HeldValue\", 4, 1) & vbLf\n    result = result & \"HeldValue_4_2=\" & DoCase(\"HeldValue\", 4, 2) & vbLf\n    result = result & \"HeldValue_8_1=\" & DoCase(\"HeldValue\", 8, 1) & vbLf\n    result = result & \"HeldValue_8_2=\" & DoCase(\"HeldValue\", 8, 2) & vbLf\n    result = result & \"OnlyLetProp_4_1=\" & DoCase(\"OnlyLetProp\", 4, 1) & vbLf\n    result = result & \"OnlyLetProp_4_2=\" & DoCase(\"OnlyLetProp\", 4, 2) & vbLf\n    result = result & \"OnlyLetProp_8_1=\" & DoCase(\"OnlyLetProp\", 8, 1) & vbLf\n    result = result & \"OnlyLetProp_8_2=\" & DoCase(\"OnlyLetProp\", 8, 2) & vbLf\n    result = result & \"OnlySetProp_4_1=\" & DoCase(\"OnlySetProp\", 4, 1) & vbLf\n    result = result & \"OnlySetProp_4_2=\" & DoCase(\"OnlySetProp\", 4, 2) & vbLf\n    result = result & \"OnlySetProp_8_1=\" & DoCase(\"OnlySetProp\", 8, 1) & vbLf\n    result = result & \"OnlySetProp_8_2=\" & DoCase(\"OnlySetProp\", 8, 2) & vbLf\n    result = result & \"BothProp_4_1=\" & DoCase(\"BothProp\", 4, 1) & vbLf\n    result = result & \"BothProp_4_2=\" & DoCase(\"BothProp\", 4, 2) & vbLf\n    result = result & \"BothProp_8_1=\" & DoCase(\"BothProp\", 8, 1) & vbLf\n    result = result & \"BothProp_8_2=\" & DoCase(\"BothProp\", 8, 2) & vbLf\n    result = result & \"IndexedProp_indexed_1=\" & DoCase(\"IndexedProp\", 1, 3) & vbLf\n    result = result & \"IndexedProp_indexed_2=\" & DoCase(\"IndexedProp\", 2, 3) & vbLf\n    result = result & \"IndexedProp_indexed_3=\" & DoCase(\"IndexedProp\", 3, 3) & vbLf\n    result = result & \"IndexedProp_indexed_4=\" & DoCase(\"IndexedProp\", 4, 3) & vbLf\n    result = result & \"IndexedProp_indexed_8=\" & DoCase(\"IndexedProp\", 8, 3) & vbLf\n    result = result & \"flag_coercion_1.5=\" & DoCase(\"ReadOnlyProp\", 1.5, 0) & vbLf\n    result = result & \"flag_coercion_2.5=\" & DoCase(\"ReadOnlyProp\", 2.5, 0) & vbLf\n    result = result & \"flag_coercion_0=\" & DoCase(\"ReadOnlyProp\", 0, 0) & vbLf\n    result = result & \"flag_coercion_-1=\" & DoCase(\"ReadOnlyProp\", -1, 0) & vbLf\n    result = result & \"flag_coercion_16=\" & DoCase(\"ReadOnlyProp\", 16, 0) & vbLf\n    result = result & \"flag_coercion_Null=\" & DoCase(\"ReadOnlyProp\", Null, 0) & vbLf\n    result = result & \"flag_coercion_\"\"2\"\"=\" & DoCase(\"ReadOnlyProp\", \"2\", 0) & vbLf\n    result = result & \"flag_coercion_\"\"bad\"\"=\" & DoCase(\"ReadOnlyProp\", \"bad\", 0) & vbLf\n    Probe = result\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "callbyname_binding_extra",
+    "source": "callbyname_binding_callbyname_binding_extra.bas",
+    "procedure": "Driver.Probe",
+    "expected": "NoSuchMember_noargs_1=438~Empty~~Empty\nNoSuchMember_noargs_2=438~Empty~~Empty\nNoSuchMember_noargs_3=438~Empty~~Empty\nNoSuchMember_noargs_4=446~Empty~~Empty\nNoSuchMember_noargs_8=446~Empty~~Empty\nHiddenPrivate_noargs_1=438~Empty~~Empty\nHiddenPrivate_noargs_2=438~Empty~~Empty\nHiddenPrivate_noargs_3=438~Empty~~Empty\nHiddenPrivate_noargs_4=446~Empty~~Empty\nHiddenPrivate_noargs_8=446~Empty~~Empty\nHiddenFriend_noargs_1=438~Empty~~Empty\nHiddenFriend_noargs_2=438~Empty~~Empty\nHiddenFriend_noargs_3=438~Empty~~Empty\nHiddenFriend_noargs_4=446~Empty~~Empty\nHiddenFriend_noargs_8=446~Empty~~Empty\nunknown_put_4_1=438~Empty~~Empty\nunknown_put_4_2=438~Empty~~Empty\nunknown_put_8_1=438~Empty~~Empty\nunknown_put_8_2=438~Empty~~Empty\nnull_name_1=94~Empty~~Empty\nnull_name_2=94~Empty~~Empty\nnull_name_4=94~Empty~~Empty\nnull_name_8=94~Empty~~Empty\nempty_name_1=438~Empty~~Empty\nempty_name_2=438~Empty~~Empty\nempty_name_4=446~Empty~~Empty\nempty_name_8=446~Empty~~Empty\nrounding_1.6=450~Empty~~Empty\nrounding_2.6=0~String~~Empty\nrounding_7.5=446~Empty~~Empty\nrounding_2147483648#=6~Empty~~Empty\n",
+    "measured_cases": 31,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "callbyname_binding_extra.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "callbyname_binding_extra",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic HeldValue As Variant\nPublic Trace As String\nPublic Function MethodCall() As String\n    MethodCall = \"method\"\nEnd Function\nPublic Property Get ReadOnlyProp() As Variant\n    ReadOnlyProp = \"get\"\nEnd Property\nPublic Property Let OnlyLetProp(ByVal value As Variant)\n    Trace = \"let:\" & TypeName(value)\nEnd Property\nPublic Property Set OnlySetProp(ByVal value As Variant)\n    Trace = \"set:\" & TypeName(value)\nEnd Property\nPublic Property Let BothProp(ByVal value As Variant)\n    Trace = \"let:\" & TypeName(value)\nEnd Property\nPublic Property Set BothProp(ByVal value As Variant)\n    Trace = \"set:\" & TypeName(value)\nEnd Property\nPublic Property Get IndexedProp(ByVal index As Long) As Variant\n    IndexedProp = \"get:\" & CStr(index)\nEnd Property\nPublic Property Let IndexedProp(ByVal index As Long, ByVal value As Variant)\n    Trace = \"index:\" & CStr(index) & \":\" & TypeName(value)\nEnd Property\n\nPrivate Function HiddenPrivate() As String\n    HiddenPrivate = \"private\"\nEnd Function\nFriend Function HiddenFriend() As String\n    HiddenFriend = \"friend\"\nEnd Function\n"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPrivate Function DoCase(ByVal member As Variant, ByVal flag As Variant, ByVal scenario As Long) As String\n    Dim obj As New Item\n    Dim result As Variant\n    On Error Resume Next\n    Select Case scenario\n    Case 0\n        result = CallByName(obj, member, flag)\n    Case 1\n        result = CallByName(obj, member, flag, \"x\")\n    Case 2\n        result = CallByName(obj, member, flag, Range(\"A1\"))\n    Case 3\n        result = CallByName(obj, member, flag, 2, \"x\")\n    End Select\n    DoCase = CStr(Err.Number) & \"~\" & TypeName(result) & \"~\" & obj.Trace & \"~\" & TypeName(obj.HeldValue)\nEnd Function\nPublic Function Probe() As String\n    Dim result As String\n    result = result & \"NoSuchMember_noargs_1=\" & DoCase(\"NoSuchMember\", 1, 0) & vbLf\n    result = result & \"NoSuchMember_noargs_2=\" & DoCase(\"NoSuchMember\", 2, 0) & vbLf\n    result = result & \"NoSuchMember_noargs_3=\" & DoCase(\"NoSuchMember\", 3, 0) & vbLf\n    result = result & \"NoSuchMember_noargs_4=\" & DoCase(\"NoSuchMember\", 4, 0) & vbLf\n    result = result & \"NoSuchMember_noargs_8=\" & DoCase(\"NoSuchMember\", 8, 0) & vbLf\n    result = result & \"HiddenPrivate_noargs_1=\" & DoCase(\"HiddenPrivate\", 1, 0) & vbLf\n    result = result & \"HiddenPrivate_noargs_2=\" & DoCase(\"HiddenPrivate\", 2, 0) & vbLf\n    result = result & \"HiddenPrivate_noargs_3=\" & DoCase(\"HiddenPrivate\", 3, 0) & vbLf\n    result = result & \"HiddenPrivate_noargs_4=\" & DoCase(\"HiddenPrivate\", 4, 0) & vbLf\n    result = result & \"HiddenPrivate_noargs_8=\" & DoCase(\"HiddenPrivate\", 8, 0) & vbLf\n    result = result & \"HiddenFriend_noargs_1=\" & DoCase(\"HiddenFriend\", 1, 0) & vbLf\n    result = result & \"HiddenFriend_noargs_2=\" & DoCase(\"HiddenFriend\", 2, 0) & vbLf\n    result = result & \"HiddenFriend_noargs_3=\" & DoCase(\"HiddenFriend\", 3, 0) & vbLf\n    result = result & \"HiddenFriend_noargs_4=\" & DoCase(\"HiddenFriend\", 4, 0) & vbLf\n    result = result & \"HiddenFriend_noargs_8=\" & DoCase(\"HiddenFriend\", 8, 0) & vbLf\n    result = result & \"unknown_put_4_1=\" & DoCase(\"NoSuchMember\", 4, 1) & vbLf\n    result = result & \"unknown_put_4_2=\" & DoCase(\"NoSuchMember\", 4, 2) & vbLf\n    result = result & \"unknown_put_8_1=\" & DoCase(\"NoSuchMember\", 8, 1) & vbLf\n    result = result & \"unknown_put_8_2=\" & DoCase(\"NoSuchMember\", 8, 2) & vbLf\n    result = result & \"null_name_1=\" & DoCase(Null, 1, 0) & vbLf\n    result = result & \"null_name_2=\" & DoCase(Null, 2, 0) & vbLf\n    result = result & \"null_name_4=\" & DoCase(Null, 4, 0) & vbLf\n    result = result & \"null_name_8=\" & DoCase(Null, 8, 0) & vbLf\n    result = result & \"empty_name_1=\" & DoCase(\"\", 1, 0) & vbLf\n    result = result & \"empty_name_2=\" & DoCase(\"\", 2, 0) & vbLf\n    result = result & \"empty_name_4=\" & DoCase(\"\", 4, 0) & vbLf\n    result = result & \"empty_name_8=\" & DoCase(\"\", 8, 0) & vbLf\n    result = result & \"rounding_1.6=\" & DoCase(\"MethodCall\", 1.6, 0) & vbLf\n    result = result & \"rounding_2.6=\" & DoCase(\"MethodCall\", 2.6, 0) & vbLf\n    result = result & \"rounding_7.5=\" & DoCase(\"MethodCall\", 7.5, 0) & vbLf\n    result = result & \"rounding_2147483648#=\" & DoCase(\"MethodCall\", 2147483648#, 0) & vbLf\n    Probe = result\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "callbyname_host_matrix",
+    "source": "callbyname_binding_callbyname_host_matrix.bas",
+    "procedure": "Driver.Probe",
+    "expected": "Range_Value_noargs_1=438~Empty~\nRange_Value_noargs_2=0~Empty~\nRange_Value_noargs_3=0~Empty~\nRange_Value_noargs_4=446~Empty~\nRange_Value_noargs_8=446~Empty~\nRange_Address_noargs_1=438~Empty~\nRange_Address_noargs_2=0~String~\nRange_Address_noargs_3=0~String~\nRange_Address_noargs_4=446~Empty~\nRange_Address_noargs_8=446~Empty~\nRange_Clear_noargs_1=0~Boolean~\nRange_Clear_noargs_2=0~Boolean~\nRange_Clear_noargs_3=0~Boolean~\nRange_Clear_noargs_4=446~Empty~\nRange_Clear_noargs_8=446~Empty~\nWorksheet_Name_noargs_1=438~Empty~\nWorksheet_Name_noargs_2=0~String~\nWorksheet_Name_noargs_3=0~String~\nWorksheet_Name_noargs_4=446~Empty~\nWorksheet_Name_noargs_8=446~Empty~\nWorksheet_Calculate_noargs_1=0~Boolean~\nWorksheet_Calculate_noargs_2=0~Boolean~\nWorksheet_Calculate_noargs_3=0~Boolean~\nWorksheet_Calculate_noargs_4=446~Empty~\nWorksheet_Calculate_noargs_8=446~Empty~\nWorkbook_Name_noargs_1=438~Empty~\nWorkbook_Name_noargs_2=0~String~\nWorkbook_Name_noargs_3=0~String~\nWorkbook_Name_noargs_4=446~Empty~\nWorkbook_Name_noargs_8=446~Empty~\nCollection_Count_noargs_1=0~Long~\nCollection_Count_noargs_2=438~Empty~\nCollection_Count_noargs_3=0~Long~\nCollection_Count_noargs_4=446~Empty~\nCollection_Count_noargs_8=446~Empty~\nCollection_Add_noargs_1=450~Empty~\nCollection_Add_noargs_2=438~Empty~\nCollection_Add_noargs_3=450~Empty~\nCollection_Add_noargs_4=446~Empty~\nCollection_Add_noargs_8=446~Empty~\nErr_Number_noargs_1=438~Empty~\nErr_Number_noargs_2=0~Long~\nErr_Number_noargs_3=0~Long~\nErr_Number_noargs_4=446~Empty~\nErr_Number_noargs_8=446~Empty~\nErr_Clear_noargs_1=0~Empty~\nErr_Clear_noargs_2=438~Empty~\nErr_Clear_noargs_3=0~Empty~\nErr_Clear_noargs_4=446~Empty~\nErr_Clear_noargs_8=446~Empty~\nRange_Value_4_1=0~Empty~x\nRange_Value_4_2=0~Empty~payload\nRange_Value_4_3=1004~Empty~\nRange_Value_8_1=438~Empty~\nRange_Value_8_2=438~Empty~\nRange_Value_8_3=438~Empty~\nWorksheet_Name_4_1=0~Empty~\nWorksheet_Name_4_2=0~Empty~\nWorksheet_Name_4_3=451~Empty~\nWorksheet_Name_8_1=438~Empty~\nWorksheet_Name_8_2=438~Empty~\nWorksheet_Name_8_3=438~Empty~\n",
+    "measured_cases": 62,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "callbyname_host_matrix.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "callbyname_host_matrix",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPrivate Function DoCase(ByVal target As String, ByVal member As String, ByVal flag As Variant, ByVal scenario As Long) As String\n    Dim obj As Object\n    Dim result As Variant\n    Dim savedNumber As Long\n    ThisWorkbook.Worksheets(1).Name = \"Sheet1\"\n    Range(\"A1\").Value = \"\"\n    Range(\"B1\").Value = \"payload\"\n    Select Case target\n    Case \"Range\"\n        Set obj = Range(\"A1\")\n    Case \"Worksheet\"\n        Set obj = ThisWorkbook.Worksheets(1)\n    Case \"Workbook\"\n        Set obj = ThisWorkbook\n    Case \"Collection\"\n        Set obj = New Collection\n        obj.Add \"one\"\n    Case \"Err\"\n        Set obj = Err\n    End Select\n    Err.Clear\n    On Error Resume Next\n    Select Case scenario\n    Case 0\n        result = CallByName(obj, member, flag)\n    Case 1\n        result = CallByName(obj, member, flag, \"x\")\n    Case 2\n        result = CallByName(obj, member, flag, Range(\"B1\"))\n    Case 3\n        result = CallByName(obj, member, flag, 1, \"x\")\n    End Select\n    savedNumber = Err.Number\n    DoCase = CStr(savedNumber) & \"~\" & TypeName(result) & \"~\" & CStr(Range(\"A1\").Value)\nEnd Function\nPublic Function Probe() As String\n    Dim result As String\n    result = result & \"Range_Value_noargs_1=\" & DoCase(\"Range\", \"Value\", 1, 0) & vbLf\n    result = result & \"Range_Value_noargs_2=\" & DoCase(\"Range\", \"Value\", 2, 0) & vbLf\n    result = result & \"Range_Value_noargs_3=\" & DoCase(\"Range\", \"Value\", 3, 0) & vbLf\n    result = result & \"Range_Value_noargs_4=\" & DoCase(\"Range\", \"Value\", 4, 0) & vbLf\n    result = result & \"Range_Value_noargs_8=\" & DoCase(\"Range\", \"Value\", 8, 0) & vbLf\n    result = result & \"Range_Address_noargs_1=\" & DoCase(\"Range\", \"Address\", 1, 0) & vbLf\n    result = result & \"Range_Address_noargs_2=\" & DoCase(\"Range\", \"Address\", 2, 0) & vbLf\n    result = result & \"Range_Address_noargs_3=\" & DoCase(\"Range\", \"Address\", 3, 0) & vbLf\n    result = result & \"Range_Address_noargs_4=\" & DoCase(\"Range\", \"Address\", 4, 0) & vbLf\n    result = result & \"Range_Address_noargs_8=\" & DoCase(\"Range\", \"Address\", 8, 0) & vbLf\n    result = result & \"Range_Clear_noargs_1=\" & DoCase(\"Range\", \"Clear\", 1, 0) & vbLf\n    result = result & \"Range_Clear_noargs_2=\" & DoCase(\"Range\", \"Clear\", 2, 0) & vbLf\n    result = result & \"Range_Clear_noargs_3=\" & DoCase(\"Range\", \"Clear\", 3, 0) & vbLf\n    result = result & \"Range_Clear_noargs_4=\" & DoCase(\"Range\", \"Clear\", 4, 0) & vbLf\n    result = result & \"Range_Clear_noargs_8=\" & DoCase(\"Range\", \"Clear\", 8, 0) & vbLf\n    result = result & \"Worksheet_Name_noargs_1=\" & DoCase(\"Worksheet\", \"Name\", 1, 0) & vbLf\n    result = result & \"Worksheet_Name_noargs_2=\" & DoCase(\"Worksheet\", \"Name\", 2, 0) & vbLf\n    result = result & \"Worksheet_Name_noargs_3=\" & DoCase(\"Worksheet\", \"Name\", 3, 0) & vbLf\n    result = result & \"Worksheet_Name_noargs_4=\" & DoCase(\"Worksheet\", \"Name\", 4, 0) & vbLf\n    result = result & \"Worksheet_Name_noargs_8=\" & DoCase(\"Worksheet\", \"Name\", 8, 0) & vbLf\n    result = result & \"Worksheet_Calculate_noargs_1=\" & DoCase(\"Worksheet\", \"Calculate\", 1, 0) & vbLf\n    result = result & \"Worksheet_Calculate_noargs_2=\" & DoCase(\"Worksheet\", \"Calculate\", 2, 0) & vbLf\n    result = result & \"Worksheet_Calculate_noargs_3=\" & DoCase(\"Worksheet\", \"Calculate\", 3, 0) & vbLf\n    result = result & \"Worksheet_Calculate_noargs_4=\" & DoCase(\"Worksheet\", \"Calculate\", 4, 0) & vbLf\n    result = result & \"Worksheet_Calculate_noargs_8=\" & DoCase(\"Worksheet\", \"Calculate\", 8, 0) & vbLf\n    result = result & \"Workbook_Name_noargs_1=\" & DoCase(\"Workbook\", \"Name\", 1, 0) & vbLf\n    result = result & \"Workbook_Name_noargs_2=\" & DoCase(\"Workbook\", \"Name\", 2, 0) & vbLf\n    result = result & \"Workbook_Name_noargs_3=\" & DoCase(\"Workbook\", \"Name\", 3, 0) & vbLf\n    result = result & \"Workbook_Name_noargs_4=\" & DoCase(\"Workbook\", \"Name\", 4, 0) & vbLf\n    result = result & \"Workbook_Name_noargs_8=\" & DoCase(\"Workbook\", \"Name\", 8, 0) & vbLf\n    result = result & \"Collection_Count_noargs_1=\" & DoCase(\"Collection\", \"Count\", 1, 0) & vbLf\n    result = result & \"Collection_Count_noargs_2=\" & DoCase(\"Collection\", \"Count\", 2, 0) & vbLf\n    result = result & \"Collection_Count_noargs_3=\" & DoCase(\"Collection\", \"Count\", 3, 0) & vbLf\n    result = result & \"Collection_Count_noargs_4=\" & DoCase(\"Collection\", \"Count\", 4, 0) & vbLf\n    result = result & \"Collection_Count_noargs_8=\" & DoCase(\"Collection\", \"Count\", 8, 0) & vbLf\n    result = result & \"Collection_Add_noargs_1=\" & DoCase(\"Collection\", \"Add\", 1, 0) & vbLf\n    result = result & \"Collection_Add_noargs_2=\" & DoCase(\"Collection\", \"Add\", 2, 0) & vbLf\n    result = result & \"Collection_Add_noargs_3=\" & DoCase(\"Collection\", \"Add\", 3, 0) & vbLf\n    result = result & \"Collection_Add_noargs_4=\" & DoCase(\"Collection\", \"Add\", 4, 0) & vbLf\n    result = result & \"Collection_Add_noargs_8=\" & DoCase(\"Collection\", \"Add\", 8, 0) & vbLf\n    result = result & \"Err_Number_noargs_1=\" & DoCase(\"Err\", \"Number\", 1, 0) & vbLf\n    result = result & \"Err_Number_noargs_2=\" & DoCase(\"Err\", \"Number\", 2, 0) & vbLf\n    result = result & \"Err_Number_noargs_3=\" & DoCase(\"Err\", \"Number\", 3, 0) & vbLf\n    result = result & \"Err_Number_noargs_4=\" & DoCase(\"Err\", \"Number\", 4, 0) & vbLf\n    result = result & \"Err_Number_noargs_8=\" & DoCase(\"Err\", \"Number\", 8, 0) & vbLf\n    result = result & \"Err_Clear_noargs_1=\" & DoCase(\"Err\", \"Clear\", 1, 0) & vbLf\n    result = result & \"Err_Clear_noargs_2=\" & DoCase(\"Err\", \"Clear\", 2, 0) & vbLf\n    result = result & \"Err_Clear_noargs_3=\" & DoCase(\"Err\", \"Clear\", 3, 0) & vbLf\n    result = result & \"Err_Clear_noargs_4=\" & DoCase(\"Err\", \"Clear\", 4, 0) & vbLf\n    result = result & \"Err_Clear_noargs_8=\" & DoCase(\"Err\", \"Clear\", 8, 0) & vbLf\n    result = result & \"Range_Value_4_1=\" & DoCase(\"Range\", \"Value\", 4, 1) & vbLf\n    result = result & \"Range_Value_4_2=\" & DoCase(\"Range\", \"Value\", 4, 2) & vbLf\n    result = result & \"Range_Value_4_3=\" & DoCase(\"Range\", \"Value\", 4, 3) & vbLf\n    result = result & \"Range_Value_8_1=\" & DoCase(\"Range\", \"Value\", 8, 1) & vbLf\n    result = result & \"Range_Value_8_2=\" & DoCase(\"Range\", \"Value\", 8, 2) & vbLf\n    result = result & \"Range_Value_8_3=\" & DoCase(\"Range\", \"Value\", 8, 3) & vbLf\n    result = result & \"Worksheet_Name_4_1=\" & DoCase(\"Worksheet\", \"Name\", 4, 1) & vbLf\n    result = result & \"Worksheet_Name_4_2=\" & DoCase(\"Worksheet\", \"Name\", 4, 2) & vbLf\n    result = result & \"Worksheet_Name_4_3=\" & DoCase(\"Worksheet\", \"Name\", 4, 3) & vbLf\n    result = result & \"Worksheet_Name_8_1=\" & DoCase(\"Worksheet\", \"Name\", 8, 1) & vbLf\n    result = result & \"Worksheet_Name_8_2=\" & DoCase(\"Worksheet\", \"Name\", 8, 2) & vbLf\n    result = result & \"Worksheet_Name_8_3=\" & DoCase(\"Worksheet\", \"Name\", 8, 3) & vbLf\n    Probe = result\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "callbyname_arity",
+    "source": "callbyname_binding_callbyname_arity.bas",
+    "procedure": "Driver.Probe",
+    "expected": "NeedArg_1_0=449~Empty~~Empty\nNeedArg_2_0=450~Empty~~Empty\nNeedArg_3_0=449~Empty~~Empty\nIndexedProp_4_1=449~Empty~~Empty\nIndexedProp_4_2=449~Empty~~Empty\nHeldValue_2_1=451~Empty~~Empty\nHeldValue_3_1=451~Empty~~Empty\nHeldValue_4_3=451~Empty~~Empty\nHeldValue_8_3=451~Empty~~Empty\nOnlyLetProp_4_3=450~Empty~~Empty\n",
+    "measured_cases": 10,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "callbyname_arity.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "callbyname_arity",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic HeldValue As Variant\nPublic Trace As String\nPublic Function MethodCall() As String\n    MethodCall = \"method\"\nEnd Function\nPublic Property Get ReadOnlyProp() As Variant\n    ReadOnlyProp = \"get\"\nEnd Property\nPublic Property Let OnlyLetProp(ByVal value As Variant)\n    Trace = \"let:\" & TypeName(value)\nEnd Property\nPublic Property Set OnlySetProp(ByVal value As Variant)\n    Trace = \"set:\" & TypeName(value)\nEnd Property\nPublic Property Let BothProp(ByVal value As Variant)\n    Trace = \"let:\" & TypeName(value)\nEnd Property\nPublic Property Set BothProp(ByVal value As Variant)\n    Trace = \"set:\" & TypeName(value)\nEnd Property\nPublic Property Get IndexedProp(ByVal index As Long) As Variant\n    IndexedProp = \"get:\" & CStr(index)\nEnd Property\nPublic Property Let IndexedProp(ByVal index As Long, ByVal value As Variant)\n    Trace = \"index:\" & CStr(index) & \":\" & TypeName(value)\nEnd Property\n\nPublic Function NeedArg(ByVal value As Long) As String\n    NeedArg = CStr(value)\nEnd Function\n"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPrivate Function DoCase(ByVal member As String, ByVal flag As Variant, ByVal scenario As Long) As String\n    Dim obj As New Item\n    Dim result As Variant\n    On Error Resume Next\n    Select Case scenario\n    Case 0\n        result = CallByName(obj, member, flag)\n    Case 1\n        result = CallByName(obj, member, flag, \"x\")\n    Case 2\n        result = CallByName(obj, member, flag, Range(\"A1\"))\n    Case 3\n        result = CallByName(obj, member, flag, 2, \"x\")\n    End Select\n    DoCase = CStr(Err.Number) & \"~\" & TypeName(result) & \"~\" & obj.Trace & \"~\" & TypeName(obj.HeldValue)\nEnd Function\nPublic Function Probe() As String\n    Dim result As String\n    result = result & \"NeedArg_1_0=\" & DoCase(\"NeedArg\", 1, 0) & vbLf\n    result = result & \"NeedArg_2_0=\" & DoCase(\"NeedArg\", 2, 0) & vbLf\n    result = result & \"NeedArg_3_0=\" & DoCase(\"NeedArg\", 3, 0) & vbLf\n    result = result & \"IndexedProp_4_1=\" & DoCase(\"IndexedProp\", 4, 1) & vbLf\n    result = result & \"IndexedProp_4_2=\" & DoCase(\"IndexedProp\", 4, 2) & vbLf\n    result = result & \"HeldValue_2_1=\" & DoCase(\"HeldValue\", 2, 1) & vbLf\n    result = result & \"HeldValue_3_1=\" & DoCase(\"HeldValue\", 3, 1) & vbLf\n    result = result & \"HeldValue_4_3=\" & DoCase(\"HeldValue\", 4, 3) & vbLf\n    result = result & \"HeldValue_8_3=\" & DoCase(\"HeldValue\", 8, 3) & vbLf\n    result = result & \"OnlyLetProp_4_3=\" & DoCase(\"OnlyLetProp\", 4, 3) & vbLf\n    Probe = result\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "callbyname_host_indices",
+    "source": "callbyname_binding_callbyname_host_indices.bas",
+    "procedure": "Driver.Probe",
+    "expected": "Value_2_9=1004~Empty~\nValue_2_10=0~Empty~\nValue_2_11=13~Empty~\nValue_4_4=0~Empty~x\nValue_4_5=1004~Empty~\nValue_4_6=445~Empty~\nValue_4_7=450~Empty~\nValue_4_12=13~Empty~\nValue_4_13=0~Empty~x\nValue_4_14=0~Empty~x\nValue2_2_10=451~Empty~\nValue2_4_4=451~Empty~\nItem_2_0=450~Empty~\nItem_2_9=0~Empty~\nItem_4_1=450~Empty~\nItem_4_3=0~Empty~x\nItem_4_8=0~Empty~\n_Default_1_0=438~Empty~\n_Default_2_0=0~Empty~\n_Default_4_1=0~Empty~x\n_Default_4_3=0~Empty~x\n_Default_4_8=0~Empty~\n",
+    "measured_cases": 22,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "callbyname_host_indices.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "callbyname_host_indices",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPrivate Function DoCase(ByVal target As String, ByVal member As String, ByVal flag As Variant, ByVal scenario As Long) As String\n    Dim obj As Object\n    Dim result As Variant\n    Dim savedNumber As Long\n    ThisWorkbook.Worksheets(1).Name = \"Sheet1\"\n    Range(\"A1\").Value = \"\"\n    Range(\"B1\").Value = \"payload\"\n    Select Case target\n    Case \"Range\"\n        Set obj = Range(\"A1\")\n    Case \"Worksheet\"\n        Set obj = ThisWorkbook.Worksheets(1)\n    Case \"Workbook\"\n        Set obj = ThisWorkbook\n    Case \"Collection\"\n        Set obj = New Collection\n        obj.Add \"one\"\n    Case \"Err\"\n        Set obj = Err\n    End Select\n    Err.Clear\n    On Error Resume Next\n    Select Case scenario\n    Case 0\n        result = CallByName(obj, member, flag)\n    Case 1\n        result = CallByName(obj, member, flag, \"x\")\n    Case 2\n        result = CallByName(obj, member, flag, Range(\"B1\"))\n    Case 3\n        result = CallByName(obj, member, flag, 1, \"x\")\n    Case 4\n        result = CallByName(obj, member, flag, 10, \"x\")\n    Case 5\n        result = CallByName(obj, member, flag, 11, \"x\")\n    Case 6\n        result = CallByName(obj, member, flag, 12, \"x\")\n    Case 7\n        result = CallByName(obj, member, flag, 10, 1, \"x\")\n    Case 8\n        result = CallByName(obj, member, flag, 2, 1, \"x\")\n    Case 9\n        result = CallByName(obj, member, flag, 1)\n    Case 10\n        result = CallByName(obj, member, flag, 10)\n    Case 11\n        result = CallByName(obj, member, flag, Null)\n    Case 12\n        result = CallByName(obj, member, flag, Null, \"x\")\n    Case 13\n        result = CallByName(obj, member, flag, 9.6, \"x\")\n    Case 14\n        result = CallByName(obj, member, flag, \"10\", \"x\")\n    End Select\n    savedNumber = Err.Number\n    DoCase = CStr(savedNumber) & \"~\" & TypeName(result) & \"~\" & CStr(Range(\"A1\").Value)\nEnd Function\nPublic Function Probe() As String\n    Dim result As String\n    result = result & \"Value_2_9=\" & DoCase(\"Range\", \"Value\", 2, 9) & vbLf\n    result = result & \"Value_2_10=\" & DoCase(\"Range\", \"Value\", 2, 10) & vbLf\n    result = result & \"Value_2_11=\" & DoCase(\"Range\", \"Value\", 2, 11) & vbLf\n    result = result & \"Value_4_4=\" & DoCase(\"Range\", \"Value\", 4, 4) & vbLf\n    result = result & \"Value_4_5=\" & DoCase(\"Range\", \"Value\", 4, 5) & vbLf\n    result = result & \"Value_4_6=\" & DoCase(\"Range\", \"Value\", 4, 6) & vbLf\n    result = result & \"Value_4_7=\" & DoCase(\"Range\", \"Value\", 4, 7) & vbLf\n    result = result & \"Value_4_12=\" & DoCase(\"Range\", \"Value\", 4, 12) & vbLf\n    result = result & \"Value_4_13=\" & DoCase(\"Range\", \"Value\", 4, 13) & vbLf\n    result = result & \"Value_4_14=\" & DoCase(\"Range\", \"Value\", 4, 14) & vbLf\n    result = result & \"Value2_2_10=\" & DoCase(\"Range\", \"Value2\", 2, 10) & vbLf\n    result = result & \"Value2_4_4=\" & DoCase(\"Range\", \"Value2\", 4, 4) & vbLf\n    result = result & \"Item_2_0=\" & DoCase(\"Range\", \"Item\", 2, 0) & vbLf\n    result = result & \"Item_2_9=\" & DoCase(\"Range\", \"Item\", 2, 9) & vbLf\n    result = result & \"Item_4_1=\" & DoCase(\"Range\", \"Item\", 4, 1) & vbLf\n    result = result & \"Item_4_3=\" & DoCase(\"Range\", \"Item\", 4, 3) & vbLf\n    result = result & \"Item_4_8=\" & DoCase(\"Range\", \"Item\", 4, 8) & vbLf\n    result = result & \"_Default_1_0=\" & DoCase(\"Range\", \"_Default\", 1, 0) & vbLf\n    result = result & \"_Default_2_0=\" & DoCase(\"Range\", \"_Default\", 2, 0) & vbLf\n    result = result & \"_Default_4_1=\" & DoCase(\"Range\", \"_Default\", 4, 1) & vbLf\n    result = result & \"_Default_4_3=\" & DoCase(\"Range\", \"_Default\", 4, 3) & vbLf\n    result = result & \"_Default_4_8=\" & DoCase(\"Range\", \"_Default\", 4, 8) & vbLf\n    Probe = result\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "callbyname_optional",
+    "source": "callbyname_binding_callbyname_optional.bas",
+    "procedure": "Driver.Probe",
+    "expected": "optional_let=0~let:7:String\noptional_set=0~set:7:String\nexplicit_let=0~let:2:String\nbyref_copyback=0~42\nobject_name_kind=0~7\ndictionary_object=0~String\n",
+    "measured_cases": 6,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "callbyname_optional.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "callbyname_optional",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic Trace As String\nPublic Property Let Choice(Optional ByVal index As Long = 7, ByVal value As Variant)\n    Trace = \"let:\" & CStr(index) & \":\" & TypeName(value)\nEnd Property\nPublic Property Set Choice(Optional ByVal index As Long = 7, ByVal value As Variant)\n    Trace = \"set:\" & CStr(index) & \":\" & TypeName(value)\nEnd Property\nPublic Property Get Choice(Optional ByVal index As Long = 7) As Variant\n    Choice = CStr(index)\nEnd Property\nPublic Sub Touch(ByRef value As Long)\n    value = value + 2\nEnd Sub\n"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim result As Variant\n    Dim report As String\n    Dim n As Long\n    Dim dict As Object\n    On Error Resume Next\n    CallByName obj, \"Choice\", VbLet, \"x\"\n    report = \"optional_let=\" & CStr(Err.Number) & \"~\" & obj.Trace & vbLf\n    Err.Clear\n    CallByName obj, \"Choice\", VbSet, \"x\"\n    report = report & \"optional_set=\" & CStr(Err.Number) & \"~\" & obj.Trace & vbLf\n    Err.Clear\n    CallByName obj, \"Choice\", VbLet, 2, \"x\"\n    report = report & \"explicit_let=\" & CStr(Err.Number) & \"~\" & obj.Trace & vbLf\n    Err.Clear\n    n = 40\n    CallByName obj, \"Touch\", VbMethod, n\n    report = report & \"byref_copyback=\" & CStr(Err.Number) & \"~\" & CStr(n) & vbLf\n    Err.Clear\n    Range(\"C1\").Value = \"Choice\"\n    Range(\"D1\").Value = 2.6\n    result = CallByName(obj, Range(\"C1\"), Range(\"D1\"))\n    report = report & \"object_name_kind=\" & CStr(Err.Number) & \"~\" & CStr(result) & vbLf\n    Err.Clear\n    Set dict = CreateObject(\"Scripting.Dictionary\")\n    Range(\"A1\").Value = \"payload\"\n    CallByName dict, \"Item\", VbLet, \"one\", Range(\"A1\")\n    report = report & \"dictionary_object=\" & CStr(Err.Number) & \"~\" & TypeName(dict.Item(\"one\")) & vbLf\n    Probe = report\nEnd Function\n"
+        }
+      ]
+    }
+  },
+  {
+    "name": "next_indexed_property_assignment",
+    "source": "callbyname_binding_next_indexed_property_assignment.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|indexed",
+    "measured_cases": 1,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "next_indexed_property_assignment.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "next_indexed_property_assignment",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPrivate held(1 To 2) As String\nPublic Property Let 陰(ByVal index As Long, ByVal value As String)\n    held(index) = value\nEnd Property\nPublic Property Get 陰(ByVal index As Long) As String\n    陰 = held(index)\nEnd Property"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim value As String\n    On Error Resume Next\n    CallByName obj, \"餌\", VbLet, 2, \"indexed\"\n    value = CallByName(obj, \"餌\", VbGet, 2)\n    Probe = CStr(Err.Number) & \"|\" & value\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "next_property_set_object",
+    "source": "callbyname_binding_next_property_set_object.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|Range",
+    "measured_cases": 1,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "next_property_set_object.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "next_property_set_object",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPrivate held As Object\nPublic Property Set 陰(ByVal value As Object)\n    Set held = value\nEnd Property\nPublic Property Get 陰() As Object\n    Set 陰 = held\nEnd Property"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim value As Object\n    On Error Resume Next\n    CallByName obj, \"餌\", VbSet, Range(\"A1\")\n    Set value = CallByName(obj, \"餌\", VbGet)\n    Probe = CStr(Err.Number) & \"|\" & TypeName(value)\nEnd Function"
+        }
+      ]
+    }
+  }
+]

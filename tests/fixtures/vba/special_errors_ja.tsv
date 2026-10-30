@@ -1,0 +1,37 @@
+DispatchRaise	40040	omitted	terminate		-2146788248
+StatementResumeNext	40039	omitted	return	after	40039|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+StatementGoTo	40039	omitted	return	handler	40039|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+StatementNested	40039	omitted	return	before|inner-after|outer-after	40039|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+RaiseResumeNext	40039	omitted	return	after	40039|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+RaiseGoTo	40039	omitted	return	handler	40039|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+AssignNumber	40039	omitted	return	after	40039||||0
+RaiseWithState	40039	omitted	return		40039|old|old description|oldHelp.chm|77
+DispatchRaise	40039	omitted	return		40039|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+RaiseResumeNext	40039	empty	return	after	40039|custom||{VBA_HELP}|1040039
+RaiseResumeNext	40039	message	return	after	40039|custom|message|{VBA_HELP}|1040039
+RaiseGoTo	40039	empty	return	handler	40039|custom||{VBA_HELP}|1040039
+RaiseGoTo	40039	message	return	handler	40039|custom|message|{VBA_HELP}|1040039
+StatementResumeNext	40040	omitted	terminate	before	-2146788248
+StatementGoTo	40040	omitted	terminate	before	-2146788248
+StatementNested	40040	omitted	terminate	before	-2146788248
+RaiseResumeNext	40040	omitted	return	after	440|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+RaiseGoTo	40040	omitted	return	handler	440|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+AssignNumber	40040	omitted	return	after	40040||||0
+RaiseWithState	40040	omitted	return		440|old|old description|oldHelp.chm|77
+RaiseResumeNext	40040	empty	return	after	440|custom||{VBA_HELP}|1040040
+RaiseResumeNext	40040	message	return	after	440|custom|message|{VBA_HELP}|1040040
+RaiseGoTo	40040	empty	return	handler	440|custom||{VBA_HELP}|1040040
+RaiseGoTo	40040	message	return	handler	440|custom|message|{VBA_HELP}|1040040
+StatementResumeNext	40041	omitted	return	after	40041|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+StatementGoTo	40041	omitted	return	handler	40041|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+StatementNested	40041	omitted	return	before|inner-after|outer-after	40041|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+RaiseResumeNext	40041	omitted	return	after	40041|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+RaiseGoTo	40041	omitted	return	handler	40041|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+AssignNumber	40041	omitted	return	after	40041||||0
+RaiseWithState	40041	omitted	return		40041|old|old description|oldHelp.chm|77
+DispatchRaise	40041	omitted	return		40041|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|{VBA_HELP}|1000095
+RaiseResumeNext	40041	empty	return	after	40041|custom||{VBA_HELP}|1040041
+RaiseResumeNext	40041	message	return	after	40041|custom|message|{VBA_HELP}|1040041
+RaiseGoTo	40041	empty	return	handler	40041|custom||{VBA_HELP}|1040041
+RaiseGoTo	40041	message	return	handler	40041|custom|message|{VBA_HELP}|1040041
+StatementUnhandled	40040	omitted	terminate	before	-2146788248

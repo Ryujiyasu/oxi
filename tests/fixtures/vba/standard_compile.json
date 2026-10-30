@@ -1,0 +1,32 @@
+[
+  {
+    "name": "ambiguous_function",
+    "source": "negative_ambiguous_function.bas",
+    "procedure": "DriverModule.Probe",
+    "message": "名前が適切ではありません: Clash"
+  },
+  {
+    "name": "private_qualified_function",
+    "source": "negative_private_qualified_function.bas",
+    "procedure": "DriverModule.Probe",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "private_unqualified_function",
+    "source": "negative_private_unqualified_function.bas",
+    "procedure": "DriverModule.Probe",
+    "message": "Sub または Function が定義されていません。"
+  },
+  {
+    "name": "private_qualified_field",
+    "source": "negative_private_qualified_field.bas",
+    "procedure": "DriverModule.Probe",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "private_unqualified_field",
+    "source": "negative_private_unqualified_field.bas",
+    "procedure": "DriverModule.Probe",
+    "message": "変数が定義されていません。"
+  }
+]

@@ -22,8 +22,8 @@
 //! by diffing its output against Excel driven over COM. Two consequences:
 //!
 //! - `BTreeMap` everywhere, so iteration order never varies.
-//! - No volatile functions (`NOW`, `TODAY`, `RAND`). They need an injected clock
-//!   and seed before they can be added; see `functions.rs`.
+//! - Volatile functions use an injected clock and a local random generator.
+//!   The host selects which dirty or volatile formulas participate in a pass.
 //!
 //! # Example
 //!
@@ -43,6 +43,7 @@
 
 pub mod ast;
 pub mod case_fold;
+pub mod column_width;
 pub mod datetime;
 mod distributions;
 mod functions_more;
@@ -59,9 +60,11 @@ pub mod r1c1;
 pub mod reference;
 pub mod regex;
 pub mod value;
+mod utf16;
+mod utf16_extended;
 
 pub use ast::{BinaryOp, Expr, UnaryOp};
-pub use engine::{set_digit_width, set_user_function_hook, CalcError, RecalcReport, UserArg, UserCaller, Workbook};
+pub use engine::{record_user_function_reads, FormulaCell, defer_user_function, set_digit_width, set_user_function_hook, CalcError, RecalcReport, UserArg, UserCaller, Workbook};
 pub use numfmt::{format_number, format_text, looks_like_a_date};
 pub use lexer::{
     canonical_formula, canonical_tables, map_table_references, rename_table_column, drop_own_table_name, drop_sheet_in_formula, move_sheet_in_formula, implied_intersections, move_formula_references, normalise_formula_ranges, rename_name_in_formula, rename_sheet_in_formula, without_intersections,

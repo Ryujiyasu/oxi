@@ -1,0 +1,260 @@
+[
+  {
+    "name": "project_run_arguments",
+    "source": "project_run_arguments.bas",
+    "package_fixture": "project_run_arguments.xlsm",
+    "procedure": "Driver.Probe",
+    "expected": "r0k-1=5|Empty||\nr0k0=0|String|Long:7|NAB\nr0k1=0|Error|エラー 2015|NA\nr0k2=0|Error|エラー 2015|NA\nr0k3=0|Error|エラー 2015|NA\nr0k4=0|Error|エラー 2015|NA\nr0k5=0|Error|エラー 2015|NA\nr0k6=0|Error|エラー 2015|NA\nr0k7=0|Error|エラー 2015|NA\nr0k8=0|Error|エラー 2015|NA\nr0k9=1004|Empty||NA\nr0k11=5|Empty||NA\nr0k12=1004|Empty||NA\nr0k13=1004|Empty||NA\nr0k14=1004|Empty||NA\nr0k15=0|String|Long:7|NADB\nr0k16=438|Empty||NA\nr0k17=1004|Empty||NA\nr0k18=1004|Empty||NA\nr0k19=0|Error|エラー 2015|NA\nr0k20=450|Empty||NA\nr1k-1=5|Empty||\nr1k0=0|String|Long:7|NAB\nr1k1=0|Error|エラー 2015|NA\nr1k2=0|Error|エラー 2015|NA\nr1k3=0|Error|エラー 2015|NA\nr1k4=0|Error|エラー 2015|NA\nr1k5=0|Error|エラー 2015|NA\nr1k6=0|Error|エラー 2015|NA\nr1k7=0|Error|エラー 2015|NA\nr1k8=0|Error|エラー 2015|NA\nr1k9=1004|Empty||NA\nr1k11=5|Empty||NA\nr1k12=1004|Empty||NA\nr1k13=1004|Empty||NA\nr1k14=1004|Empty||NA\nr1k15=0|String|Long:7|NADB\nr1k16=438|Empty||NA\nr1k17=1004|Empty||NA\nr1k18=1004|Empty||NA\nr1k19=0|Error|エラー 2015|NA\nr1k20=450|Empty||NA\nr2k-1=5|Empty||\nr2k0=0|String|Long:7|NAB\nr2k1=0|Error|エラー 2015|NA\nr2k2=0|Error|エラー 2015|NA\nr2k3=0|Error|エラー 2015|NA\nr2k4=0|Error|エラー 2015|NA\nr2k5=0|Error|エラー 2015|NA\nr2k6=0|Error|エラー 2015|NA\nr2k7=0|Error|エラー 2015|NA\nr2k8=0|Error|エラー 2015|NA\nr2k9=1004|Empty||NA\nr2k11=5|Empty||NA\nr2k12=1004|Empty||NA\nr2k13=1004|Empty||NA\nr2k14=1004|Empty||NA\nr2k15=0|String|Long:7|NADB\nr2k16=438|Empty||NA\nr2k17=1004|Empty||NA\nr2k18=1004|Empty||NA\nr2k19=0|Error|エラー 2015|NA\nr2k20=450|Empty||NA\nr3k-1=5|Empty||\nr3k0=0|String|Long:7|NAB\nr3k1=0|Error|エラー 2015|NA\nr3k2=0|Error|エラー 2015|NA\nr3k3=0|Error|エラー 2015|NA\nr3k4=0|Error|エラー 2015|NA\nr3k5=0|Error|エラー 2015|NA\nr3k6=0|Error|エラー 2015|NA\nr3k7=0|Error|エラー 2015|NA\nr3k8=0|Error|エラー 2015|NA\nr3k9=1004|Empty||NA\nr3k11=5|Empty||NA\nr3k12=1004|Empty||NA\nr3k13=1004|Empty||NA\nr3k14=1004|Empty||NA\nr3k15=0|String|Long:7|NADB\nr3k16=438|Empty||NA\nr3k17=1004|Empty||NA\nr3k18=1004|Empty||NA\nr3k19=0|Error|エラー 2015|NA\nr3k20=450|Empty||NA\n",
+    "measured_cases": 84,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "project_run_arguments.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932,
+      "errorLanguage": "ja-JP"
+    },
+    "measurement": {
+      "modules": [
+        {
+          "kind": 1,
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Trace As String\nPrivate Function GetMacro(ByVal kind As Long) As Variant\nTrace = Trace & \"N\"\nSelect Case kind\nCase 0: GetMacro = \"Targets.Echo\"\nCase 1: GetMacro = Empty\nCase 2: GetMacro = Null\nCase 3: GetMacro = CByte(1)\nCase 4: GetMacro = CLng(0)\nCase 5: GetMacro = CLng(-1)\nCase 6: GetMacro = CDbl(1.5)\nCase 7: GetMacro = True\nCase 8: GetMacro = False\nCase 9: GetMacro = CVErr(2042)\nCase 10: GetMacro = Array(\"Targets.Echo\")\nCase 11: Set GetMacro = Nothing\nCase 12: Set GetMacro = Range(\"A1\")\nCase 13: Set GetMacro = Range(\"A2\")\nCase 14: Set GetMacro = Range(\"A3\")\nCase 15: Set GetMacro = New NameBox\nCase 16: Set GetMacro = New NoDefault\nCase 17: GetMacro = \"\"\nCase 18: GetMacro = \" \"\nCase 19: GetMacro = \"1\"\nCase 20: GetMacro = \"Targets.Zero\"\nEnd Select\nEnd Function\nPrivate Function GetArgument() As Variant\nTrace = Trace & \"A\"\nGetArgument = CLng(7)\nEnd Function\nPrivate Function TryRun(ByVal kind As Long, ByVal route As Long) As String\nDim value As Variant\nDim failure As Long\nDim text As String\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nIf kind = -1 Then\nSelect Case route\nCase 0: value = Application.Run()\nCase 1\nWith Application\nvalue = .Run()\nEnd With\nCase 2: value = Run()\nCase 3: value = CallByName(Application, \"Run\", VbMethod)\nEnd Select\nElse\nSelect Case route\nCase 0: value = Application.Run(GetMacro(kind), GetArgument())\nCase 1\nWith Application\nvalue = .Run(GetMacro(kind), GetArgument())\nEnd With\nCase 2: value = Run(GetMacro(kind), GetArgument())\nCase 3: value = CallByName(Application, \"Run\", VbMethod, GetMacro(kind), GetArgument())\nEnd Select\nEnd If\nfailure = Err.Number\nErr.Clear\nIf IsObject(value) Then\ntext = \"object\"\nElseIf IsArray(value) Then\ntext = \"array\"\nElseIf IsError(value) Then\ntext = CStr(value)\nElseIf IsNull(value) Then\ntext = \"null\"\nElse\ntext = CStr(value)\nEnd If\nTryRun = CStr(failure) & \"|\" & TypeName(value) & \"|\" & text & \"|\" & Trace\nEnd Function\nPublic Function Probe() As String\nDim report As String\nRange(\"A1\").Value = \"Targets.Echo\"\nRange(\"A2\").ClearContents\nRange(\"A3\").Value = CVErr(2042)\nreport = report & \"r0k-1=\" & TryRun(-1, 0) & vbLf\nreport = report & \"r0k0=\" & TryRun(0, 0) & vbLf\nreport = report & \"r0k1=\" & TryRun(1, 0) & vbLf\nreport = report & \"r0k2=\" & TryRun(2, 0) & vbLf\nreport = report & \"r0k3=\" & TryRun(3, 0) & vbLf\nreport = report & \"r0k4=\" & TryRun(4, 0) & vbLf\nreport = report & \"r0k5=\" & TryRun(5, 0) & vbLf\nreport = report & \"r0k6=\" & TryRun(6, 0) & vbLf\nreport = report & \"r0k7=\" & TryRun(7, 0) & vbLf\nreport = report & \"r0k8=\" & TryRun(8, 0) & vbLf\nreport = report & \"r0k9=\" & TryRun(9, 0) & vbLf\nreport = report & \"r0k11=\" & TryRun(11, 0) & vbLf\nreport = report & \"r0k12=\" & TryRun(12, 0) & vbLf\nreport = report & \"r0k13=\" & TryRun(13, 0) & vbLf\nreport = report & \"r0k14=\" & TryRun(14, 0) & vbLf\nreport = report & \"r0k15=\" & TryRun(15, 0) & vbLf\nreport = report & \"r0k16=\" & TryRun(16, 0) & vbLf\nreport = report & \"r0k17=\" & TryRun(17, 0) & vbLf\nreport = report & \"r0k18=\" & TryRun(18, 0) & vbLf\nreport = report & \"r0k19=\" & TryRun(19, 0) & vbLf\nreport = report & \"r0k20=\" & TryRun(20, 0) & vbLf\nreport = report & \"r1k-1=\" & TryRun(-1, 1) & vbLf\nreport = report & \"r1k0=\" & TryRun(0, 1) & vbLf\nreport = report & \"r1k1=\" & TryRun(1, 1) & vbLf\nreport = report & \"r1k2=\" & TryRun(2, 1) & vbLf\nreport = report & \"r1k3=\" & TryRun(3, 1) & vbLf\nreport = report & \"r1k4=\" & TryRun(4, 1) & vbLf\nreport = report & \"r1k5=\" & TryRun(5, 1) & vbLf\nreport = report & \"r1k6=\" & TryRun(6, 1) & vbLf\nreport = report & \"r1k7=\" & TryRun(7, 1) & vbLf\nreport = report & \"r1k8=\" & TryRun(8, 1) & vbLf\nreport = report & \"r1k9=\" & TryRun(9, 1) & vbLf\nreport = report & \"r1k11=\" & TryRun(11, 1) & vbLf\nreport = report & \"r1k12=\" & TryRun(12, 1) & vbLf\nreport = report & \"r1k13=\" & TryRun(13, 1) & vbLf\nreport = report & \"r1k14=\" & TryRun(14, 1) & vbLf\nreport = report & \"r1k15=\" & TryRun(15, 1) & vbLf\nreport = report & \"r1k16=\" & TryRun(16, 1) & vbLf\nreport = report & \"r1k17=\" & TryRun(17, 1) & vbLf\nreport = report & \"r1k18=\" & TryRun(18, 1) & vbLf\nreport = report & \"r1k19=\" & TryRun(19, 1) & vbLf\nreport = report & \"r1k20=\" & TryRun(20, 1) & vbLf\nreport = report & \"r2k-1=\" & TryRun(-1, 2) & vbLf\nreport = report & \"r2k0=\" & TryRun(0, 2) & vbLf\nreport = report & \"r2k1=\" & TryRun(1, 2) & vbLf\nreport = report & \"r2k2=\" & TryRun(2, 2) & vbLf\nreport = report & \"r2k3=\" & TryRun(3, 2) & vbLf\nreport = report & \"r2k4=\" & TryRun(4, 2) & vbLf\nreport = report & \"r2k5=\" & TryRun(5, 2) & vbLf\nreport = report & \"r2k6=\" & TryRun(6, 2) & vbLf\nreport = report & \"r2k7=\" & TryRun(7, 2) & vbLf\nreport = report & \"r2k8=\" & TryRun(8, 2) & vbLf\nreport = report & \"r2k9=\" & TryRun(9, 2) & vbLf\nreport = report & \"r2k11=\" & TryRun(11, 2) & vbLf\nreport = report & \"r2k12=\" & TryRun(12, 2) & vbLf\nreport = report & \"r2k13=\" & TryRun(13, 2) & vbLf\nreport = report & \"r2k14=\" & TryRun(14, 2) & vbLf\nreport = report & \"r2k15=\" & TryRun(15, 2) & vbLf\nreport = report & \"r2k16=\" & TryRun(16, 2) & vbLf\nreport = report & \"r2k17=\" & TryRun(17, 2) & vbLf\nreport = report & \"r2k18=\" & TryRun(18, 2) & vbLf\nreport = report & \"r2k19=\" & TryRun(19, 2) & vbLf\nreport = report & \"r2k20=\" & TryRun(20, 2) & vbLf\nreport = report & \"r3k-1=\" & TryRun(-1, 3) & vbLf\nreport = report & \"r3k0=\" & TryRun(0, 3) & vbLf\nreport = report & \"r3k1=\" & TryRun(1, 3) & vbLf\nreport = report & \"r3k2=\" & TryRun(2, 3) & vbLf\nreport = report & \"r3k3=\" & TryRun(3, 3) & vbLf\nreport = report & \"r3k4=\" & TryRun(4, 3) & vbLf\nreport = report & \"r3k5=\" & TryRun(5, 3) & vbLf\nreport = report & \"r3k6=\" & TryRun(6, 3) & vbLf\nreport = report & \"r3k7=\" & TryRun(7, 3) & vbLf\nreport = report & \"r3k8=\" & TryRun(8, 3) & vbLf\nreport = report & \"r3k9=\" & TryRun(9, 3) & vbLf\nreport = report & \"r3k11=\" & TryRun(11, 3) & vbLf\nreport = report & \"r3k12=\" & TryRun(12, 3) & vbLf\nreport = report & \"r3k13=\" & TryRun(13, 3) & vbLf\nreport = report & \"r3k14=\" & TryRun(14, 3) & vbLf\nreport = report & \"r3k15=\" & TryRun(15, 3) & vbLf\nreport = report & \"r3k16=\" & TryRun(16, 3) & vbLf\nreport = report & \"r3k17=\" & TryRun(17, 3) & vbLf\nreport = report & \"r3k18=\" & TryRun(18, 3) & vbLf\nreport = report & \"r3k19=\" & TryRun(19, 3) & vbLf\nreport = report & \"r3k20=\" & TryRun(20, 3) & vbLf\nProbe = report\nEnd Function\nPublic Function ProbeOne(ByVal kind As Long, ByVal route As Long) As String\nRange(\"A1\").Value = \"Targets.Echo\"\nRange(\"A2\").ClearContents\nRange(\"A3\").Value = CVErr(2042)\nProbeOne = TryRun(kind, route)\nEnd Function\n",
+          "old": ""
+        },
+        {
+          "kind": 1,
+          "name": "Targets",
+          "body": "Option Explicit\nPublic Function Echo(Optional value As Variant) As String\nDriver.Trace = Driver.Trace & \"B\"\nEcho = TypeName(value) & \":\" & CStr(value)\nEnd Function\nPublic Function Zero() As String\nDriver.Trace = Driver.Trace & \"Z\"\nZero = \"zero\"\nEnd Function\n",
+          "old": ""
+        },
+        {
+          "kind": 2,
+          "name": "NameBox",
+          "body": "Option Explicit\nPublic Property Get Value() As String\nDriver.Trace = Driver.Trace & \"D\"\nValue = \"Targets.Echo\"\nEnd Property\n",
+          "old": "",
+          "member_attributes": {
+            "Value": {
+              "VB_UserMemId": 0
+            }
+          }
+        },
+        {
+          "kind": 2,
+          "name": "NoDefault",
+          "body": "Option Explicit\n",
+          "old": ""
+        }
+      ]
+    }
+  },
+  {
+    "name": "project_run_name_text",
+    "source": "project_run_name_text.bas",
+    "package_fixture": "project_run_name_text.xlsm",
+    "procedure": "Driver.Probe",
+    "expected": "r0k21=0|Error|エラー 2015|NA\nr0k22=0|Error|エラー 2015|NA\nr0k23=0|Error|エラー 2015|NA\nr0k24=0|Error|エラー 2015|NA\nr0k25=0|Error|エラー 2015|NA\nr0k26=0|Error|エラー 2015|NA\nr0k27=0|Error|エラー 2015|NA\nr0k28=0|Error|エラー 2015|NA\nr0k29=1004|Empty||NA\nr0k30=1004|Empty||NA\nr0k31=1004|Empty||NABB\nr0k32=0|String|Long:7|NAB\nr0k33=0|String|Long:7|NAB\nr0k34=0|String|Long:7|NAB\nr0k35=0|String|Long:7|NAB\nr0k36=1004|Empty||NA\nr0k37=1004|Empty||NA\nr0k38=1004|Empty||NA\nr0k39=1004|Empty||NA\nr0k40=1004|Empty||NA\nr1k21=0|Error|エラー 2015|NA\nr1k22=0|Error|エラー 2015|NA\nr1k23=0|Error|エラー 2015|NA\nr1k24=0|Error|エラー 2015|NA\nr1k25=0|Error|エラー 2015|NA\nr1k26=0|Error|エラー 2015|NA\nr1k27=0|Error|エラー 2015|NA\nr1k28=0|Error|エラー 2015|NA\nr1k29=1004|Empty||NA\nr1k30=1004|Empty||NA\nr1k31=1004|Empty||NABB\nr1k32=0|String|Long:7|NAB\nr1k33=0|String|Long:7|NAB\nr1k34=0|String|Long:7|NAB\nr1k35=0|String|Long:7|NAB\nr1k36=1004|Empty||NA\nr1k37=1004|Empty||NA\nr1k38=1004|Empty||NA\nr1k39=1004|Empty||NA\nr1k40=1004|Empty||NA\nr2k21=0|Error|エラー 2015|NA\nr2k22=0|Error|エラー 2015|NA\nr2k23=0|Error|エラー 2015|NA\nr2k24=0|Error|エラー 2015|NA\nr2k25=0|Error|エラー 2015|NA\nr2k26=0|Error|エラー 2015|NA\nr2k27=0|Error|エラー 2015|NA\nr2k28=0|Error|エラー 2015|NA\nr2k29=1004|Empty||NA\nr2k30=1004|Empty||NA\nr2k31=1004|Empty||NABB\nr2k32=0|String|Long:7|NAB\nr2k33=0|String|Long:7|NAB\nr2k34=0|String|Long:7|NAB\nr2k35=0|String|Long:7|NAB\nr2k36=1004|Empty||NA\nr2k37=1004|Empty||NA\nr2k38=1004|Empty||NA\nr2k39=1004|Empty||NA\nr2k40=1004|Empty||NA\nr3k21=0|Error|エラー 2015|NA\nr3k22=0|Error|エラー 2015|NA\nr3k23=0|Error|エラー 2015|NA\nr3k24=0|Error|エラー 2015|NA\nr3k25=0|Error|エラー 2015|NA\nr3k26=0|Error|エラー 2015|NA\nr3k27=0|Error|エラー 2015|NA\nr3k28=0|Error|エラー 2015|NA\nr3k29=1004|Empty||NA\nr3k30=1004|Empty||NA\nr3k31=1004|Empty||NABB\nr3k32=0|String|Long:7|NAB\nr3k33=0|String|Long:7|NAB\nr3k34=0|String|Long:7|NAB\nr3k35=0|String|Long:7|NAB\nr3k36=1004|Empty||NA\nr3k37=1004|Empty||NA\nr3k38=1004|Empty||NA\nr3k39=1004|Empty||NA\nr3k40=1004|Empty||NA\n",
+    "measured_cases": 80,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "project_run_name_text.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932,
+      "errorLanguage": "ja-JP"
+    },
+    "measurement": {
+      "modules": [
+        {
+          "kind": 1,
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Trace As String\nPrivate Function GetMacro(ByVal kind As Long) As Variant\nTrace = Trace & \"N\"\nSelect Case kind\nCase 0: GetMacro = \"Targets.Echo\"\nCase 1: GetMacro = Empty\nCase 2: GetMacro = Null\nCase 3: GetMacro = CByte(1)\nCase 4: GetMacro = CLng(0)\nCase 5: GetMacro = CLng(-1)\nCase 6: GetMacro = CDbl(1.5)\nCase 7: GetMacro = True\nCase 8: GetMacro = False\nCase 9: GetMacro = CVErr(2042)\nCase 10: GetMacro = Array(\"Targets.Echo\")\nCase 11: Set GetMacro = Nothing\nCase 12: Set GetMacro = Range(\"A1\")\nCase 13: Set GetMacro = Range(\"A2\")\nCase 14: Set GetMacro = Range(\"A3\")\nCase 15: Set GetMacro = New NameBox\nCase 16: Set GetMacro = New NoDefault\nCase 17: GetMacro = \"\"\nCase 18: GetMacro = \" \"\nCase 19: GetMacro = \"1\"\nCase 20: GetMacro = \"Targets.Zero\"\nCase 21: GetMacro = \"1.0\"\nCase 22: GetMacro = \" 1 \"\nCase 23: GetMacro = \"-1\"\nCase 24: GetMacro = \"1E2\"\nCase 25: GetMacro = \"=1\"\nCase 26: GetMacro = \"1+1\"\nCase 27: GetMacro = \"TRUE\"\nCase 28: GetMacro = \"False\"\nCase 29: GetMacro = \"A1\"\nCase 30: GetMacro = \"Sheet1!A1\"\nCase 31: GetMacro = \"Targets.Echo()\"\nCase 32: GetMacro = \"Targets.Echo \"\nCase 33: GetMacro = \" Targets.Echo\"\nCase 34: GetMacro = \"\tTargets.Echo\"\nCase 35: GetMacro = \"=Targets.Echo\"\nCase 36: GetMacro = \"C1\"\nCase 37: GetMacro = \"#N/A\"\nCase 38: GetMacro = \"1,5\"\nCase 39: GetMacro = \"0x01\"\nCase 40: GetMacro = \"&H1\"\nEnd Select\nEnd Function\nPrivate Function GetArgument() As Variant\nTrace = Trace & \"A\"\nGetArgument = CLng(7)\nEnd Function\nPrivate Function TryRun(ByVal kind As Long, ByVal route As Long) As String\nDim value As Variant\nDim failure As Long\nDim text As String\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nIf kind = -1 Then\nSelect Case route\nCase 0: value = Application.Run()\nCase 1\nWith Application\nvalue = .Run()\nEnd With\nCase 2: value = Run()\nCase 3: value = CallByName(Application, \"Run\", VbMethod)\nEnd Select\nElse\nSelect Case route\nCase 0: value = Application.Run(GetMacro(kind), GetArgument())\nCase 1\nWith Application\nvalue = .Run(GetMacro(kind), GetArgument())\nEnd With\nCase 2: value = Run(GetMacro(kind), GetArgument())\nCase 3: value = CallByName(Application, \"Run\", VbMethod, GetMacro(kind), GetArgument())\nEnd Select\nEnd If\nfailure = Err.Number\nErr.Clear\nIf IsObject(value) Then\ntext = \"object\"\nElseIf IsArray(value) Then\ntext = \"array\"\nElseIf IsError(value) Then\ntext = CStr(value)\nElseIf IsNull(value) Then\ntext = \"null\"\nElse\ntext = CStr(value)\nEnd If\nTryRun = CStr(failure) & \"|\" & TypeName(value) & \"|\" & text & \"|\" & Trace\nEnd Function\nPublic Function Probe() As String\nDim report As String\nRange(\"A1\").Value = \"Targets.Echo\"\nRange(\"A2\").ClearContents\nRange(\"A3\").Value = CVErr(2042)\nreport = report & \"r0k21=\" & TryRun(21, 0) & vbLf\nreport = report & \"r0k22=\" & TryRun(22, 0) & vbLf\nreport = report & \"r0k23=\" & TryRun(23, 0) & vbLf\nreport = report & \"r0k24=\" & TryRun(24, 0) & vbLf\nreport = report & \"r0k25=\" & TryRun(25, 0) & vbLf\nreport = report & \"r0k26=\" & TryRun(26, 0) & vbLf\nreport = report & \"r0k27=\" & TryRun(27, 0) & vbLf\nreport = report & \"r0k28=\" & TryRun(28, 0) & vbLf\nreport = report & \"r0k29=\" & TryRun(29, 0) & vbLf\nreport = report & \"r0k30=\" & TryRun(30, 0) & vbLf\nreport = report & \"r0k31=\" & TryRun(31, 0) & vbLf\nreport = report & \"r0k32=\" & TryRun(32, 0) & vbLf\nreport = report & \"r0k33=\" & TryRun(33, 0) & vbLf\nreport = report & \"r0k34=\" & TryRun(34, 0) & vbLf\nreport = report & \"r0k35=\" & TryRun(35, 0) & vbLf\nreport = report & \"r0k36=\" & TryRun(36, 0) & vbLf\nreport = report & \"r0k37=\" & TryRun(37, 0) & vbLf\nreport = report & \"r0k38=\" & TryRun(38, 0) & vbLf\nreport = report & \"r0k39=\" & TryRun(39, 0) & vbLf\nreport = report & \"r0k40=\" & TryRun(40, 0) & vbLf\nreport = report & \"r1k21=\" & TryRun(21, 1) & vbLf\nreport = report & \"r1k22=\" & TryRun(22, 1) & vbLf\nreport = report & \"r1k23=\" & TryRun(23, 1) & vbLf\nreport = report & \"r1k24=\" & TryRun(24, 1) & vbLf\nreport = report & \"r1k25=\" & TryRun(25, 1) & vbLf\nreport = report & \"r1k26=\" & TryRun(26, 1) & vbLf\nreport = report & \"r1k27=\" & TryRun(27, 1) & vbLf\nreport = report & \"r1k28=\" & TryRun(28, 1) & vbLf\nreport = report & \"r1k29=\" & TryRun(29, 1) & vbLf\nreport = report & \"r1k30=\" & TryRun(30, 1) & vbLf\nreport = report & \"r1k31=\" & TryRun(31, 1) & vbLf\nreport = report & \"r1k32=\" & TryRun(32, 1) & vbLf\nreport = report & \"r1k33=\" & TryRun(33, 1) & vbLf\nreport = report & \"r1k34=\" & TryRun(34, 1) & vbLf\nreport = report & \"r1k35=\" & TryRun(35, 1) & vbLf\nreport = report & \"r1k36=\" & TryRun(36, 1) & vbLf\nreport = report & \"r1k37=\" & TryRun(37, 1) & vbLf\nreport = report & \"r1k38=\" & TryRun(38, 1) & vbLf\nreport = report & \"r1k39=\" & TryRun(39, 1) & vbLf\nreport = report & \"r1k40=\" & TryRun(40, 1) & vbLf\nreport = report & \"r2k21=\" & TryRun(21, 2) & vbLf\nreport = report & \"r2k22=\" & TryRun(22, 2) & vbLf\nreport = report & \"r2k23=\" & TryRun(23, 2) & vbLf\nreport = report & \"r2k24=\" & TryRun(24, 2) & vbLf\nreport = report & \"r2k25=\" & TryRun(25, 2) & vbLf\nreport = report & \"r2k26=\" & TryRun(26, 2) & vbLf\nreport = report & \"r2k27=\" & TryRun(27, 2) & vbLf\nreport = report & \"r2k28=\" & TryRun(28, 2) & vbLf\nreport = report & \"r2k29=\" & TryRun(29, 2) & vbLf\nreport = report & \"r2k30=\" & TryRun(30, 2) & vbLf\nreport = report & \"r2k31=\" & TryRun(31, 2) & vbLf\nreport = report & \"r2k32=\" & TryRun(32, 2) & vbLf\nreport = report & \"r2k33=\" & TryRun(33, 2) & vbLf\nreport = report & \"r2k34=\" & TryRun(34, 2) & vbLf\nreport = report & \"r2k35=\" & TryRun(35, 2) & vbLf\nreport = report & \"r2k36=\" & TryRun(36, 2) & vbLf\nreport = report & \"r2k37=\" & TryRun(37, 2) & vbLf\nreport = report & \"r2k38=\" & TryRun(38, 2) & vbLf\nreport = report & \"r2k39=\" & TryRun(39, 2) & vbLf\nreport = report & \"r2k40=\" & TryRun(40, 2) & vbLf\nreport = report & \"r3k21=\" & TryRun(21, 3) & vbLf\nreport = report & \"r3k22=\" & TryRun(22, 3) & vbLf\nreport = report & \"r3k23=\" & TryRun(23, 3) & vbLf\nreport = report & \"r3k24=\" & TryRun(24, 3) & vbLf\nreport = report & \"r3k25=\" & TryRun(25, 3) & vbLf\nreport = report & \"r3k26=\" & TryRun(26, 3) & vbLf\nreport = report & \"r3k27=\" & TryRun(27, 3) & vbLf\nreport = report & \"r3k28=\" & TryRun(28, 3) & vbLf\nreport = report & \"r3k29=\" & TryRun(29, 3) & vbLf\nreport = report & \"r3k30=\" & TryRun(30, 3) & vbLf\nreport = report & \"r3k31=\" & TryRun(31, 3) & vbLf\nreport = report & \"r3k32=\" & TryRun(32, 3) & vbLf\nreport = report & \"r3k33=\" & TryRun(33, 3) & vbLf\nreport = report & \"r3k34=\" & TryRun(34, 3) & vbLf\nreport = report & \"r3k35=\" & TryRun(35, 3) & vbLf\nreport = report & \"r3k36=\" & TryRun(36, 3) & vbLf\nreport = report & \"r3k37=\" & TryRun(37, 3) & vbLf\nreport = report & \"r3k38=\" & TryRun(38, 3) & vbLf\nreport = report & \"r3k39=\" & TryRun(39, 3) & vbLf\nreport = report & \"r3k40=\" & TryRun(40, 3) & vbLf\nProbe = report\nEnd Function\nPublic Function ProbeOne(ByVal kind As Long, ByVal route As Long) As String\nRange(\"A1\").Value = \"Targets.Echo\"\nRange(\"A2\").ClearContents\nRange(\"A3\").Value = CVErr(2042)\nProbeOne = TryRun(kind, route)\nEnd Function\n",
+          "old": ""
+        },
+        {
+          "kind": 1,
+          "name": "Targets",
+          "body": "Option Explicit\nPublic Function Echo(Optional value As Variant) As String\nDriver.Trace = Driver.Trace & \"B\"\nEcho = TypeName(value) & \":\" & CStr(value)\nEnd Function\nPublic Function Zero() As String\nDriver.Trace = Driver.Trace & \"Z\"\nZero = \"zero\"\nEnd Function\n",
+          "old": ""
+        },
+        {
+          "kind": 2,
+          "name": "NameBox",
+          "body": "Option Explicit\nPublic Property Get Value() As String\nDriver.Trace = Driver.Trace & \"D\"\nValue = \"Targets.Echo\"\nEnd Property\n",
+          "old": "",
+          "member_attributes": {
+            "Value": {
+              "VB_UserMemId": 0
+            }
+          }
+        },
+        {
+          "kind": 2,
+          "name": "NoDefault",
+          "body": "Option Explicit\n",
+          "old": ""
+        }
+      ]
+    }
+  },
+  {
+    "name": "project_run_expression_stable",
+    "source": "project_run_expression_stable.bas",
+    "package_fixture": "project_run_expression_stable.xlsm",
+    "procedure": "Driver.Probe",
+    "expected": "r0k21=0|Error|エラー 2015|NAnn\nr0k22=0|Error|エラー 2015|NAnn\nr0k23=1004|Empty||NAss\nr0k24=1004|Empty||NAss\nr0k25=0|Error|エラー 2015|NAtt\nr0k26=1004|Empty||NAee\nr0k27=0|Error|エラー 2015|NAmm\nr0k28=0|Error|エラー 2015|NAuu\nr0k29=0|Error|エラー 2015|NAbb\nr0k31=1004|Empty||NABB\nr0k32=1004|Empty||NABB\nr0k33=1004|Empty||NA\nr0k34=0|Error|エラー 2015|NApp\nr0k35=1004|Empty||NA\nr0k36=1004|Empty||NA\nr0k37=0|Error|エラー 2015|NA\nr0k38=0|Error|エラー 2015|NA\nr0k39=1004|Empty||NAZZ\nr0k40=1004|Empty||NAZZ\nr1k21=0|Error|エラー 2015|NAnn\nr1k22=0|Error|エラー 2015|NAnn\nr1k23=1004|Empty||NAss\nr1k24=1004|Empty||NAss\nr1k25=0|Error|エラー 2015|NAtt\nr1k26=1004|Empty||NAee\nr1k27=0|Error|エラー 2015|NAmm\nr1k28=0|Error|エラー 2015|NAuu\nr1k29=0|Error|エラー 2015|NAbb\nr1k31=1004|Empty||NABB\nr1k32=1004|Empty||NABB\nr1k33=1004|Empty||NA\nr1k34=0|Error|エラー 2015|NApp\nr1k35=1004|Empty||NA\nr1k36=1004|Empty||NA\nr1k37=0|Error|エラー 2015|NA\nr1k38=0|Error|エラー 2015|NA\nr1k39=1004|Empty||NAZZ\nr1k40=1004|Empty||NAZZ\nr2k21=0|Error|エラー 2015|NAnn\nr2k22=0|Error|エラー 2015|NAnn\nr2k23=1004|Empty||NAss\nr2k24=1004|Empty||NAss\nr2k25=0|Error|エラー 2015|NAtt\nr2k26=1004|Empty||NAee\nr2k27=0|Error|エラー 2015|NAmm\nr2k28=0|Error|エラー 2015|NAuu\nr2k29=0|Error|エラー 2015|NAbb\nr2k31=1004|Empty||NABB\nr2k32=1004|Empty||NABB\nr2k33=1004|Empty||NA\nr2k34=0|Error|エラー 2015|NApp\nr2k35=1004|Empty||NA\nr2k36=1004|Empty||NA\nr2k37=0|Error|エラー 2015|NA\nr2k38=0|Error|エラー 2015|NA\nr2k39=1004|Empty||NAZZ\nr2k40=1004|Empty||NAZZ\nr3k21=0|Error|エラー 2015|NAnn\nr3k22=0|Error|エラー 2015|NAnn\nr3k23=1004|Empty||NAss\nr3k24=1004|Empty||NAss\nr3k25=0|Error|エラー 2015|NAtt\nr3k26=1004|Empty||NAee\nr3k27=0|Error|エラー 2015|NAmm\nr3k28=0|Error|エラー 2015|NAuu\nr3k29=0|Error|エラー 2015|NAbb\nr3k31=1004|Empty||NABB\nr3k32=1004|Empty||NABB\nr3k33=1004|Empty||NA\nr3k34=0|Error|エラー 2015|NApp\nr3k35=1004|Empty||NA\nr3k36=1004|Empty||NA\nr3k37=0|Error|エラー 2015|NA\nr3k38=0|Error|エラー 2015|NA\nr3k39=1004|Empty||NAZZ\nr3k40=1004|Empty||NAZZ\n",
+    "measured_cases": 76,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "project_run_expression_stable.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932,
+      "errorLanguage": "ja-JP"
+    },
+    "measurement": {
+      "modules": [
+        {
+          "kind": 1,
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Trace As String\nPrivate Function GetMacro(ByVal kind As Long) As Variant\nTrace = Trace & \"N\"\nSelect Case kind\nCase 0: GetMacro = \"Targets.Echo\"\nCase 1: GetMacro = Empty\nCase 2: GetMacro = Null\nCase 3: GetMacro = CByte(1)\nCase 4: GetMacro = CLng(0)\nCase 5: GetMacro = CLng(-1)\nCase 6: GetMacro = CDbl(1.5)\nCase 7: GetMacro = True\nCase 8: GetMacro = False\nCase 9: GetMacro = CVErr(2042)\nCase 10: GetMacro = Array(\"Targets.Echo\")\nCase 11: Set GetMacro = Nothing\nCase 12: Set GetMacro = Range(\"A1\")\nCase 13: Set GetMacro = Range(\"A2\")\nCase 14: Set GetMacro = Range(\"A3\")\nCase 15: Set GetMacro = New NameBox\nCase 16: Set GetMacro = New NoDefault\nCase 17: GetMacro = \"\"\nCase 18: GetMacro = \" \"\nCase 19: GetMacro = \"1\"\nCase 20: GetMacro = \"Targets.Zero\"\nCase 21: GetMacro = \"Targets.Ret1()\"\nCase 22: GetMacro = \"=Targets.Ret1()\"\nCase 23: GetMacro = \"Targets.RetName()\"\nCase 24: GetMacro = \"=Targets.RetName()\"\nCase 25: GetMacro = \"Targets.RetNumText()\"\nCase 26: GetMacro = \"Targets.RetError()\"\nCase 27: GetMacro = \"Targets.RetEmpty()\"\nCase 28: GetMacro = \"Targets.RetNull()\"\nCase 29: GetMacro = \"Targets.RetBool()\"\nCase 30: GetMacro = \"Targets.ThrowError()\"\nCase 31: GetMacro = \"Targets.Echo(11)\"\nCase 32: GetMacro = \"=Targets.Echo(11)\"\nCase 33: GetMacro = \"Targets.Ret1(11)\"\nCase 34: GetMacro = \"Targets.Private1()\"\nCase 35: GetMacro = \"1/0\"\nCase 36: GetMacro = \"=NA()\"\nCase 37: GetMacro = \"SUM(1,2)\"\nCase 38: GetMacro = \"=SUM(1,2)\"\nCase 39: GetMacro = \"Targets.Zero()\"\nCase 40: GetMacro = \"=Targets.Zero()\"\nEnd Select\nEnd Function\nPrivate Function GetArgument() As Variant\nTrace = Trace & \"A\"\nGetArgument = CLng(7)\nEnd Function\nPrivate Function TryRun(ByVal kind As Long, ByVal route As Long) As String\nDim value As Variant\nDim failure As Long\nDim text As String\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nIf kind = -1 Then\nSelect Case route\nCase 0: value = Application.Run()\nCase 1\nWith Application\nvalue = .Run()\nEnd With\nCase 2: value = Run()\nCase 3: value = CallByName(Application, \"Run\", VbMethod)\nEnd Select\nElse\nSelect Case route\nCase 0: value = Application.Run(GetMacro(kind), GetArgument())\nCase 1\nWith Application\nvalue = .Run(GetMacro(kind), GetArgument())\nEnd With\nCase 2: value = Run(GetMacro(kind), GetArgument())\nCase 3: value = CallByName(Application, \"Run\", VbMethod, GetMacro(kind), GetArgument())\nEnd Select\nEnd If\nfailure = Err.Number\nErr.Clear\nIf IsObject(value) Then\ntext = \"object\"\nElseIf IsArray(value) Then\ntext = \"array\"\nElseIf IsError(value) Then\ntext = CStr(value)\nElseIf IsNull(value) Then\ntext = \"null\"\nElse\ntext = CStr(value)\nEnd If\nTryRun = CStr(failure) & \"|\" & TypeName(value) & \"|\" & text & \"|\" & Trace\nEnd Function\nPublic Function Probe() As String\nDim report As String\nRange(\"A1\").Value = \"Targets.Echo\"\nRange(\"A2\").ClearContents\nRange(\"A3\").Value = CVErr(2042)\nreport = report & \"r0k21=\" & TryRun(21, 0) & vbLf\nreport = report & \"r0k22=\" & TryRun(22, 0) & vbLf\nreport = report & \"r0k23=\" & TryRun(23, 0) & vbLf\nreport = report & \"r0k24=\" & TryRun(24, 0) & vbLf\nreport = report & \"r0k25=\" & TryRun(25, 0) & vbLf\nreport = report & \"r0k26=\" & TryRun(26, 0) & vbLf\nreport = report & \"r0k27=\" & TryRun(27, 0) & vbLf\nreport = report & \"r0k28=\" & TryRun(28, 0) & vbLf\nreport = report & \"r0k29=\" & TryRun(29, 0) & vbLf\nreport = report & \"r0k31=\" & TryRun(31, 0) & vbLf\nreport = report & \"r0k32=\" & TryRun(32, 0) & vbLf\nreport = report & \"r0k33=\" & TryRun(33, 0) & vbLf\nreport = report & \"r0k34=\" & TryRun(34, 0) & vbLf\nreport = report & \"r0k35=\" & TryRun(35, 0) & vbLf\nreport = report & \"r0k36=\" & TryRun(36, 0) & vbLf\nreport = report & \"r0k37=\" & TryRun(37, 0) & vbLf\nreport = report & \"r0k38=\" & TryRun(38, 0) & vbLf\nreport = report & \"r0k39=\" & TryRun(39, 0) & vbLf\nreport = report & \"r0k40=\" & TryRun(40, 0) & vbLf\nreport = report & \"r1k21=\" & TryRun(21, 1) & vbLf\nreport = report & \"r1k22=\" & TryRun(22, 1) & vbLf\nreport = report & \"r1k23=\" & TryRun(23, 1) & vbLf\nreport = report & \"r1k24=\" & TryRun(24, 1) & vbLf\nreport = report & \"r1k25=\" & TryRun(25, 1) & vbLf\nreport = report & \"r1k26=\" & TryRun(26, 1) & vbLf\nreport = report & \"r1k27=\" & TryRun(27, 1) & vbLf\nreport = report & \"r1k28=\" & TryRun(28, 1) & vbLf\nreport = report & \"r1k29=\" & TryRun(29, 1) & vbLf\nreport = report & \"r1k31=\" & TryRun(31, 1) & vbLf\nreport = report & \"r1k32=\" & TryRun(32, 1) & vbLf\nreport = report & \"r1k33=\" & TryRun(33, 1) & vbLf\nreport = report & \"r1k34=\" & TryRun(34, 1) & vbLf\nreport = report & \"r1k35=\" & TryRun(35, 1) & vbLf\nreport = report & \"r1k36=\" & TryRun(36, 1) & vbLf\nreport = report & \"r1k37=\" & TryRun(37, 1) & vbLf\nreport = report & \"r1k38=\" & TryRun(38, 1) & vbLf\nreport = report & \"r1k39=\" & TryRun(39, 1) & vbLf\nreport = report & \"r1k40=\" & TryRun(40, 1) & vbLf\nreport = report & \"r2k21=\" & TryRun(21, 2) & vbLf\nreport = report & \"r2k22=\" & TryRun(22, 2) & vbLf\nreport = report & \"r2k23=\" & TryRun(23, 2) & vbLf\nreport = report & \"r2k24=\" & TryRun(24, 2) & vbLf\nreport = report & \"r2k25=\" & TryRun(25, 2) & vbLf\nreport = report & \"r2k26=\" & TryRun(26, 2) & vbLf\nreport = report & \"r2k27=\" & TryRun(27, 2) & vbLf\nreport = report & \"r2k28=\" & TryRun(28, 2) & vbLf\nreport = report & \"r2k29=\" & TryRun(29, 2) & vbLf\nreport = report & \"r2k31=\" & TryRun(31, 2) & vbLf\nreport = report & \"r2k32=\" & TryRun(32, 2) & vbLf\nreport = report & \"r2k33=\" & TryRun(33, 2) & vbLf\nreport = report & \"r2k34=\" & TryRun(34, 2) & vbLf\nreport = report & \"r2k35=\" & TryRun(35, 2) & vbLf\nreport = report & \"r2k36=\" & TryRun(36, 2) & vbLf\nreport = report & \"r2k37=\" & TryRun(37, 2) & vbLf\nreport = report & \"r2k38=\" & TryRun(38, 2) & vbLf\nreport = report & \"r2k39=\" & TryRun(39, 2) & vbLf\nreport = report & \"r2k40=\" & TryRun(40, 2) & vbLf\nreport = report & \"r3k21=\" & TryRun(21, 3) & vbLf\nreport = report & \"r3k22=\" & TryRun(22, 3) & vbLf\nreport = report & \"r3k23=\" & TryRun(23, 3) & vbLf\nreport = report & \"r3k24=\" & TryRun(24, 3) & vbLf\nreport = report & \"r3k25=\" & TryRun(25, 3) & vbLf\nreport = report & \"r3k26=\" & TryRun(26, 3) & vbLf\nreport = report & \"r3k27=\" & TryRun(27, 3) & vbLf\nreport = report & \"r3k28=\" & TryRun(28, 3) & vbLf\nreport = report & \"r3k29=\" & TryRun(29, 3) & vbLf\nreport = report & \"r3k31=\" & TryRun(31, 3) & vbLf\nreport = report & \"r3k32=\" & TryRun(32, 3) & vbLf\nreport = report & \"r3k33=\" & TryRun(33, 3) & vbLf\nreport = report & \"r3k34=\" & TryRun(34, 3) & vbLf\nreport = report & \"r3k35=\" & TryRun(35, 3) & vbLf\nreport = report & \"r3k36=\" & TryRun(36, 3) & vbLf\nreport = report & \"r3k37=\" & TryRun(37, 3) & vbLf\nreport = report & \"r3k38=\" & TryRun(38, 3) & vbLf\nreport = report & \"r3k39=\" & TryRun(39, 3) & vbLf\nreport = report & \"r3k40=\" & TryRun(40, 3) & vbLf\nProbe = report\nEnd Function\nPublic Function ProbeOne(ByVal kind As Long, ByVal route As Long) As String\nRange(\"A1\").Value = \"Targets.Echo\"\nRange(\"A2\").ClearContents\nRange(\"A3\").Value = CVErr(2042)\nProbeOne = TryRun(kind, route)\nEnd Function\n",
+          "old": ""
+        },
+        {
+          "kind": 1,
+          "name": "Targets",
+          "body": "Option Explicit\nPublic Function Echo(Optional value As Variant) As String\nDriver.Trace = Driver.Trace & \"B\"\nEcho = TypeName(value) & \":\" & CStr(value)\nEnd Function\nPublic Function Zero() As String\nDriver.Trace = Driver.Trace & \"Z\"\nZero = \"zero\"\nEnd Function\nPublic Function Ret1() As Variant\nDriver.Trace = Driver.Trace & \"n\"\nRet1 = 1\nEnd Function\nPublic Function RetName() As Variant\nDriver.Trace = Driver.Trace & \"s\"\nRetName = \"Targets.Echo\"\nEnd Function\nPublic Function RetNumText() As Variant\nDriver.Trace = Driver.Trace & \"t\"\nRetNumText = \"1\"\nEnd Function\nPublic Function RetError() As Variant\nDriver.Trace = Driver.Trace & \"e\"\nRetError = CVErr(2015)\nEnd Function\nPublic Function RetEmpty() As Variant\nDriver.Trace = Driver.Trace & \"m\"\n\nEnd Function\nPublic Function RetNull() As Variant\nDriver.Trace = Driver.Trace & \"u\"\nRetNull = Null\nEnd Function\nPublic Function RetBool() As Variant\nDriver.Trace = Driver.Trace & \"b\"\nRetBool = True\nEnd Function\nPublic Function ThrowError() As Variant\nDriver.Trace = Driver.Trace & \"x\"\nErr.Raise 999, \"Probe\", \"probe\"\nEnd Function\nPrivate Function Private1() As Variant\nDriver.Trace = Driver.Trace & \"p\"\nPrivate1 = 1\nEnd Function\n",
+          "old": ""
+        },
+        {
+          "kind": 2,
+          "name": "NameBox",
+          "body": "Option Explicit\nPublic Property Get Value() As String\nDriver.Trace = Driver.Trace & \"D\"\nValue = \"Targets.Echo\"\nEnd Property\n",
+          "old": "",
+          "member_attributes": {
+            "Value": {
+              "VB_UserMemId": 0
+            }
+          }
+        },
+        {
+          "kind": 2,
+          "name": "NoDefault",
+          "body": "Option Explicit\n",
+          "old": ""
+        }
+      ]
+    }
+  }
+]

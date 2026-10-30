@@ -1,0 +1,2669 @@
+{
+  "scope": "Complete unmodified Native returns from three normal owned Excel observations per case. Rectangular and disjoint spill metadata, sparse whole-row/column queries and used-range trimming after formatting or cleared values.",
+  "groups": [
+    {
+      "source": "spill_metadata_ranges.bas",
+      "package": "spill_metadata_ranges.xlsm",
+      "source_identity": 2026102115,
+      "source_packet_sha256": "8db126832a7288504b7eb9e74dfaaa6492d95b13e401449a3c6f20dadd59418a",
+      "cases": [
+        {
+          "id": 3080,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                0,
+                0
+              ],
+              "expected": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3081,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                1,
+                0
+              ],
+              "expected": "has:11:True|parent:$N$1|range:Nothing|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3082,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                2,
+                0
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3083,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                3,
+                0
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3084,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                4,
+                0
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3085,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                5,
+                0
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3086,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                6,
+                0
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3087,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                7,
+                0
+              ],
+              "expected": "has:11:False|parent:error1004|range:error1004|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3088,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                8,
+                0
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3089,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                9,
+                0
+              ],
+              "expected": "has:error1004|parent:error1004|range:error1004|formula:11:True"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3090,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                0,
+                1
+              ],
+              "expected": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3091,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                1,
+                1
+              ],
+              "expected": "has:11:True|parent:$N$1|range:Nothing|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3092,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                2,
+                1
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3093,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                3,
+                1
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3094,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                4,
+                1
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3095,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                5,
+                1
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3096,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                6,
+                1
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3097,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                7,
+                1
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3098,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                8,
+                1
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3099,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                9,
+                1
+              ],
+              "expected": "has:error1004|parent:error1004|range:error1004|formula:11:True"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source": "spill_metadata_extent.bas",
+      "package": "spill_metadata_extent.xlsm",
+      "source_identity": 2026102116,
+      "source_packet_sha256": "0d06efd547b495f184206757e5dc2db5d18fb7af91ba1c730bc198deb05ad6a4",
+      "cases": [
+        {
+          "id": 3100,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                0,
+                2
+              ],
+              "expected": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3101,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                1,
+                2
+              ],
+              "expected": "has:11:True|parent:$N$1|range:Nothing|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3102,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                2,
+                2
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3103,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                3,
+                2
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3104,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                4,
+                2
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3105,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                5,
+                2
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3106,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                6,
+                2
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3107,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                7,
+                2
+              ],
+              "expected": "has:11:False|parent:error1004|range:error1004|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3108,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                8,
+                2
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3109,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                9,
+                2
+              ],
+              "expected": "has:error1004|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3110,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                0,
+                3
+              ],
+              "expected": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3111,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                1,
+                3
+              ],
+              "expected": "has:11:True|parent:$N$1|range:Nothing|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3112,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                2,
+                3
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3113,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                3,
+                3
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3114,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                4,
+                3
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3115,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                5,
+                3
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3116,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                6,
+                3
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3117,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                7,
+                3
+              ],
+              "expected": "has:11:False|parent:error1004|range:error1004|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3118,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                8,
+                3
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3119,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                9,
+                3
+              ],
+              "expected": "has:error1004|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:1:Null",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source": "spill_metadata_bounds.bas",
+      "package": "spill_metadata_bounds.xlsm",
+      "source_identity": 2026102117,
+      "source_packet_sha256": "a1bf1e890a953c3ff2c6b0e9d70e49804f863c69bd0b6feb820aa2a47e0e1edf",
+      "cases": [
+        {
+          "id": 3120,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                0,
+                4
+              ],
+              "expected": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3121,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                1,
+                4
+              ],
+              "expected": "has:11:True|parent:$N$1|range:Nothing|formula:11:False|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3122,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                2,
+                4
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3123,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                3,
+                4
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3124,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                4,
+                4
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3125,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                5,
+                4
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3126,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                6,
+                4
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3127,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                7,
+                4
+              ],
+              "expected": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3128,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                8,
+                4
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3129,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                9,
+                4
+              ],
+              "expected": "has:error1004|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3130,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                10,
+                4
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3131,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                11,
+                4
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3132,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                12,
+                4
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3133,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                13,
+                4
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3134,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                14,
+                4
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3135,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                15,
+                4
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3136,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                16,
+                4
+              ],
+              "expected": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3137,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                17,
+                4
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3138,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                18,
+                4
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3139,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                19,
+                4
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$R$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$R$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3140,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                0,
+                5
+              ],
+              "expected": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:$N$1|range:$N$1:$O$2|formula:11:True|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3141,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                1,
+                5
+              ],
+              "expected": "has:11:True|parent:$N$1|range:Nothing|formula:11:False|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:$N$1|range:Nothing|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3142,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                2,
+                5
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3143,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                3,
+                5
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3144,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                4,
+                5
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3145,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                5,
+                5
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3146,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                6,
+                5
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:True|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3147,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                7,
+                5
+              ],
+              "expected": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3148,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                8,
+                5
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3149,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                9,
+                5
+              ],
+              "expected": "has:error1004|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:error1004|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3150,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                10,
+                5
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3151,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                11,
+                5
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3152,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                12,
+                5
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3153,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                13,
+                5
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3154,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                14,
+                5
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3155,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                15,
+                5
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3156,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                16,
+                5
+              ],
+              "expected": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3157,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                17,
+                5
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3158,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                18,
+                5
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:1:Null|parent:error1004|range:error1004|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3159,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                19,
+                5
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$O$12"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|used:$A$1:$O$12",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

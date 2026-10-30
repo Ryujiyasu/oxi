@@ -1,0 +1,2667 @@
+[
+  {
+    "name": "count",
+    "source": "chart_document_count.bas",
+    "measurement_source": "chart_document_count_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "count.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "1:2:1",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "1:2:1",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "1:2:1",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "helper",
+    "source": "chart_document_helper.bas",
+    "measurement_source": "chart_document_helper_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "helper.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "1",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "2",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "3",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "traits",
+    "source": "chart_document_traits.bas",
+    "measurement_source": "chart_document_traits_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "traits.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "Sheets|Sheets|Sheets|Chart|Chart|2|1|True|True",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "Sheets|Sheets|Sheets|Chart|Chart|2|1|True|True",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "Sheets|Sheets|Sheets|Chart|Chart|2|1|True|True",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "me",
+    "source": "chart_document_me.bas",
+    "measurement_source": "chart_document_me_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_me_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "me.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "グラフ1:PlotHost:Chart:1:1",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "グラフ1:PlotHost:Chart:1:2",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "グラフ1:PlotHost:Chart:1:3",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "cross",
+    "source": "chart_document_cross.bas",
+    "measurement_source": "chart_document_cross_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_cross_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "cross.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "3:2:2",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "8:4:4",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "13:6:6",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "byref",
+    "source": "chart_document_byref.bas",
+    "measurement_source": "chart_document_byref_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_byref_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "byref.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "8:1",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "8:2",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "8:3",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "native_move",
+    "source": "chart_document_native_move.bas",
+    "measurement_source": "chart_document_native_move_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "native_move.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "グラフ1:1:2:1",
+        "sheet_names_after": [
+          "Sheet1",
+          "グラフ1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 1,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "グラフ1:2:2:1",
+        "sheet_names_after": [
+          "Sheet1",
+          "グラフ1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 1,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "グラフ1:3:2:1",
+        "sheet_names_after": [
+          "Sheet1",
+          "グラフ1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "external_move",
+    "source": "chart_document_external_move.bas",
+    "measurement_source": "chart_document_external_move_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": true,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "external_move.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "グラフ1:1:1:2",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 1,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "グラフ1:2:2:1",
+        "sheet_names_after": [
+          "Sheet1",
+          "グラフ1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 1,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "グラフ1:3:2:1",
+        "sheet_names_after": [
+          "Sheet1",
+          "グラフ1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "save_refresh",
+    "source": "chart_document_save_refresh.bas",
+    "measurement_source": "chart_document_save_refresh_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": true
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "save_refresh.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "1:2:1",
+        "sheet_names_after": [
+          "Sheet1",
+          "グラフ1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 1,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "2:2:1",
+        "sheet_names_after": [
+          "Sheet1",
+          "グラフ1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 1,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "3:2:1",
+        "sheet_names_after": [
+          "Sheet1",
+          "グラフ1"
+        ]
+      }
+    ],
+    "package_fixture": "chart_document_save_refresh.xlsm",
+    "package_refreshed": "chart_document_save_refresh_refreshed.xlsm",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "native_props",
+    "source": "chart_document_native_props.bas",
+    "measurement_source": "chart_document_native_props_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "native_props.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "51:False:True:0",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "51:False:True:0",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "51:False:True:0",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "native_props_set",
+    "source": "chart_document_native_props_set.bas",
+    "measurement_source": "chart_document_native_props_set_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": true
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "native_props_set.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "Revenue:False:1",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "Revenue:False:2",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "Revenue:False:3",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      }
+    ],
+    "package_fixture": "chart_document_native_props_set.xlsm",
+    "package_refreshed": "chart_document_native_props_set_refreshed.xlsm",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "chart_range_refusal",
+    "source": "chart_document_chart_range_refusal.bas",
+    "measurement_source": "chart_document_chart_range_refusal_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "chart_range_refusal.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "438:Nothing",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "438:Nothing",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "438:Nothing",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "new_document",
+    "source": "chart_document_new_document.bas",
+    "measurement_source": "chart_document_new_document_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "compile",
+    "message": "New キーワードの使用法が不正です。",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart"
+        }
+      ]
+    }
+  },
+  {
+    "name": "readonly_codename",
+    "source": "chart_document_readonly_codename.bas",
+    "measurement_source": "chart_document_readonly_codename_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "compile",
+    "message": "値の取得のみ可能なプロパティに値を設定することはできません。",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart"
+        }
+      ]
+    }
+  },
+  {
+    "name": "global_range",
+    "source": "chart_document_global_range.bas",
+    "measurement_source": "chart_document_global_range_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "global_range.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "1004:Nothing",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "1004:Nothing",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "1004:Nothing",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "global_cells",
+    "source": "chart_document_global_cells.bas",
+    "measurement_source": "chart_document_global_cells_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "global_cells.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "1004:Nothing",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "1004:Nothing",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "1004:Nothing",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  },
+  {
+    "name": "activecell",
+    "source": "chart_document_activecell.bas",
+    "measurement_source": "chart_document_activecell_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "setup_sheets": 1,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_document_tick_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_document_tick_module.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "activecell.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "0:Nothing",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "0:Nothing",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          },
+          {
+            "name": "PlotHost",
+            "baseType": "Excel.Chart",
+            "sheetIndex": 0,
+            "codeName": "PlotHost"
+          }
+        ],
+        "value": "0:Nothing",
+        "sheet_names_after": [
+          "グラフ1",
+          "Sheet1"
+        ]
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    }
+  }
+]

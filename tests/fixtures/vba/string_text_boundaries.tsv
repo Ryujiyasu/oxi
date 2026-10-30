@@ -1,0 +1,4 @@
+# Self-authored Native Excel UTF16 text comparison and storage. CC BY-SA 4.0.
+procedure	value
+TextCases	-1|2|2:4:120:-8704|0:1:2:-10179|False|False
+CellCases	0|1:2:-10179

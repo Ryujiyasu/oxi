@@ -1,0 +1,156 @@
+typed_byte_overflow	type_const_typed_byte_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+typed_byte_overflow	type_const_typed_byte_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+typed_integer_round	type_const_typed_integer_round.bas	DriverModule.Probe	values	2
+typed_integer_round	type_const_typed_integer_round.bas	DriverModule.Probe	values	2
+typed_null	type_const_typed_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+typed_null	type_const_typed_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+untyped_null	type_const_untyped_null.bas	DriverModule.Probe	values	
+untyped_null	type_const_untyped_null.bas	DriverModule.Probe	values	
+object_is	type_const_object_is.bas	DriverModule.Probe	values	True
+object_is	type_const_object_is.bas	DriverModule.Probe	values	True
+array_null	type_const_array_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+array_null	type_const_array_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+owner_compare	type_const_owner_compare.bas	DriverModule.Probe	values	0
+owner_compare	type_const_owner_compare.bas	DriverModule.Probe	values	0
+qualifier_shadow	type_const_qualifier_shadow.bas	DriverModule.Probe	compile	定数式が必要です。
+qualifier_shadow	type_const_qualifier_shadow.bas	DriverModule.Probe	compile	定数式が必要です。
+constant_alias_shadow	type_const_constant_alias_shadow.bas	DriverModule.Probe	values	1
+constant_alias_shadow	type_const_constant_alias_shadow.bas	DriverModule.Probe	values	1
+byte_negative	type_const_byte_negative.bas	DriverModule.Probe	compile	オーバーフローしました。
+byte_negative	type_const_byte_negative.bas	DriverModule.Probe	compile	オーバーフローしました。
+byte_fraction_ok	type_const_byte_fraction_ok.bas	DriverModule.Probe	values	17:255
+byte_fraction_ok	type_const_byte_fraction_ok.bas	DriverModule.Probe	values	17:255
+byte_fraction_overflow	type_const_byte_fraction_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+byte_fraction_overflow	type_const_byte_fraction_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+byte_negative_half	type_const_byte_negative_half.bas	DriverModule.Probe	values	17:0
+byte_negative_half	type_const_byte_negative_half.bas	DriverModule.Probe	values	17:0
+byte_negative_round	type_const_byte_negative_round.bas	DriverModule.Probe	compile	オーバーフローしました。
+byte_negative_round	type_const_byte_negative_round.bas	DriverModule.Probe	compile	オーバーフローしました。
+byte_text	type_const_byte_text.bas	DriverModule.Probe	values	17:2
+byte_text	type_const_byte_text.bas	DriverModule.Probe	values	17:2
+integer_overflow	type_const_integer_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+integer_overflow	type_const_integer_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+integer_negative_overflow	type_const_integer_negative_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+integer_negative_overflow	type_const_integer_negative_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+long_overflow	type_const_long_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+long_overflow	type_const_long_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+long_fraction_ok	type_const_long_fraction_ok.bas	DriverModule.Probe	values	3:2147483647
+long_fraction_ok	type_const_long_fraction_ok.bas	DriverModule.Probe	values	3:2147483647
+long_fraction_overflow	type_const_long_fraction_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+long_fraction_overflow	type_const_long_fraction_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+longlong_ok	type_const_longlong_ok.bas	DriverModule.Probe	values	20:2147483648
+longlong_ok	type_const_longlong_ok.bas	DriverModule.Probe	values	20:2147483648
+single_overflow	type_const_single_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+single_overflow	type_const_single_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+double_ok	type_const_double_ok.bas	DriverModule.Probe	values	5:1E+39
+double_ok	type_const_double_ok.bas	DriverModule.Probe	values	5:1E+39
+currency_overflow	type_const_currency_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+currency_overflow	type_const_currency_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+currency_round	type_const_currency_round.bas	DriverModule.Probe	values	6:1.2346
+currency_round	type_const_currency_round.bas	DriverModule.Probe	values	6:1.2346
+boolean_text_true	type_const_boolean_text_true.bas	DriverModule.Probe	values	11:True
+boolean_text_true	type_const_boolean_text_true.bas	DriverModule.Probe	values	11:True
+boolean_text_bad	type_const_boolean_text_bad.bas	DriverModule.Probe	compile	型が一致しません。
+boolean_text_bad	type_const_boolean_text_bad.bas	DriverModule.Probe	compile	型が一致しません。
+integer_text_bad	type_const_integer_text_bad.bas	DriverModule.Probe	compile	型が一致しません。
+integer_text_bad	type_const_integer_text_bad.bas	DriverModule.Probe	compile	型が一致しません。
+integer_text_fraction	type_const_integer_text_fraction.bas	DriverModule.Probe	values	2:2
+integer_text_fraction	type_const_integer_text_fraction.bas	DriverModule.Probe	values	2:2
+string_numeric	type_const_string_numeric.bas	DriverModule.Probe	values	8:123
+string_numeric	type_const_string_numeric.bas	DriverModule.Probe	values	8:123
+string_null	type_const_string_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+string_null	type_const_string_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+boolean_null	type_const_boolean_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+boolean_null	type_const_boolean_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+date_null	type_const_date_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+date_null	type_const_date_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+variant_null	type_const_variant_null.bas	DriverModule.Probe	values	
+variant_null	type_const_variant_null.bas	DriverModule.Probe	values	
+integer_empty	type_const_integer_empty.bas	DriverModule.Probe	values	2:0
+integer_empty	type_const_integer_empty.bas	DriverModule.Probe	values	2:0
+string_empty	type_const_string_empty.bas	DriverModule.Probe	values	8:
+string_empty	type_const_string_empty.bas	DriverModule.Probe	values	8:
+variant_empty	type_const_variant_empty.bas	DriverModule.Probe	values	0:
+variant_empty	type_const_variant_empty.bas	DriverModule.Probe	values	0:
+object_number	type_const_object_number.bas	DriverModule.Probe	compile	定数のデータ型が不正です。
+object_number	type_const_object_number.bas	DriverModule.Probe	compile	定数のデータ型が不正です。
+variant_nothing_group	type_const_variant_nothing_group.bas	DriverModule.Probe	compile	オブジェクトの使い方が不正です。
+variant_nothing_group	type_const_variant_nothing_group.bas	DriverModule.Probe	compile	オブジェクトの使い方が不正です。
+date_numeric	type_const_date_numeric.bas	DriverModule.Probe	values	7:1/1/1900
+date_numeric	type_const_date_numeric.bas	DriverModule.Probe	values	7:1/1/1900
+date_overflow	type_const_date_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+date_overflow	type_const_date_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+byte_true	type_const_byte_true.bas	DriverModule.Probe	values	17:255
+byte_true	type_const_byte_true.bas	DriverModule.Probe	values	17:255
+integer_true	type_const_integer_true.bas	DriverModule.Probe	values	2:-1
+integer_true	type_const_integer_true.bas	DriverModule.Probe	values	2:-1
+unused_bad_const	type_const_unused_bad_const.bas	DriverModule.Probe	compile	オーバーフローしました。
+unused_bad_const	type_const_unused_bad_const.bas	DriverModule.Probe	compile	オーバーフローしました。
+alias_bad_const	type_const_alias_bad_const.bas	DriverModule.Probe	compile	オーバーフローしました。
+alias_bad_const	type_const_alias_bad_const.bas	DriverModule.Probe	compile	オーバーフローしました。
+typed_alias	type_const_typed_alias.bas	DriverModule.Probe	compile	オーバーフローしました。
+typed_alias	type_const_typed_alias.bas	DriverModule.Probe	compile	オーバーフローしました。
+array_null_const	type_const_array_null_const.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+array_null_const	type_const_array_null_const.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+array_cint_null	type_const_array_cint_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+array_cint_null	type_const_array_cint_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+array_null_add	type_const_array_null_add.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+array_null_add	type_const_array_null_add.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+width_null	type_const_width_null.bas	DriverModule.Probe	compile	構文エラー
+width_null	type_const_width_null.bas	DriverModule.Probe	compile	構文エラー
+width_null_const	type_const_width_null_const.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+width_null_const	type_const_width_null_const.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+enum_const	type_const_enum_const.bas	DriverModule.Probe	compile	構文エラー
+enum_const	type_const_enum_const.bas	DriverModule.Probe	compile	構文エラー
+enum_const_overflow	type_const_enum_const_overflow.bas	DriverModule.Probe	compile	構文エラー
+enum_const_overflow	type_const_enum_const_overflow.bas	DriverModule.Probe	compile	構文エラー
+class_const	type_const_class_const.bas	DriverModule.Probe	compile	構文エラー
+class_const	type_const_class_const.bas	DriverModule.Probe	compile	構文エラー
+record_const	type_const_record_const.bas	DriverModule.Probe	compile	構文エラー
+record_const	type_const_record_const.bas	DriverModule.Probe	compile	構文エラー
+array_const	type_const_array_const.bas	DriverModule.Probe	compile	構文エラー
+array_const	type_const_array_const.bas	DriverModule.Probe	compile	構文エラー
+nothing_group_untyped	type_const_nothing_group_untyped.bas	DriverModule.Probe	compile	オブジェクトの使い方が不正です。
+nothing_group_untyped	type_const_nothing_group_untyped.bas	DriverModule.Probe	compile	オブジェクトの使い方が不正です。
+nothing_group_long	type_const_nothing_group_long.bas	DriverModule.Probe	compile	オブジェクトの使い方が不正です。
+nothing_group_long	type_const_nothing_group_long.bas	DriverModule.Probe	compile	オブジェクトの使い方が不正です。
+object_null	type_const_object_null.bas	DriverModule.Probe	compile	定数のデータ型が不正です。
+object_null	type_const_object_null.bas	DriverModule.Probe	compile	定数のデータ型が不正です。
+object_empty	type_const_object_empty.bas	DriverModule.Probe	compile	定数のデータ型が不正です。
+object_empty	type_const_object_empty.bas	DriverModule.Probe	compile	定数のデータ型が不正です。
+longptr_overflow	type_const_longptr_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+longptr_overflow	type_const_longptr_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+longlong_overflow	type_const_longlong_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+longlong_overflow	type_const_longlong_overflow.bas	DriverModule.Probe	compile	オーバーフローしました。
+date_empty	type_const_date_empty.bas	DriverModule.Probe	values	7:12:00:00 AM
+date_empty	type_const_date_empty.bas	DriverModule.Probe	values	7:12:00:00 AM
+byte_null_alias	type_const_byte_null_alias.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+byte_null_alias	type_const_byte_null_alias.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+decimal_type	type_const_decimal_type.bas	DriverModule.Probe	compile	構文エラー
+decimal_type	type_const_decimal_type.bas	DriverModule.Probe	compile	構文エラー
+undefined_type	type_const_undefined_type.bas	DriverModule.Probe	compile	構文エラー
+undefined_type	type_const_undefined_type.bas	DriverModule.Probe	compile	構文エラー
+new_object_type	type_const_new_object_type.bas	DriverModule.Probe	compile	構文エラー
+new_object_type	type_const_new_object_type.bas	DriverModule.Probe	compile	構文エラー
+fixed_string_const	type_const_fixed_string_const.bas	DriverModule.Probe	values	ran
+fixed_string_const	type_const_fixed_string_const.bas	DriverModule.Probe	values	ran
+array_type_const	type_const_array_type_const.bas	DriverModule.Probe	compile	構文エラー
+array_type_const	type_const_array_type_const.bas	DriverModule.Probe	compile	構文エラー
+withevents_const	type_const_withevents_const.bas	DriverModule.Probe	compile	構文エラー
+withevents_const	type_const_withevents_const.bas	DriverModule.Probe	compile	構文エラー
+fixed_const_long	type_const_fixed_const_long.bas	DriverModule.Probe	values	3:<abc>
+fixed_const_long	type_const_fixed_const_long.bas	DriverModule.Probe	values	3:<abc>
+fixed_const_short	type_const_fixed_const_short.bas	DriverModule.Probe	values	3:<x  >
+fixed_const_short	type_const_fixed_const_short.bas	DriverModule.Probe	values	3:<x  >
+fixed_const_bound	type_const_fixed_const_bound.bas	DriverModule.Probe	values	3
+fixed_const_bound	type_const_fixed_const_bound.bas	DriverModule.Probe	values	3
+fixed_const_zero	type_const_fixed_const_zero.bas	DriverModule.Probe	compile	固定長文字列の長さが不正です。
+fixed_const_zero	type_const_fixed_const_zero.bas	DriverModule.Probe	compile	固定長文字列の長さが不正です。
+fixed_const_null	type_const_fixed_const_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+fixed_const_null	type_const_fixed_const_null.bas	DriverModule.Probe	compile	Null の使い方が不正です。
+fixed_const_padded_bound	type_const_fixed_const_padded_bound.bas	DriverModule.Probe	values	2
+fixed_const_padded_bound	type_const_fixed_const_padded_bound.bas	DriverModule.Probe	values	2
+fixed_const_truncated_bound	type_const_fixed_const_truncated_bound.bas	DriverModule.Probe	compile	値が有効範囲にありません。
+fixed_const_truncated_bound	type_const_fixed_const_truncated_bound.bas	DriverModule.Probe	compile	値が有効範囲にありません。
+date_longlong	type_const_date_longlong.bas	DriverModule.Probe	values	7:1/1/1900
+date_longlong	type_const_date_longlong.bas	DriverModule.Probe	values	7:1/1/1900

@@ -1,0 +1,655 @@
+[
+  {
+    "name": "class_byref",
+    "source": "class_args_class_byref.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11"
+      }
+    ]
+  },
+  {
+    "name": "class_field_len",
+    "source": "class_args_class_field_len.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "変数が必要です。"
+  },
+  {
+    "name": "qualified_len",
+    "source": "class_args_qualified_len.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "alias",
+    "source": "class_args_alias.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4"
+      }
+    ]
+  },
+  {
+    "name": "named",
+    "source": "class_args_named.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4"
+      }
+    ]
+  },
+  {
+    "name": "with",
+    "source": "class_args_with.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4"
+      }
+    ]
+  },
+  {
+    "name": "call",
+    "source": "class_args_call.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4"
+      }
+    ]
+  },
+  {
+    "name": "parentheses",
+    "source": "class_args_parentheses.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "late",
+    "source": "class_args_late.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4"
+      }
+    ]
+  },
+  {
+    "name": "byval",
+    "source": "class_args_byval.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      }
+    ]
+  },
+  {
+    "name": "error",
+    "source": "class_args_error.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "513:9"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "513:9"
+      }
+    ]
+  },
+  {
+    "name": "caller_scope",
+    "source": "class_args_caller_scope.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11:50"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11:50"
+      }
+    ]
+  },
+  {
+    "name": "paramarray",
+    "source": "class_args_paramarray.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "12"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "12"
+      }
+    ]
+  },
+  {
+    "name": "fixed_string",
+    "source": "class_args_fixed_string.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "[1234]"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "[1234]"
+      }
+    ]
+  },
+  {
+    "name": "array",
+    "source": "class_args_array.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11"
+      }
+    ]
+  },
+  {
+    "name": "function",
+    "source": "class_args_function.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11:11"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11:11"
+      }
+    ]
+  },
+  {
+    "name": "property_get",
+    "source": "class_args_property_get.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11:11"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11:11"
+      }
+    ]
+  },
+  {
+    "name": "default",
+    "source": "class_args_default.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11:11"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11:11"
+      }
+    ]
+  },
+  {
+    "name": "len_text_early",
+    "source": "class_args_len_text_early.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3"
+      }
+    ]
+  },
+  {
+    "name": "len_text_late",
+    "source": "class_args_len_text_late.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3"
+      }
+    ]
+  },
+  {
+    "name": "len_variant_early",
+    "source": "class_args_len_variant_early.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3"
+      }
+    ]
+  },
+  {
+    "name": "len_variant_late",
+    "source": "class_args_len_variant_late.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3"
+      }
+    ]
+  },
+  {
+    "name": "len_number_early",
+    "source": "class_args_len_number_early.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "変数が必要です。"
+  },
+  {
+    "name": "len_number_late",
+    "source": "class_args_len_number_late.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3"
+      }
+    ]
+  },
+  {
+    "name": "len_property",
+    "source": "class_args_len_property.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "変数が必要です。"
+  },
+  {
+    "name": "len_with",
+    "source": "class_args_len_with.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "変数が必要です。"
+  },
+  {
+    "name": "len_qualified_member",
+    "source": "class_args_len_qualified_member.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3"
+      }
+    ]
+  },
+  {
+    "name": "receiver_order",
+    "source": "class_args_receiver_order.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ARC"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ARC"
+      }
+    ]
+  },
+  {
+    "name": "cross_instance",
+    "source": "class_args_cross_instance.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11:50"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11:50"
+      }
+    ]
+  },
+  {
+    "name": "interface",
+    "source": "class_args_interface.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11"
+      }
+    ]
+  },
+  {
+    "name": "named_order",
+    "source": "class_args_named_order.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "FSC"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "FSC"
+      }
+    ]
+  },
+  {
+    "name": "len_property_call",
+    "source": "class_args_len_property_call.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "変数が必要です。"
+  },
+  {
+    "name": "len_me",
+    "source": "class_args_len_me.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "変数が必要です。"
+  },
+  {
+    "name": "len_own",
+    "source": "class_args_len_own.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Integer:4"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Integer:4"
+      }
+    ]
+  },
+  {
+    "name": "len_class_array",
+    "source": "class_args_len_class_array.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。"
+  },
+  {
+    "name": "late_named_order",
+    "source": "class_args_late_named_order.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "SFC"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "SFC"
+      }
+    ]
+  },
+  {
+    "name": "bad_class_unused",
+    "source": "class_args_bad_class_unused.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ok"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ok"
+      }
+    ]
+  },
+  {
+    "name": "bad_class_dim",
+    "source": "class_args_bad_class_dim.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。"
+  },
+  {
+    "name": "bad_class_late",
+    "source": "class_args_bad_class_late.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。"
+  },
+  {
+    "name": "bad_class_fixed",
+    "source": "class_args_bad_class_fixed.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。"
+  },
+  {
+    "name": "bad_class_const",
+    "source": "class_args_bad_class_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。"
+  },
+  {
+    "name": "len_private_array",
+    "source": "class_args_len_private_array.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Integer:4"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Integer:4"
+      }
+    ]
+  },
+  {
+    "name": "with_named_order",
+    "source": "class_args_with_named_order.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "FSC"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "FSC"
+      }
+    ]
+  },
+  {
+    "name": "with_late_named_order",
+    "source": "class_args_with_late_named_order.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "SFC"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "SFC"
+      }
+    ]
+  },
+  {
+    "name": "object_lifetime",
+    "source": "class_args_object_lifetime.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "IBTCA|True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "IBTCA|True"
+      }
+    ]
+  },
+  {
+    "name": "variant_lifetime",
+    "source": "class_args_variant_lifetime.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "IBCTA|True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "IBCTA|True"
+      }
+    ]
+  },
+  {
+    "name": "default_order",
+    "source": "class_args_default_order.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "AIC:11"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "AIC:11"
+      }
+    ]
+  }
+]

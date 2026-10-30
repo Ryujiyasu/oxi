@@ -1,0 +1,956 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "source": "copy_to_open_destination.bas",
+  "source_sha256": "aafa574f6317d5949c46bb415b1edabba33d33c1c6faa994f69168aaa0d08780",
+  "package": "copy_to_open_destination.xlsm",
+  "package_sha256": "f7e2914eaeb9093d31068b986c93db0857d893c320fa204ab0eaea3d37efef72",
+  "initial_directory_state": {
+    "currentDrive": "C",
+    "directories": [
+      "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+      "D:\\"
+    ]
+  },
+  "native_evidence": {
+    "status": "QUALIFIED_NATIVE36",
+    "cases": 36,
+    "normal_owned_processes": 3,
+    "all_controller_and_owned_exits_zero": true,
+    "source_identity": 2026102081,
+    "cases_sha256": "dbbaf569dd7daa6c6289b375b996714a39f9e0da640c5ba36c1b3d7cfd9297aa",
+    "proof": [
+      {
+        "group": "fso-copy-move-0",
+        "raw_report": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-0\\created.json",
+        "raw_report_sha256": "fb965703780b6926e1525b008dbc38de0b72205bb7a157aecc23883fa7ccbf58",
+        "source_packet": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-0\\input.xlsm",
+        "source_packet_sha256": "f7e2914eaeb9093d31068b986c93db0857d893c320fa204ab0eaea3d37efef72",
+        "owned_pid": 19344,
+        "owned_exit_code": 0,
+        "controller_exit_code": 0,
+        "initial_directory_state": {
+          "currentDrive": "C",
+          "directories": [
+            "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+            "D:\\"
+          ]
+        }
+      },
+      {
+        "group": "fso-copy-move-1",
+        "raw_report": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-1\\created.json",
+        "raw_report_sha256": "9a713648ff6ec92e9efa1239255ded279bf258aa781513f36eca6f5bdeec5f01",
+        "source_packet": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-1\\input.xlsm",
+        "source_packet_sha256": "f7e2914eaeb9093d31068b986c93db0857d893c320fa204ab0eaea3d37efef72",
+        "owned_pid": 14548,
+        "owned_exit_code": 0,
+        "controller_exit_code": 0,
+        "initial_directory_state": {
+          "currentDrive": "C",
+          "directories": [
+            "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+            "D:\\"
+          ]
+        }
+      },
+      {
+        "group": "fso-copy-move-2",
+        "raw_report": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\created.json",
+        "raw_report_sha256": "5c6de3f5ba1ae62ca35ecffb2d588c462fdeff04c1d927b1b9ce2176928a1a01",
+        "source_packet": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\input.xlsm",
+        "source_packet_sha256": "f7e2914eaeb9093d31068b986c93db0857d893c320fa204ab0eaea3d37efef72",
+        "owned_pid": 18588,
+        "owned_exit_code": 0,
+        "controller_exit_code": 0,
+        "initial_directory_state": {
+          "currentDrive": "C",
+          "directories": [
+            "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+            "D:\\"
+          ]
+        }
+      }
+    ],
+    "qualification": "Fresh owned3 normal0/controller0; unchanged readonly ordinary-source packages, Excel.Run source identity plus36 calls, first and second Open errors captured independently. No VBE/security/registry/signing or denied-image retries."
+  },
+  "cases": [
+    {
+      "kind": 281,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        281,
+        "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs"
+      ],
+      "expected": "0|||result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs",
+        "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\copied.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs",
+        "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\copied.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-281\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 282,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        282,
+        "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs"
+      ],
+      "expected": "0|||result:|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs",
+        "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\a.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\ab.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            97,
+            98,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\copied.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\name.a.b",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            97,
+            109,
+            101,
+            46,
+            97,
+            46,
+            98
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\plain",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            112,
+            108,
+            97,
+            105,
+            110
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\UPPER.TXT",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            85,
+            80,
+            80,
+            69,
+            82,
+            46,
+            84,
+            88,
+            84
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs",
+        "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\a.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\ab.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\copied.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\name.a.b",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\plain",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_fso_copy_move_native_20261020\\group-2\\case-282\\fs\\upper.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1733 @@
+{
+  "license": "CC BY-SA 4.0",
+  "scope": "Four primitive row geometry properties observed through normal-zero read-only Excel COM, no VBA invocation or source-recompile claim; loaded window zoom retained as separate unresolved context",
+  "cases": [
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-0.xlsm",
+      "sha256": "4f4864d92e96608817d5cfc6b24f64b8155b872dc97e3891c3be057c58e4b155",
+      "expected": {
+        "row_height": 0.0,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-1.xlsm",
+      "sha256": "3aa2a79977ac161dd6ab6a81ab4b356673ee85643cabc2ba4eafa8732f373a0d",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-10.xlsm",
+      "sha256": "81096918cd7f820bedc03e0ca4ea448755abec6437a0a1b2a1f2046f6aa82f61",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-11.xlsm",
+      "sha256": "1920e5c73b4ce84010586186b60dc88e822336ffa3a2b483da1059ef3b0a1e16",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-12.xlsm",
+      "sha256": "36879c5c5440921d36797212ba615cb30b8a179f5e76f66e176d5cd1c66c7cc7",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-13.xlsm",
+      "sha256": "40c9db43e8dd8ace3233f6baed7b0c807fbfd3dd8a905f43b7ae8a7a84d8094e",
+      "expected": {
+        "row_height": 1.5,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-14.xlsm",
+      "sha256": "e2392cd9cc6d5738ff171a2020737ae2f5d9cc73345fcd23b181561f3587596b",
+      "expected": {
+        "row_height": 2.5,
+        "height": 2.25,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-15.xlsm",
+      "sha256": "1f5e5b457c2fa21b14db714c15c6b3ed6768250bf268c6fd3f3462d5c03bde8c",
+      "expected": {
+        "row_height": 19.5,
+        "height": 19.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-2.xlsm",
+      "sha256": "f50f8806a7f8a7f8fe9372f30d7dda2ce1972e2e241733f3d1597ede3e57a973",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-3.xlsm",
+      "sha256": "c0d1536bf1920e32259b456bb8573fedf3391b9850264b8316ee0ee385d180e1",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-4.xlsm",
+      "sha256": "4c2d2ee59735000dd2ad5a699df8809ad543427ef09af5a6de7ddbdd3b830d8d",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-5.xlsm",
+      "sha256": "8b894a6ea27d5b56463af21119153cdfb7523cbb1572471086ac9e7ca62061b5",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-6.xlsm",
+      "sha256": "b0ae0bef5a824a037af79e3abee154b7a790c9b5ed869af22c597f8336cb8a91",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-7.xlsm",
+      "sha256": "277355d7bea87c18c2d595a492275775b349be799f451143ebbc72ae64573044",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-8.xlsm",
+      "sha256": "58e00a74870dea029f496ffbd1fb97269c48f76102245def46193f2b334eec08",
+      "expected": {
+        "row_height": 1.0,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-75-height-9.xlsm",
+      "sha256": "df525b2f02c72e74c6c14db139d2111f5542acadd0e56b6932f109721b60bb58",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 75.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-0.xlsm",
+      "sha256": "ce430b2093160f6da9937f22512b1889101c394fabc08a9068f57b9e2b07a5b8",
+      "expected": {
+        "row_height": 0.0,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-1.xlsm",
+      "sha256": "3dfb5979ff996b87ccfed88a6076ed6e052ace6887915be8835ec0f6670ca0a0",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-10.xlsm",
+      "sha256": "31ced6bac1d3ff9a61c4ff06b537fd66a8c0059df584b2cc6d4887574599b248",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-11.xlsm",
+      "sha256": "6a40e894b048837828454067c23a36c4f315edb58f4304eb9178eafd0d1d60db",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-12.xlsm",
+      "sha256": "b4937925282d08baa0933dc7fd5141963d77f0e547673d118e9d11857b9ce6ff",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-13.xlsm",
+      "sha256": "8c0a7e24a2e46df677707cd2964179bff3392df173a12088f2975a94f2c4547e",
+      "expected": {
+        "row_height": 1.5,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-14.xlsm",
+      "sha256": "8c8c46bc590bb4d0589f04236cb85dce5fab86010174e5a8aadb69b4b452f9b7",
+      "expected": {
+        "row_height": 2.5,
+        "height": 2.25,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-15.xlsm",
+      "sha256": "a9665bf6a67b7a3e6836ea8053c2efd9863322f9aa8b210ed9bc280cf4f7491e",
+      "expected": {
+        "row_height": 19.5,
+        "height": 19.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-2.xlsm",
+      "sha256": "690854cb7e8085054587b9376bec401e8d2b710ec7b56d03ceb35c1587fc3c7a",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-3.xlsm",
+      "sha256": "8793abb854b4267270e603296df9b80b514c5418c24097e2407566999cb75bec",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-4.xlsm",
+      "sha256": "2800684f3a165a2e347bdfd5167141e983064d4263f6d53b992bd0412acdea04",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-5.xlsm",
+      "sha256": "6839ffa5cd5bff260358f3f03f425d8fb307b1e2b64920b11e4f041975b0a0c9",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-6.xlsm",
+      "sha256": "2e8cf960ad6b8b8947628d8b996724021f2baa29b8383c8581643c0ae8a4c104",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-7.xlsm",
+      "sha256": "060a2b870761a09cb70ff3607fb5bcab79433bd9d2ed9b6a4a59bdad8eebb917",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-8.xlsm",
+      "sha256": "4e14ee8f637ec43674135dab4696e41733c23de10ec3c54f1ffc875b98802295",
+      "expected": {
+        "row_height": 1.0,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-100-height-9.xlsm",
+      "sha256": "432d43997226ba74298d26bbd947d48f7bd4dcd7e5b71c9d3a6c9f84817a49b2",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-0.xlsm",
+      "sha256": "90b71dca3cb659f0dae5a23bed46bc51f9c071892a42e8666161ff68692ae9f4",
+      "expected": {
+        "row_height": 0.0,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-1.xlsm",
+      "sha256": "9a5c45de908e5469f60e7755bd4ec818fa42fec0e4dfae63461648b443d3f7e0",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-10.xlsm",
+      "sha256": "0686393674310200d767b01bf7c65ab52f292894f079689e5681d00667528ad5",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-11.xlsm",
+      "sha256": "e12a4d621883abd07894f985b932e604322671baaa7a784c565150dd4b28bc2f",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-12.xlsm",
+      "sha256": "76c43e2b5604483cd2e840e3de723fecdae843f548cf714c1f964cb5a0bdb93d",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-13.xlsm",
+      "sha256": "ba254e21ec3a1b3c300d54f7805573954700c07f992df645d73ec818c9eb5da9",
+      "expected": {
+        "row_height": 1.5,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-14.xlsm",
+      "sha256": "f65f45c24733299fe9661eec39f6e4aec5ac96af9d8b7b0caf9b6654cf2a8c85",
+      "expected": {
+        "row_height": 2.5,
+        "height": 2.25,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-15.xlsm",
+      "sha256": "454efa8d4fe36bcdfccf1016200f69c9d41cb9febe4c038d4a8f3285da6610b9",
+      "expected": {
+        "row_height": 19.5,
+        "height": 19.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-2.xlsm",
+      "sha256": "82094d49ee16ee4459d2ebecc60904d82d235eaf35bbfabcd898d39216400319",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-3.xlsm",
+      "sha256": "79fd1420674f2621902b7572ee518b61bfcb616f7241971f3b89f09d98b16aa6",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-4.xlsm",
+      "sha256": "442d5e67df9961f99904f11473f18d59d0e6b0d0fc9441518a34008054e25092",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-5.xlsm",
+      "sha256": "1f752b911d5f5bf265b5ee0af4fa24e6357a4ef11dc85f31999a7e64442b8bf7",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-6.xlsm",
+      "sha256": "dc7fa63329ee2e870f56ff84cfc9aea524591bbb18d886fa17ab6008a1dd565d",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-7.xlsm",
+      "sha256": "b713adbbefc919a4fe9ceacbcc4129526f65ae0e036c5c282f043a9171ceceaa",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-8.xlsm",
+      "sha256": "d77a643d682299157cba2923ec05dc1f911f7991ba575ec31abc538b17432a17",
+      "expected": {
+        "row_height": 1.0,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-geometry-150-height-9.xlsm",
+      "sha256": "645dcd326defcfdb13a11e55934ac80a68eedacf0d3e647439a424af17ad4382",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 150.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-0.xlsm",
+      "sha256": "c9891bbc209a14fb00d15b2b7f5b0d776d16af250fe4d839eaa4d0172410ea32",
+      "expected": {
+        "row_height": 15.0,
+        "height": 15.0,
+        "hidden": false,
+        "use_standard": true
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-1.xlsm",
+      "sha256": "df26a16ce1063df9a6d5a1e052b56fdeb916fd5d89f53251e08d174393041594",
+      "expected": {
+        "row_height": 0.0,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": true
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-10.xlsm",
+      "sha256": "82e9ed0477037bebc0cee0064eb02041c44bdef50733d13b5356bdfa3feb5554",
+      "expected": {
+        "row_height": 15.0,
+        "height": 15.0,
+        "hidden": false,
+        "use_standard": true
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-11.xlsm",
+      "sha256": "d9b5377671f107748d0488beae2530cdd40f4d1f58fd12fa07c4437c59e2df3c",
+      "expected": {
+        "row_height": 0.0,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": true
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-12.xlsm",
+      "sha256": "85612746322e5b4d0899375a845382286f593b86e22fecdb3314c88423cf3aea",
+      "expected": {
+        "row_height": 0.0,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-13.xlsm",
+      "sha256": "94d459e3916335415997196f493332fc05c0148eb84ba4ffd681653dba6e99fe",
+      "expected": {
+        "row_height": 15.0,
+        "height": 15.0,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-2.xlsm",
+      "sha256": "00f959ab0de9354e71ca97a1ee6567884709b623a3f11a088e681c26e9f3078b",
+      "expected": {
+        "row_height": 0.0,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": true
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-3.xlsm",
+      "sha256": "adfc86f5dfc18936a55dd17b21878324ab68420804f8ab5a605e2c4bed9b59d5",
+      "expected": {
+        "row_height": 15.0,
+        "height": 15.0,
+        "hidden": false,
+        "use_standard": true
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-4.xlsm",
+      "sha256": "146862c6f7df79651b620fe9ccfe2f009f3094f0551e24670b1aeeb3b65ba736",
+      "expected": {
+        "row_height": 15.0,
+        "height": 15.0,
+        "hidden": false,
+        "use_standard": true
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-5.xlsm",
+      "sha256": "ccf41a6461ed507f9104e3fccce32a5087b227a4c7430c530e9ddf027995097c",
+      "expected": {
+        "row_height": 19.5,
+        "height": 19.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-6.xlsm",
+      "sha256": "585816f52167daa4bd740e6ed596d40e8cf72b39a7418060577387e88add7f26",
+      "expected": {
+        "row_height": 19.5,
+        "height": 19.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-7.xlsm",
+      "sha256": "e41f91d2067d5aa350a2815e76bc5458f3e3a8431ad914709596f3a594e0cb56",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-8.xlsm",
+      "sha256": "f259efc8e1fdcc079b972999c8816791d9964ce5844bd0e0723035c1e69bd7ac",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/readonly-defaults-state-9.xlsm",
+      "sha256": "12b8c9b6ce56263f5ad6b0dc3ac157a00747a9d337f5c0bcc8e4c2d9a6614aeb",
+      "expected": {
+        "row_height": 15.0,
+        "height": 15.0,
+        "hidden": false,
+        "use_standard": true
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-0.xlsm",
+      "sha256": "30a89de593682ec3ecedc030accf5a1c1d50d4d77b37c1a4ae9b2a510ba8fbb8",
+      "expected": {
+        "row_height": 0.0,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-1.xlsm",
+      "sha256": "300adcfb506156df34f08f30051b42a44a98386e0bc996459d402e00f7590308",
+      "expected": {
+        "row_height": 0.0,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-2.xlsm",
+      "sha256": "22d08a8e0d944319bde95f17eb39cd6a15eaeed7e3ade7012d3ffd405d237990",
+      "expected": {
+        "row_height": 0.0,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-3.xlsm",
+      "sha256": "82b231e3df44abe83af26ab112b0efb703ae08325c31538dc2a51f03ba71c866",
+      "expected": {
+        "row_height": 0.0,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-4.xlsm",
+      "sha256": "30acd718d56a490cd0581b1bd93addd91b90f95f97d069239bd4c01578b95492",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-5.xlsm",
+      "sha256": "72e2be55b8e1643b712d40dfe26b7b1dd535abec2fc51f673d4f52c144c252da",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-6.xlsm",
+      "sha256": "5b837eeab2247dc66f653e902009d9a7497331eb7ab5910e043cba1e6c66fec8",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-7.xlsm",
+      "sha256": "216eca335090b2c31714a1f32ef663cff04e6d31dc6b4ef9b75b5a3afd1a2ad4",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-8.xlsm",
+      "sha256": "10d13f528fd45a78d7d7b94a2a39e4c9c7c03b607c189f6c6d90308a153f76f9",
+      "expected": {
+        "row_height": 0.25,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-9.xlsm",
+      "sha256": "21bc984ec95eae744ede9c0d47a11e2376d56d7ed89c1a6cc6dbee7d94490840",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-10.xlsm",
+      "sha256": "bd931499b02bcf0d7d73eeebab28a7c338bd8c1a90a622cce2d18b95900f28fa",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-11.xlsm",
+      "sha256": "8c07d15f2fb9591fa2e6479340712a5b731e87054afef5096fae041a63cc0990",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-12.xlsm",
+      "sha256": "d0bee8a17b5948ef2592f27d2cee84a54df455ee3968aa7473732b810e36156d",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-13.xlsm",
+      "sha256": "8df8d4173a37d54aed3a080738fbe12a723006f34a1566ec6d0fc868995fcc15",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-14.xlsm",
+      "sha256": "a1efc93f9eac6657b3be08e3fac4e938fd919c8d9c4a017880d592c12d567fff",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-15.xlsm",
+      "sha256": "2a74c282b294ae74f6f70c445c6bca7d84df70ed371e546ef7a225491c004b83",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-16.xlsm",
+      "sha256": "f0b8914ebb306a806cb3e4d9e045b6dad61f55db0e32aaa71738970801089884",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-17.xlsm",
+      "sha256": "6a08c85b35f096e5852f8ef1b753f3b29a7ec28d4b4340a6203e5caa9c6b701b",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-18.xlsm",
+      "sha256": "abfa3b0d475d1a41a1a000cddc0b1362507aca70f312e46ae1a90e95d083daa9",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-19.xlsm",
+      "sha256": "136bc4211466fbcc7b192d3103dcffc659294b9abefbe01f5767c4c4a4c54a0b",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-20.xlsm",
+      "sha256": "de9b7fddce9237b38bce9c709fdb0bffc6201911ed79f2bdafb01c18e3805970",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-21.xlsm",
+      "sha256": "59e5dba5459f8de7523604d23395b86637a6de42f51cc295f09cdb6ea56c9cae",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-22.xlsm",
+      "sha256": "983f4f989a5c385d7d67854d1a046ec2946d0c2a5f773181e090520f21bf0251",
+      "expected": {
+        "row_height": 1.0,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-23.xlsm",
+      "sha256": "9e3290b8eeec8c5be29845a7bd5cd444c48b7d1a2d70d8c5700ed73187e97037",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-24.xlsm",
+      "sha256": "f4c0bdc50fe9b43dcda54f073649d2458b467505802615aa23dd2ace60c96f9d",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-25.xlsm",
+      "sha256": "d2e88b0fe43bb74e5a9141bd3cb6b07bbf47b77c5f1867971e4f24c0cf5a35e5",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-26.xlsm",
+      "sha256": "0170fc62b038a84af79972d52b3e9b8e5a20cd20dcafb5f1b6b4459558354efd",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-27.xlsm",
+      "sha256": "8783d4faae587c5ef3e04675c040364a8e88affe30387fb1e40bb683485d8592",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-28.xlsm",
+      "sha256": "bd8d87f57888255ba1caa80d4a9a5345ad6e05e59b189d851af8770268e9a872",
+      "expected": {
+        "row_height": 2.5,
+        "height": 2.25,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-29.xlsm",
+      "sha256": "4e560a7493c1f2522e9177caeabe11c8be677ad945c5abad50a5f95128eafcfa",
+      "expected": {
+        "row_height": 15.0,
+        "height": 15.0,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-30.xlsm",
+      "sha256": "80463feedb3e01edc68c99a8927b6ddc926663406c996c493ed36dc90b698caf",
+      "expected": {
+        "row_height": 20.0,
+        "height": 19.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-31.xlsm",
+      "sha256": "834e67550e11c272e5f2223bae96a1e9fa5e89f1d9e8ed268e6e09dac1fa1911",
+      "expected": {
+        "row_height": 20.25,
+        "height": 20.25,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-32.xlsm",
+      "sha256": "7e6233af6119f97477a9c0f8b3835cb5dd5d936402721e7baceb1b8b00dbb8de",
+      "expected": {
+        "row_height": 25.0,
+        "height": 24.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-33.xlsm",
+      "sha256": "0e7f33112c63291b9fd749f5effd53f89feff37ba8ab38ffd87b7c2148151603",
+      "expected": {
+        "row_height": 25.0,
+        "height": 24.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/arbitrary_files_complete-arbitrary-height-34.xlsm",
+      "sha256": "7db7afc250565325a7d06808a862ae976df3803ed0d47595ac28ae9e18849633",
+      "expected": {
+        "row_height": 409.5,
+        "height": 409.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-0.xlsm",
+      "sha256": "747f5d3e12d7043ce6884eb003b9f9183c5c2f8d1db5ea674bffbf782873ffec",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-1.xlsm",
+      "sha256": "f6097aea1b1f85fea471b8f48066392a3a140d6db884f8ce8031c10564c41232",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-2.xlsm",
+      "sha256": "abfa3b0d475d1a41a1a000cddc0b1362507aca70f312e46ae1a90e95d083daa9",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-3.xlsm",
+      "sha256": "be0f77b8b63e6e84a549a112c340364813bb8121b02858f0cc26445cc12cce1b",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-4.xlsm",
+      "sha256": "9de922dc40679c6c495f2c1de8039fb0c0b5583c20cc64fa4d5922e494de6ee0",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-5.xlsm",
+      "sha256": "c4408af053a21525918570abf0c33d5ef002616d9b801ef08ec5016de7cd9bb6",
+      "expected": {
+        "row_height": 1.0,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-6.xlsm",
+      "sha256": "6a18f382e265da26e751c4064b2c7791489791d41ae8bd73207476a15342d1ef",
+      "expected": {
+        "row_height": 1.0,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-7.xlsm",
+      "sha256": "9e3290b8eeec8c5be29845a7bd5cd444c48b7d1a2d70d8c5700ed73187e97037",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-8.xlsm",
+      "sha256": "8975fe0ed97dc8830818cc538b0431b2509137fbe3024092f2d2c93e32205919",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-9.xlsm",
+      "sha256": "e8411977e2b4eda922e339d33b80ac0bbac19bf629c079359bb56f752987e789",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-10.xlsm",
+      "sha256": "a9abea023af65fe26abf6a99ee5c5a5814a0a06ff14dc85541f7c5e4f97eeb4d",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-11.xlsm",
+      "sha256": "e784475c727197c0a0126798b76045a4b12dd8c26ece8628675b918eac98dd7b",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-12.xlsm",
+      "sha256": "f92780b2fa824ce5f3998719369151e60761ff0bc2d59ab78de1b184bdb6bbb7",
+      "expected": {
+        "row_height": 1.5,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-13.xlsm",
+      "sha256": "4c2e56e104f96dba4a73fbfe93cac2511d3b86c7b97ba5564288e094f8bfc1be",
+      "expected": {
+        "row_height": 1.5,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-14.xlsm",
+      "sha256": "df91ad4bdce3317c8612d44bafd269a5c2bc5b23748f99c4bdbf51dff70bb2cc",
+      "expected": {
+        "row_height": 1.5,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-15.xlsm",
+      "sha256": "b850b40fb6ad229e99bc3deb7789633d29ee0a42d985f7f82da8434dc68e5f7a",
+      "expected": {
+        "row_height": 1.75,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-16.xlsm",
+      "sha256": "5400c0d2b2a768195137c0df878e6246b7fcc499f1d01b8b19152a3a972a57ec",
+      "expected": {
+        "row_height": 1.75,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-17.xlsm",
+      "sha256": "ba4d2915f01d7f147f89f68713afcb884ce679f87ad0245b3f880edaa2e6b6a9",
+      "expected": {
+        "row_height": 2.0,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-18.xlsm",
+      "sha256": "b27e0dff801bb5a5a552384d630b67e632ae90ffa551fa2d509e436d5cddfa69",
+      "expected": {
+        "row_height": 2.0,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-19.xlsm",
+      "sha256": "407335e23bb6263888549f2d6583f73cf6137c7d6d969c714541281e62c80487",
+      "expected": {
+        "row_height": 2.0,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-20.xlsm",
+      "sha256": "68bbcfbceeb4c624e9b4238ce1faedc798a408cf90c090914e0ab9cf550cd079",
+      "expected": {
+        "row_height": 20.0,
+        "height": 19.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-21.xlsm",
+      "sha256": "c0950cbb15aec4b44d85ceeda5b3e90514bbeece8d1f4cc81a15bc8c4b295d90",
+      "expected": {
+        "row_height": 20.0,
+        "height": 19.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-22.xlsm",
+      "sha256": "76fede049046424ae32c7e8641700fbffa58eef0247187126113393030bc2455",
+      "expected": {
+        "row_height": 20.25,
+        "height": 20.25,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-23.xlsm",
+      "sha256": "d6f09bf5c8dd126be961535a534522daccd02d0f7a94f2eea826f8c2877c99c2",
+      "expected": {
+        "row_height": 20.25,
+        "height": 20.25,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-24.xlsm",
+      "sha256": "650b05ea9bde2c450c7694f26c84a946230ff7289f6a747fb9b334d92cba1237",
+      "expected": {
+        "row_height": 20.25,
+        "height": 20.25,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-25.xlsm",
+      "sha256": "7f1a19053353a7e5723d19584dc3cd6c42232c90013083e98a9febc8b7ace75d",
+      "expected": {
+        "row_height": 25.0,
+        "height": 24.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-26.xlsm",
+      "sha256": "d098ec0ed625556e3039fbb61b84f04a53656b03e7b9eb9b6cb1d09b80ba9e7b",
+      "expected": {
+        "row_height": 25.0,
+        "height": 24.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-27.xlsm",
+      "sha256": "06998bc66498881d80b6ee93dfe719c2df32237b9ac5a637208f5790d6ce0c93",
+      "expected": {
+        "row_height": 25.25,
+        "height": 24.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-28.xlsm",
+      "sha256": "3c3bfe7592792ece38e6a80255d5ef59830ba827f17fd6fab334c2b83c085ae5",
+      "expected": {
+        "row_height": 25.25,
+        "height": 24.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-cells-height-29.xlsm",
+      "sha256": "4b4aa8751168eb6a86bd8584ea77d591b6e9d382c4a81f8ad05cc12a6b377d86",
+      "expected": {
+        "row_height": 25.25,
+        "height": 24.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-0.xlsm",
+      "sha256": "a78f7dc094b07c53d089f9858c3d90f188c2cba28ff8c6c03364aa479770afc3",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-1.xlsm",
+      "sha256": "c240f5ffffe0a487dfd83169893bfec2d6e046c901698ecabdf62015182c09ff",
+      "expected": {
+        "row_height": 0.5,
+        "height": 0.0,
+        "hidden": true,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-2.xlsm",
+      "sha256": "13a3d76207a714db1d96a910d95eaaf04e7afcab57c511241d36cfa47ad08368",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-3.xlsm",
+      "sha256": "32dc0a89e533074800bcc475cb3fd0ac586b4565a52d66c7dc7633b8cc965a88",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-4.xlsm",
+      "sha256": "659785b56f3034eb96e20d108d5621df389633dba75a765f7a52d91bfc8efb8b",
+      "expected": {
+        "row_height": 0.75,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-5.xlsm",
+      "sha256": "7a47f2f6da8f83da80d330bff20b2326fd1f37b89b36699c80a25fcc81330011",
+      "expected": {
+        "row_height": 1.0,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-6.xlsm",
+      "sha256": "9436ed8c8b7d34a37a76d1201426fd8e38e02156bbfdc87d5c812eedc9269d13",
+      "expected": {
+        "row_height": 1.0,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-7.xlsm",
+      "sha256": "a3f24dea2c1dece8a7eca4a3442e6767c441817e8ccf05f72d294a92eca62895",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-8.xlsm",
+      "sha256": "dacb69cc3199a470816781baf2db74142bac2cc4c146c3cada340d407d190722",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-9.xlsm",
+      "sha256": "196b3772bf445ee9788788365123d58bccfa4f4548692726292ae3631528714d",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-10.xlsm",
+      "sha256": "2bcb58e90ffa5a330950fcc6eb164bad1aa29b28f8538f2ac6f2915d61ba63c5",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-11.xlsm",
+      "sha256": "3ced1b8a02ad2b9a09440b2fdc6364f4887c2907ab3e82460c114741a2edc892",
+      "expected": {
+        "row_height": 1.25,
+        "height": 0.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-12.xlsm",
+      "sha256": "c66ad5cac6248f29b98533da032913c5d5465956bd55eb407a1328fd2e52cfde",
+      "expected": {
+        "row_height": 1.5,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-13.xlsm",
+      "sha256": "e496800530669dbd4363610a757da29b4be6de63d02a3405833b4aaebd4461b1",
+      "expected": {
+        "row_height": 1.5,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-14.xlsm",
+      "sha256": "9ba95c55cc52d90903bf659a2549848a20bc88cd0ccd326608fc7003bf3979c1",
+      "expected": {
+        "row_height": 1.5,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-15.xlsm",
+      "sha256": "d62d203726ab762779a56f04126161b25ff6c77ae830472817009ed10da10acd",
+      "expected": {
+        "row_height": 1.75,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-16.xlsm",
+      "sha256": "8c26f5f6b141c8453625bd26eb2839fb752b8fd17b7a46593f73adc3d4f0a8c5",
+      "expected": {
+        "row_height": 1.75,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-17.xlsm",
+      "sha256": "eb1c32c9b91846980831a18638312bb972550888338565ca595317b229f8b901",
+      "expected": {
+        "row_height": 2.0,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-18.xlsm",
+      "sha256": "b181525b16fc94f114006bda2a89583fb74bd3822eeecbb324e00afbc507653e",
+      "expected": {
+        "row_height": 2.0,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-19.xlsm",
+      "sha256": "9c2e958a342775f551ef5a4a41c02398f06b6c1ff5e7502276aa5bd889067d8e",
+      "expected": {
+        "row_height": 2.0,
+        "height": 1.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-20.xlsm",
+      "sha256": "0fe3295879887bda7651b3c71df0764e7241faac55af6aaee783403d9e71b6de",
+      "expected": {
+        "row_height": 20.0,
+        "height": 19.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-21.xlsm",
+      "sha256": "108720bbe62939b7ff798cece95dd6a9de8134af94aa8634d3469e8652236d9a",
+      "expected": {
+        "row_height": 20.0,
+        "height": 19.5,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-22.xlsm",
+      "sha256": "32284dad9ad830633080879ba28610e85c14efdf7ff79b2e67e36915bfa9ea01",
+      "expected": {
+        "row_height": 20.25,
+        "height": 20.25,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-23.xlsm",
+      "sha256": "fec642fb60f42f7298c80538c2796eb66350e1be2bb16b7e73489f2402c758c6",
+      "expected": {
+        "row_height": 20.25,
+        "height": 20.25,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-24.xlsm",
+      "sha256": "5be976cd42b26a19935c3a8784bee81afa0abe69c34af847387f7b46562899c2",
+      "expected": {
+        "row_height": 20.25,
+        "height": 20.25,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-25.xlsm",
+      "sha256": "ccc0e8f1245680f42c00a9949042d0030ec57befe8d19fec055d7e69196c7dc7",
+      "expected": {
+        "row_height": 25.0,
+        "height": 24.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-26.xlsm",
+      "sha256": "aaf57c420e5addcc435de4d9074336a850ad73c83b5de3ac842219b0d2e2ee5b",
+      "expected": {
+        "row_height": 25.0,
+        "height": 24.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-27.xlsm",
+      "sha256": "9e3c8d89193b5413447dc11939e312619a54bb3c6bc4b2d5fa3a7ac822f1932f",
+      "expected": {
+        "row_height": 25.25,
+        "height": 24.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-28.xlsm",
+      "sha256": "3f4713319049050371a294d3c407a0bc031f0dbdc1f816c54b686e3d883f9d13",
+      "expected": {
+        "row_height": 25.25,
+        "height": 24.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    },
+    {
+      "file": "row_height_saved/file_boundaries-empty-height-29.xlsm",
+      "sha256": "d80c1b9eac3f4b563d663b24163dedf64c333a20bd503b2dbf9589ee6947b413",
+      "expected": {
+        "row_height": 25.25,
+        "height": 24.75,
+        "hidden": false,
+        "use_standard": false
+      },
+      "observed_window_zoom": 100.0
+    }
+  ]
+}

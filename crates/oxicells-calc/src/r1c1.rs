@@ -69,7 +69,9 @@ pub fn formula_to_r1c1(formula: &str, row: u32, column: u32) -> Result<String, S
                     render_line(first.1, row, column),
                     render_line(last.1, row, column),
                 ) {
-                    let sheets_agree = first.0 == last.0;
+                    // An omitted second owner inherits the first: Other!A:A
+                    // is one column of Other, rather than a cross-sheet span.
+                    let sheets_agree = last.0.is_none() || first.0 == last.0;
                     render_token(
                         &mut output,
                         Token::Name {
@@ -488,6 +490,16 @@ mod tests {
         );
         assert_eq!(formula_to_r1c1("=SUM($A:$A)", 13, 1).unwrap(), "=SUM(C1)");
         assert_eq!(formula_to_r1c1("=SUM($1:$1)", 14, 1).unwrap(), "=SUM(R1)");
+        for (input, expected) in [
+            ("=Other!A:A", "=Other!C[-2]"),
+            ("=SUM(Other!$B:$B)", "=SUM(Other!C2)"),
+            ("='Other Space'!$1:$1", "='Other Space'!R1"),
+            ("=SUM(Other!$B:B)", "=SUM(Other!C2:C[-1])"),
+            ("=SUM(Other!A1:A1)", "=SUM(Other!R[-4]C[-2]:R[-4]C[-2])"),
+            ("=SUM(Other!1:2)", "=SUM(Other!R[-4]:R[-3])"),
+        ] {
+            assert_eq!(formula_to_r1c1(input, 4, 2).unwrap(), expected, "{input}");
+        }
         assert_eq!(formula_to_r1c1("=SUM($A:B)", 4, 1).unwrap(), "=SUM(C1:C)");
         assert_eq!(
             formula_to_r1c1("=SUM(A1:A1)", 1, 1).unwrap(),

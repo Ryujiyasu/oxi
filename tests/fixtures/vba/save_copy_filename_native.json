@@ -1,0 +1,1723 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "groups": [
+    {
+      "name": "save_copy_filename_shapes",
+      "source": "save_copy_filename_shapes.bas",
+      "package": "save_copy_filename_shapes.xlsm",
+      "source_sha256": "d0258eb25162ba3c7a558e880308ed2fef14627429247cf51630730097d08222",
+      "package_sha256": "99135d3d965ef81cbaddb68c3e544be37e0166f39aba4a8f3ba25ad02b7339cb",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\input.xlsm",
+      "read_only": true,
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs"
+      ],
+      "initial_files": [],
+      "vba_help_file": "C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm",
+      "cases": [
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            0,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-0.xlsm",
+            false
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1001004|saved:True|kind:Null",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            1,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-1.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Empty",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            2,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-2.xlsm",
+            false
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1001004|saved:True|kind:Error",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            3,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-3.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-3.xlsm",
+              "sha256": "aa05b9f8ae37e033dbe901ce996a1bb0fafe8c3a3aee903517a123898a400afb",
+              "length": 19283,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-3.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-3.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-3.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            4,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-4.xlsm",
+            false
+          ],
+          "expected": "5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|saved:True|kind:Nothing",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            5,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-5.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Range",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-5.xlsm",
+              "sha256": "de95ee3d49494d2ae2fd1e8320635a39b53a3866208848660fa1b1b78e4f9b7f",
+              "length": 19274,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-5.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-5.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-5.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            6,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-6.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:String",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-6.xlsm",
+              "sha256": "d600ef962ca71d7dec9685b77b6b9022b5b1e9a0ff5a784406f2f597eb774b4b",
+              "length": 19276,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-6.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-6.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-6.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            7,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-7.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:String",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            8,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-8.xlsm",
+            false
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1001004|saved:True|kind:Collection",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            9,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-9.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:String",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            10,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-10.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-10.xlsm",
+              "sha256": "497af64159fbff40f30e6a8a4b57a252b20f6384399f11fdd4a3dd6c3e81c7f7",
+              "length": 19269,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-10.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-10.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-10.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-10.xlsm.extra.xlsm",
+              "sha256": "63debd706cb0d0feface9269d7ef2be4ab3342cf7415d9294ea76eff6b2217c5",
+              "length": 19280,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-10.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-10.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-10.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            11,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm",
+              "sha256": "30008b0b8a545bf93316529e0236ce669483c898ec8379046a56e3dab21958f3",
+              "length": 19272,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm.matrix12.xlsm",
+              "sha256": "a1752f5c8c64424ac654c2f7fdb63787c43081c1f61ef87f0b377bd1ed7503ef",
+              "length": 19276,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm.matrix21.xlsm",
+              "sha256": "0743086e70db3d2d84d9682d7f4f24aaa0858c29dd414fd407c04030227ae5d1",
+              "length": 19270,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm.matrix22.xlsm",
+              "sha256": "b384bfcfe65ce5a7e0b70db94ebb67946bc5c1d84064aa2b018261dd66e528a4",
+              "length": 19268,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-11.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            12,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-12.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:String()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-12.xlsm",
+              "sha256": "ebc4a1807e9304e9192a34ed785f39c45cb99cdd4e8ab10d0ccab12bbd672c0f",
+              "length": 19270,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-12.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-12.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-12.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            13,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-13.xlsm",
+            false
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            14,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-14.xlsm",
+            false
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            15,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-15.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-15.xlsm",
+              "sha256": "ea57062d63cd4d94af6cabefd48e9433a3c4f8b54fe79eb8997a11cd1cbc00b9",
+              "length": 19289,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-15.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-15.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-15.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            16,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-16.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Range",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-16.xlsm",
+              "sha256": "4729e7e5aa8110fe05ada3a43a243366aca5589004b69c6c61dff65447c58c8c",
+              "length": 19286,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-16.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-16.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-16.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-16.xlsm.cellA2.xlsm",
+              "sha256": "dfc3d3696d1d66fcc325347285cbcf6e252ae9276229eb9a04acda475caa34ed",
+              "length": 19273,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-16.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-16.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-16.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            17,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-17.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Range",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-17.xlsm",
+              "sha256": "2633763b7d914a6da6255817558087cf98da80f7b0afb4d7ce5641b30e3bb835",
+              "length": 19286,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-17.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-17.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-17.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-17.xlsm.cellA2.xlsm",
+              "sha256": "2620d95c7b8ed12a5cbc16ff60bcb8bdd27c9970d045f544f667cb31c9c69f4b",
+              "length": 19273,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-17.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-17.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-17.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            18,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-18.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Range",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            19,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-19.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Range",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-19.xlsm",
+              "sha256": "0380fb39d592f56a94c3ad743895abb8e3002247bb0bb85ef2d2490dd5fcb9ec",
+              "length": 19280,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-19.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-19.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-19.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-19.xlsm.cellB1.xlsm",
+              "sha256": "dfe93a4c80f89f9660eb12f3af2c24f1a05bac2768cf2d4269c83a2afb263516",
+              "length": 19284,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-19.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-19.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-19.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            1,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-20.xlsm",
+            true
+          ],
+          "expected": "0||||0|saved:False|kind:Empty",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            7,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-21.xlsm",
+            true
+          ],
+          "expected": "0||||0|saved:False|kind:String",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            9,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-22.xlsm",
+            true
+          ],
+          "expected": "0||||0|saved:False|kind:String",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            14,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-23.xlsm",
+            true
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|saved:False|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            18,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_shapes_20261020\\typed\\outputs\\type-24.xlsm",
+            true
+          ],
+          "expected": "0||||0|saved:False|kind:Range",
+          "files": []
+        }
+      ]
+    },
+    {
+      "name": "save_copy_filename_leaves",
+      "source": "save_copy_filename_leaves.bas",
+      "package": "save_copy_filename_leaves.xlsm",
+      "source_sha256": "fd1f5a772697742342ae5f9de4d2fafced97515f4fd3fc5960b49deb5721bbfa",
+      "package_sha256": "65c971fd64fb963190614c33b7acb9e8af52564b60285a6a7811681f1cd541d0",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\input.xlsm",
+      "read_only": true,
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs"
+      ],
+      "initial_files": [],
+      "vba_help_file": "C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm",
+      "cases": [
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            20,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-0.xlsm",
+            false
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1001004|saved:True|kind:Range",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            21,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-1.xlsm",
+            false
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1001004|saved:True|kind:Range",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-1.xlsm.cellA2.xlsm",
+              "sha256": "e52d1e03fb3672d5df539d28c1871da64744c42bdcb22e447eb95aa336fef0c6",
+              "length": 19910,
+              "cells": {
+                "A1": {
+                  "Error": "#DIV/0!"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-1.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-1.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            22,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-2.xlsm",
+            false
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1001004|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            23,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-3.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            24,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-4.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            25,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-5.xlsm",
+            false
+          ],
+          "expected": "5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            26,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-6.xlsm",
+            false
+          ],
+          "expected": "450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000450|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            27,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-7.xlsm",
+            false
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            28,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-8.xlsm",
+            false
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            29,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-9.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            30,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-10.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            31,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-11.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-11.xlsm",
+              "sha256": "471e195611b8b43aaa8b6060219df2d52cb03e551124d4898ce34656c4ea6c01",
+              "length": 19898,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-11.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-11.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-11.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            32,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-12.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-12.xlsm",
+              "sha256": "2c273412b9ff446df25d20825c39230ba34864f4dab4978f6bf502ebde78edef",
+              "length": 19899,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-12.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-12.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_leaves_20261020\\typed\\outputs\\type-12.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "save_copy_filename_vectors",
+      "source": "save_copy_filename_vectors.bas",
+      "package": "save_copy_filename_vectors.xlsm",
+      "source_sha256": "2a5678cd6a762332898d1b2dbf958e8fa8c04777e34a105ee83e9c351e5a8e82",
+      "package_sha256": "f541fe0338532941c4946865cb942fede681526f282f9c580b67de2dc3e5895d",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\input.xlsm",
+      "read_only": true,
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs"
+      ],
+      "initial_files": [],
+      "vba_help_file": "C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm",
+      "cases": [
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            33,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-0.xlsm",
+            false
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            34,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-1.xlsm",
+            false
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            35,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-2.xlsm",
+            false
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-2.xlsm",
+              "sha256": "5d7c864fb95497bbd57f7d95dae065f661634719735c4fba96c84a465953ea6a",
+              "length": 21804,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-2.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-2.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-2.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-2.xlsm.after.xlsm",
+              "sha256": "f4f46399352598d567f4fbbd1909db0069d5c20f37c528f5019eb6cc9f19e8b5",
+              "length": 21800,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-2.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-2.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-2.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            36,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-3.xlsm",
+            false
+          ],
+          "expected": "1004|VBAProject|'SaveCopyAs' メソッドは失敗しました: '_Workbook' オブジェクト|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-3.xlsm",
+              "sha256": "c00c6917fe40e64a34662bc182ea8f01f41952463c8d62f58003b045b0b65cbe",
+              "length": 21805,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-3.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-3.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-3.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            37,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-4.xlsm",
+            false
+          ],
+          "expected": "5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            38,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-5.xlsm",
+            false
+          ],
+          "expected": "450|VBAProject|引数の数が一致していません。または不正なプロパティを指定しています。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000450|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            39,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-6.xlsm",
+            false
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            40,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-7.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-7.xlsm",
+              "sha256": "58f43f81eec4c336671be6930d5403984ec8098c37e53a91facce3f096c43445",
+              "length": 21807,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-7.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-7.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-7.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-7.xlsm.after.xlsm",
+              "sha256": "6244008d97ada50e4a4817c860f89b62a55b0eb8468d080effd882bfd2893588",
+              "length": 21796,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-7.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-7.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-7.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            41,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-8.xlsm",
+            false
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            42,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-9.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|ファイル 'C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-9.xlsm\\missing\\out.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。|xlmain11.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-9.xlsm",
+              "sha256": "459190ec5e391c4a540b67267eb38bdd898166277ef4c0e4d80ab2267ee384dc",
+              "length": 21798,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-9.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-9.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-9.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-9.xlsm.after.xlsm",
+              "sha256": "5d33f84ee9408ff3435b730f44d908d94052184b6bb41f43eef3acd37edc83bf",
+              "length": 21796,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-9.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-9.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-9.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            43,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-10.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|ファイル 'C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-10.xlsm\\missing\\out.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。|xlmain11.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-10.xlsm",
+              "sha256": "0aa95d8920528b281962d689e881e6b58e4fb3e27d0d79897ec8501f0ce651ab",
+              "length": 21794,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-10.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-10.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-10.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            44,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-11.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|ファイル 'C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-11.xlsm\\missing\\out.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。|xlmain11.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-11.xlsm",
+              "sha256": "b5c2a04696df256df23ee5e655312aff3037f35f731132fb221a3d3f7dbec344",
+              "length": 21806,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-11.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-11.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-11.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            45,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-12.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|ファイル 'C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-12.xlsm\\missing\\out.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。|xlmain11.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-12.xlsm",
+              "sha256": "824f71be0df7fc60926846280352f7877a1bc3c66fee487ab892f82398415c04",
+              "length": 21797,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-12.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-12.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-12.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            46,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm",
+              "sha256": "4cf446ea97c211323b53e071283afa77a5ba67a13283350f6afafa57c3e921c4",
+              "length": 21802,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm.nested.xlsm",
+              "sha256": "4eb422349e996350bd60c7331b354f316125b133c41a09a9be7a0b4e9e1251d3",
+              "length": 21805,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm.second.xlsm",
+              "sha256": "d5cd7a373fde0fcc36cb8affa1cff6a8c394f5d7975fef9720266988f5a5f6a5",
+              "length": 21802,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm.third.xlsm",
+              "sha256": "c089dead849bc9ac677aa539d2bab55722109f6e00eabb1c049cae4983edfe1e",
+              "length": 21800,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-13.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            47,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|ファイル 'C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm\\missing\\out.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。|xlmain11.chm|1001004|saved:True|kind:Range",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm",
+              "sha256": "def9260bfcf2f14f00275fe48e12730e0fdff103d48727ce1211cdf4b3032fe3",
+              "length": 21807,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm\\missing\\out.xlsm"
+                },
+                "A3": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm.after.xlsm"
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm.after.xlsm",
+              "sha256": "bf7aeaa730c5e629b85bc1677a6f6b4ebeb3cb5c1f12ea05c6174f9b7ace4b60",
+              "length": 21816,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm\\missing\\out.xlsm"
+                },
+                "A3": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm.after.xlsm"
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            48,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-15.xlsm",
+            false
+          ],
+          "expected": "0||||0|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-15.xlsm",
+              "sha256": "7ffe1863bb20a69cb45db0f3b91f543de2639656e7960a1c4506ed2c9ad12746",
+              "length": 21813,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-15.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-15.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm.after.xlsm"
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-15.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            49,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-16.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|ファイル 'C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-16.xlsm\\missing\\out.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。|xlmain11.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-16.xlsm",
+              "sha256": "7bbc7c168a43df2128a8cfb12c4ba328b59b76c60bfd49e917610f2fabe1479e",
+              "length": 21809,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-16.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-16.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm.after.xlsm"
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-16.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-16.xlsm.after.xlsm",
+              "sha256": "1f09974157ecb85bb3cf18c52597d4703f0995d30f963b0f0c9a134b35060052",
+              "length": 21803,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-16.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-16.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm.after.xlsm"
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-16.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            50,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-17.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|ファイル 'C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-17.xlsm\\missing\\out.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。|xlmain11.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-17.xlsm",
+              "sha256": "b27c73bf55ce67f9e27fdd4f2851dd9aec6906b9794f12d05b5f72a2aac06313",
+              "length": 21811,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-17.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-17.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm.after.xlsm"
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-17.xlsm.cellB1.xlsm"
+                }
+              }
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-17.xlsm.after.xlsm",
+              "sha256": "bea4c7bec8f8ee83d346fc3a88ab7bb584e8e0c3db0059efe3c092005a83c927",
+              "length": 21810,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-17.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-17.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-14.xlsm.after.xlsm"
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-17.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            51,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-18.xlsm",
+            false
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            52,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-19.xlsm",
+            false
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|saved:True|kind:Variant()",
+          "files": []
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            53,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_vectors_20261020\\typed\\outputs\\type-20.xlsm",
+            false
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|saved:True|kind:Variant()",
+          "files": []
+        }
+      ]
+    },
+    {
+      "name": "save_copy_filename_order",
+      "source": "save_copy_filename_order.bas",
+      "package": "save_copy_filename_order.xlsm",
+      "source_sha256": "0c824a541b07118e16ddbd27c90a64c4a6f5f96c8e0b7d1801a7446bc817e12e",
+      "package_sha256": "6af2d01f53afe1719f39918ef6f10ebbb9d489d7bc208bc49fcb245ed4db7811",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\input.xlsm",
+      "read_only": true,
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs"
+      ],
+      "initial_files": [],
+      "vba_help_file": "C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm",
+      "cases": [
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            54,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-0.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|申し訳ございません。C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-0.xlsm?.xlsmが見つかりません。名前が変更されたか、移動や削除が行われた可能性があります。|xlmain11.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-0.xlsm",
+              "sha256": "23a1fb1bd52430c7d2a4e5be211a6791ad75971065c7eddd890b709a948a75ef",
+              "length": 22340,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-0.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-0.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-0.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            55,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-1.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|ファイル 'C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-1.xlsm\\missing\\out.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。|xlmain11.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-1.xlsm",
+              "sha256": "efc033bd4e743a54d24bc702cb39654cd41f593372621a96d6c1586ffc75bd6a",
+              "length": 22331,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-1.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-1.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-1.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            56,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-2.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|申し訳ございません。C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-2.xlsm?.xlsmが見つかりません。名前が変更されたか、移動や削除が行われた可能性があります。|xlmain11.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-2.xlsm",
+              "sha256": "6ff0093afb5f328d58cac7847f45da463f32aa5fa611e46f93e9d570717cc338",
+              "length": 22322,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-2.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-2.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-2.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            57,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-3.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|申し訳ございません。C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-3.xlsm|.xlsmが見つかりません。名前が変更されたか、移動や削除が行われた可能性があります。|xlmain11.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-3.xlsm",
+              "sha256": "07756778c75aa549bf9653e69c47639d6569a1f4d3832701b488f0692cf7b14c",
+              "length": 22334,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-3.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-3.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-3.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            58,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-4.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|ファイル 'C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-4.xlsm\\missing\\out.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。|xlmain11.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-4.xlsm",
+              "sha256": "b8c5a9606bda97821dde0edd011c528b40c60bc72755b9a16db3019648ebcfa4",
+              "length": 22327,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-4.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-4.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-4.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "procedure": "CopyTyped",
+          "arguments": [
+            59,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-5.xlsm",
+            false
+          ],
+          "expected": "1004|Microsoft Excel|ファイル 'C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-5.xlsm\\missing\\out.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。|xlmain11.chm|1001004|saved:True|kind:Variant()",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-5.xlsm",
+              "sha256": "27f6e054b4063e80af02e0b0531fc0ec09b226f79d71cd5c352e5c21cf43fd98",
+              "length": 22334,
+              "cells": {
+                "A1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-5.xlsm"
+                },
+                "A2": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-5.xlsm.cellA2.xlsm"
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "String": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_filename_order_20261020\\typed\\outputs\\type-5.xlsm.cellB1.xlsm"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

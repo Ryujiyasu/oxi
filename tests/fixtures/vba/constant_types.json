@@ -1,0 +1,809 @@
+[
+  {
+    "name": "typed_byte_overflow",
+    "source": "type_const_typed_byte_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "typed_integer_round",
+    "source": "type_const_typed_integer_round.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "typed_null",
+    "source": "type_const_typed_null.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "untyped_null",
+    "source": "type_const_untyped_null.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": ""
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "name": "object_is",
+    "source": "type_const_object_is.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True"
+      }
+    ]
+  },
+  {
+    "name": "array_null",
+    "source": "type_const_array_null.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "owner_compare",
+    "source": "type_const_owner_compare.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0"
+      }
+    ]
+  },
+  {
+    "name": "qualifier_shadow",
+    "source": "type_const_qualifier_shadow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "constant_alias_shadow",
+    "source": "type_const_constant_alias_shadow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      }
+    ]
+  },
+  {
+    "name": "byte_negative",
+    "source": "type_const_byte_negative.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "byte_fraction_ok",
+    "source": "type_const_byte_fraction_ok.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "17:255"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "17:255"
+      }
+    ]
+  },
+  {
+    "name": "byte_fraction_overflow",
+    "source": "type_const_byte_fraction_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "byte_negative_half",
+    "source": "type_const_byte_negative_half.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "17:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "17:0"
+      }
+    ]
+  },
+  {
+    "name": "byte_negative_round",
+    "source": "type_const_byte_negative_round.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "byte_text",
+    "source": "type_const_byte_text.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "17:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "17:2"
+      }
+    ]
+  },
+  {
+    "name": "integer_overflow",
+    "source": "type_const_integer_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "integer_negative_overflow",
+    "source": "type_const_integer_negative_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "long_overflow",
+    "source": "type_const_long_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "long_fraction_ok",
+    "source": "type_const_long_fraction_ok.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:2147483647"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:2147483647"
+      }
+    ]
+  },
+  {
+    "name": "long_fraction_overflow",
+    "source": "type_const_long_fraction_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "longlong_ok",
+    "source": "type_const_longlong_ok.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "20:2147483648"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "20:2147483648"
+      }
+    ]
+  },
+  {
+    "name": "single_overflow",
+    "source": "type_const_single_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "double_ok",
+    "source": "type_const_double_ok.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "5:1E+39"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "5:1E+39"
+      }
+    ]
+  },
+  {
+    "name": "currency_overflow",
+    "source": "type_const_currency_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "currency_round",
+    "source": "type_const_currency_round.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "6:1.2346"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "6:1.2346"
+      }
+    ]
+  },
+  {
+    "name": "boolean_text_true",
+    "source": "type_const_boolean_text_true.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11:True"
+      }
+    ]
+  },
+  {
+    "name": "boolean_text_bad",
+    "source": "type_const_boolean_text_bad.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "型が一致しません。"
+  },
+  {
+    "name": "integer_text_bad",
+    "source": "type_const_integer_text_bad.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "型が一致しません。"
+  },
+  {
+    "name": "integer_text_fraction",
+    "source": "type_const_integer_text_fraction.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2"
+      }
+    ]
+  },
+  {
+    "name": "string_numeric",
+    "source": "type_const_string_numeric.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "8:123"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "8:123"
+      }
+    ]
+  },
+  {
+    "name": "string_null",
+    "source": "type_const_string_null.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "boolean_null",
+    "source": "type_const_boolean_null.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "date_null",
+    "source": "type_const_date_null.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "variant_null",
+    "source": "type_const_variant_null.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": ""
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "name": "integer_empty",
+    "source": "type_const_integer_empty.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:0"
+      }
+    ]
+  },
+  {
+    "name": "string_empty",
+    "source": "type_const_string_empty.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "8:"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "8:"
+      }
+    ]
+  },
+  {
+    "name": "variant_empty",
+    "source": "type_const_variant_empty.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:"
+      }
+    ]
+  },
+  {
+    "name": "object_number",
+    "source": "type_const_object_number.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数のデータ型が不正です。"
+  },
+  {
+    "name": "variant_nothing_group",
+    "source": "type_const_variant_nothing_group.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "date_numeric",
+    "source": "type_const_date_numeric.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7:1/1/1900"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7:1/1/1900"
+      }
+    ]
+  },
+  {
+    "name": "date_overflow",
+    "source": "type_const_date_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "byte_true",
+    "source": "type_const_byte_true.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "17:255"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "17:255"
+      }
+    ]
+  },
+  {
+    "name": "integer_true",
+    "source": "type_const_integer_true.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:-1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:-1"
+      }
+    ]
+  },
+  {
+    "name": "unused_bad_const",
+    "source": "type_const_unused_bad_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "alias_bad_const",
+    "source": "type_const_alias_bad_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "typed_alias",
+    "source": "type_const_typed_alias.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "array_null_const",
+    "source": "type_const_array_null_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "array_cint_null",
+    "source": "type_const_array_cint_null.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "array_null_add",
+    "source": "type_const_array_null_add.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "width_null",
+    "source": "type_const_width_null.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "width_null_const",
+    "source": "type_const_width_null_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "enum_const",
+    "source": "type_const_enum_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "enum_const_overflow",
+    "source": "type_const_enum_const_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "class_const",
+    "source": "type_const_class_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "record_const",
+    "source": "type_const_record_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "array_const",
+    "source": "type_const_array_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "nothing_group_untyped",
+    "source": "type_const_nothing_group_untyped.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "nothing_group_long",
+    "source": "type_const_nothing_group_long.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。"
+  },
+  {
+    "name": "object_null",
+    "source": "type_const_object_null.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数のデータ型が不正です。"
+  },
+  {
+    "name": "object_empty",
+    "source": "type_const_object_empty.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数のデータ型が不正です。"
+  },
+  {
+    "name": "longptr_overflow",
+    "source": "type_const_longptr_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "longlong_overflow",
+    "source": "type_const_longlong_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "date_empty",
+    "source": "type_const_date_empty.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7:12:00:00 AM"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7:12:00:00 AM"
+      }
+    ]
+  },
+  {
+    "name": "byte_null_alias",
+    "source": "type_const_byte_null_alias.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "decimal_type",
+    "source": "type_const_decimal_type.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "undefined_type",
+    "source": "type_const_undefined_type.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_object_type",
+    "source": "type_const_new_object_type.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "fixed_string_const",
+    "source": "type_const_fixed_string_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "array_type_const",
+    "source": "type_const_array_type_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "withevents_const",
+    "source": "type_const_withevents_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "fixed_const_long",
+    "source": "type_const_fixed_const_long.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:<abc>"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:<abc>"
+      }
+    ]
+  },
+  {
+    "name": "fixed_const_short",
+    "source": "type_const_fixed_const_short.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:<x  >"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:<x  >"
+      }
+    ]
+  },
+  {
+    "name": "fixed_const_bound",
+    "source": "type_const_fixed_const_bound.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "fixed_const_zero",
+    "source": "type_const_fixed_const_zero.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "固定長文字列の長さが不正です。"
+  },
+  {
+    "name": "fixed_const_null",
+    "source": "type_const_fixed_const_null.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "fixed_const_padded_bound",
+    "source": "type_const_fixed_const_padded_bound.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "fixed_const_truncated_bound",
+    "source": "type_const_fixed_const_truncated_bound.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "date_longlong",
+    "source": "type_const_date_longlong.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7:1/1/1900"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7:1/1/1900"
+      }
+    ]
+  }
+]

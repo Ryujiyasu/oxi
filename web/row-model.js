@@ -163,6 +163,14 @@ export function blankHeight(sheet, heightOf, merged, recorded) {
   return { px: tallest, unknown };
 }
 
+// Recover canonical whole twips after the IR's f32 storage. Raw heights
+// between twips keep their file truncation rather than rounding upward.
+function storedRowPixels(points) {
+  const nearestTwip = Math.round(points * 20);
+  const twips = Math.fround(nearestTwip / 20) === points ? nearestTwip : Math.floor(points * 20);
+  return Math.floor((twips + 1) / 15);
+}
+
 /// The height of a row the file records nothing for.
 export function sheetDefault(sheet, heightOf) {
   if (sheet.default_row_custom && sheet.default_row_height > 0) {
@@ -183,7 +191,7 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance }) {
   const parts = [];
   const fallback = () => row?.height
     ? {
-      px: Math.min(Math.floor((row.height + 0.05) / 0.75), CEILING),
+      px: Math.min(storedRowPixels(row.height), CEILING),
       note: 'a font this page has never measured, so the height the file remembers stands in',
     }
     : { px: sheetDefault(sheet, heightOf), note: 'a font this page has never measured' };
@@ -197,8 +205,8 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance }) {
     return { px, parts };
   }
 
-  if (row.custom_height && row.height) {
-    const px = Math.min(Math.floor((row.height + 0.05) / 0.75), CEILING);
+  if (row.custom_height && row.height != null) {
+    const px = Math.min(storedRowPixels(row.height), CEILING);
     parts.push({
       kind: 'pin', won: true, px,
       what: `pinned at ${row.height}pt (customHeight), floored to the pixel`,

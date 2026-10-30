@@ -1,0 +1,4093 @@
+{
+  "scope": "Unchanged complete Native returns from three normal owned Excel observations. Covers cross-invocation used-extent state and spill-reference syntax including scalar formula anchors, names and spans.",
+  "groups": [
+    {
+      "source": "spill_metadata_lifecycle.bas",
+      "package": "spill_metadata_lifecycle.xlsm",
+      "source_identity": 2026102118,
+      "source_packet_sha256": "afb5db3427e73c823d8f40571343ef21e3d549560dfea9b5b91ffb6569edab2d",
+      "cases": [
+        {
+          "id": 3160,
+          "steps": [
+            {
+              "procedure": "CacheStage",
+              "arguments": [
+                0
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            },
+            {
+              "procedure": "CacheFinish",
+              "arguments": [],
+              "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    0
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    0
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    0
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3161,
+          "steps": [
+            {
+              "procedure": "CacheStage",
+              "arguments": [
+                1
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            },
+            {
+              "procedure": "CacheFinish",
+              "arguments": [],
+              "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    1
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    1
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    1
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3162,
+          "steps": [
+            {
+              "procedure": "CacheStage",
+              "arguments": [
+                2
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            },
+            {
+              "procedure": "CacheFinish",
+              "arguments": [],
+              "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    2
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    2
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    2
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3163,
+          "steps": [
+            {
+              "procedure": "CacheStage",
+              "arguments": [
+                3
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            },
+            {
+              "procedure": "CacheFinish",
+              "arguments": [],
+              "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    3
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    3
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    3
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3164,
+          "steps": [
+            {
+              "procedure": "CacheStage",
+              "arguments": [
+                4
+              ],
+              "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            },
+            {
+              "procedure": "CacheFinish",
+              "arguments": [],
+              "expected": "before:has:11:True|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    4
+                  ],
+                  "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:11:True|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    4
+                  ],
+                  "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:11:True|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    4
+                  ],
+                  "expected": "has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:11:True|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3165,
+          "steps": [
+            {
+              "procedure": "CacheStage",
+              "arguments": [
+                5
+              ],
+              "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+            },
+            {
+              "procedure": "CacheFinish",
+              "arguments": [],
+              "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    5
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    5
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "CacheStage",
+                  "arguments": [
+                    5
+                  ],
+                  "expected": "has:1:Null|parent:error1004|range:error1004|formula:1:Null"
+                },
+                {
+                  "procedure": "CacheFinish",
+                  "arguments": [],
+                  "expected": "before:has:1:Null|parent:error1004|range:error1004|formula:1:Null|used:$A$1:$O$12|after:has:11:True|parent:error1004|range:error1004|formula:1:Null"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source": "spill_metadata_singleton.bas",
+      "package": "spill_metadata_singleton.xlsm",
+      "source_identity": 2026102119,
+      "source_packet_sha256": "31cc8474f5f8b60b31decf43ce50f9fe0572c55461374e9849fedd16aff4ca00",
+      "cases": [
+        {
+          "id": 3170,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                0,
+                0
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3171,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                1,
+                0
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    1,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    1,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    1,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3172,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                2,
+                0
+              ],
+              "expected": "has:11:True|parent:$N$1|range:$N$1:$O$1|formula:11:True|suffix:$N$1:$O$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    2,
+                    0
+                  ],
+                  "expected": "has:11:True|parent:$N$1|range:$N$1:$O$1|formula:11:True|suffix:$N$1:$O$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    2,
+                    0
+                  ],
+                  "expected": "has:11:True|parent:$N$1|range:$N$1:$O$1|formula:11:True|suffix:$N$1:$O$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    2,
+                    0
+                  ],
+                  "expected": "has:11:True|parent:$N$1|range:$N$1:$O$1|formula:11:True|suffix:$N$1:$O$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3173,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                3,
+                0
+              ],
+              "expected": "has:11:True|parent:$N$1|range:$N$1:$N$2|formula:11:True|suffix:$N$1:$N$2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    3,
+                    0
+                  ],
+                  "expected": "has:11:True|parent:$N$1|range:$N$1:$N$2|formula:11:True|suffix:$N$1:$N$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    3,
+                    0
+                  ],
+                  "expected": "has:11:True|parent:$N$1|range:$N$1:$N$2|formula:11:True|suffix:$N$1:$N$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    3,
+                    0
+                  ],
+                  "expected": "has:11:True|parent:$N$1|range:$N$1:$N$2|formula:11:True|suffix:$N$1:$N$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3174,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                4,
+                0
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    4,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    4,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    4,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3175,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                5,
+                0
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    5,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    5,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    5,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3176,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                6,
+                0
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    6,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    6,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    6,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3177,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                7,
+                0
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    7,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    7,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    7,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3178,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                8,
+                0
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    8,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    8,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    8,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3179,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                9,
+                0
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    9,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    9,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    9,
+                    0
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:True|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3180,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                0,
+                1
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    0,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    0,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    0,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3181,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                1,
+                1
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    1,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    1,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    1,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3182,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                2,
+                1
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1:$O$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    2,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1:$O$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    2,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1:$O$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    2,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1:$O$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3183,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                3,
+                1
+              ],
+              "expected": "has:11:True|parent:$N$1|range:Nothing|formula:11:False|suffix:$N$1:$N$2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    3,
+                    1
+                  ],
+                  "expected": "has:11:True|parent:$N$1|range:Nothing|formula:11:False|suffix:$N$1:$N$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    3,
+                    1
+                  ],
+                  "expected": "has:11:True|parent:$N$1|range:Nothing|formula:11:False|suffix:$N$1:$N$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    3,
+                    1
+                  ],
+                  "expected": "has:11:True|parent:$N$1|range:Nothing|formula:11:False|suffix:$N$1:$N$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3184,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                4,
+                1
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    4,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    4,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    4,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3185,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                5,
+                1
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    5,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    5,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    5,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3186,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                6,
+                1
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    6,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    6,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    6,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3187,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                7,
+                1
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    7,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    7,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    7,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3188,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                8,
+                1
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    8,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    8,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    8,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3189,
+          "steps": [
+            {
+              "procedure": "FlowCase",
+              "arguments": [
+                9,
+                1
+              ],
+              "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    9,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    9,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "FlowCase",
+                  "arguments": [
+                    9,
+                    1
+                  ],
+                  "expected": "has:11:False|parent:Nothing|range:Nothing|formula:11:False|suffix:$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source": "spill_reference_syntax.bas",
+      "package": "spill_reference_syntax.xlsm",
+      "source_identity": 2026102120,
+      "source_packet_sha256": "4f347a7402f003a5c138d5c99f6edf1b8edc20ea9c0f4bce68945c884411bb47",
+      "cases": [
+        {
+          "id": 3190,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                0,
+                0
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3191,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                1,
+                0
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    0
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    0
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    0
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3192,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                2,
+                0
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3193,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                3,
+                0
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3194,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                4,
+                0
+              ],
+              "expected": "$N$1:$O$2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    0
+                  ],
+                  "expected": "$N$1:$O$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    0
+                  ],
+                  "expected": "$N$1:$O$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    0
+                  ],
+                  "expected": "$N$1:$O$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3195,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                0,
+                1
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3196,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                1,
+                1
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3197,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                2,
+                1
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3198,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                3,
+                1
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3199,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                4,
+                1
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3200,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                0,
+                2
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    2
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    2
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    2
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3201,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                1,
+                2
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    2
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    2
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    2
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3202,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                2,
+                2
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3203,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                3,
+                2
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3204,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                4,
+                2
+              ],
+              "expected": "$N$1:$O$2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    2
+                  ],
+                  "expected": "$N$1:$O$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    2
+                  ],
+                  "expected": "$N$1:$O$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    2
+                  ],
+                  "expected": "$N$1:$O$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3205,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                0,
+                3
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    3
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    3
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    3
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3206,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                1,
+                3
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    3
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    3
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    3
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3207,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                2,
+                3
+              ],
+              "expected": "$N$1:$Q$2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3208,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                3,
+                3
+              ],
+              "expected": "$N$1:$Q$2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3209,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                4,
+                3
+              ],
+              "expected": "$N$1:$Q$2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source": "spill_reference_errors.bas",
+      "package": "spill_reference_errors.xlsm",
+      "source_identity": 2026102121,
+      "source_packet_sha256": "b654caabc800b553b9bbfa4b071bcf83e706ef15cb8dd970f5866cf80d40b380",
+      "cases": [
+        {
+          "id": 3220,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                0,
+                0
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3221,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                1,
+                0
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3222,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                2,
+                0
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3223,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                3,
+                0
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3224,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                4,
+                0
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    0
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3225,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                0,
+                1
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3226,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                1,
+                1
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3227,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                2,
+                1
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3228,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                3,
+                1
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3229,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                4,
+                1
+              ],
+              "expected": "error1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    1
+                  ],
+                  "expected": "error1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3230,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                0,
+                2
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3231,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                1,
+                2
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3232,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                2,
+                2
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3233,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                3,
+                2
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3234,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                4,
+                2
+              ],
+              "expected": "$N$1"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    2
+                  ],
+                  "expected": "$N$1"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3235,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                0,
+                3
+              ],
+              "expected": "$N$1:$Q$2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    0,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3236,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                1,
+                3
+              ],
+              "expected": "$N$1:$Q$2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    1,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3237,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                2,
+                3
+              ],
+              "expected": "$N$1:$Q$2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    2,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3238,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                3,
+                3
+              ],
+              "expected": "$N$1:$Q$2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    3,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3239,
+          "steps": [
+            {
+              "procedure": "ReferenceCase",
+              "arguments": [
+                4,
+                3
+              ],
+              "expected": "$N$1:$Q$2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "ReferenceCase",
+                  "arguments": [
+                    4,
+                    3
+                  ],
+                  "expected": "$N$1:$Q$2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

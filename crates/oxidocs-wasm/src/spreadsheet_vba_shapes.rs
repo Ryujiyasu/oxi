@@ -11,7 +11,7 @@
 
 use super::*;
 use oxicells_core::ir::{
-    Anchor, Chart, ChartAxis, ChartSeries, Drawing, DrawingKind, Legend, Shape, ShapeLine,
+    Anchor, Chart, ChartAxis, ChartSeries, Drawing, DrawingKind, GroupTransform, Legend, Shape, ShapeLine,
     ShapeParagraph, ShapeRun, ShapeText,
 };
 
@@ -52,18 +52,37 @@ pub(super) struct TextStyle {
     pub italic: bool,
     pub underline: bool,
     pub color: i64,
+    pub color_theme: Option<usize>,
+    pub color_brightness: f64,
+    pub scheme_color: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ShapeRunRecord {
     pub text: String,
     pub style: TextStyle,
+    /// This run is the paragraph separator after an OOXML `<a:p>`. Kept
+    /// separate from soft line breaks so character indices remain intact.
+    pub paragraph_end: bool,
+}
+
+fn source_shape_run_at(paragraph: &ShapeParagraph, character: usize) -> Option<&ShapeRun> {
+    let mut start = 0usize;
+    paragraph.runs.iter().find(|run| {
+        let end = start + run.text.chars().count();
+        let contains = start <= character && character < end;
+        start = end;
+        contains
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ShapeRecord {
     pub id: u64,
     pub sheet: usize,
+    /// A legacy note's VML shape, which lives in worksheet comments rather
+    /// than the normal drawing part.
+    pub comment_at: Option<CellAddress>,
     pub name: String,
     pub kind: ShapeKind,
     /// Points, as the macro states them.
@@ -77,16 +96,36 @@ pub(super) struct ShapeRecord {
     pub visible: bool,
     pub fill: i64,
     pub fill_theme: Option<usize>,
+    pub theme_palette: [i64; 12],
+    pub fill_scheme_color: Option<u8>,
+    pub fill_brightness: f64,
     pub fill_visible: bool,
     pub transparency: f64,
     pub line: i64,
     pub line_theme: Option<usize>,
+    pub line_scheme_color: Option<u8>,
+    pub line_brightness: f64,
+    pub line_shade: Option<f32>,
+    pub line_back: i64,
+    pub line_back_theme: Option<usize>,
+    pub line_back_scheme_color: Option<u8>,
+    pub line_back_brightness: f64,
     pub line_visible: bool,
+    /// MsoPatternType; Excel answers -2 for a mixed/default line.
+    pub line_pattern: i64,
     pub line_weight: f64,
+    pub line_transparency: f64,
     /// msoLineDashStyle, 1 solid.
     pub dash: i64,
+    /// msoArrowheadStyle at the start, 1 none.
+    pub arrow_start: i64,
     /// msoArrowheadStyle at the far end, 1 none.
     pub arrow_end: i64,
+    /// msoArrowheadLength/Width at each end; None retains DrawingML's default.
+    pub arrow_start_length: Option<i64>,
+    pub arrow_start_width: Option<i64>,
+    pub arrow_end_length: Option<i64>,
+    pub arrow_end_width: Option<i64>,
     pub runs: Vec<ShapeRunRecord>,
     /// xlLeft -4131, xlCenter -4108, xlRight -4152.
     pub h_align: i64,
@@ -110,6 +149,16 @@ pub(super) struct ShapeRecord {
     /// The drawing the file held, when this record stands for one, so the
     /// picture's bytes and everything else read from the file survive.
     pub original: Option<Drawing>,
+    /// Source drawing name for a runtime OLE duplicate, needed by the package writer.
+    pub ole_clone_of: Option<String>,
+    /// For a grouped child, the DrawingML name of its parent group. A virtual
+    /// group record stores the members in `group_children` instead.
+    pub group_name: Option<String>,
+    pub group_parent_id: Option<u64>,
+    pub group_children: Vec<u64>,
+    pub group_bounds: Option<(f64, f64, f64, f64)>,
+    pub group_transform: Option<GroupTransform>,
+    pub group_nested: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -157,10 +206,16 @@ pub(super) enum DrawingPart {
     /// `Worksheet.Shapes`.
     Shapes(usize),
     Shape(u64),
+    /// `Worksheet.OLEObjects`.
+    OleObjects(usize),
+    /// The `OLEObjects` object returned by `Duplicate`; Excel keeps it bound
+    /// to the collection as it existed when `Duplicate` was called.
+    OleObjectsSnapshot(usize, usize),
     Fill(u64),
     FillColor(u64),
     Line(u64),
     LineColor(u64),
+    LineBackColor(u64),
     TextFrame(u64),
     TextFrame2(u64),
     TextRange(u64),
@@ -199,15 +254,30 @@ pub(super) enum DrawingPart {
     /// `Selection.ShapeRange` / `Shapes.Range(Array(...))`: several shapes
     /// held as one, by their place in the host's `shape_ranges`.
     ShapeRange(usize),
+    /// The child collection of a grouped worksheet shape.
+    GroupItems(u64),
+    /// Image adjustments and crop state.
+    PictureFormat(u64),
+    /// The independent picture viewport/position object on PictureFormat.
+    Crop(u64),
+    /// OLE metadata exposed by Shape.OLEFormat.
+    OleFormat(u64),
+    /// The common Excel OLE wrapper returned by `OLEFormat.Object`.
+    OleObject(u64),
+    /// A grouped object returned by `OLEObjects.Group`.
+    GroupObject(u64),
+    OleBorder(u64),
+    OleInterior(u64),
 }
 
 impl DrawingPart {
     pub(super) fn kind_name(self) -> &'static str {
         match self {
             DrawingPart::Shapes(_) => "Shapes",
+            DrawingPart::OleObjects(_) | DrawingPart::OleObjectsSnapshot(..) => "OLEObjects",
             DrawingPart::Shape(_) => "Shape",
             DrawingPart::Fill(_) | DrawingPart::SeriesFill(..) => "FillFormat",
-            DrawingPart::FillColor(_) | DrawingPart::LineColor(_) | DrawingPart::SeriesColor(..) => {
+            DrawingPart::FillColor(_) | DrawingPart::LineColor(_) | DrawingPart::LineBackColor(_) | DrawingPart::SeriesColor(..) => {
                 "ColorFormat"
             }
             DrawingPart::Line(_) => "LineFormat",
@@ -237,6 +307,14 @@ impl DrawingPart {
             DrawingPart::Adjustments(_) => "Adjustments",
             DrawingPart::Paragraphs(_) => "TextRange2",
             DrawingPart::ShapeRange(_) => "ShapeRange",
+            DrawingPart::GroupItems(_) => "GroupShapes",
+            DrawingPart::PictureFormat(_) => "PictureFormat",
+            DrawingPart::Crop(_) => "Crop",
+            DrawingPart::OleFormat(_) => "OLEFormat",
+            DrawingPart::OleObject(_) => "OLEObject",
+            DrawingPart::GroupObject(_) => "GroupObject",
+            DrawingPart::OleBorder(_) => "Border",
+            DrawingPart::OleInterior(_) => "Interior",
         }
     }
 
@@ -244,6 +322,8 @@ impl DrawingPart {
     pub(super) fn renumbered(self, moved: &dyn Fn(usize) -> Option<usize>) -> Option<Self> {
         Some(match self {
             DrawingPart::Shapes(sheet) => DrawingPart::Shapes(moved(sheet)?),
+            DrawingPart::OleObjects(sheet) => DrawingPart::OleObjects(moved(sheet)?),
+            DrawingPart::OleObjectsSnapshot(sheet, index) => DrawingPart::OleObjectsSnapshot(moved(sheet)?, index),
             DrawingPart::ChartObjects(sheet) => DrawingPart::ChartObjects(moved(sheet)?),
             other => other,
         })
@@ -396,6 +476,35 @@ pub(super) fn arrow_name(style: i64) -> Option<&'static str> {
     })
 }
 
+fn arrow_style(name: Option<&str>) -> i64 {
+    match name {
+        Some("triangle") => 2,
+        Some("arrow") => 3,
+        Some("stealth") => 4,
+        Some("diamond") => 5,
+        Some("oval") => 6,
+        _ => 1,
+    }
+}
+
+fn arrow_size(name: Option<&str>) -> Option<i64> {
+    match name {
+        Some("sm") => Some(1),
+        Some("med") => Some(2),
+        Some("lg") => Some(3),
+        _ => None,
+    }
+}
+
+fn arrow_size_name(size: i64) -> String {
+    match size {
+        1 => "sm",
+        2 => "med",
+        _ => "lg",
+    }
+    .to_string()
+}
+
 /// "bar", "line", "pie", "area", "scatter", "doughnut" -- the chart part's
 /// own word for an `xlChartType` -- and whether the bars stand up.
 pub(super) fn chart_kind(chart_type: i64) -> &'static str {
@@ -412,6 +521,22 @@ pub(super) fn chart_kind(chart_type: i64) -> &'static str {
 
 pub(super) fn packed_hex(colour: i64) -> String {
     colour_from_packed(colour)
+}
+
+pub(super) fn line_pattern_name(value: i64) -> Option<&'static str> {
+    const PATTERNS: [&str; 54] = [
+        "pct5", "pct10", "pct20", "pct25", "pct30", "pct40", "pct50", "pct60", "pct70", "pct75", "pct80", "pct90",
+        "dkHorz", "dkVert", "dkDnDiag", "dkUpDiag", "smCheck", "trellis", "ltHorz", "ltVert", "ltDnDiag", "ltUpDiag",
+        "smGrid", "dotDmnd", "wdDnDiag", "wdUpDiag", "dashUpDiag", "dashDnDiag", "narVert", "narHorz", "dashVert",
+        "dashHorz", "lgConfetti", "lgGrid", "horzBrick", "lgCheck", "smConfetti", "zigZag", "solidDmnd", "diagBrick",
+        "openDmnd", "plaid", "sphere", "weave", "dotGrid", "divot", "shingle", "wave", "horz", "vert", "cross",
+        "dnDiag", "upDiag", "diagCross",
+    ];
+    usize::try_from(value.checked_sub(1)?).ok().and_then(|index| PATTERNS.get(index).copied())
+}
+
+pub(super) fn line_pattern_value(value: &str) -> Option<i64> {
+    (1..=54).find(|candidate| line_pattern_name(*candidate) == Some(value))
 }
 
 pub(super) fn mso(flag: bool) -> Value {
@@ -460,11 +585,13 @@ impl<'a> WorkbookHost<'a> {
                                     has_labels: !series.labels.is_empty(),
                                 })
                                 .collect(),
-                            has_title: false,
-                            title: String::new(),
+                            has_title: chart.title.is_some(),
+                            title: chart.title.clone().unwrap_or_default(),
                             has_legend: chart.legend.is_some(),
                             title_auto: false,
-                            legend_position: -4152,
+                            legend_position: match chart.legend.as_ref().map(|legend|legend.position.as_str()) {
+                                Some("b")=>-4107,Some("l")=>-4131,Some("t")=>-4160,Some("tr")=>2,_=>-4152,
+                            },
                             axes: [
                                 AxisRecord {
                                     min: chart.category_axis.as_ref().and_then(|axis| axis.min),
@@ -493,61 +620,280 @@ impl<'a> WorkbookHost<'a> {
                     DrawingKind::Other => (ShapeKind::Other, "Object"),
                 };
                 let (left, top, width, height) = self.points_of_drawing(sheet, &drawing);
-                let number = self.next_shape_number(sheet);
+                let is_ole = drawing.ole_prog_id.is_some();
+                let number = if is_ole {
+                    if let Some(number) = drawing.name.as_deref()
+                        .and_then(|name| name.rsplit_once(' '))
+                        .and_then(|(_, suffix)| suffix.parse::<u32>().ok())
+                    {
+                        let counter = self.ole_object_counters.entry(sheet).or_insert(0);
+                        *counter = (*counter).max(number);
+                        number
+                    } else {
+                        self.next_ole_object_number(sheet)
+                    }
+                } else {
+                    self.next_shape_number(sheet)
+                };
                 let id = self.next_shape_id;
                 self.next_shape_id += 1;
-                let mut record = ShapeRecord::blank(id, sheet, format!("{base} {number}"), kind);
+                let mut record = ShapeRecord::blank(id, sheet, drawing.name.clone().unwrap_or_else(||format!("{base} {number}")), kind);
                 record.left = left;
                 record.top = top;
                 record.width = width;
                 record.height = height;
+                if let Some(placement) = drawing.ole_placement {
+                    record.placement = placement;
+                }
+                record.group_name = drawing.group_name.clone();
                 if let DrawingKind::Shape(shape) = &drawing.kind {
+                    record.theme_palette = workbook_office_theme_palette(&self.workbook.theme_colors);
                     record.rotation = f64::from(shape.rotation) / 60_000.0;
                     record.flip_h = shape.flip_h;
                     record.flip_v = shape.flip_v;
                     if let Some(fill) = &shape.fill {
                         record.fill = colour_to_packed(Some(fill)).unwrap_or(record.fill);
+                        record.fill_theme = shape.fill_theme;
+                        record.fill_scheme_color = shape.fill_legacy_color_index;
+                        record.fill_brightness = f64::from(shape.fill_brightness.unwrap_or(0.0));
                     } else {
                         record.fill_visible = false;
                     }
                     match &shape.line {
                         Some(line) => {
                             record.line = colour_to_packed(Some(&line.color)).unwrap_or(record.line);
+                            record.line_theme = line.color_theme;
+                            record.line_scheme_color = line.legacy_color_index;
+                            record.line_brightness = f64::from(line.color_brightness.unwrap_or(0.0));
+                            record.line_shade = line.color_shade;
+                            record.line_pattern = line.pattern.as_deref().and_then(line_pattern_value).unwrap_or(-2);
+                            record.line_back = line.back_color.as_deref().and_then(|color| colour_to_packed(Some(color))).unwrap_or(WHITE);
+                            record.line_back_theme = line.back_color_theme;
+                            record.line_back_scheme_color = line.back_legacy_color_index;
+                            record.line_back_brightness = f64::from(line.back_color_brightness.unwrap_or(0.0));
                             record.line_weight = line.width as f64 / EMU_PER_PX * 0.75;
+                            record.arrow_start = arrow_style(line.head_end.as_deref());
+                            record.arrow_end = arrow_style(line.tail_end.as_deref());
+                            record.arrow_start_length = arrow_size(line.head_end_length.as_deref());
+                            record.arrow_start_width = arrow_size(line.head_end_width.as_deref());
+                            record.arrow_end_length = arrow_size(line.tail_end_length.as_deref());
+                            record.arrow_end_width = arrow_size(line.tail_end_width.as_deref());
                         }
                         None => record.line_visible = false,
                     }
                     if let Some(text) = &shape.text {
-                        record.runs = text
-                            .paragraphs
-                            .iter()
-                            .enumerate()
-                            .map(|(at, paragraph)| ShapeRunRecord {
-                                text: if at + 1 < text.paragraphs.len() {
-                                    format!("{}\n", paragraph.text)
-                                } else {
-                                    paragraph.text.clone()
-                                },
-                                style: TextStyle {
-                                    name: paragraph.face.clone().unwrap_or_else(|| SHAPE_FACE.to_string()),
-                                    size: f64::from(paragraph.size),
-                                    bold: paragraph.bold,
-                                    italic: paragraph.italic,
-                                    underline: false,
-                                    color: paragraph
-                                        .color
-                                        .as_deref()
-                                        .and_then(|c| colour_to_packed(Some(c)))
-                                        .unwrap_or(0),
-                                },
-                            })
-                            .collect();
+                        record.paragraph_count = text.paragraphs.len().max(1);
+                        for (at, paragraph) in text.paragraphs.iter().enumerate() {
+                            let base = TextStyle {
+                                name: paragraph.face.clone().unwrap_or_else(|| SHAPE_FACE.to_string()),
+                                size: f64::from(paragraph.size),
+                                bold: paragraph.bold,
+                                italic: paragraph.italic,
+                                underline: false,
+                                color: paragraph.color.as_deref().and_then(|c| colour_to_packed(Some(c))).unwrap_or(0),
+                                color_theme: None,
+                                color_brightness: 0.0,
+                                scheme_color: None,
+                            };
+                            if paragraph.runs.is_empty() {
+                                record.runs.push(ShapeRunRecord { text: paragraph.text.clone(), style: base.clone(), paragraph_end: false });
+                            } else {
+                                record.runs.extend(paragraph.runs.iter().map(|run| ShapeRunRecord {
+                                    text: run.text.clone(),
+                                    style: TextStyle {
+                                        name: run.face.clone().or_else(|| paragraph.face.clone()).unwrap_or_else(|| SHAPE_FACE.to_string()),
+                                        size: f64::from(run.size.unwrap_or(paragraph.size)),
+                                        bold: run.bold,
+                                        underline: run.underline,
+                                        italic: run.italic.unwrap_or(paragraph.italic),
+                                        color: run.color.as_deref().or(paragraph.color.as_deref())
+                                            .and_then(|c| colour_to_packed(Some(c))).unwrap_or(base.color),
+                                        color_theme: run.color_theme.or(base.color_theme),
+                                        color_brightness: run.color_brightness.map(f64::from).unwrap_or(base.color_brightness),
+                                        scheme_color: run.legacy_color_index,
+                                    },
+                                    paragraph_end: false,
+                                }));
+                            }
+                            if at + 1 < text.paragraphs.len() {
+                                let style = record.runs.last().map(|run| run.style.clone()).unwrap_or(base);
+                                record.runs.push(ShapeRunRecord { text: "\n".into(), style, paragraph_end: true });
+                            }
+                        }
                     }
                 }
                 record.original = Some(drawing);
+                record.on_action = record.original.as_ref().and_then(|drawing| drawing.ole_on_action.clone()).unwrap_or_default();
+                self.shapes.push(record);
+            }
+            self.adopt_shape_groups(sheet);
+        }
+        self.adopt_comment_shapes();
+    }
+
+    fn adopt_shape_groups(&mut self, sheet: usize) {
+        let mut names = Vec::<String>::new();
+        for shape in self.shapes.iter().filter(|shape| shape.sheet == sheet) {
+            if let Some(name) = &shape.group_name {
+                if !names.iter().any(|held| held == name) {
+                    names.push(name.clone());
+                }
+            }
+        }
+        for name in names {
+            let children: Vec<u64> = self.shapes.iter()
+                .filter(|shape| shape.sheet == sheet && shape.group_name.as_deref() == Some(&name))
+                .map(|shape| shape.id)
+                .collect();
+            let Some(first_child) = children.first().and_then(|id| self.shape(*id).ok()).cloned() else { continue };
+            let Some(mut group_drawing) = first_child.original.clone() else { continue };
+            group_drawing.grouped = false;
+            group_drawing.frame = None;
+            group_drawing.group_name = None;
+            group_drawing.group_rotation = 0;
+            let bounds = self.points_of_drawing(sheet, &group_drawing);
+            let id = self.next_shape_id;
+            self.next_shape_id += 1;
+            let mut group = ShapeRecord::blank(id, sheet, name, ShapeKind::Other);
+            group.left = bounds.0;
+            group.top = bounds.1;
+            group.width = bounds.2;
+            group.height = bounds.3;
+            group.rotation = first_child.original.as_ref().map_or(0.0, |drawing| f64::from(drawing.group_rotation) / 60_000.0);
+            group.group_children = children.clone();
+            group.group_bounds = Some(bounds);
+            group.group_transform = first_child.original.as_ref().and_then(|drawing| drawing.group_transform);
+            group.group_nested = first_child.original.as_ref().is_some_and(|drawing| drawing.group_nested);
+            for child in children {
+                if let Ok(record) = self.shape_mut(child) {
+                    record.group_parent_id = Some(id);
+                }
+            }
+            self.shapes.push(group);
+        }
+    }
+
+    fn adopt_comment_shapes(&mut self) {
+        for sheet in 0..self.workbook.sheets.len() {
+            let comments = self.workbook.sheets[sheet].comments.clone();
+            for comment in comments {
+                if comment.author.strip_prefix("tc=").is_some_and(|id| self.workbook.sheets[sheet].threaded_comments.iter().any(|thread| thread.cell == comment.cell && thread.id.eq_ignore_ascii_case(id))) { continue; }
+                let number = self.next_comment_shape_number(sheet);
+                let at = CellAddress { sheet, row: comment.cell.0 + 1, column: comment.cell.1 };
+                let id = self.next_shape_id;
+                self.next_shape_id += 1;
+                self.next_shape_number(sheet);
+                let mut record = ShapeRecord::blank(id, sheet, format!("Comment {number}"), ShapeKind::Other);
+                record.comment_at = Some(at);
+                record.left = self.anchor_point(sheet, comment.from.col, comment.from.col_off, comment.from.row, comment.from.row_off).0;
+                record.top = self.anchor_point(sheet, comment.from.col, comment.from.col_off, comment.from.row, comment.from.row_off).1;
+                record.width = f64::from(comment.size.0);
+                record.height = f64::from(comment.size.1);
+                record.visible = comment.visible;
+                record.fill = colour_to_packed(comment.fill.as_deref()).unwrap_or(14_811_135);
+                record.fill_theme = None;
+                record.fill_visible = comment.fill_visible;
+                record.transparency = f64::from(comment.fill_transparency);
+                record.line = colour_to_packed(comment.line_color.as_deref()).unwrap_or(0);
+                record.line_theme = None;
+                record.line_visible = comment.line_visible;
+                record.line_weight = f64::from(comment.line_weight);
+                record.line_transparency = f64::from(comment.line_transparency);
+                record.placement = 3;
+                record.margins = (
+                    comment.text.insets.0 as f64 / 12_700.0,
+                    comment.text.insets.1 as f64 / 12_700.0,
+                    comment.text.insets.2 as f64 / 12_700.0,
+                    comment.text.insets.3 as f64 / 12_700.0,
+                );
+                for (index, paragraph) in comment.text.paragraphs.iter().enumerate() {
+                    let base = TextStyle {
+                        name: paragraph.face.clone().unwrap_or_else(|| SHAPE_FACE.to_string()),
+                        size: f64::from(paragraph.size),
+                        bold: paragraph.bold,
+                        italic: paragraph.italic,
+                        underline: false,
+                        color: paragraph.color.as_deref().and_then(|color| colour_to_packed(Some(color))).unwrap_or(0),
+                        color_theme: None,
+                        color_brightness: 0.0,
+                        scheme_color: None,
+                    };
+                    if paragraph.runs.is_empty() {
+                        record.runs.push(ShapeRunRecord { text: paragraph.text.clone(), style: base.clone(), paragraph_end: false });
+                    } else {
+                        record.runs.extend(paragraph.runs.iter().map(|run| ShapeRunRecord {
+                            text: run.text.clone(), paragraph_end: false,
+                            style: TextStyle {
+                                name: run.face.clone().unwrap_or_else(|| base.name.clone()),
+                                size: f64::from(run.size.unwrap_or(paragraph.size)), bold: run.bold,
+                                italic: run.italic.unwrap_or(paragraph.italic), underline: run.underline,
+                                color: run.color.as_deref().and_then(|color| colour_to_packed(Some(color))).unwrap_or(base.color),
+                                color_theme: run.color_theme, color_brightness: f64::from(run.color_brightness.unwrap_or(0.0)),
+                                scheme_color: run.legacy_color_index,
+                            },
+                        }));
+                    }
+                    if index + 1 < comment.text.paragraphs.len() {
+                        let style = record.runs.last().map(|run| run.style.clone()).unwrap_or(base);
+                        record.runs.push(ShapeRunRecord { text: "\n".into(), style, paragraph_end: true });
+                    }
+                }
+                record.paragraph_count = comment.text.paragraphs.len().max(1);
                 self.shapes.push(record);
             }
         }
+    }
+
+    fn anchor_point(&self, sheet: usize, col: u32, col_off: i64, row: u32, row_off: i64) -> (f64, f64) {
+        let x = (0..col).map(|column| f64::from(self.column_px(sheet, column))).sum::<f64>()
+            + col_off as f64 / EMU_PER_PX;
+        let y = (1..=row).map(|row| f64::from(self.row_px(sheet, row))).sum::<f64>()
+            + row_off as f64 / EMU_PER_PX;
+        (x * 0.75, y * 0.75)
+    }
+
+    pub(super) fn add_comment_shape(&mut self, at: CellAddress) {
+        let existing = self.shapes.iter().any(|shape| shape.comment_at == Some(at));
+        if existing { return; }
+        let number = self.next_comment_shape_number(at.sheet);
+        let id = self.next_shape_id;
+        self.next_shape_id += 1;
+        self.next_shape_number(at.sheet);
+        let cell_left = (0..at.column).map(|column| f64::from(self.column_px(at.sheet, column))).sum::<f64>() * 0.75;
+        let cell_top = (1..at.row).map(|row| f64::from(self.row_px(at.sheet, row))).sum::<f64>() * 0.75;
+        let cell_width = f64::from(self.column_px(at.sheet, at.column)) * 0.75;
+        let mut record = ShapeRecord::blank(id, at.sheet, format!("Comment {number}"), ShapeKind::Other);
+        record.comment_at = Some(at);
+        record.left = cell_left + cell_width + 11.25;
+        record.top = (cell_top - 7.5).max(0.0);
+        record.width = 96.0;
+        record.height = 59.25;
+        record.visible = false;
+        record.fill = 14_811_135;
+        record.fill_theme = None;
+        record.fill_visible = true;
+        record.line = 0;
+        record.line_theme = None;
+        record.line_visible = true;
+        record.line_weight = 0.75;
+        record.placement = 3;
+        record.margins = (7.2, 3.6, 7.2, 3.6);
+        if let Some(note) = self.notes.iter().find(|note| note.at == at) {
+            let text = note.text.clone();
+            if !text.is_empty() {
+                record.runs = vec![ShapeRunRecord { text, paragraph_end: false, style: TextStyle {
+                    name: SHAPE_FACE.to_string(), size: 9.0, bold: false, italic: false, underline: false, color: 0,
+                    color_theme: None, color_brightness: 0.0, scheme_color: None,
+                }}];
+            }
+        }
+        self.shapes.push(record);
+    }
+
+    fn next_comment_shape_number(&mut self, sheet: usize) -> u32 {
+        let counter = self.comment_shape_counters.entry(sheet).or_insert(0);
+        *counter += 1;
+        *counter
     }
 
     /// Where a drawing's box sits, in points, from its anchors.
@@ -568,13 +914,38 @@ impl<'a> WorkbookHost<'a> {
             (None, Some((cx, cy))) => (cx as f64 / EMU_PER_PX, cy as f64 / EMU_PER_PX),
             (None, None) => (0.0, 0.0),
         };
+        let (x, y, w, h) = if drawing.grouped {
+            drawing.frame.map_or((x, y, w, h), |frame| {
+                let child_x = x + w * frame.x;
+                let child_y = y + h * frame.y;
+                let child_width = w * frame.w;
+                let child_height = h * frame.h;
+                if drawing.group_rotation == 0 {
+                    (child_x, child_y, child_width, child_height)
+                } else {
+                    let angle = f64::from(drawing.group_rotation) / 60_000.0 * std::f64::consts::PI / 180.0;
+                    let (sin, cos) = angle.sin_cos();
+                    let group_center_x = x + w / 2.0;
+                    let group_center_y = y + h / 2.0;
+                    let child_center_x = child_x + child_width / 2.0;
+                    let child_center_y = child_y + child_height / 2.0;
+                    let dx = child_center_x - group_center_x;
+                    let dy = child_center_y - group_center_y;
+                    let center_x = group_center_x + dx * cos - dy * sin;
+                    let center_y = group_center_y + dx * sin + dy * cos;
+                    (center_x - child_width / 2.0, center_y - child_height / 2.0, child_width, child_height)
+                }
+            })
+        } else {
+            (x, y, w, h)
+        };
         (x * 0.75, y * 0.75, w * 0.75, h * 0.75)
     }
 
     /// The anchor of a point on the sheet, in EMU within its cell.
     pub(super) fn anchor_at(&self, sheet: usize, x_pt: f64, y_pt: f64) -> Anchor {
-        let x_px = (x_pt / 0.75).max(0.0);
-        let y_px = (y_pt / 0.75).max(0.0);
+        let x_px = x_pt / 0.75;
+        let y_px = y_pt / 0.75;
         let mut col = 0u32;
         let mut reached = 0.0f64;
         loop {
@@ -585,7 +956,7 @@ impl<'a> WorkbookHost<'a> {
             reached += width;
             col += 1;
         }
-        let col_off = ((x_px - reached) * EMU_PER_PX) as i64;
+        let col_off = ((x_px - reached) * EMU_PER_PX).round() as i64;
         let mut row = 1u32;
         let mut down = 0.0f64;
         loop {
@@ -596,7 +967,7 @@ impl<'a> WorkbookHost<'a> {
             down += height;
             row += 1;
         }
-        let row_off = ((y_px - down) * EMU_PER_PX) as i64;
+        let row_off = ((y_px - down) * EMU_PER_PX).round() as i64;
         // The drawing part counts rows from nought.
         Anchor { col, col_off, row: row - 1, row_off }
     }
@@ -614,6 +985,12 @@ impl<'a> WorkbookHost<'a> {
     /// Chart 9.
     pub(super) fn next_shape_number(&mut self, sheet: usize) -> u32 {
         let counter = self.shape_counters.entry(sheet).or_insert(0);
+        *counter += 1;
+        *counter
+    }
+
+    pub(super) fn next_ole_object_number(&mut self, sheet: usize) -> u32 {
+        let counter = self.ole_object_counters.entry(sheet).or_insert(0);
         *counter += 1;
         *counter
     }
@@ -666,32 +1043,224 @@ impl<'a> WorkbookHost<'a> {
             self.shapes.iter().filter(|shape| shape.sheet == sheet).cloned().collect();
         let drawings: Vec<Drawing> = records
             .iter()
-            .filter(|record| record.visible || record.original.is_some())
+            .filter(|record| record.comment_at.is_none() && record.group_children.is_empty() && (record.visible || record.original.is_some()))
             .map(|record| self.drawing_of(record))
             .collect();
         if let Some(held) = self.workbook.sheets.get_mut(sheet) {
             held.drawings = drawings;
         }
+        let comment_shapes: Vec<ShapeRecord> = records.into_iter().filter(|record| record.comment_at.is_some()).collect();
+        for record in comment_shapes {
+            let Some(at) = record.comment_at else { continue };
+            if let Some(note) = self.notes.iter_mut().find(|note| note.at == at) {
+                note.visible = record.visible;
+                let text = record.text();
+                if note.text != text { note.text = text; note.utf16_text = None; }
+            }
+            let from = self.anchor_at(sheet, record.left, record.top);
+            let to = self.anchor_at(sheet, record.left + record.width, record.top + record.height);
+            let comment_text = self.shape_of(&record).text;
+            if let Some(comment) = self.workbook.sheets.get_mut(sheet)
+                .and_then(|held| held.comments.iter_mut().find(|comment| comment.cell == (at.row - 1, at.column)))
+            {
+                comment.from = from;
+                comment.to = Some(to);
+                comment.size = (record.width as f32, record.height as f32);
+                comment.visible = record.visible;
+                comment.fill = Some(packed_hex(record.fill));
+                comment.fill_visible = record.fill_visible;
+                comment.fill_transparency = record.transparency as f32;
+                // A fresh Excel note has an automatic/default line color
+                // (`strokecolor="none [81]"`) that reads as RGB 0. Keeping
+                // the IR value empty lets a read-only Shape access preserve
+                // that state instead of turning it into an explicit black
+                // color in the next SaveCopyAs.
+                if record.line != 0 || comment.line_color.is_some() {
+                    comment.line_color = Some(packed_hex(record.line));
+                }
+                comment.line_visible = record.line_visible;
+                comment.line_weight = record.line_weight as f32;
+                comment.line_transparency = record.line_transparency as f32;
+                if let Some(text) = comment_text {
+                    comment.text = text;
+                }
+            }
+        }
+    }
+
+    /// Commit the session-local legacy note objects to the workbook IR before
+    /// SaveCopyAs. Excel saves both the comment text part and its VML shape.
+    pub(super) fn sync_legacy_notes_for_save(&mut self) {
+        for sheet in 0..self.workbook.sheets.len() {
+            let original = std::mem::take(&mut self.workbook.sheets[sheet].comments);
+            let mut comments: Vec<_> = original.iter().filter(|comment| comment.author.strip_prefix("tc=").is_some_and(|id| self.threaded_notes.iter().any(|thread| !thread.deleted && thread.at.sheet == sheet && thread.at.row == comment.cell.0 + 1 && thread.at.column == comment.cell.1 && thread.id.eq_ignore_ascii_case(id)))).cloned().collect();
+            for note in self.notes.iter().filter(|note| note.at.sheet == sheet) {
+                let mut comment = original.iter()
+                    .find(|comment| comment.cell == (note.at.row.saturating_sub(1), note.at.column))
+                    .cloned()
+                    .unwrap_or_else(|| oxicells_core::ir::Comment {
+                        author: note.author.clone(),
+                        utf16_text: None,
+                        from: Anchor { col: note.at.column, col_off: 0, row: note.at.row.saturating_sub(1), row_off: 0 },
+                        size: (96.0, 59.25),
+                        to: None,
+                        text: ShapeText {
+                            paragraphs: vec![ShapeParagraph {
+                                text: String::new(), runs: Vec::new(), align: None, size: 9.0,
+                                bold: false, italic: false, face: Some(SHAPE_FACE.into()), charset: None,
+                                pitch_family: None, color: None, line_pitch: None, line_scale: None,
+                            }],
+                            anchor: Some("t".into()), insets: (91_440, 45_720, 91_440, 45_720), wrap: true, clip: true,
+                        },
+                        fill: Some("FFFFE1".into()),
+                        fill_visible: true,
+                        fill_transparency: 0.0,
+                        line_color: None,
+                        line_visible: true,
+                        line_weight: 0.75,
+                        line_transparency: 0.0,
+                        cell: (note.at.row.saturating_sub(1), note.at.column),
+                        visible: note.visible,
+                    });
+                comment.author = note.author.clone();
+                comment.utf16_text = note.utf16_text.clone();
+                comment.cell = (note.at.row.saturating_sub(1), note.at.column);
+                comment.visible = note.visible;
+                if let Some(record) = self.shapes.iter().find(|shape| shape.comment_at == Some(note.at)) {
+                    comment.from = self.anchor_at(sheet, record.left, record.top);
+                    comment.to = Some(self.anchor_at(sheet, record.left + record.width, record.top + record.height));
+                    comment.size = (record.width as f32, record.height as f32);
+                    comment.fill = Some(packed_hex(record.fill));
+                    comment.fill_visible = record.fill_visible;
+                    comment.fill_transparency = record.transparency as f32;
+                    if record.line != 0 || comment.line_color.is_some() {
+                        comment.line_color = Some(packed_hex(record.line));
+                    }
+                    comment.line_visible = record.line_visible;
+                    comment.line_weight = record.line_weight as f32;
+                    comment.line_transparency = record.line_transparency as f32;
+                    let baseline = (
+                        comment.text.insets.0 as f64 / 12_700.0,
+                        comment.text.insets.1 as f64 / 12_700.0,
+                        comment.text.insets.2 as f64 / 12_700.0,
+                        comment.text.insets.3 as f64 / 12_700.0,
+                    );
+                    if baseline != record.margins {
+                        comment.text.insets = (
+                            (record.margins.0 * 12_700.0).round() as i64,
+                            (record.margins.1 * 12_700.0).round() as i64,
+                            (record.margins.2 * 12_700.0).round() as i64,
+                            (record.margins.3 * 12_700.0).round() as i64,
+                        );
+                    }
+                }
+                let held_text = comment.text.paragraphs.iter().map(|paragraph| paragraph.text.as_str()).collect::<Vec<_>>().join("\n");
+                if held_text != note.text {
+                    let shape_text = self.shapes.iter().find(|shape| shape.comment_at == Some(note.at) && shape.text() == note.text)
+                        .and_then(|shape| self.shape_of(shape).text);
+                    if let Some(shape_text) = shape_text {
+                        comment.text.paragraphs = shape_text.paragraphs;
+                    } else {
+                    let style = comment.text.paragraphs.first().cloned().unwrap_or(ShapeParagraph {
+                        text: String::new(), runs: Vec::new(), align: None, size: 9.0,
+                        bold: false, italic: false, face: Some(SHAPE_FACE.into()), charset: None,
+                        pitch_family: None, color: None, line_pitch: None, line_scale: None,
+                    });
+                    comment.text.paragraphs = note.text.split('\n').map(|line| {
+                        let mut paragraph = style.clone();
+                        paragraph.text = line.to_string();
+                        paragraph.runs.clear();
+                        paragraph
+                    }).collect();
+                    }
+                }
+                comments.push(comment);
+            }
+            comments.sort_by_key(|comment| comment.cell);
+            self.workbook.sheets[sheet].comments = comments;
+        }
     }
 
     pub(super) fn drawing_of(&self, record: &ShapeRecord) -> Drawing {
-        let from = self.anchor_at(record.sheet, record.left, record.top);
-        let to = self.anchor_at(record.sheet, record.left + record.width, record.top + record.height);
-        let extent = Some((
+        let grouped = record.group_parent_id.is_some();
+        let original = grouped.then_some(record.original.as_ref()).flatten();
+        let parent = record.group_parent_id.and_then(|id| self.shape(id).ok());
+        let from = parent.map_or_else(
+            || original.map_or_else(|| self.anchor_at(record.sheet, record.left, record.top), |drawing| drawing.from),
+            |group| self.anchor_at(record.sheet, group.left, group.top),
+        );
+        let to = if let Some(group) = parent {
+            Some(self.anchor_at(record.sheet, group.left + group.width, group.top + group.height))
+        } else {
+            Some(self.anchor_at(record.sheet, record.left + record.width, record.top + record.height))
+        };
+        let extent = if grouped {
+            original.and_then(|drawing| drawing.extent)
+        } else {
+            Some((
             (record.width / 0.75 * EMU_PER_PX) as i64,
             (record.height / 0.75 * EMU_PER_PX) as i64,
-        ));
+            ))
+        };
         let kind = match &record.kind {
             ShapeKind::Picture | ShapeKind::Other => match &record.original {
                 Some(original) => original.kind.clone(),
                 None => DrawingKind::Other,
             },
-            ShapeKind::Chart(chart) => DrawingKind::Chart(self.chart_of(chart)),
+            ShapeKind::Chart(chart) => {
+                let mut chart=self.chart_of(chart);
+                if let Some(Drawing {kind:DrawingKind::Chart(original),..})=&record.original {chart.origin_id=original.origin_id;}
+                DrawingKind::Chart(chart)
+            },
             ShapeKind::Auto(_) | ShapeKind::TextBox | ShapeKind::Line => {
                 DrawingKind::Shape(self.shape_of(record))
             }
         };
-        Drawing { from, to: Some(to), extent, kind, frame: None, grouped: false }
+        Drawing {
+            name: Some(record.name.clone()),
+            ole_prog_id: record.original.as_ref().and_then(|drawing| drawing.ole_prog_id.clone()),
+            ole_source_name: record.ole_clone_of.clone(),
+            ole_clone_position: record.ole_clone_of.as_ref().map(|_| (record.left, record.top)),
+            ole_embedded_package: record.original.as_ref().and_then(|drawing| drawing.ole_embedded_package.clone()),
+            ole_package_is_empty: record.original.as_ref().and_then(|drawing| drawing.ole_package_is_empty),
+            ole_clone_visible: record.ole_clone_of.as_ref().map(|_| record.visible),
+            ole_placement: record.original.as_ref().and_then(|drawing| drawing.ole_prog_id.as_ref().map(|_| record.placement)),
+            ole_type: record.original.as_ref().and_then(|drawing| drawing.ole_type),
+            ole_display_as_icon: record.original.as_ref().and_then(|drawing| drawing.ole_display_as_icon),
+            ole_auto_load: record.original.as_ref().and_then(|drawing| drawing.ole_auto_load),
+            ole_enabled: record.original.as_ref().and_then(|drawing| drawing.ole_enabled),
+            ole_locked: record.original.as_ref().and_then(|drawing| drawing.ole_locked),
+            ole_print_object: record.original.as_ref().and_then(|drawing| drawing.ole_print_object),
+            ole_shadow: record.original.as_ref().and_then(|drawing| drawing.ole_shadow),
+            ole_on_action: record.original.as_ref().and_then(|drawing| {
+                if drawing.ole_prog_id.is_some()
+                    && record.on_action != drawing.ole_on_action.as_deref().unwrap_or_default()
+                {
+                    Some(record.on_action.clone())
+                } else {
+                    drawing.ole_on_action.clone()
+                }
+            }),
+            ole_border_color: record.original.as_ref().and_then(|drawing| drawing.ole_border_color.clone()),
+            ole_border_weight: record.original.as_ref().and_then(|drawing| drawing.ole_border_weight),
+            ole_interior_color: record.original.as_ref().and_then(|drawing| drawing.ole_interior_color.clone()),
+            from,
+            to,
+            extent,
+            kind,
+            frame: grouped.then(|| record.original.as_ref().and_then(|drawing| drawing.frame)).flatten(),
+            grouped,
+            group_name: record.group_parent_id.and_then(|id| self.shape(id).ok().map(|group| group.name.clone())),
+            group_rotation: if grouped { original.map_or(0, |drawing| drawing.group_rotation) } else { 0 },
+            group_transform: parent.and_then(|group| group.group_transform),
+            group_child_transform: grouped.then_some((
+                (record.left / 0.75 * EMU_PER_PX).round() as i64,
+                (record.top / 0.75 * EMU_PER_PX).round() as i64,
+                (record.width / 0.75 * EMU_PER_PX).round() as i64,
+                (record.height / 0.75 * EMU_PER_PX).round() as i64,
+            )),
+            group_nested: parent.is_some_and(|group| group.group_nested),
+        }
     }
 
     pub(super) fn shape_of(&self, record: &ShapeRecord) -> Shape {
@@ -701,58 +1270,150 @@ impl<'a> WorkbookHost<'a> {
             _ => "rect",
         };
         let line = record.line_visible.then(|| ShapeLine {
-            head_end: None,
+            head_end: arrow_name(record.arrow_start).map(str::to_string),
             tail_end: arrow_name(record.arrow_end).map(str::to_string),
+            head_end_length: record.arrow_start_length.map(arrow_size_name),
+            head_end_width: record.arrow_start_width.map(arrow_size_name),
+            tail_end_length: record.arrow_end_length.map(arrow_size_name),
+            tail_end_width: record.arrow_end_width.map(arrow_size_name),
             color: packed_hex(record.line),
+            color_theme: record.line_theme,
+            legacy_color_index: record.line_scheme_color,
+            color_brightness: (record.line_brightness != 0.0).then_some(record.line_brightness as f32),
+            color_shade: record.line_shade,
+            pattern: line_pattern_name(record.line_pattern).map(str::to_string),
+            back_color: (record.line_pattern != -2).then(|| packed_hex(record.line_back)),
+            back_color_theme: record.line_back_theme,
+            back_legacy_color_index: record.line_back_scheme_color,
+            back_color_brightness: (record.line_back_brightness != 0.0).then_some(record.line_back_brightness as f32),
+            back_color_shade: None,
             width: (record.line_weight / 0.75 * EMU_PER_PX) as i64,
             dash: dash_name(record.dash).map(str::to_string),
             cap: None,
         });
         let text = (!record.runs.is_empty() && !matches!(record.kind, ShapeKind::Line)).then(|| {
-            let whole: String = record.runs.iter().map(|run| run.text.as_str()).collect();
-            let first = record.runs.first().map(|run| run.style.clone());
-            let paragraphs = whole
-                .split('\n')
-                .map(|line| ShapeParagraph {
-                    text: line.to_string(),
-                    runs: Vec::new(),
-                    align: Some(match record.h_align {
-                        -4108 => "ctr".to_string(),
-                        -4152 => "r".to_string(),
-                        _ => "l".to_string(),
-                    }),
-                    size: first.as_ref().map_or(11.0, |style| style.size as f32),
-                    bold: first.as_ref().is_some_and(|style| style.bold),
-                    italic: first.as_ref().is_some_and(|style| style.italic),
-                    face: first.as_ref().map(|style| style.name.clone()),
-                    charset: None,
-                    pitch_family: None,
-                    color: first.as_ref().map(|style| packed_hex(style.color)),
-                    line_pitch: None,
-                    line_scale: None,
-                })
-                .collect();
-            let _ = ShapeRun { text: String::new(), bold: false, underline: false, color: None };
-            ShapeText {
-                paragraphs,
-                anchor: Some(match record.v_align {
+            let mut output = record.original.as_ref().and_then(|drawing| match &drawing.kind {
+                DrawingKind::Shape(shape) => shape.text.clone(),
+                _ => None,
+            }).filter(|text| text.paragraphs.len() == record.paragraph_count);
+            if let Some(mut original) = output.take() {
+                let mut run_index = 0usize;
+                for paragraph in &mut original.paragraphs {
+                    let source_paragraph = paragraph.clone();
+                    let mut runs = Vec::new();
+                    let mut paragraph_text = String::new();
+                    while let Some(run) = record.runs.get(run_index) {
+                        run_index += 1;
+                        if run.paragraph_end { break; }
+                        let position = paragraph_text.chars().count();
+                        let source_run = source_shape_run_at(&source_paragraph, position);
+                        paragraph_text.push_str(&run.text);
+                        if !run.text.is_empty() {
+                            let source_size = source_run.and_then(|source| source.size).unwrap_or(source_paragraph.size);
+                            let source_face = source_run.and_then(|source| source.face.as_deref())
+                                .or(source_paragraph.face.as_deref()).unwrap_or(SHAPE_FACE);
+                            let source_italic = source_run.and_then(|source| source.italic).unwrap_or(source_paragraph.italic);
+                            let source_color = source_run.and_then(|source| source.color.as_deref())
+                                .or(source_paragraph.color.as_deref())
+                                .and_then(|color| colour_to_packed(Some(color)));
+                            let source_theme = source_run.and_then(|source| source.color_theme);
+                            let source_brightness = source_run.and_then(|source| source.color_brightness).map(f64::from).unwrap_or(0.0);
+                            let source_scheme = source_run.and_then(|source| source.legacy_color_index);
+                            runs.push(ShapeRun {
+                                text: run.text.clone(),
+                                bold: run.style.bold,
+                                italic: (run.style.italic != source_italic).then_some(run.style.italic)
+                                    .or_else(|| source_run.and_then(|source| source.italic)),
+                                underline: run.style.underline,
+                                face: (run.style.name != source_face).then(|| run.style.name.clone())
+                                    .or_else(|| source_run.and_then(|source| source.face.clone())),
+                                size: ((run.style.size as f32) != source_size).then_some(run.style.size as f32)
+                                    .or_else(|| source_run.and_then(|source| source.size)),
+                                color: (source_color != Some(run.style.color)).then(|| packed_hex(run.style.color))
+                                    .or_else(|| source_run.and_then(|source| source.color.clone())),
+                                color_theme: if source_theme != run.style.color_theme {
+                                    run.style.color_theme
+                                } else {
+                                    source_run.and_then(|source| source.color_theme)
+                                },
+                                color_brightness: if source_brightness != run.style.color_brightness {
+                                    (run.style.color_brightness != 0.0).then_some(run.style.color_brightness as f32)
+                                } else {
+                                    source_run.and_then(|source| source.color_brightness)
+                                },
+                                legacy_color_index: if source_scheme != run.style.scheme_color {
+                                    run.style.scheme_color
+                                } else {
+                                    source_scheme
+                                },
+                            });
+                        }
+                    }
+                    paragraph.text = paragraph_text;
+                    paragraph.runs = runs;
+                }
+                original.anchor = Some(match record.v_align {
                     -4108 => "ctr".to_string(),
                     -4107 => "b".to_string(),
                     _ => "t".to_string(),
-                }),
-                insets: (
+                });
+                original.insets = (
                     (record.margins.0 / 0.75 * EMU_PER_PX) as i64,
                     (record.margins.1 / 0.75 * EMU_PER_PX) as i64,
                     (record.margins.2 / 0.75 * EMU_PER_PX) as i64,
                     (record.margins.3 / 0.75 * EMU_PER_PX) as i64,
-                ),
-                wrap: true,
-                clip: false,
+                );
+                original
+            } else {
+                let mut paragraphs = Vec::new();
+                let mut paragraph_text = String::new();
+                let mut paragraph_runs = Vec::new();
+                let mut first_style: Option<TextStyle> = None;
+                let to_paragraph = |text: String, runs: Vec<ShapeRun>, style: Option<TextStyle>| {
+                    let style = style.unwrap_or_else(|| record.runs.first().map(|run| run.style.clone()).unwrap_or_else(|| record.default_style()));
+                    ShapeParagraph {
+                        text, runs,
+                        align: Some(match record.h_align { -4108 => "ctr".to_string(), -4152 => "r".to_string(), _ => "l".to_string() }),
+                        size: style.size as f32, bold: style.bold, italic: style.italic, face: Some(style.name),
+                        charset: None, pitch_family: None, color: Some(packed_hex(style.color)), line_pitch: None, line_scale: None,
+                    }
+                };
+                for run in &record.runs {
+                    if run.paragraph_end {
+                        paragraphs.push(to_paragraph(std::mem::take(&mut paragraph_text), std::mem::take(&mut paragraph_runs), first_style.take()));
+                    } else {
+                        paragraph_text.push_str(&run.text);
+                        if !run.text.is_empty() {
+                            first_style.get_or_insert_with(|| run.style.clone());
+                            paragraph_runs.push(ShapeRun { text: run.text.clone(), bold: run.style.bold,
+                                italic: Some(run.style.italic), underline: run.style.underline,
+                                face: Some(run.style.name.clone()), size: Some(run.style.size as f32),
+                                color: Some(packed_hex(run.style.color)),
+                                color_theme: run.style.color_theme,
+                                color_brightness: (run.style.color_brightness != 0.0).then_some(run.style.color_brightness as f32),
+                                legacy_color_index: run.style.scheme_color });
+                        }
+                    }
+                }
+                if paragraphs.len() < record.paragraph_count || !paragraph_text.is_empty() || !paragraph_runs.is_empty() {
+                    paragraphs.push(to_paragraph(paragraph_text, paragraph_runs, first_style));
+                }
+                ShapeText {
+                    paragraphs,
+                    anchor: Some(match record.v_align { -4108 => "ctr".to_string(), -4107 => "b".to_string(), _ => "t".to_string() }),
+                    insets: ((record.margins.0 / 0.75 * EMU_PER_PX) as i64, (record.margins.1 / 0.75 * EMU_PER_PX) as i64,
+                        (record.margins.2 / 0.75 * EMU_PER_PX) as i64, (record.margins.3 / 0.75 * EMU_PER_PX) as i64),
+                    wrap: true, clip: false,
+                }
             }
         });
         Shape {
             geometry: geometry.to_string(),
+            text_box: matches!(record.kind, ShapeKind::TextBox),
             fill: record.fill_visible.then(|| packed_hex(record.fill)),
+            fill_theme: record.fill_theme,
+            fill_legacy_color_index: record.fill_scheme_color,
+            fill_brightness: (record.fill_brightness != 0.0).then_some(record.fill_brightness as f32),
             line,
             adjusts: record
                 .adjusts
@@ -774,6 +1435,8 @@ impl<'a> WorkbookHost<'a> {
     pub(super) fn chart_of(&self, chart: &ChartRecord) -> Chart {
         let categories = chart.series.first().map(|series| series.xs.clone()).unwrap_or_default();
         Chart {
+            origin_id: None,
+            title: chart.has_title.then(||chart.title.clone()),
             kind: chart_kind(chart.chart_type).to_string(),
             plot: None,
             series: chart
@@ -785,7 +1448,21 @@ impl<'a> WorkbookHost<'a> {
                     line: series.color.map(|colour| ShapeLine {
                         head_end: None,
                         tail_end: None,
+                        head_end_length: None,
+                        head_end_width: None,
+                        tail_end_length: None,
+                        tail_end_width: None,
                         color: packed_hex(colour),
+                        color_theme: None,
+                        legacy_color_index: None,
+                        color_brightness: None,
+                        color_shade: None,
+                        pattern: None,
+                        back_color: None,
+                        back_color_theme: None,
+                        back_legacy_color_index: None,
+                        back_color_brightness: None,
+                        back_color_shade: None,
                         width: 28_575,
                         dash: None,
                         cap: None,
@@ -861,6 +1538,7 @@ impl ShapeRecord {
         let mut record = Self {
             id,
             sheet,
+            comment_at: None,
             name,
             kind: ShapeKind::Auto(1),
             left: 0.0,
@@ -873,14 +1551,31 @@ impl ShapeRecord {
             visible: true,
             fill: THEME_COLOURS[ACCENT1 - 1],
             fill_theme: Some(ACCENT1),
+            theme_palette: workbook_office_theme_palette(&[]),
+            fill_scheme_color: None,
+            fill_brightness: 0.0,
             fill_visible: true,
             transparency: 0.0,
+            line_transparency: 0.0,
             line: SHAPE_OUTLINE,
             line_theme: Some(ACCENT1),
+            line_scheme_color: None,
+            line_brightness: 0.0,
+            line_shade: Some(0.15),
+            line_back: WHITE,
+            line_back_theme: None,
+            line_back_scheme_color: None,
+            line_back_brightness: 0.0,
             line_visible: true,
+            line_pattern: -2,
             line_weight: 1.5,
             dash: 1,
+            arrow_start: 1,
             arrow_end: 1,
+            arrow_start_length: None,
+            arrow_start_width: None,
+            arrow_end_length: None,
+            arrow_end_width: None,
             runs: Vec::new(),
             h_align: -4131,
             v_align: -4160,
@@ -893,7 +1588,14 @@ impl ShapeRecord {
             lock_aspect: false,
             paragraph_count: 1,
             original: None,
+            ole_clone_of: None,
             connector: 0,
+            group_name: None,
+            group_parent_id: None,
+            group_children: Vec::new(),
+            group_bounds: None,
+            group_transform: None,
+            group_nested: false,
         };
         record.kind = kind;
         if let ShapeKind::Auto(kind) = record.kind {
@@ -937,6 +1639,9 @@ impl ShapeRecord {
             italic: false,
             underline: false,
             color: if matches!(self.kind, ShapeKind::TextBox) { 0 } else { WHITE },
+            color_theme: Some(if matches!(self.kind, ShapeKind::TextBox) { 1 } else { 2 }),
+            color_brightness: 0.0,
+            scheme_color: None,
         }
     }
 
@@ -952,10 +1657,44 @@ impl ShapeRecord {
         let text = text.replace("\r\n", "\r");
         self.paragraph_count = text.split('\r').count().max(1);
         let text = text.replace('\r', "\n");
-        self.runs = if text.is_empty() { Vec::new() } else { vec![ShapeRunRecord { text, style }] };
+        self.runs = if text.is_empty() {
+            Vec::new()
+        } else {
+            let lines = text.split('\n').collect::<Vec<_>>();
+            let mut runs = Vec::with_capacity(lines.len() * 2 - 1);
+            for (index, line) in lines.iter().enumerate() {
+                runs.push(ShapeRunRecord { text: (*line).to_string(), style: style.clone(), paragraph_end: false });
+                if index + 1 < lines.len() {
+                    runs.push(ShapeRunRecord { text: "\n".into(), style: style.clone(), paragraph_end: true });
+                }
+            }
+            runs
+        };
         if self.auto_size {
             self.fit_to_text();
         }
+    }
+
+    /// Replace a Characters span while keeping the dress of the untouched runs.
+    pub(super) fn replace_characters(&mut self, start: u32, length: Option<u32>, text: &str) {
+        // Excel treats an explicit zero length as the rest of the text here.
+        let length = length.filter(|length| *length != 0);
+        let (first, last) = self.split_runs(start, length);
+        let style = if self.comment_at.is_some() && first > 0 {
+            self.runs[first - 1].style.clone()
+        } else {
+            self.runs.get(first).or_else(|| self.runs.last()).map(|run| run.style.clone()).unwrap_or_else(|| self.default_style())
+        };
+        let text = text.replace("\r\n", "\r").replace('\r', "\n");
+        let mut replacement = Vec::new();
+        let mut lines = text.split('\n').peekable();
+        while let Some(line) = lines.next() {
+            if !line.is_empty() { replacement.push(ShapeRunRecord { text: line.to_string(), style: style.clone(), paragraph_end: false }); }
+            if lines.peek().is_some() { replacement.push(ShapeRunRecord { text: "\n".into(), style: style.clone(), paragraph_end: true }); }
+        }
+        self.runs.splice(first..last, replacement);
+        self.paragraph_count = self.text().split('\n').count().max(1);
+        if self.auto_size { self.fit_to_text(); }
     }
 
     /// The box a text box shrinks to when it sizes itself: measured, "tb" in
@@ -992,8 +1731,10 @@ impl ShapeRecord {
                         (text[..split].to_string(), text[split..].to_string())
                     };
                     let style = self.runs[at].style.clone();
+                    let paragraph_end = self.runs[at].paragraph_end;
                     self.runs[at].text = head;
-                    self.runs.insert(at + 1, ShapeRunRecord { text: tail, style });
+                    self.runs[at].paragraph_end = false;
+                    self.runs.insert(at + 1, ShapeRunRecord { text: tail, style, paragraph_end });
                     break;
                 }
                 seen += count;

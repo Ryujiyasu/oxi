@@ -308,12 +308,13 @@ pub fn implied_intersections(input: &str, multi_name: &dyn Fn(&str) -> bool) -> 
         return input.to_string();
     };
     let mut reader = AtReader { tokens: &tokens, pos: 0, multi_name };
-    let Some(tree) = reader.expr() else {
+    let Some(mut tree) = reader.expr() else {
         return input.to_string();
     };
     if reader.pos != tokens.len() {
         return input.to_string();
     }
+    bind_intersection_shapes(&mut tree, &std::collections::BTreeMap::new());
     let mut marks = Vec::new();
     mark_intersections(&tree, AtContext::Value, &mut marks);
     if marks.is_empty() {
@@ -518,6 +519,213 @@ fn absolute_r1c1(name: &str) -> Option<String> {
     Some(format!("${letters}${row}"))
 }
 
+/// Resolve the relative coordinates stored in an OOXML defined name at a
+/// caller, retaining literals and the formula's existing whitespace.
+pub fn name_formula_at(input: &str, at: (u32, u32)) -> Result<String, String> {
+    use crate::reference::{col_to_letters, letters_to_col, parse_a1, RangeRef, MAX_COL, MAX_ROW};
+    let tokens = tokenize_spanned(input).map_err(|e| e.to_string())?;
+    let mut output = String::new();
+    let mut from = 0;
+    for (index, (token, start)) in tokens.iter().enumerate() {
+        let end = tokens.get(index + 1).map_or(input.len(), |(_, at)| *at);
+        let written = &input[*start..end];
+        let text = written.trim_end();
+        let beside_colon = matches!(tokens.get(index + 1), Some((Token::Colon, _)))
+            || (index > 0 && matches!(tokens.get(index - 1), Some((Token::Colon, _))));
+        let calls = matches!(tokens.get(index + 1), Some((Token::LParen, _)));
+        let changed = match token {
+            Token::Name { sheet, name } if !calls => {
+                let placed = if let Some(cell) = parse_a1(name) {
+                    Some(RangeRef::single(cell).for_defined_name(at).start.to_a1())
+                } else if beside_colon {
+                    let absolute = name.starts_with('$');
+                    let bare = name.trim_start_matches('$');
+                    if let Some(col) = letters_to_col(bare) {
+                        let col = if absolute { col } else { (col + at.0) % (MAX_COL + 1) };
+                        Some(format!("{}{}", if absolute { "$" } else { "" }, col_to_letters(col)))
+                    } else {
+                        bare.parse::<u32>().ok().filter(|r| *r > 0 && *r <= MAX_ROW + 1).map(|row| {
+                            let row = if absolute { row - 1 } else { (row - 1 + at.1) % (MAX_ROW + 1) };
+                            format!("{}{}", if absolute { "$" } else { "" }, row + 1)
+                        })
+                    }
+                } else { None };
+                placed.map(|name| Token::Name { sheet: sheet.clone(), name })
+            }
+            Token::Number(row) if beside_colon && *row >= 1.0 && *row <= MAX_ROW as f64 + 1.0 && row.fract() == 0.0 => {
+                Some(Token::Number(((*row as u32 - 1 + at.1) % (MAX_ROW + 1) + 1) as f64))
+            }
+            _ => None,
+        };
+        if let Some(token) = changed {
+            output.push_str(&input[from..*start]);
+            render_token(&mut output, token);
+            output.push_str(&written[text.len()..]);
+            from = end;
+        }
+    }
+    output.push_str(&input[from..]);
+    Ok(output)
+}
+
+pub(crate) fn normalized_builtin_call(name: &str) -> Option<String> {
+    let upper = name.to_uppercase();
+    let plain = upper.strip_prefix("_XLFN.").unwrap_or(&upper);
+    let plain = plain.strip_prefix("_XLWS.").unwrap_or(plain);
+    (crate::functions::is_known_function(plain) || matches!(plain, "LET" | "LAMBDA"))
+        .then(|| plain.to_string())
+}
+
+/// Qualify references and local names in a name definition. LET/LAMBDA
+/// bindings have lexical scope and do not become worksheet names.
+pub fn qualify_name_formula(
+    input: &str,
+    sheet: &str,
+    sheet_case: &dyn Fn(&str) -> Option<String>,
+    name_case: &dyn Fn(Option<&str>, &str) -> Option<(Option<String>, String)>,
+) -> Result<String, String> {
+    qualify_name_formula_mode(input, Some(sheet), sheet_case, name_case, false)
+}
+
+/// Display supported OOXML future functions without their storage namespaces.
+pub fn formula_from_ooxml(input: &str) -> Result<String, String> {
+    let upper = input.to_ascii_uppercase();
+    if !upper.contains("_XLFN.") && !upper.contains("_XLPM.") { return Ok(input.to_string()); }
+    qualify_name_formula_mode(input, None, &|_| None, &|_, _| None, false)
+}
+
+/// Future-function and parameter spelling used by workbook formulas in OOXML.
+pub fn name_formula_to_ooxml(input: &str) -> Result<String, String> {
+    let tokens = tokenize(input).map_err(|e| e.to_string())?;
+    let needs_namespace = tokens.iter().enumerate().any(|(i, t)| matches!(t,
+        Token::Name { sheet: None, name } if name.to_uppercase().starts_with("_XLFN.")
+            || (matches!(tokens.get(i + 1), Some(Token::LParen)) && matches!(normalized_builtin_call(name).as_deref(), Some("LET" | "LAMBDA")))));
+    if !needs_namespace { return Ok(input.to_string()); }
+    qualify_name_formula_mode(input, None, &|_| None, &|_, _| None, true)
+}
+
+/// Compatibility identifiers exposed by Excel's Names collection. They are
+/// not ordinary definedName elements and must not be written into that list.
+pub fn name_compatibility_identifiers(input: &str) -> Vec<String> {
+    let Ok(xml) = name_formula_to_ooxml(input) else { return Vec::new(); };
+    let Ok(tokens) = tokenize(&xml) else { return Vec::new(); };
+    let mut names = Vec::new();
+    for token in tokens {
+        match token {
+            Token::Name { name, .. } if name.to_uppercase().starts_with("_XLFN.") => names.push(format!("_xlfn.{}", &name[6..])),
+            Token::Name { name, .. } if name.to_uppercase().starts_with("_XLPM.") => names.push(format!("_xlpm.{}", &name[6..])),
+            Token::At => names.push("_xlfn.SINGLE".into()),
+            _ => {}
+        }
+    }
+    names
+}
+
+fn qualify_name_formula_mode(
+    input: &str,
+    sheet: Option<&str>,
+    sheet_case: &dyn Fn(&str) -> Option<String>,
+    name_case: &dyn Fn(Option<&str>, &str) -> Option<(Option<String>, String)>,
+    ooxml: bool,
+) -> Result<String, String> {
+    use std::collections::HashMap;
+    use crate::reference::{letters_to_col, parse_a1};
+    let input = canonical_formula(input, sheet_case, &|_| None);
+    let tokens = tokenize_spanned(&input).map_err(|e| e.to_string())?;
+    let mut counts = vec![0; tokens.len()];
+    let mut stack = Vec::<(usize, usize)>::new();
+    for (i, (token, _)) in tokens.iter().enumerate() {
+        match token {
+            Token::LParen | Token::LBrace => stack.push((i, 1)),
+            Token::Comma => if let Some((_, count)) = stack.last_mut() { *count += 1; },
+            Token::RParen | Token::RBrace => if let Some((open, count)) = stack.pop() { counts[open] = count; },
+            _ => {}
+        }
+    }
+    #[derive(Default)]
+    struct Frame {
+        function: String,
+        arg: usize,
+        total: usize,
+        locals: HashMap<String, String>,
+        pending: Option<(String, String)>,
+    }
+    let mut frames = Vec::<Frame>::new();
+    let mut output = String::new();
+    let mut from = 0;
+    for (index, (token, start)) in tokens.iter().enumerate() {
+        let end = tokens.get(index + 1).map_or(input.len(), |(_, at)| *at);
+        let written = &input[*start..end];
+        let text = written.trim_end();
+        let calls = matches!(tokens.get(index + 1), Some((Token::LParen, _)));
+        let after_colon = index > 0 && matches!(tokens.get(index - 1), Some((Token::Colon, _)));
+        let before_colon = matches!(tokens.get(index + 1), Some((Token::Colon, _)));
+        let mut replacement = None;
+        if let Token::Name { sheet: owner, name } = token {
+            let key = crate::case_fold::name_key(name);
+            let binder = owner.is_none() && frames.last().is_some_and(|f| f.arg + 1 < f.total
+                && (f.function == "LAMBDA" || (f.function == "LET" && f.arg % 2 == 0)));
+            let lexical = owner.is_none().then(|| frames.iter().rev().find_map(|f| f.locals.get(&key).cloned())).flatten();
+            if binder {
+                let plain = name.strip_prefix("_xlpm.").unwrap_or(name);
+                let printed = if ooxml { format!("_xlpm.{plain}") } else { plain.to_string() };
+                frames.last_mut().unwrap().pending = Some((key, printed.clone()));
+                replacement = Some(Token::Name { sheet: None, name: printed });
+            } else if let Some(name) = lexical {
+                replacement = Some(Token::Name { sheet: None, name });
+            } else {
+                let cell = !calls && parse_a1(name).is_some();
+                let line = !calls && (before_colon || after_colon) && (letters_to_col(name.trim_start_matches('$')).is_some()
+                    || name.trim_start_matches('$').parse::<u32>().is_ok());
+                if cell || line {
+                    if owner.is_none() && !after_colon && sheet.is_some() {
+                        replacement = Some(Token::Name { sheet: sheet.map(str::to_string), name: name.clone() });
+                    }
+                } else if calls && owner.is_none() && normalized_builtin_call(name).is_some() {
+                    let builtin = normalized_builtin_call(name).unwrap();
+                    let upper = name.to_uppercase();
+                    let future = matches!(builtin.as_str(), "LET" | "LAMBDA") || upper.starts_with("_XLFN.");
+                    let name = if ooxml && future {
+                        format!("_xlfn.{}{builtin}", if upper.starts_with("_XLFN._XLWS.") { "_xlws." } else { "" })
+                    } else { builtin };
+                    replacement = Some(Token::Name { sheet: None, name });
+                } else if let Some((scope, name)) = name_case(owner.as_deref(), name) {
+                    replacement = Some(Token::Name { sheet: owner.clone().or(scope), name });
+                }
+            }
+        } else if let Token::Number(row) = token {
+            if before_colon && !after_colon && sheet.is_some() { replacement = Some(Token::Name { sheet: sheet.map(str::to_string), name: row.to_string() }); }
+        }
+        if let Some(token) = replacement {
+            output.push_str(&input[from..*start]);
+            render_token(&mut output, token);
+            output.push_str(&written[text.len()..]);
+            from = end;
+        }
+        match token {
+            Token::LParen | Token::LBrace => {
+                let function = if matches!(token, Token::LParen) && index > 0 {
+                    match &tokens[index - 1].0 {
+                        Token::Name { sheet: None, name } => normalized_builtin_call(name).unwrap_or_default(),
+                        _ => String::new(),
+                    }
+                } else { String::new() };
+                frames.push(Frame { function, total: counts[index], ..Default::default() });
+            }
+            Token::Comma => if let Some(frame) = frames.last_mut() {
+                if frame.function == "LAMBDA" || (frame.function == "LET" && frame.arg % 2 == 1) {
+                    if let Some((key, name)) = frame.pending.take() { frame.locals.insert(key, name); }
+                }
+                frame.arg += 1;
+            },
+            Token::RParen | Token::RBrace => { frames.pop(); }
+            _ => {}
+        }
+    }
+    output.push_str(&input[from..]);
+    Ok(output)
+}
+
 /// A formula as `.Formula` shows it: every `@` taken out. Measured, `=@A1:A3`
 /// written through `.Formula` reads back `=A1:A3`.
 pub fn without_intersections(input: &str) -> String {
@@ -551,12 +759,14 @@ enum AtNode {
     Plain { number: Option<f64>, cell: bool },
     /// A range, or a name standing for one.
     Block { start: usize },
+    Symbol { start: usize, name: String, multiple: bool },
     /// Operators, whose operands are worked one value at a time.
     Operation(Vec<AtNode>),
     /// A `@` already written.
     Written,
     Group(Vec<AtNode>),
     Call { start: usize, name: String, args: Vec<Option<AtNode>> },
+    Invoke { start: usize, callee: Box<AtNode>, args: Vec<Option<AtNode>> },
 }
 
 struct AtReader<'a> {
@@ -614,6 +824,11 @@ impl AtReader<'_> {
             _ => {
                 let start = self.start();
                 let mut node = self.primary()?;
+                while self.peek() == Some(&Token::LParen) {
+                    self.pos += 1;
+                    let args = self.arguments()?;
+                    node = AtNode::Invoke { start, callee: Box::new(node), args };
+                }
                 if self.peek() == Some(&Token::Colon) {
                     while self.peek() == Some(&Token::Colon) {
                         self.pos += 1;
@@ -653,37 +868,21 @@ impl AtReader<'_> {
             Token::Number(number) => Some(AtNode::Plain { number: Some(number), cell: false }),
             Token::Text(_) | Token::ErrorLit(_) | Token::Table { .. } => Some(AtNode::Plain { number: None, cell: false }),
             Token::Name { name, sheet } => {
-                if self.peek() == Some(&Token::LParen) && sheet.is_none() {
+                if self.peek() == Some(&Token::LParen) {
+                    let name = match sheet.as_deref() {
+                        Some(owner) => format!("'{}'!{name}", owner.replace('\'', "''")),
+                        None => name,
+                    };
+                    let name = normalized_builtin_call(&name).unwrap_or_else(|| name.to_ascii_uppercase());
                     self.pos += 1;
-                    let mut args = Vec::new();
-                    if self.peek() == Some(&Token::RParen) {
-                        self.pos += 1;
-                        return Some(AtNode::Call { start, name: name.to_ascii_uppercase(), args });
-                    }
-                    loop {
-                        if matches!(self.peek(), Some(Token::Comma | Token::RParen)) {
-                            args.push(None);
-                        } else {
-                            args.push(Some(self.expr()?));
-                        }
-                        match self.peek()? {
-                            Token::Comma => self.pos += 1,
-                            Token::RParen => {
-                                self.pos += 1;
-                                break;
-                            }
-                            _ => return None,
-                        }
-                    }
-                    return Some(AtNode::Call { start, name: name.to_ascii_uppercase(), args });
+                    let args = self.arguments()?;
+                    return Some(AtNode::Call { start, name, args });
                 }
                 if parse_a1(&name).is_some() {
                     return Some(AtNode::Plain { number: None, cell: true });
                 }
-                if sheet.is_none() && (self.multi_name)(&name) {
-                    return Some(AtNode::Block { start });
-                }
-                Some(AtNode::Plain { number: None, cell: false })
+                let qualified = sheet.as_ref().map(|owner| format!("'{}'!{name}", owner.replace('\'', "''"))).unwrap_or_else(|| name.clone());
+                Some(AtNode::Symbol { start, multiple: (self.multi_name)(&qualified), name: qualified })
             }
             Token::LParen => {
                 let mut inner = vec![self.expr()?];
@@ -706,6 +905,65 @@ impl AtReader<'_> {
             }
             _ => None,
         }
+    }
+
+    fn arguments(&mut self) -> Option<Vec<Option<AtNode>>> {
+        let mut args = Vec::new();
+        if self.peek() == Some(&Token::RParen) { self.pos += 1; return Some(args); }
+        loop {
+            args.push(if matches!(self.peek(), Some(Token::Comma | Token::RParen)) { None } else { Some(self.expr()?) });
+            match self.peek()? {
+                Token::Comma => self.pos += 1,
+                Token::RParen => { self.pos += 1; return Some(args); }
+                _ => return None,
+            }
+        }
+    }
+}
+
+fn bind_intersection_shapes(node: &mut AtNode, outer: &std::collections::BTreeMap<String, bool>) {
+    match node {
+        AtNode::Symbol { name, multiple, .. } => {
+            if let Some(bound) = outer.get(&crate::case_fold::name_key(name)) { *multiple = *bound; }
+        }
+        AtNode::Operation(parts) | AtNode::Group(parts) => {
+            for part in parts { bind_intersection_shapes(part, outer); }
+        }
+        AtNode::Call { name, args, .. } if name == "LET" || name == "LAMBDA" => {
+            let mut scope = outer.clone();
+            let last = args.len().saturating_sub(1);
+            if name == "LET" {
+                let mut i = 0;
+                while i + 1 < last {
+                    let label = match &args[i] { Some(AtNode::Symbol { name, .. }) => Some(crate::case_fold::name_key(name)), _ => None };
+                    if let Some(value) = &mut args[i + 1] { bind_intersection_shapes(value, &scope); }
+                    if let Some(label) = label { scope.insert(label, args[i + 1].as_ref().is_some_and(intersection_result_is_multiple)); }
+                    i += 2;
+                }
+            } else {
+                for parameter in args.iter().take(last) {
+                    if let Some(AtNode::Symbol { name, .. }) = parameter { scope.insert(crate::case_fold::name_key(name), true); }
+                }
+            }
+            if let Some(Some(body)) = args.last_mut() { bind_intersection_shapes(body, &scope); }
+        }
+        AtNode::Call { args, .. } => {
+            for arg in args.iter_mut().flatten() { bind_intersection_shapes(arg, outer); }
+        }
+        AtNode::Invoke { callee, args, .. } => {
+            bind_intersection_shapes(callee, outer);
+            for arg in args.iter_mut().flatten() { bind_intersection_shapes(arg, outer); }
+        }
+        _ => {}
+    }
+}
+
+fn intersection_result_is_multiple(node: &AtNode) -> bool {
+    match node {
+        AtNode::Block { .. } | AtNode::Symbol { multiple: true, .. } | AtNode::Invoke { .. } => true,
+        AtNode::Call { name, args, .. } => may_answer_a_block(name, args),
+        AtNode::Group(parts) => parts.len() > 1 || parts.first().is_some_and(intersection_result_is_multiple),
+        _ => false,
     }
 }
 
@@ -761,14 +1019,15 @@ fn parameter_kind(name: &str, index: usize) -> AtContext {
 
 /// Whether a function may answer with more than one cell where it stands.
 fn may_answer_a_block(name: &str, args: &[Option<AtNode>]) -> bool {
-    let is_block = |node: &Option<AtNode>| matches!(node, Some(AtNode::Block { .. }));
+    let is_block = |node: &Option<AtNode>| node.as_ref().is_some_and(intersection_result_is_multiple);
     let loose_index = |node: &Option<AtNode>| match node {
         None => true,
         Some(AtNode::Plain { number: Some(number), .. }) => *number == 0.0,
-        Some(AtNode::Plain { cell: true, .. }) | Some(AtNode::Block { .. }) => true,
+        Some(AtNode::Plain { cell: true, .. }) | Some(AtNode::Block { .. }) | Some(AtNode::Symbol { multiple: true, .. }) => true,
         _ => false,
     };
     match name {
+        "LET" => args.last().is_some_and(is_block),
         "INDIRECT" | "FILTER" | "SORT" | "SORTBY" | "UNIQUE" | "SEQUENCE" | "TRANSPOSE" | "MMULT" => true,
         "OFFSET" => args.iter().skip(3).take(2).any(|size| match size {
             Some(AtNode::Plain { number: Some(number), .. }) => *number != 1.0,
@@ -779,14 +1038,14 @@ fn may_answer_a_block(name: &str, args: &[Option<AtNode>]) -> bool {
         "IF" => args.iter().skip(1).any(is_block),
         "CHOOSE" => args.iter().skip(1).any(is_block),
         "ROW" | "COLUMN" => args.first().is_some_and(is_block),
-        _ => false,
+        _ => !crate::functions::is_known_function(name),
     }
 }
 
 fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>) {
     match node {
-        AtNode::Plain { .. } | AtNode::Written => {}
-        AtNode::Block { start } => {
+        AtNode::Plain { .. } | AtNode::Written | AtNode::Symbol { multiple: false, .. } => {}
+        AtNode::Block { start } | AtNode::Symbol { start, multiple: true, .. } => {
             if context == AtContext::Value {
                 marks.push(*start);
             }
@@ -808,9 +1067,18 @@ fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>)
             }
             for (index, arg) in args.iter().enumerate() {
                 if let Some(arg) = arg {
-                    mark_intersections(arg, parameter_kind(name, index), marks);
+                    if (name == "LET" && index + 1 < args.len() && index % 2 == 0)
+                        || (name == "LAMBDA" && index + 1 < args.len()) { continue; }
+                    let context = if matches!(name.as_str(), "LET" | "LAMBDA") { AtContext::Range }
+                        else { parameter_kind(name, index) };
+                    mark_intersections(arg, context, marks);
                 }
             }
+        }
+        AtNode::Invoke { start, callee, args } => {
+            if context == AtContext::Value { marks.push(*start); }
+            mark_intersections(callee, AtContext::Array, marks);
+            for arg in args.iter().flatten() { mark_intersections(arg, AtContext::Array, marks); }
         }
     }
 }
@@ -887,6 +1155,50 @@ pub fn translate_formula_references(
     for token in tokens {
         render_token(&mut output, token);
     }
+    Ok(output)
+}
+
+/// Rebase validation references when a cell is cut onto another sheet.
+/// Excel rebases unqualified references and references to the destination,
+/// while references to other named sheets stay in place.
+pub fn translate_moved_validation_references(input: &str, rows: i64, columns: i64, destination: &str) -> Result<String, String> {
+    translate_validation_tokens(input, rows, columns, Some(destination))
+}
+
+/// Rebase validation references, wrapping relative coordinates at sheet edges.
+pub fn translate_validation_references(input: &str, rows: i64, columns: i64) -> Result<String, String> {
+    translate_validation_tokens(input, rows, columns, None)
+}
+
+fn translate_validation_tokens(input: &str, rows: i64, columns: i64, destination: Option<&str>) -> Result<String, String> {
+    crate::parser::parse(input).map_err(|error| error.to_string())?;
+    let mut tokens = tokenize(input).map_err(|error| error.to_string())?;
+    let mut range_sheet: Option<String> = None;
+    for index in 0..tokens.len() {
+        if matches!(tokens[index], Token::Colon) { continue; }
+        let is_function = matches!(tokens.get(index + 1), Some(Token::LParen));
+        let follows_colon = index > 0 && matches!(tokens[index - 1], Token::Colon);
+        if !follows_colon { range_sheet = None; }
+        let Token::Name { sheet, name } = &mut tokens[index] else { continue; };
+        if is_function { continue; }
+        let Some(mut reference) = parse_a1(name) else { continue; };
+        let effective_sheet = sheet.as_ref().or(range_sheet.as_ref());
+        let local = destination.is_none_or(|destination| effective_sheet.is_none_or(|held| held.eq_ignore_ascii_case(destination)));
+        if let Some(held) = sheet.as_ref() { range_sheet = Some(held.clone()); }
+        if local {
+            if !reference.row_absolute {
+                reference.row = (i64::from(reference.row) + rows).rem_euclid(i64::from(MAX_ROW) + 1) as u32;
+            }
+            if !reference.col_absolute {
+                reference.col = (i64::from(reference.col) + columns).rem_euclid(i64::from(MAX_COL) + 1) as u32;
+            }
+            *name = reference.to_a1();
+            if destination.is_some_and(|destination| sheet.as_ref().is_some_and(|held| held.eq_ignore_ascii_case(destination))) { *sheet = None; }
+        }
+    }
+    let mut output = String::new();
+    if input.trim_start().starts_with('=') { output.push('='); }
+    for token in tokens { render_token(&mut output, token); }
     Ok(output)
 }
 
@@ -2617,7 +2929,13 @@ mod tests {
             ("=1:1", "=@1:1"),
             ("=A1:A1", "=@A1:A1"),
             ("=A1+B1", "=A1+B1"),
-            ("=MYOWN(A1:A3)", "=MYOWN(A1:A3)"),
+            ("=MYOWN(A1:A3)", "=@MYOWN(A1:A3)"),
+            ("=LET(Rate,100,Rate)", "=LET(Rate,100,Rate)"),
+            ("=LET(Rate,A1:A2,Rate)", "=@LET(Rate,A1:A2,Rate)"),
+            ("=LET(Rate,100,Rate+1)", "=LET(Rate,100,Rate+1)"),
+            ("=LAMBDA(x,x+1)(2)", "=@LAMBDA(x,@x+1)(2)"),
+            ("=LET(x,2,LAMBDA(y,y+x)(3))", "=@LET(x,2,LAMBDA(y,@y+x)(3))"),
+            ("=LET(x,1,x+A1:A3)", "=LET(x,1,x+@A1:A3)"),
         ] {
             assert_eq!(implied_intersections(written, &multi), kept, "{written}");
             assert_eq!(without_intersections(kept), written, "{kept}");
@@ -2647,6 +2965,19 @@ mod tests {
             translate_formula_references("=SUM(tblP[@[Unit Price]:[Qty]])+[@Qty]*B2", 1, 0).unwrap(),
             "=SUM(tblP[@[Unit Price]:[Qty]])+[@Qty]*B3"
         );
+    }
+
+    #[test]
+    fn cross_sheet_moved_validation_keeps_other_sheet_ranges() {
+        assert_eq!(translate_moved_validation_references("=SUM(Other!D1:D3)+Target!E1+D1", 0, 2, "Target").unwrap(),
+            "=SUM(Other!D1:D3)+G1+F1");
+    }
+
+    #[test]
+    fn validation_references_wrap_at_sheet_edges() {
+        assert_eq!(translate_validation_references("=SUM(A1:C1)+$A$1", 0, -2).unwrap(), "=SUM(XFC1:A1)+$A$1");
+        assert_eq!(translate_validation_references("=XFD1048576", 1, 1).unwrap(), "=A1");
+        assert_eq!(translate_moved_validation_references("=SUM(A1:C1)+Other!A1", 0, -2, "Target").unwrap(), "=SUM(XFC1:A1)+Other!A1");
     }
 
     #[test]
@@ -3236,4 +3567,37 @@ mod shift_tests {
             assert_eq!(super::normalise_formula_ranges(written), stored, "{written}");
         }
     }
+    #[test]
+    fn name_formulas_follow_excel_qualification_lexical_bindings_and_callers() {
+        let sheets=|name:&str| (name.eq_ignore_ascii_case("Alpha")).then(|| "Alpha".to_string());
+        let names=|owner:Option<&str>,name:&str| if name.eq_ignore_ascii_case("Rate") { Some((Some(owner.unwrap_or("Alpha").to_string()),"Rate".to_string())) } else { None };
+        for (source,expected) in [
+            ("=sum( a1 , b2 )","=SUM( Alpha!A1, Alpha!B2 )"),
+            ("=SUM(A1:B2)","=SUM(Alpha!A1:B2)"),
+            ("=A:A","=Alpha!A:A"),("=1:2","=Alpha!1:2"),
+            ("=Rate&\"A1 Rate\"","=Alpha!Rate&\"A1 Rate\""),
+            ("=LET(Rate,2,rate+A1)","=LET(Rate,2,Rate+Alpha!A1)"),
+            ("=LET(Rate,Rate+1,Rate)","=LET(Rate,Alpha!Rate+1,Rate)"),
+            ("=LAMBDA(Rate,rate+A1)","=LAMBDA(Rate,Rate+Alpha!A1)"),
+            ("=_xlfn.LAMBDA(_xlpm.x,_xlpm.x+Alpha!A1)","=LAMBDA(x,x+Alpha!A1)"),
+            ("=LOG10(100)","=LOG10(100)"),
+        ] { assert_eq!(super::qualify_name_formula(source,"Alpha",&sheets,&names).unwrap(),expected,"{source}"); }
+        for (source,at,expected) in [
+            ("=Alpha!A1",(2,4),"=Alpha!C5"),
+            ("=SUM( Alpha!A1, Alpha!B2 )",(2,4),"=SUM( Alpha!C5, Alpha!D6 )"),
+            ("=SUM(Alpha!A1,Alpha!$B2,Alpha!C$3,Alpha!$D$4)",(2,4),"=SUM(Alpha!C5,Alpha!$B6,Alpha!E$3,Alpha!$D$4)"),
+            ("=Alpha!XFD1048576",(2,4),"=Alpha!B4"),
+            ("=Alpha!A:A",(2,4),"=Alpha!C:C"),
+            ("=Alpha!1:2",(2,4),"=Alpha!5:6"),
+            ("=Alpha!B2",(16383,1048575),"=Alpha!A1"),
+            ("=LOG10(100)&\"A1\"",(2,4),"=LOG10(100)&\"A1\""),
+        ] { assert_eq!(super::name_formula_at(source,at).unwrap(),expected,"{source}"); }
+        for (xml, displayed) in [
+            ("=_xlfn.LET(_xlpm.Rate,100,_xlpm.Rate)", "=LET(Rate,100,Rate)"),
+            ("=_xlfn.LAMBDA(_xlpm.x,_xlpm.x+1)(2)", "=LAMBDA(x,x+1)(2)"),
+            ("=SUM(_xlfn.LET(_xlpm.Rate,100,_xlpm.Rate),Rate)", "=SUM(LET(Rate,100,Rate),Rate)"),
+            ("=\"_xlfn.LET(_xlpm.Rate)\"", "=\"_xlfn.LET(_xlpm.Rate)\""),
+        ] { assert_eq!(super::formula_from_ooxml(xml).unwrap(), displayed); }
+    }
+
 }

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: CC-BY-SA-4.0
+# Excel 16.0 build 20430; exact source/input bound; only normal-zero owned process measurements.
+# version	method	arguments_json	expected
+1	DimensionNothingError	["ColumnWidth",false]	5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005
+1	DimensionNothingError	["ColumnWidth",true]	5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005
+1	DimensionNothingError	["StandardWidth",false]	5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005
+1	DimensionNothingError	["StandardWidth",true]	5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005
+1	DimensionNothingError	["UseStandardWidth",false]	5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005
+1	DimensionNothingError	["UseStandardWidth",true]	5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005
+1	DimensionNothingError	["RowHeight",false]	5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005
+1	DimensionNothingError	["RowHeight",true]	5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005
+1	DimensionNothingError	["Hidden",false]	5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005
+1	DimensionNothingError	["Hidden",true]	5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005
+1	DimensionNothingError	["Value2",false]	1004|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095
+1	DimensionNothingError	["Value2",true]	1004|VBAProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095

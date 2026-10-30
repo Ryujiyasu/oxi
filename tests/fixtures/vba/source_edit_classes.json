@@ -1,0 +1,128 @@
+[
+  {
+    "name": "class_body",
+    "old": "CStr(stored)",
+    "new": "CStr(stored + 10)",
+    "prime": null,
+    "before": "123|2|True|I",
+    "after": "123|13|True|I",
+    "edits": [
+      {
+        "line": 31,
+        "deleteLines": 1,
+        "text": "ReadValue = CStr(Value) & \"|\" & CStr(stored + 10)"
+      }
+    ],
+    "source": "Option Explicit\nPublic Log As String\nPrivate held As StateClass\nPrivate other As Object\nPublic Sub Prime()\nSet held = New StateClass\nSet other = held\nheld.Value = 123\nRange(\"D1\").Value = ReadState()\nEnd Sub\nPublic Function ReadState() As String\nIf held Is Nothing Then\nReadState = \"none|\" & Log\nElse\nReadState = held.ReadValue() & \"|\" & CStr(held Is other) & \"|\" & Log\nEnd If\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"StateClass\"\nOption Explicit\nPublic Value As Long\nPrivate Sub Class_Initialize()\nLog = Log & \"I\"\nEnd Sub\nPrivate Sub Class_Terminate()\nLog = Log & \"T\"\nEnd Sub\nPublic Function ReadValue() As String\nStatic stored As Long\nstored = stored + 1\nReadValue = CStr(Value) & \"|\" & CStr(stored + 10)\nEnd Function\n"
+  },
+  {
+    "name": "class_field_add",
+    "old": "Public Value As Long",
+    "new": "Public Value As Long\nPrivate extra As Long",
+    "prime": null,
+    "before": "123|2|True|I",
+    "after": "none|",
+    "edits": [
+      {
+        "line": 21,
+        "deleteLines": 1,
+        "text": "Public Value As Long\nPrivate extra As Long"
+      }
+    ],
+    "source": "Option Explicit\nPublic Log As String\nPrivate held As StateClass\nPrivate other As Object\nPublic Sub Prime()\nSet held = New StateClass\nSet other = held\nheld.Value = 123\nRange(\"D1\").Value = ReadState()\nEnd Sub\nPublic Function ReadState() As String\nIf held Is Nothing Then\nReadState = \"none|\" & Log\nElse\nReadState = held.ReadValue() & \"|\" & CStr(held Is other) & \"|\" & Log\nEnd If\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"StateClass\"\nOption Explicit\nPublic Value As Long\nPrivate extra As Long\nPrivate Sub Class_Initialize()\nLog = Log & \"I\"\nEnd Sub\nPrivate Sub Class_Terminate()\nLog = Log & \"T\"\nEnd Sub\nPublic Function ReadValue() As String\nStatic stored As Long\nstored = stored + 1\nReadValue = CStr(Value) & \"|\" & CStr(stored)\nEnd Function\n"
+  },
+  {
+    "name": "class_field_type",
+    "old": "Public Value As Long",
+    "new": "Public Value As Double",
+    "prime": null,
+    "before": "123|2|True|I",
+    "after": "none|",
+    "edits": [
+      {
+        "line": 21,
+        "deleteLines": 1,
+        "text": "Public Value As Double"
+      }
+    ],
+    "source": "Option Explicit\nPublic Log As String\nPrivate held As StateClass\nPrivate other As Object\nPublic Sub Prime()\nSet held = New StateClass\nSet other = held\nheld.Value = 123\nRange(\"D1\").Value = ReadState()\nEnd Sub\nPublic Function ReadState() As String\nIf held Is Nothing Then\nReadState = \"none|\" & Log\nElse\nReadState = held.ReadValue() & \"|\" & CStr(held Is other) & \"|\" & Log\nEnd If\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"StateClass\"\nOption Explicit\nPublic Value As Double\nPrivate Sub Class_Initialize()\nLog = Log & \"I\"\nEnd Sub\nPrivate Sub Class_Terminate()\nLog = Log & \"T\"\nEnd Sub\nPublic Function ReadValue() As String\nStatic stored As Long\nstored = stored + 1\nReadValue = CStr(Value) & \"|\" & CStr(stored)\nEnd Function\n"
+  },
+  {
+    "name": "class_static_add",
+    "old": "Static stored As Long",
+    "new": "Static stored As Long\nStatic extra As Long",
+    "prime": null,
+    "before": "123|2|True|I",
+    "after": "none|",
+    "edits": [
+      {
+        "line": 29,
+        "deleteLines": 1,
+        "text": "Static stored As Long\nStatic extra As Long"
+      }
+    ],
+    "source": "Option Explicit\nPublic Log As String\nPrivate held As StateClass\nPrivate other As Object\nPublic Sub Prime()\nSet held = New StateClass\nSet other = held\nheld.Value = 123\nRange(\"D1\").Value = ReadState()\nEnd Sub\nPublic Function ReadState() As String\nIf held Is Nothing Then\nReadState = \"none|\" & Log\nElse\nReadState = held.ReadValue() & \"|\" & CStr(held Is other) & \"|\" & Log\nEnd If\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"StateClass\"\nOption Explicit\nPublic Value As Long\nPrivate Sub Class_Initialize()\nLog = Log & \"I\"\nEnd Sub\nPrivate Sub Class_Terminate()\nLog = Log & \"T\"\nEnd Sub\nPublic Function ReadValue() As String\nStatic stored As Long\nStatic extra As Long\nstored = stored + 1\nReadValue = CStr(Value) & \"|\" & CStr(stored)\nEnd Function\n"
+  },
+  {
+    "name": "class_local_add",
+    "old": "Static stored As Long",
+    "new": "Static stored As Long\nDim extra As Long",
+    "prime": null,
+    "before": "123|2|True|I",
+    "after": "none|",
+    "edits": [
+      {
+        "line": 29,
+        "deleteLines": 1,
+        "text": "Static stored As Long\nDim extra As Long"
+      }
+    ],
+    "source": "Option Explicit\nPublic Log As String\nPrivate held As StateClass\nPrivate other As Object\nPublic Sub Prime()\nSet held = New StateClass\nSet other = held\nheld.Value = 123\nRange(\"D1\").Value = ReadState()\nEnd Sub\nPublic Function ReadState() As String\nIf held Is Nothing Then\nReadState = \"none|\" & Log\nElse\nReadState = held.ReadValue() & \"|\" & CStr(held Is other) & \"|\" & Log\nEnd If\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"StateClass\"\nOption Explicit\nPublic Value As Long\nPrivate Sub Class_Initialize()\nLog = Log & \"I\"\nEnd Sub\nPrivate Sub Class_Terminate()\nLog = Log & \"T\"\nEnd Sub\nPublic Function ReadValue() As String\nStatic stored As Long\nDim extra As Long\nstored = stored + 1\nReadValue = CStr(Value) & \"|\" & CStr(stored)\nEnd Function\n"
+  },
+  {
+    "name": "class_method_add",
+    "append": "Public Sub ExtraMethod()\nEnd Sub",
+    "prime": null,
+    "before": "123|2|True|I",
+    "after": "none|",
+    "edits": [
+      {
+        "line": 33,
+        "deleteLines": 0,
+        "text": "Public Sub ExtraMethod()\nEnd Sub"
+      }
+    ],
+    "source": "Option Explicit\nPublic Log As String\nPrivate held As StateClass\nPrivate other As Object\nPublic Sub Prime()\nSet held = New StateClass\nSet other = held\nheld.Value = 123\nRange(\"D1\").Value = ReadState()\nEnd Sub\nPublic Function ReadState() As String\nIf held Is Nothing Then\nReadState = \"none|\" & Log\nElse\nReadState = held.ReadValue() & \"|\" & CStr(held Is other) & \"|\" & Log\nEnd If\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"StateClass\"\nOption Explicit\nPublic Value As Long\nPrivate Sub Class_Initialize()\nLog = Log & \"I\"\nEnd Sub\nPrivate Sub Class_Terminate()\nLog = Log & \"T\"\nEnd Sub\nPublic Function ReadValue() As String\nStatic stored As Long\nstored = stored + 1\nReadValue = CStr(Value) & \"|\" & CStr(stored)\nEnd Function\nPublic Sub ExtraMethod()\nEnd Sub\n"
+  },
+  {
+    "name": "class_return_type",
+    "old": "ReadValue() As String",
+    "new": "ReadValue() As Variant",
+    "prime": null,
+    "before": "123|2|True|I",
+    "after": "none|",
+    "edits": [
+      {
+        "line": 28,
+        "deleteLines": 1,
+        "text": "Public Function ReadValue() As Variant"
+      }
+    ],
+    "source": "Option Explicit\nPublic Log As String\nPrivate held As StateClass\nPrivate other As Object\nPublic Sub Prime()\nSet held = New StateClass\nSet other = held\nheld.Value = 123\nRange(\"D1\").Value = ReadState()\nEnd Sub\nPublic Function ReadState() As String\nIf held Is Nothing Then\nReadState = \"none|\" & Log\nElse\nReadState = held.ReadValue() & \"|\" & CStr(held Is other) & \"|\" & Log\nEnd If\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"StateClass\"\nOption Explicit\nPublic Value As Long\nPrivate Sub Class_Initialize()\nLog = Log & \"I\"\nEnd Sub\nPrivate Sub Class_Terminate()\nLog = Log & \"T\"\nEnd Sub\nPublic Function ReadValue() As Variant\nStatic stored As Long\nstored = stored + 1\nReadValue = CStr(Value) & \"|\" & CStr(stored)\nEnd Function\n"
+  },
+  {
+    "name": "class_component_add",
+    "new_component": true,
+    "prime": null,
+    "before": "123|2|True|I",
+    "after": "123|3|True|I",
+    "edits": [
+      {
+        "line": 33,
+        "deleteLines": 0,
+        "text": "VERSION 1.0 CLASS\nAttribute VB_Name = \"ExtraClass\""
+      }
+    ],
+    "source": "Option Explicit\nPublic Log As String\nPrivate held As StateClass\nPrivate other As Object\nPublic Sub Prime()\nSet held = New StateClass\nSet other = held\nheld.Value = 123\nRange(\"D1\").Value = ReadState()\nEnd Sub\nPublic Function ReadState() As String\nIf held Is Nothing Then\nReadState = \"none|\" & Log\nElse\nReadState = held.ReadValue() & \"|\" & CStr(held Is other) & \"|\" & Log\nEnd If\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"StateClass\"\nOption Explicit\nPublic Value As Long\nPrivate Sub Class_Initialize()\nLog = Log & \"I\"\nEnd Sub\nPrivate Sub Class_Terminate()\nLog = Log & \"T\"\nEnd Sub\nPublic Function ReadValue() As String\nStatic stored As Long\nstored = stored + 1\nReadValue = CStr(Value) & \"|\" & CStr(stored)\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"ExtraClass\"\n"
+  }
+]

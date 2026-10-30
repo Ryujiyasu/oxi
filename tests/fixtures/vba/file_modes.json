@@ -1,0 +1,4053 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "source": "file_modes.bas",
+  "source_sha256": "510caa3e9bffa212918c6667f2d21fd2d4488432892bb80e947b5cfd78117d84",
+  "package": "file_modes.xlsm",
+  "package_sha256": "1e9cab3da60603e06ebf55d9710c49283070754deda8b054743d04fca825fb55",
+  "initial_directory_state": {
+    "currentDrive": "C",
+    "directories": [
+      "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+      "D:\\"
+    ]
+  },
+  "native_evidence": {
+    "status": "QUALIFIED_NATIVE_OBSERVATIONS",
+    "steps": 18,
+    "ordinary_full_string_returns": 18,
+    "normal_owned_processes": 1,
+    "actual_controller_exit_code": 0,
+    "owned_excel_exit_code": 0,
+    "owned_pid": 10768,
+    "identity": 2026102074,
+    "raw_report": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\created.json",
+    "raw_report_sha256": "c74ff4351b0d66cb490c54db26eecfff2e3fd3475ad26748d6c7fe0f8b66eede",
+    "cases_sha256": "55e1098457cfb859bea97dfd8a24243c71e8e4ed5aa825d0405c67915cd7d3ee",
+    "input_package_sha256": "1e9cab3da60603e06ebf55d9710c49283070754deda8b054743d04fca825fb55",
+    "input_packages_unchanged": true,
+    "qualification": "Self-authored ordinary-source code compiled/ran via Excel.Run, fresh owned normal0/controller0, all18 full strings and actual post bytes/Win32 attribute flags retained. No VBE/security/registry/signing changes. Source package outside case fs roots and unchanged; all attribute mutations confined to fresh dedicated D phase. No Oxi equality claim."
+  },
+  "cases": [
+    {
+      "kind": 64,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        64,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs"
+      ],
+      "expected": "75|VBAProject|パス名が無効です。|result:X|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-64\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 65,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        65,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs"
+      ],
+      "expected": "75|VBAProject|パス名が無効です。|result:X|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-65\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 66,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        66,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs"
+      ],
+      "expected": "75|VBAProject|パス名が無効です。|result:X|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-66\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 67,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        67,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs"
+      ],
+      "expected": "75|VBAProject|パス名が無効です。|result:|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-67\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 68,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        68,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs"
+      ],
+      "expected": "75|VBAProject|パス名が無効です。|result:|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-68\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 69,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        69,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs"
+      ],
+      "expected": "75|VBAProject|パス名が無効です。|result:X|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-69\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 70,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        70,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs"
+      ],
+      "expected": "70|VBAProject|書き込みできません。|result:|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-70\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 71,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        71,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs"
+      ],
+      "expected": "0|||result:|trace:|get-file:|get-folder:16|fso-file:|fso-folder:16|nonempty:True|leaf:True|snapshot-error:53",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-71\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 72,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        72,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs"
+      ],
+      "expected": "70|VBAProject|書き込みできません。|result:|trace:|get-file:32|get-folder:17|fso-file:32|fso-folder:17|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\empty",
+          "value": 17,
+          "windows_attributes": 17
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-72\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 73,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        73,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs"
+      ],
+      "expected": "0|||result:|trace:|get-file:32|get-folder:|fso-file:32|fso-folder:|nonempty:True|leaf:True|snapshot-error:76",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-73\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 74,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        74,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs"
+      ],
+      "expected": "75|VBAProject|パス名が無効です。|result:|trace:|get-file:32|get-folder:17|fso-file:32|fso-folder:17|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\empty",
+          "value": 17,
+          "windows_attributes": 17
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-74\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 75,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        75,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs"
+      ],
+      "expected": "0|||result:|trace:|get-file:2|get-folder:16|fso-file:2|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\held.txt",
+          "value": 2,
+          "windows_attributes": 2
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-75\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 76,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        76,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs"
+      ],
+      "expected": "0|||result:held.txt|trace:|get-file:2|get-folder:16|fso-file:2|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\held.txt",
+          "value": 2,
+          "windows_attributes": 2
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-76\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 77,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        77,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs"
+      ],
+      "expected": "0|||result:|trace:|get-file:4|get-folder:16|fso-file:4|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\held.txt",
+          "value": 4,
+          "windows_attributes": 4
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-77\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 78,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        78,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs"
+      ],
+      "expected": "0|||result:held.txt|trace:|get-file:4|get-folder:16|fso-file:4|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\held.txt",
+          "value": 4,
+          "windows_attributes": 4
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-78\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 79,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        79,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs"
+      ],
+      "expected": "0|||result:held.txt|trace:|get-file:1|get-folder:16|fso-file:1|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\held.txt",
+          "value": 1,
+          "windows_attributes": 1
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-79\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 80,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        80,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs"
+      ],
+      "expected": "0|||result:held.txt|trace:|get-file:0|get-folder:16|fso-file:0|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\held.txt",
+          "value": 0,
+          "windows_attributes": 128
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-80\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    },
+    {
+      "kind": 81,
+      "procedure": "FileAttributesProbe",
+      "arguments": [
+        81,
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs"
+      ],
+      "expected": "0|||result:3:3|trace:|get-file:32|get-folder:16|fso-file:32|fso-folder:16|nonempty:True|leaf:True|snapshot-error:0",
+      "full_name": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\input.xlsm",
+      "folders": [
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\empty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\nonempty",
+        "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\nonempty\\child",
+        "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+        "D:\\"
+      ],
+      "files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_files": [
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\held.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            104,
+            101,
+            108,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\nonempty\\leaf.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            108,
+            101,
+            97,
+            102,
+            46,
+            116,
+            120,
+            116
+          ]
+        },
+        {
+          "path": "D:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\nonempty\\child\\nested.txt",
+          "bytes": [
+            115,
+            101,
+            101,
+            100,
+            58,
+            110,
+            111,
+            110,
+            101,
+            109,
+            112,
+            116,
+            121,
+            92,
+            99,
+            104,
+            105,
+            108,
+            100,
+            92,
+            110,
+            101,
+            115,
+            116,
+            101,
+            100,
+            46,
+            116,
+            120,
+            116
+          ]
+        }
+      ],
+      "expected_folder_keys": [
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\empty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\nonempty",
+        "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\nonempty\\child"
+      ],
+      "expected_attributes": [
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\empty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\held.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\nonempty",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\nonempty\\child",
+          "value": 16,
+          "windows_attributes": 16
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\nonempty\\child\\nested.txt",
+          "value": 32,
+          "windows_attributes": 32
+        },
+        {
+          "path": "d:\\oxi-vba-validation\\vba_file_modes_retry_native_20261020\\case-81\\fs\\nonempty\\leaf.txt",
+          "value": 32,
+          "windows_attributes": 32
+        }
+      ]
+    }
+  ]
+}

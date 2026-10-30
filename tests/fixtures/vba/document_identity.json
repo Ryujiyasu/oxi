@@ -1,0 +1,1645 @@
+[
+  {
+    "name": "plain",
+    "source": "document_identity_plain.bas",
+    "measurement_source": "document_identity_plain_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "setup_sheets": 2,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "Journal",
+        "kind": "sheet",
+        "sheet": 1,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "document_identity_tick.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "host_context": {
+      "book_name": "plain.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Journal"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "Journal",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Journal"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "1:1:1:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "2:2:2:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "3:3:3:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "metadata_order",
+    "source": "document_identity_metadata_order.bas",
+    "measurement_source": "document_identity_metadata_order_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "setup_sheets": 2,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "Journal",
+        "kind": "sheet",
+        "sheet": 1,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "document_identity_tick.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "host_context": {
+      "book_name": "metadata_order.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Journal"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "Journal",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Journal"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "1:1:1:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "2:2:2:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "3:3:3:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "metadata_alias",
+    "source": "document_identity_metadata_alias.bas",
+    "measurement_source": "document_identity_metadata_alias_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "setup_sheets": 2,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "Journal",
+        "kind": "sheet",
+        "sheet": 1,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "document_identity_tick.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "host_context": {
+      "book_name": "metadata_alias.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Journal"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "Journal",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Journal"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "1:1:1:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "2:2:2:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "3:3:3:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "metadata_case",
+    "source": "document_identity_metadata_case.bas",
+    "measurement_source": "document_identity_metadata_case_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "setup_sheets": 2,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "Journal",
+        "kind": "sheet",
+        "sheet": 1,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "document_identity_tick.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "host_context": {
+      "book_name": "metadata_case.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Journal"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "Journal",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Journal"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "1:1:1:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "2:2:2:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "3:3:3:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "move_refresh",
+    "source": "document_identity_move_refresh.bas",
+    "measurement_source": "document_identity_move_refresh_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "setup_sheets": 2,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "Journal",
+        "kind": "sheet",
+        "sheet": 1,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "document_identity_tick.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "host_context": {
+      "book_name": "move_refresh.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Journal"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "Journal",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Journal"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "1:1:1:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "2:2:2:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "3:3:3:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "move_save_refresh",
+    "source": "document_identity_move_save_refresh.bas",
+    "measurement_source": "document_identity_move_save_refresh_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "setup_sheets": 2,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "Journal",
+        "kind": "sheet",
+        "sheet": 1,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "document_identity_tick.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": true
+    },
+    "host_context": {
+      "book_name": "move_save_refresh.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Journal"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "Journal",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Journal"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "1:1:1:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "2:2:2:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "3:3:3:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      }
+    ],
+    "package_fixture": "document_identity_move_save_refresh.xlsm",
+    "package_refreshed": "document_identity_move_save_refresh_refreshed.xlsm"
+  },
+  {
+    "name": "external_move_refresh",
+    "source": "document_identity_external_move_refresh.bas",
+    "measurement_source": "document_identity_external_move_refresh_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "setup_sheets": 2,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "Journal",
+        "kind": "sheet",
+        "sheet": 1,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "document_identity_tick.bas"
+      }
+    ],
+    "after_first": {
+      "move": true,
+      "save": false
+    },
+    "host_context": {
+      "book_name": "external_move_refresh.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Journal"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "Journal",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Journal"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "1:1:1:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "2:2:2:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "3:3:3:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "move_original_context",
+    "source": "document_identity_move_original_context.bas",
+    "measurement_source": "document_identity_move_original_context_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "setup_sheets": 2,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "Journal",
+        "kind": "sheet",
+        "sheet": 1,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "document_identity_tick.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "host_context": {
+      "book_name": "move_original_context.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Journal"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "Journal",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Journal"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "1:1:1:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "2:2:2:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "3:3:3:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "omit_metadata",
+    "source": "document_identity_omit_metadata.bas",
+    "measurement_source": "document_identity_omit_metadata_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "setup_sheets": 2,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "Journal",
+        "kind": "sheet",
+        "sheet": 1,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "document_identity_tick.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "host_context": {
+      "book_name": "omit_metadata.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Journal"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "Journal",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Journal"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "1:1:1:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "2:2:2:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "3:3:3:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "cross_document",
+    "source": "document_identity_cross_document.bas",
+    "measurement_source": "document_identity_cross_document_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "setup_sheets": 2,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "document_identity_cross.bas"
+      },
+      {
+        "name": "Journal",
+        "kind": "sheet",
+        "sheet": 1,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "document_identity_tick.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": false
+    },
+    "host_context": {
+      "book_name": "cross_document.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Journal"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "Journal",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Journal"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "3:2:2:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "8:4:4:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "13:6:6:1:2:True",
+        "sheet_names_after": [
+          "Sheet1",
+          "Sheet2"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "cross_document_move_save_refresh",
+    "source": "document_identity_cross_document_move_save_refresh.bas",
+    "measurement_source": "document_identity_cross_document_move_save_refresh_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "setup_sheets": 2,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "document_identity_cross.bas"
+      },
+      {
+        "name": "Journal",
+        "kind": "sheet",
+        "sheet": 1,
+        "source": "document_identity_tick.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "document_identity_tick.bas"
+      }
+    ],
+    "after_first": {
+      "move": false,
+      "save": true
+    },
+    "host_context": {
+      "book_name": "cross_document_move_save_refresh.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Journal"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "Journal",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Journal"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      }
+    ],
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "3:2:2:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "8:4:4:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "metadata": [
+          {
+            "name": "Ledger",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 1,
+            "codeName": "Ledger"
+          },
+          {
+            "name": "Journal",
+            "baseType": "Excel.Worksheet",
+            "sheetIndex": 0,
+            "codeName": "Journal"
+          },
+          {
+            "name": "ArchiveHost",
+            "baseType": "Excel.Workbook",
+            "codeName": "ThisWorkbook"
+          }
+        ],
+        "value": "13:6:6:2:1:True",
+        "sheet_names_after": [
+          "Sheet2",
+          "Sheet1"
+        ]
+      }
+    ],
+    "package_fixture": "document_identity_cross_document_move_save_refresh.xlsm",
+    "package_refreshed": "document_identity_cross_document_move_save_refresh_refreshed.xlsm"
+  }
+]

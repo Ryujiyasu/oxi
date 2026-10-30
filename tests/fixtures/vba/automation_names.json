@@ -1,0 +1,1902 @@
+[
+  {
+    "name": "ansi_scope_callbyname_field",
+    "source": "automation_names_ansi_scope_callbyname_field.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|field",
+    "host_context": {
+      "book_name": "ansi_scope_callbyname_field.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_scope_callbyname_field",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPublic 陰 As String",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    On Error Resume Next\n    CallByName obj, \"餌\", VbLet, \"field\"\n    Probe = CStr(Err.Number) & \"|\" & obj.陰\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "ansi_scope_callbyname_method",
+    "source": "automation_names_ansi_scope_callbyname_method.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|method",
+    "host_context": {
+      "book_name": "ansi_scope_callbyname_method.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_scope_callbyname_method",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPublic Function 陰() As String\n    陰 = \"method\"\nEnd Function",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim result As Variant\n    On Error Resume Next\n    result = CallByName(obj, \"餌\", VbMethod)\n    Probe = CStr(Err.Number) & \"|\" & CStr(result)\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "ansi_scope_string_compare",
+    "source": "automation_names_ansi_scope_string_compare.bas",
+    "procedure": "Driver.Probe",
+    "expected": "-1|False",
+    "host_context": {
+      "book_name": "ansi_scope_string_compare.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_scope_string_compare",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Probe = CStr(StrComp(\"陰\", \"餌\", vbTextCompare)) & \"|\" & CStr(\"陰\" = \"餌\")\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "ansi_scope_option_compare",
+    "source": "automation_names_ansi_scope_option_compare.bas",
+    "procedure": "Driver.Probe",
+    "expected": "different",
+    "host_context": {
+      "book_name": "ansi_scope_option_compare.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_scope_option_compare",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nOption Compare Text\nPublic Function Probe() As String\n    Select Case \"陰\"\n        Case \"餌\": Probe = \"same\"\n        Case Else: Probe = \"different\"\n    End Select\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "ansi_control_unrelated",
+    "source": "automation_names_ansi_control_unrelated.bas",
+    "procedure": "Driver.Probe",
+    "expected": "438|",
+    "host_context": {
+      "book_name": "ansi_control_unrelated.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_control_unrelated",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPublic 陰 As String",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    On Error Resume Next\n    CallByName obj, \"売\", VbLet, \"field\"\n    Probe = CStr(Err.Number) & \"|\" & obj.陰\nEnd Function\nPublic Function MakeItem() As Object\n    Set MakeItem = New Item\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "inspect_names": [
+        "陰",
+        "売"
+      ]
+    }
+  },
+  {
+    "name": "ansi_control_fullwidth",
+    "source": "automation_names_ansi_control_fullwidth.bas",
+    "procedure": "Driver.Probe",
+    "expected": "438|",
+    "host_context": {
+      "book_name": "ansi_control_fullwidth.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_control_fullwidth",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPublic Ａ As String",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    On Error Resume Next\n    CallByName obj, \"ａ\", VbLet, \"field\"\n    Probe = CStr(Err.Number) & \"|\" & obj.Ａ\nEnd Function\nPublic Function MakeItem() As Object\n    Set MakeItem = New Item\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "inspect_names": [
+        "Ａ",
+        "ａ"
+      ]
+    }
+  },
+  {
+    "name": "ansi_control_kana_width",
+    "source": "automation_names_ansi_control_kana_width.bas",
+    "procedure": "Driver.Probe",
+    "expected": "438|",
+    "host_context": {
+      "book_name": "ansi_control_kana_width.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_control_kana_width",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPublic カ As String",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    On Error Resume Next\n    CallByName obj, \"ｶ\", VbLet, \"field\"\n    Probe = CStr(Err.Number) & \"|\" & obj.カ\nEnd Function\nPublic Function MakeItem() As Object\n    Set MakeItem = New Item\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "inspect_names": [
+        "カ",
+        "ｶ"
+      ]
+    }
+  },
+  {
+    "name": "ansi_control_greek",
+    "source": "automation_names_ansi_control_greek.bas",
+    "procedure": "Driver.Probe",
+    "expected": "438|",
+    "host_context": {
+      "book_name": "ansi_control_greek.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_control_greek",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPublic Ω As String",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    On Error Resume Next\n    CallByName obj, \"ω\", VbLet, \"field\"\n    Probe = CStr(Err.Number) & \"|\" & obj.Ω\nEnd Function\nPublic Function MakeItem() As Object\n    Set MakeItem = New Item\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "inspect_names": [
+        "Ω",
+        "ω"
+      ]
+    }
+  },
+  {
+    "name": "ansi_control_composite",
+    "source": "automation_names_ansi_control_composite.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|field",
+    "host_context": {
+      "book_name": "ansi_control_composite.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_control_composite",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPublic Pre陰Post As String",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    On Error Resume Next\n    CallByName obj, \"pre餌post\", VbLet, \"field\"\n    Probe = CStr(Err.Number) & \"|\" & obj.Pre陰Post\nEnd Function\nPublic Function MakeItem() As Object\n    Set MakeItem = New Item\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "inspect_names": [
+        "Pre陰Post",
+        "pre餌post"
+      ]
+    }
+  },
+  {
+    "name": "ansi_control_extended_byte_case",
+    "source": "automation_names_ansi_control_extended_byte_case.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|field",
+    "host_context": {
+      "book_name": "ansi_control_extended_byte_case.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_control_extended_byte_case",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPublic 佳 As String",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    On Error Resume Next\n    CallByName obj, \"霞\", VbLet, \"field\"\n    Probe = CStr(Err.Number) & \"|\" & obj.佳\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "ansi_expansion_sharp_s",
+    "source": "automation_names_ansi_expansion_sharp_s.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|field",
+    "host_context": {
+      "book_name": "ansi_expansion_sharp_s.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_expansion_sharp_s",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPublic 過 As String",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    On Error Resume Next\n    CallByName obj, \"鋭s\", VbLet, \"field\"\n    Probe = CStr(Err.Number) & \"|\" & obj.過\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "ansi_expansion_ae",
+    "source": "automation_names_ansi_expansion_ae.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|field",
+    "host_context": {
+      "book_name": "ansi_expansion_ae.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_expansion_ae",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPublic 画 As String",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    On Error Resume Next\n    CallByName obj, \"餌e\", VbLet, \"field\"\n    Probe = CStr(Err.Number) & \"|\" & obj.画\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "ansi_expansion_soft_hyphen",
+    "source": "automation_names_ansi_expansion_soft_hyphen.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|field",
+    "host_context": {
+      "book_name": "ansi_expansion_soft_hyphen.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "ansi_expansion_soft_hyphen",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPublic 億A As String",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    On Error Resume Next\n    CallByName obj, \"陰\", VbLet, \"field\"\n    Probe = CStr(Err.Number) & \"|\" & obj.億A\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "nul_after_name",
+    "source": "automation_names_nul_after_name.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|method",
+    "host_context": {
+      "book_name": "nul_after_name.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "nul_after_name",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic Function ReadText() As String\n    ReadText = \"method\"\nEnd Function"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim result As String\n    On Error Resume Next\n    result = CallByName(obj, \"ReadText\" & ChrW(0) & \"suffix\", VbMethod)\n    Probe = CStr(Err.Number) & \"|\" & result\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "nul_before_name",
+    "source": "automation_names_nul_before_name.bas",
+    "procedure": "Driver.Probe",
+    "expected": "438|",
+    "host_context": {
+      "book_name": "nul_before_name.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "nul_before_name",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic Function ReadText() As String\n    ReadText = \"method\"\nEnd Function"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim result As String\n    On Error Resume Next\n    result = CallByName(obj, ChrW(0) & \"ReadText\", VbMethod)\n    Probe = CStr(Err.Number) & \"|\" & result\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "bestfit_accent",
+    "source": "automation_names_bestfit_accent.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|method",
+    "host_context": {
+      "book_name": "bestfit_accent.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "bestfit_accent",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic Function Cafe() As String\n    Cafe = \"method\"\nEnd Function"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim result As String\n    On Error Resume Next\n    result = CallByName(obj, \"Caf\" & ChrW(233), VbMethod)\n    Probe = CStr(Err.Number) & \"|\" & result\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "bestfit_dotless_i",
+    "source": "automation_names_bestfit_dotless_i.bas",
+    "procedure": "Driver.Probe",
+    "expected": "438|",
+    "host_context": {
+      "book_name": "bestfit_dotless_i.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "bestfit_dotless_i",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic Function I() As String\n    I = \"method\"\nEnd Function"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim result As String\n    On Error Resume Next\n    result = CallByName(obj, ChrW(305), VbMethod)\n    Probe = CStr(Err.Number) & \"|\" & result\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "bestfit_kelvin",
+    "source": "automation_names_bestfit_kelvin.bas",
+    "procedure": "Driver.Probe",
+    "expected": "438|",
+    "host_context": {
+      "book_name": "bestfit_kelvin.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "bestfit_kelvin",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic Function K() As String\n    K = \"method\"\nEnd Function"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim result As String\n    On Error Resume Next\n    result = CallByName(obj, ChrW(8490), VbMethod)\n    Probe = CStr(Err.Number) & \"|\" & result\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "unmappable_suffix",
+    "source": "automation_names_unmappable_suffix.bas",
+    "procedure": "Driver.Probe",
+    "expected": "438|",
+    "host_context": {
+      "book_name": "unmappable_suffix.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "unmappable_suffix",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic Function ReadText() As String\n    ReadText = \"method\"\nEnd Function"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim result As String\n    On Error Resume Next\n    result = CallByName(obj, \"ReadText\" & ChrW(-10179) & ChrW(-8704), VbMethod)\n    Probe = CStr(Err.Number) & \"|\" & result\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "public_property",
+    "source": "automation_names_public_property.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|property",
+    "host_context": {
+      "book_name": "public_property.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "public_property",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPrivate held As String\nPublic Property Let 陰(ByVal value As String)\n    held = value\nEnd Property\nPublic Property Get 陰() As String\n    陰 = held\nEnd Property",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim value As String\n    On Error Resume Next\n    CallByName obj, \"餌\", VbLet, \"property\"\n    value = CallByName(obj, \"餌\", VbGet)\n    Probe = CStr(Err.Number) & \"|\" & value\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "private_method",
+    "source": "automation_names_private_method.bas",
+    "procedure": "Driver.Probe",
+    "expected": "438|",
+    "host_context": {
+      "book_name": "private_method.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "private_method",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPrivate Function 陰() As String\n    陰 = \"hidden\"\nEnd Function",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim value As String\n    On Error Resume Next\n    value = CallByName(obj, \"餌\", VbMethod)\n    Probe = CStr(Err.Number) & \"|\" & value\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "friend_method",
+    "source": "automation_names_friend_method.bas",
+    "procedure": "Driver.Probe",
+    "expected": "438|",
+    "host_context": {
+      "book_name": "friend_method.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "friend_method",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nFriend Function 陰() As String\n    陰 = \"hidden\"\nEnd Function",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim value As String\n    On Error Resume Next\n    value = CallByName(obj, \"餌\", VbMethod)\n    Probe = CStr(Err.Number) & \"|\" & value\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "interface_method",
+    "source": "automation_names_interface_method.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|interface",
+    "host_context": {
+      "book_name": "interface_method.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "interface_method",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "IProbe",
+          "body": "Option Explicit\nPublic Function 陰() As String\nEnd Function",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Item",
+          "body": "Option Explicit\nImplements IProbe\nPrivate Function IProbe_陰() As String\n    IProbe_陰 = \"interface\"\nEnd Function",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As IProbe\n    Set obj = New Item\n    Dim value As String\n    On Error Resume Next\n    value = CallByName(obj, \"餌\", VbMethod)\n    Probe = CStr(Err.Number) & \"|\" & value\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "document_field",
+    "source": "automation_names_document_field.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|document",
+    "host_context": {
+      "book_name": "document_field.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "document_field",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "ThisWorkbook",
+          "body": "Option Explicit\nPublic 陰 As String",
+          "kind": 100,
+          "old": "ThisWorkbook"
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    On Error Resume Next\n    CallByName ThisWorkbook, \"餌\", VbLet, \"document\"\n    Probe = CStr(Err.Number) & \"|\" & ThisWorkbook.陰\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "excel_host_bestfit",
+    "source": "automation_names_excel_host_bestfit.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|host",
+    "host_context": {
+      "book_name": "excel_host_bestfit.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "excel_host_bestfit",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    On Error Resume Next\n    CallByName Range(\"A1\"), \"V\" & ChrW(224) & \"lue\", VbLet, \"host\"\n    Probe = CStr(Err.Number) & \"|\" & CStr(Range(\"A1\").Value)\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "collection_bestfit",
+    "source": "automation_names_collection_bestfit.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|1",
+    "host_context": {
+      "book_name": "collection_bestfit.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "collection_bestfit",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Collection\n    Dim value As String\n    obj.Add \"one\"\n    On Error Resume Next\n    value = CStr(CallByName(obj, \"C\" & ChrW(242) & \"unt\", VbMethod))\n    Probe = CStr(Err.Number) & \"|\" & value\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "err_bestfit",
+    "source": "automation_names_err_bestfit.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|0",
+    "host_context": {
+      "book_name": "err_bestfit.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "err_bestfit",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim value As String\n    On Error Resume Next\n    value = CStr(CallByName(Err, \"N\" & ChrW(250) & \"mber\", VbGet))\n    Probe = CStr(Err.Number) & \"|\" & value\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "public_method_flags3",
+    "source": "automation_names_public_method_flags3.bas",
+    "procedure": "Driver.Probe",
+    "expected": "0|method",
+    "host_context": {
+      "book_name": "public_method_flags3.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "source_code_page": 932,
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "measurement": {
+      "name": "public_method_flags3",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "body": "Option Explicit\nPublic Function 陰() As String\n    陰 = \"method\"\nEnd Function",
+          "kind": 2,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Function Probe() As String\n    Dim obj As New Item\n    Dim value As String\n    On Error Resume Next\n    value = CallByName(obj, \"餌\", 3)\n    Probe = CStr(Err.Number) & \"|\" & value\nEnd Function",
+          "kind": 1,
+          "old": null
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,546 @@
+[
+  {
+    "name": "foreign_unused",
+    "source": "module_decl_foreign_unused.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unused_byte",
+    "source": "module_lazy_unused_byte.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unused_null",
+    "source": "module_lazy_unused_null.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unused_nothing",
+    "source": "module_lazy_unused_nothing.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unused_call",
+    "source": "module_lazy_unused_call.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unused_division",
+    "source": "module_lazy_unused_division.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unused_array",
+    "source": "module_lazy_unused_array.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unused_width",
+    "source": "module_lazy_unused_width.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unused_enum",
+    "source": "module_lazy_unused_enum.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unused_first",
+    "source": "module_lazy_unused_first.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "bare_counter",
+    "source": "module_lazy_bare_counter.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "qualified_counter",
+    "source": "module_lazy_qualified_counter.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "bare_array",
+    "source": "module_lazy_bare_array.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "bare_fixed",
+    "source": "module_lazy_bare_fixed.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:<x  >"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:<x  >"
+      }
+    ]
+  },
+  {
+    "name": "bare_typed_unary",
+    "source": "module_lazy_bare_typed_unary.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "6"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "6"
+      }
+    ]
+  },
+  {
+    "name": "bare_enum",
+    "source": "module_lazy_bare_enum.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "qualified_enum",
+    "source": "module_lazy_qualified_enum.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "byref_counter",
+    "source": "module_lazy_byref_counter.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "6"
+      }
+    ]
+  },
+  {
+    "name": "class_counter",
+    "source": "module_lazy_class_counter.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "local_shadow",
+    "source": "module_lazy_local_shadow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      }
+    ]
+  },
+  {
+    "name": "private_name",
+    "source": "module_lazy_private_name.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "alias_const",
+    "source": "module_lazy_alias_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "unused_class",
+    "source": "module_lazy_unused_class.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unused_call_side_effect",
+    "source": "module_lazy_unused_call_side_effect.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0"
+      }
+    ]
+  },
+  {
+    "name": "bare_record",
+    "source": "module_lazy_bare_record.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "fixed_byref",
+    "source": "module_lazy_fixed_byref.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:<abc>"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:<abc>"
+      }
+    ]
+  },
+  {
+    "name": "array_byref",
+    "source": "module_lazy_array_byref.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4"
+      }
+    ]
+  },
+  {
+    "name": "bare_variant",
+    "source": "module_lazy_bare_variant.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Integer:False"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Integer:False"
+      }
+    ]
+  },
+  {
+    "name": "bare_alias_const",
+    "source": "module_lazy_bare_alias_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "bare_auto_new",
+    "source": "module_lazy_bare_auto_new.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7:1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1:7:1"
+      }
+    ]
+  },
+  {
+    "name": "default_own_const",
+    "source": "module_lazy_default_own_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "default_own_enum",
+    "source": "module_lazy_default_own_enum.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "default_foreign_const",
+    "source": "module_lazy_default_foreign_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "default_qualified_const",
+    "source": "module_lazy_default_qualified_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  }
+]

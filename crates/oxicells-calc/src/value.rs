@@ -67,11 +67,27 @@ pub enum Value {
     Blank,
     Number(f64),
     Text(String),
+    /// Text whose UTF-16 representation contains unpaired code units.
+    Utf16(Vec<u16>),
     Logical(bool),
     Error(ExcelError),
 }
 
 impl Value {
+    pub fn from_utf16(units: Vec<u16>) -> Self {
+        match String::from_utf16(&units) {
+            Ok(text) => Self::Text(text),
+            Err(_) => Self::Utf16(units),
+        }
+    }
+
+    pub fn to_utf16(&self) -> Result<Vec<u16>, ExcelError> {
+        match self {
+            Self::Utf16(units) => Ok(units.clone()),
+            _ => self.to_text().map(|text| text.encode_utf16().collect()),
+        }
+    }
+
     pub fn text(s: impl Into<String>) -> Value {
         Value::Text(s.into())
     }
@@ -104,6 +120,7 @@ impl Value {
             Value::Number(n) => Ok(*n),
             Value::Logical(b) => Ok(if *b { 1.0 } else { 0.0 }),
             Value::Text(s) => parse_numeric_text(s).ok_or(ExcelError::Value),
+            Value::Utf16(_) => Err(ExcelError::Value),
             Value::Error(e) => Err(*e),
         }
     }
@@ -117,6 +134,7 @@ impl Value {
             Value::Blank => Ok(String::new()),
             Value::Number(n) => Ok(number_to_text(*n)),
             Value::Text(s) => Ok(s.clone()),
+            Value::Utf16(_) => Err(ExcelError::Value),
             Value::Logical(b) => Ok(if *b { "TRUE".into() } else { "FALSE".into() }),
             Value::Error(e) => Err(*e),
         }
@@ -140,6 +158,7 @@ impl Value {
                     Err(ExcelError::Value)
                 }
             }
+            Value::Utf16(_) => Err(ExcelError::Value),
             Value::Error(e) => Err(*e),
         }
     }
@@ -175,6 +194,7 @@ impl fmt::Display for Value {
             Value::Blank => Ok(()),
             Value::Number(n) => f.write_str(&number_to_text(*n)),
             Value::Text(s) => f.write_str(s),
+            Value::Utf16(units) => f.write_str(&String::from_utf16_lossy(units)),
             Value::Logical(b) => f.write_str(if *b { "TRUE" } else { "FALSE" }),
             Value::Error(e) => f.write_str(e.as_str()),
         }
@@ -315,7 +335,7 @@ fn trim_trailing_zeros(s: &str) -> String {
 fn type_rank(v: &Value) -> u8 {
     match v {
         Value::Number(_) | Value::Blank => 0,
-        Value::Text(_) => 1,
+        Value::Text(_) | Value::Utf16(_) => 1,
         Value::Logical(_) => 2,
         Value::Error(_) => 3,
     }
@@ -331,6 +351,11 @@ pub fn compare(a: &Value, b: &Value) -> Result<Ordering, ExcelError> {
     }
     if let Some(e) = b.err() {
         return Err(e);
+    }
+    if (matches!(a, Value::Utf16(_)) && matches!(b, Value::Utf16(_) | Value::Text(_) | Value::Blank))
+        || (matches!(b, Value::Utf16(_)) && matches!(a, Value::Text(_) | Value::Blank))
+    {
+        return Ok(compare_wide(&a.to_utf16()?, &b.to_utf16()?));
     }
 
     match (a, b) {
@@ -400,6 +425,34 @@ struct CollationUnit {
     /// kana and a ringed digit are their plain selves here.
     widthless: u8,
     passed: bool,
+}
+
+fn compare_wide(a: &[u16], b: &[u16]) -> Ordering {
+    fn keys(units: &[u16]) -> Vec<(u32, u32, u8, bool)> {
+        fn flush(text: &mut String, out: &mut Vec<(u32, u32, u8, bool)>) {
+            out.extend(collation_units(text).into_iter().map(|unit| (unit.base as u32, unit.accented as u32, unit.kind, unit.passed)));
+            text.clear();
+        }
+        let mut text = String::new(); let mut out = Vec::new();
+        for unit in char::decode_utf16(units.iter().copied()) {
+            match unit {
+                Ok(ch) => text.push(ch),
+                Err(error) => {
+                    flush(&mut text, &mut out);
+                    // Outside the scalar-value range, so no ordinary text aliases a lone unit.
+                    let key = 0x110000 + u32::from(error.unpaired_surrogate());
+                    out.push((key, key, 1, false));
+                }
+            }
+        }
+        flush(&mut text, &mut out); out
+    }
+    let (left, right) = (keys(a), keys(b));
+    let level = |keys: &[(u32,u32,u8,bool)], which| keys.iter().filter(|k| !k.3).map(|k| match which { 0 => k.0, 1 => k.1, _ => u32::from(k.2) }).collect::<Vec<_>>();
+    level(&left, 0).cmp(&level(&right, 0))
+        .then_with(||level(&left, 1).cmp(&level(&right, 1)))
+        .then_with(||level(&left, 2).cmp(&level(&right, 2)))
+        .then_with(||left.iter().filter(|k|k.3).count().cmp(&right.iter().filter(|k|k.3).count()))
 }
 
 /// Two values the same when width is set aside as well as case: UNIQUE,

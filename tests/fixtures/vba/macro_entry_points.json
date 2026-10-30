@@ -1,0 +1,5715 @@
+[
+  {
+    "name": "project_entry_points",
+    "source": "project_entry_points.bas",
+    "package_fixture": "project_entry_points.xlsm",
+    "procedure": "Driver.Probe",
+    "expected": "Who=1004|Empty||\nAlpha.Who=0|String|alpha|\nBeta.Who=0|String|beta|\nAlpha.PrivateWho=0|String|alpha-private|\nAlpha.Needed=449|Empty||\nAlpha.OptionalArg=0|String|optional:7|\nAlpha.Many=0|String|many:0|\nHidden.VisibleFn=0|String|hidden-module|\nPlain.Who=1004|Empty||\nPlain.PrivateWho=1004|Empty||\nSingleton.Who=1004|Empty||\nSheet1.Who=0|Empty||\nSheet1.PrivateWho=0|Empty||\nThisWorkbook.Who=0|Empty||\nThisWorkbook.PrivateWho=0|Empty||\n標準モジュール.報告=0|String|unicode|\n報告=0|String|unicode|\nAlpha.Absent=1004|Empty||\n",
+    "measured_cases": 18,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "project_entry_points.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "expected_procedures": [
+      {
+        "name": "ThisWorkbook.Who",
+        "module_name": "ThisWorkbook",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "ThisWorkbook.PrivateWho",
+        "module_name": "ThisWorkbook",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.Who",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.PrivateWho",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Who",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.PrivateWho",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Needed",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Alpha.OptionalArg",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Many",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Beta.Who",
+        "module_name": "Beta",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Hidden.VisibleFn",
+        "module_name": "Hidden",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "標準モジュール.報告",
+        "module_name": "標準モジュール",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.ResetTrace",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "sub",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.ReadTrace",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.TryRun",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Driver.Probe",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      }
+    ],
+    "direct_entries": [
+      {
+        "name": "Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Beta.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Needed",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.OptionalArg",
+        "steps": [
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Many",
+        "steps": [
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Hidden.VisibleFn",
+        "steps": [
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Plain.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Plain.PrivateWho",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Singleton.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "ThisWorkbook.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "ThisWorkbook.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "標準モジュール.報告",
+        "steps": [
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "報告",
+        "steps": [
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Absent",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_points.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      }
+    ],
+    "measurement": {
+      "name": "project_entry_points",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "ThisWorkbook",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Who = \"book\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"book-private\"\nEnd Function\n",
+          "kind": 100,
+          "old": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Who = \"sheet\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"sheet-private\"\nEnd Function\n",
+          "kind": 100,
+          "old": "Sheet1"
+        },
+        {
+          "name": "Alpha",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Who = \"alpha\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"alpha-private\"\nEnd Function\nPublic Function Needed(ByVal n As Long) As String\nNeeded = \"need:\" & CStr(n)\nEnd Function\nPublic Function OptionalArg(Optional n As Long = 7) As String\nOptionalArg = \"optional:\" & CStr(n)\nEnd Function\nPublic Function Many(ParamArray values() As Variant) As String\nMany = \"many:\" & CStr(UBound(values) - LBound(values) + 1)\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Beta",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Who = \"beta\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Plain",
+          "body": "Option Explicit\nPrivate Sub Class_Initialize()\nDriver.Trace = Driver.Trace & \"P\"\nEnd Sub\nPublic Function Who() As String\n    Who = \"plain\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"plain-private\"\nEnd Function\n",
+          "kind": 2,
+          "old": null,
+          "predeclared": false
+        },
+        {
+          "name": "Singleton",
+          "body": "Option Explicit\nPrivate Sub Class_Initialize()\nDriver.Trace = Driver.Trace & \"S\"\nEnd Sub\nPublic Function Who() As String\n    Who = \"singleton\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"singleton-private\"\nEnd Function\n",
+          "kind": 2,
+          "old": null,
+          "predeclared": true
+        },
+        {
+          "name": "Hidden",
+          "body": "Option Explicit\nOption Private Module\nPublic Function VisibleFn() As String\n    VisibleFn = \"hidden-module\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "標準モジュール",
+          "body": "Option Explicit\nPublic Function 報告() As String\n    報告 = \"unicode\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Trace As String\nPublic Sub ResetTrace()\nTrace = \"\"\nEnd Sub\nPublic Function ReadTrace() As String\nReadTrace = Trace\nEnd Function\nPrivate Function TryRun(ByVal entryName As String) As String\nDim value As Variant\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Application.Run(\"'\" & ThisWorkbook.Name & \"'!\" & entryName)\nTryRun = CStr(Err.Number) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPublic Function Probe() As String\nDim report As String\nreport = report & \"Who=\" & TryRun(\"Who\") & vbLf\nreport = report & \"Alpha.Who=\" & TryRun(\"Alpha.Who\") & vbLf\nreport = report & \"Beta.Who=\" & TryRun(\"Beta.Who\") & vbLf\nreport = report & \"Alpha.PrivateWho=\" & TryRun(\"Alpha.PrivateWho\") & vbLf\nreport = report & \"Alpha.Needed=\" & TryRun(\"Alpha.Needed\") & vbLf\nreport = report & \"Alpha.OptionalArg=\" & TryRun(\"Alpha.OptionalArg\") & vbLf\nreport = report & \"Alpha.Many=\" & TryRun(\"Alpha.Many\") & vbLf\nreport = report & \"Hidden.VisibleFn=\" & TryRun(\"Hidden.VisibleFn\") & vbLf\nreport = report & \"Plain.Who=\" & TryRun(\"Plain.Who\") & vbLf\nreport = report & \"Plain.PrivateWho=\" & TryRun(\"Plain.PrivateWho\") & vbLf\nreport = report & \"Singleton.Who=\" & TryRun(\"Singleton.Who\") & vbLf\nreport = report & \"Sheet1.Who=\" & TryRun(\"Sheet1.Who\") & vbLf\nreport = report & \"Sheet1.PrivateWho=\" & TryRun(\"Sheet1.PrivateWho\") & vbLf\nreport = report & \"ThisWorkbook.Who=\" & TryRun(\"ThisWorkbook.Who\") & vbLf\nreport = report & \"ThisWorkbook.PrivateWho=\" & TryRun(\"ThisWorkbook.PrivateWho\") & vbLf\nreport = report & \"標準モジュール.報告=\" & TryRun(\"標準モジュール.報告\") & vbLf\nreport = report & \"報告=\" & TryRun(\"報告\") & vbLf\nreport = report & \"Alpha.Absent=\" & TryRun(\"Alpha.Absent\") & vbLf\nProbe = report\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "entry_names": [
+        "Who",
+        "Alpha.Who",
+        "Beta.Who",
+        "Alpha.PrivateWho",
+        "Alpha.Needed",
+        "Alpha.OptionalArg",
+        "Alpha.Many",
+        "Hidden.VisibleFn",
+        "Plain.Who",
+        "Plain.PrivateWho",
+        "Singleton.Who",
+        "Sheet1.Who",
+        "Sheet1.PrivateWho",
+        "ThisWorkbook.Who",
+        "ThisWorkbook.PrivateWho",
+        "標準モジュール.報告",
+        "報告",
+        "Alpha.Absent"
+      ]
+    }
+  },
+  {
+    "name": "project_entry_scopes",
+    "source": "project_entry_scopes.bas",
+    "package_fixture": "project_entry_scopes.xlsm",
+    "procedure": "Driver.Probe",
+    "expected": "Who=1004|Empty||\nAlpha.Who=0|String|alpha|\nBeta.Who=0|String|beta|\nAlpha.PrivateWho=0|String|alpha-private|\nAlpha.Needed=449|Empty||\nAlpha.OptionalArg=0|String|optional:7|\nAlpha.Many=0|String|many:0|\nHidden.VisibleFn=0|String|hidden-module|\nPlain.Who=1004|Empty||\nPlain.PrivateWho=1004|Empty||\nSingleton.Who=1004|Empty||\nSheet1.Who=0|Empty||s\nSheet1.PrivateWho=0|Empty||sp\nThisWorkbook.Who=0|Empty||b\nThisWorkbook.PrivateWho=0|Empty||bp\n標準モジュール.報告=0|String|unicode|\n報告=0|String|unicode|\nAlpha.Absent=1004|Empty||\nPrivateWho=0|String|alpha-private|\nSharedChoice=1004|Empty||\nAlpha.SharedChoice=0|String|alpha-hidden|\nBeta.SharedChoice=0|String|beta-public|\nAlpha.LocalWho=1004|String|1004~~|\n@raw:Alpha.LocalWho=1004|String|1004~~|\nVisibleFn=0|String|hidden-module|\nSheet1.DocOnly=0|Empty||D\nDocOnly=1004|Empty||\nSheet1.Needed=449|Empty||\n@arg:Sheet1.Needed=0|Empty||N11\n@arg:Sheet1.Who=450|Empty||\nSheet1.OptionalArg=0|Empty||O7\nSheet1.WriteOnly=0|Empty||Z\nAlpha.Label=1004|Empty||\nSheet1.Label=1004|Empty||\n@raw:VBAProject.Alpha.Who=0|String|alpha|\n@raw:'missing.xlsm'!Alpha.Who=1004|Empty||\n@raw:Alpha.Who=0|String|alpha|\n@raw:Who=1004|Empty||\n",
+    "measured_cases": 38,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "project_entry_scopes.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "expected_procedures": [
+      {
+        "name": "ThisWorkbook.Who",
+        "module_name": "ThisWorkbook",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "ThisWorkbook.PrivateWho",
+        "module_name": "ThisWorkbook",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.Who",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.PrivateWho",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.DocOnly",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.Needed",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Sheet1.OptionalArg",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.WriteOnly",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "sub",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Who",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.PrivateWho",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Needed",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Alpha.OptionalArg",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Many",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.SharedChoice",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.LocalWho",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Beta.Who",
+        "module_name": "Beta",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Beta.SharedChoice",
+        "module_name": "Beta",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Hidden.VisibleFn",
+        "module_name": "Hidden",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "標準モジュール.報告",
+        "module_name": "標準モジュール",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.ResetTrace",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "sub",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.ReadTrace",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.TryRun",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Driver.Probe",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      }
+    ],
+    "direct_entries": [
+      {
+        "name": "Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Beta.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Needed",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.OptionalArg",
+        "steps": [
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Many",
+        "steps": [
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Hidden.VisibleFn",
+        "steps": [
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Plain.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Plain.PrivateWho",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Singleton.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "s"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "s"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "s"
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "sp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "sp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "sp"
+          }
+        ]
+      },
+      {
+        "name": "ThisWorkbook.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "b"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "b"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "b"
+          }
+        ]
+      },
+      {
+        "name": "ThisWorkbook.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "bp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "bp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "bp"
+          }
+        ]
+      },
+      {
+        "name": "標準モジュール.報告",
+        "steps": [
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "報告",
+        "steps": [
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Absent",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "SharedChoice",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!SharedChoice' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!SharedChoice' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!SharedChoice' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.SharedChoice",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-hidden",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-hidden",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-hidden",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Beta.SharedChoice",
+        "steps": [
+          {
+            "ok": true,
+            "value": "beta-public",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta-public",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta-public",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.LocalWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:Alpha.LocalWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "VisibleFn",
+        "steps": [
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.DocOnly",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "D"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "D"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "D"
+          }
+        ]
+      },
+      {
+        "name": "DocOnly",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!DocOnly' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!DocOnly' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!DocOnly' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Needed",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@arg:Sheet1.Needed",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "N11"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "N11"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "N11"
+          }
+        ]
+      },
+      {
+        "name": "@arg:Sheet1.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352562,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352562,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352562,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.OptionalArg",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "O7"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "O7"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "O7"
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.WriteOnly",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "Z"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "Z"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "Z"
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Label",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Alpha.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Alpha.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Alpha.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Label",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Sheet1.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Sheet1.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_scopes.xlsm'!Sheet1.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:VBAProject.Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:'missing.xlsm'!Alpha.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "ファイル 'C:\\Users\\ryuji\\OneDrive\\ドキュメント\\missing.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "ファイル 'C:\\Users\\ryuji\\OneDrive\\ドキュメント\\missing.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "ファイル 'C:\\Users\\ryuji\\OneDrive\\ドキュメント\\missing.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ 'Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ 'Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ 'Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      }
+    ],
+    "measurement": {
+      "name": "project_entry_scopes",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "ThisWorkbook",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Driver.Trace = Driver.Trace & \"b\"\n    Who = \"book\"\nEnd Function\nPrivate Function PrivateWho() As String\n    Driver.Trace = Driver.Trace & \"bp\"\n    PrivateWho = \"book-private\"\nEnd Function\n",
+          "kind": 100,
+          "old": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Driver.Trace = Driver.Trace & \"s\"\n    Who = \"sheet\"\nEnd Function\nPrivate Function PrivateWho() As String\n    Driver.Trace = Driver.Trace & \"sp\"\n    PrivateWho = \"sheet-private\"\nEnd Function\nPublic Function DocOnly() As String\nDriver.Trace = Driver.Trace & \"D\"\nDocOnly = \"doc-only\"\nEnd Function\nPublic Function Needed(ByVal n As Long) As String\nDriver.Trace = Driver.Trace & \"N\" & CStr(n)\nNeeded = \"doc-need:\" & CStr(n)\nEnd Function\nPublic Function OptionalArg(Optional n As Long = 7) As String\nDriver.Trace = Driver.Trace & \"O\" & CStr(n)\nOptionalArg = \"doc-optional:\" & CStr(n)\nEnd Function\nPublic Sub WriteOnly()\nDriver.Trace = Driver.Trace & \"Z\"\nEnd Sub\nPublic Property Get Label() As String\nDriver.Trace = Driver.Trace & \"Q\"\nLabel = \"sheet-label\"\nEnd Property\n",
+          "kind": 100,
+          "old": "Sheet1"
+        },
+        {
+          "name": "Alpha",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Who = \"alpha\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"alpha-private\"\nEnd Function\nPublic Function Needed(ByVal n As Long) As String\nNeeded = \"need:\" & CStr(n)\nEnd Function\nPublic Function OptionalArg(Optional n As Long = 7) As String\nOptionalArg = \"optional:\" & CStr(n)\nEnd Function\nPublic Function Many(ParamArray values() As Variant) As String\nMany = \"many:\" & CStr(UBound(values) - LBound(values) + 1)\nEnd Function\nPrivate Function SharedChoice() As String\n    SharedChoice = \"alpha-hidden\"\nEnd Function\nPublic Function LocalWho() As String\nDim value As Variant\nDriver.Trace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Application.Run(\"Who\")\nLocalWho = CStr(Err.Number) & \"~\" & CStr(value) & \"~\" & Driver.Trace\nEnd Function\nPublic Property Get Label() As String\nDriver.Trace = Driver.Trace & \"L\"\nLabel = \"alpha-label\"\nEnd Property\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Beta",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Who = \"beta\"\nEnd Function\nPublic Function SharedChoice() As String\n    SharedChoice = \"beta-public\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Plain",
+          "body": "Option Explicit\nPrivate Sub Class_Initialize()\nDriver.Trace = Driver.Trace & \"P\"\nEnd Sub\nPublic Function Who() As String\n    Who = \"plain\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"plain-private\"\nEnd Function\n",
+          "kind": 2,
+          "old": null,
+          "predeclared": false
+        },
+        {
+          "name": "Singleton",
+          "body": "Option Explicit\nPrivate Sub Class_Initialize()\nDriver.Trace = Driver.Trace & \"S\"\nEnd Sub\nPublic Function Who() As String\n    Who = \"singleton\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"singleton-private\"\nEnd Function\n",
+          "kind": 2,
+          "old": null,
+          "predeclared": true
+        },
+        {
+          "name": "Hidden",
+          "body": "Option Explicit\nOption Private Module\nPublic Function VisibleFn() As String\n    VisibleFn = \"hidden-module\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "標準モジュール",
+          "body": "Option Explicit\nPublic Function 報告() As String\n    報告 = \"unicode\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Trace As String\nPublic Sub ResetTrace()\nTrace = \"\"\nEnd Sub\nPublic Function ReadTrace() As String\nReadTrace = Trace\nEnd Function\nPrivate Function TryRun(ByVal entryName As String) As String\nDim value As Variant, macroName As String, withArgument As Boolean\nIf Left(entryName, 5) = \"@raw:\" Then\n    macroName = Mid(entryName, 6)\nElseIf Left(entryName, 5) = \"@arg:\" Then\n    macroName = \"'\" & ThisWorkbook.Name & \"'!\" & Mid(entryName, 6)\n    withArgument = True\nElse\n    macroName = \"'\" & ThisWorkbook.Name & \"'!\" & entryName\nEnd If\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nIf withArgument Then\n    value = Application.Run(macroName, 11)\nElse\n    value = Application.Run(macroName)\nEnd If\nTryRun = CStr(Err.Number) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPublic Function Probe() As String\nDim report As String\nreport = report & \"Who=\" & TryRun(\"Who\") & vbLf\nreport = report & \"Alpha.Who=\" & TryRun(\"Alpha.Who\") & vbLf\nreport = report & \"Beta.Who=\" & TryRun(\"Beta.Who\") & vbLf\nreport = report & \"Alpha.PrivateWho=\" & TryRun(\"Alpha.PrivateWho\") & vbLf\nreport = report & \"Alpha.Needed=\" & TryRun(\"Alpha.Needed\") & vbLf\nreport = report & \"Alpha.OptionalArg=\" & TryRun(\"Alpha.OptionalArg\") & vbLf\nreport = report & \"Alpha.Many=\" & TryRun(\"Alpha.Many\") & vbLf\nreport = report & \"Hidden.VisibleFn=\" & TryRun(\"Hidden.VisibleFn\") & vbLf\nreport = report & \"Plain.Who=\" & TryRun(\"Plain.Who\") & vbLf\nreport = report & \"Plain.PrivateWho=\" & TryRun(\"Plain.PrivateWho\") & vbLf\nreport = report & \"Singleton.Who=\" & TryRun(\"Singleton.Who\") & vbLf\nreport = report & \"Sheet1.Who=\" & TryRun(\"Sheet1.Who\") & vbLf\nreport = report & \"Sheet1.PrivateWho=\" & TryRun(\"Sheet1.PrivateWho\") & vbLf\nreport = report & \"ThisWorkbook.Who=\" & TryRun(\"ThisWorkbook.Who\") & vbLf\nreport = report & \"ThisWorkbook.PrivateWho=\" & TryRun(\"ThisWorkbook.PrivateWho\") & vbLf\nreport = report & \"標準モジュール.報告=\" & TryRun(\"標準モジュール.報告\") & vbLf\nreport = report & \"報告=\" & TryRun(\"報告\") & vbLf\nreport = report & \"Alpha.Absent=\" & TryRun(\"Alpha.Absent\") & vbLf\nreport = report & \"PrivateWho=\" & TryRun(\"PrivateWho\") & vbLf\nreport = report & \"SharedChoice=\" & TryRun(\"SharedChoice\") & vbLf\nreport = report & \"Alpha.SharedChoice=\" & TryRun(\"Alpha.SharedChoice\") & vbLf\nreport = report & \"Beta.SharedChoice=\" & TryRun(\"Beta.SharedChoice\") & vbLf\nreport = report & \"Alpha.LocalWho=\" & TryRun(\"Alpha.LocalWho\") & vbLf\nreport = report & \"@raw:Alpha.LocalWho=\" & TryRun(\"@raw:Alpha.LocalWho\") & vbLf\nreport = report & \"VisibleFn=\" & TryRun(\"VisibleFn\") & vbLf\nreport = report & \"Sheet1.DocOnly=\" & TryRun(\"Sheet1.DocOnly\") & vbLf\nreport = report & \"DocOnly=\" & TryRun(\"DocOnly\") & vbLf\nreport = report & \"Sheet1.Needed=\" & TryRun(\"Sheet1.Needed\") & vbLf\nreport = report & \"@arg:Sheet1.Needed=\" & TryRun(\"@arg:Sheet1.Needed\") & vbLf\nreport = report & \"@arg:Sheet1.Who=\" & TryRun(\"@arg:Sheet1.Who\") & vbLf\nreport = report & \"Sheet1.OptionalArg=\" & TryRun(\"Sheet1.OptionalArg\") & vbLf\nreport = report & \"Sheet1.WriteOnly=\" & TryRun(\"Sheet1.WriteOnly\") & vbLf\nreport = report & \"Alpha.Label=\" & TryRun(\"Alpha.Label\") & vbLf\nreport = report & \"Sheet1.Label=\" & TryRun(\"Sheet1.Label\") & vbLf\nreport = report & \"@raw:VBAProject.Alpha.Who=\" & TryRun(\"@raw:VBAProject.Alpha.Who\") & vbLf\nreport = report & \"@raw:'missing.xlsm'!Alpha.Who=\" & TryRun(\"@raw:'missing.xlsm'!Alpha.Who\") & vbLf\nreport = report & \"@raw:Alpha.Who=\" & TryRun(\"@raw:Alpha.Who\") & vbLf\nreport = report & \"@raw:Who=\" & TryRun(\"@raw:Who\") & vbLf\nProbe = report\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "entry_names": [
+        "Who",
+        "Alpha.Who",
+        "Beta.Who",
+        "Alpha.PrivateWho",
+        "Alpha.Needed",
+        "Alpha.OptionalArg",
+        "Alpha.Many",
+        "Hidden.VisibleFn",
+        "Plain.Who",
+        "Plain.PrivateWho",
+        "Singleton.Who",
+        "Sheet1.Who",
+        "Sheet1.PrivateWho",
+        "ThisWorkbook.Who",
+        "ThisWorkbook.PrivateWho",
+        "標準モジュール.報告",
+        "報告",
+        "Alpha.Absent",
+        "PrivateWho",
+        "SharedChoice",
+        "Alpha.SharedChoice",
+        "Beta.SharedChoice",
+        "Alpha.LocalWho",
+        "@raw:Alpha.LocalWho",
+        "VisibleFn",
+        "Sheet1.DocOnly",
+        "DocOnly",
+        "Sheet1.Needed",
+        "@arg:Sheet1.Needed",
+        "@arg:Sheet1.Who",
+        "Sheet1.OptionalArg",
+        "Sheet1.WriteOnly",
+        "Alpha.Label",
+        "Sheet1.Label",
+        "@raw:VBAProject.Alpha.Who",
+        "@raw:'missing.xlsm'!Alpha.Who",
+        "@raw:Alpha.Who",
+        "@raw:Who"
+      ],
+      "expose_class": true
+    }
+  },
+  {
+    "name": "project_entry_latebound",
+    "source": "project_entry_latebound.bas",
+    "package_fixture": "project_entry_latebound.xlsm",
+    "procedure": "Driver.Probe",
+    "expected": "Who=1004|Empty||\nAlpha.Who=0|String|alpha|\nBeta.Who=0|String|beta|\nAlpha.PrivateWho=0|String|alpha-private|\nAlpha.Needed=449|Empty||\nAlpha.OptionalArg=0|String|optional:7|\nAlpha.Many=0|String|many:0|\nHidden.VisibleFn=0|String|hidden-module|\nPlain.Who=1004|Empty||\nPlain.PrivateWho=1004|Empty||\nSingleton.Who=1004|Empty||\nSheet1.Who=0|Empty||s\nSheet1.PrivateWho=0|Empty||sp\nThisWorkbook.Who=0|Empty||b\nThisWorkbook.PrivateWho=0|Empty||bp\n標準モジュール.報告=0|String|unicode|\n報告=0|String|unicode|\nAlpha.Absent=1004|Empty||\nPrivateWho=0|String|alpha-private|\nSharedChoice=1004|Empty||\nAlpha.SharedChoice=0|String|alpha-hidden|\nBeta.SharedChoice=0|String|beta-public|\nAlpha.LocalWho=1004|String|1004~~|\n@raw:Alpha.LocalWho=1004|String|1004~~|\nVisibleFn=0|String|hidden-module|\nSheet1.DocOnly=0|Empty||D\nDocOnly=1004|Empty||\nSheet1.Needed=449|Empty||\n@arg:Sheet1.Needed=0|Empty||N11\n@arg:Sheet1.Who=450|Empty||\nSheet1.OptionalArg=0|Empty||O7\nSheet1.WriteOnly=0|Empty||Z\nAlpha.Label=1004|Empty||\nSheet1.Label=1004|Empty||\n@raw:VBAProject.Alpha.Who=0|String|alpha|\n@raw:'missing.xlsm'!Alpha.Who=1004|Empty||\n@raw:Alpha.Who=0|String|alpha|\n@raw:Who=1004|Empty||\nflag_1=0|String|optional:7|\nflag_2=438|Empty||\nflag_3=0|String|optional:7|\nflag_4=438|Empty||\nflag_8=438|Empty||\nflag_0=438|Empty||\nflag_16=438|Empty||\n",
+    "measured_cases": 45,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "project_entry_latebound.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "expected_procedures": [
+      {
+        "name": "ThisWorkbook.Who",
+        "module_name": "ThisWorkbook",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "ThisWorkbook.PrivateWho",
+        "module_name": "ThisWorkbook",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.Who",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.PrivateWho",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.DocOnly",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.Needed",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Sheet1.OptionalArg",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.WriteOnly",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "sub",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Who",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.PrivateWho",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Needed",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Alpha.OptionalArg",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Many",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.SharedChoice",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.LocalWho",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Beta.Who",
+        "module_name": "Beta",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Beta.SharedChoice",
+        "module_name": "Beta",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Hidden.VisibleFn",
+        "module_name": "Hidden",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "標準モジュール.報告",
+        "module_name": "標準モジュール",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.ResetTrace",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "sub",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.ReadTrace",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.TryRun",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Driver.Probe",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.TryFlag",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      }
+    ],
+    "direct_entries": [
+      {
+        "name": "Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Beta.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Needed",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.OptionalArg",
+        "steps": [
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Many",
+        "steps": [
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Hidden.VisibleFn",
+        "steps": [
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Plain.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Plain.PrivateWho",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Singleton.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "s"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "s"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "s"
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "sp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "sp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "sp"
+          }
+        ]
+      },
+      {
+        "name": "ThisWorkbook.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "b"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "b"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "b"
+          }
+        ]
+      },
+      {
+        "name": "ThisWorkbook.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "bp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "bp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "bp"
+          }
+        ]
+      },
+      {
+        "name": "標準モジュール.報告",
+        "steps": [
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "報告",
+        "steps": [
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Absent",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "SharedChoice",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!SharedChoice' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!SharedChoice' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!SharedChoice' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.SharedChoice",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-hidden",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-hidden",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-hidden",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Beta.SharedChoice",
+        "steps": [
+          {
+            "ok": true,
+            "value": "beta-public",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta-public",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta-public",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.LocalWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:Alpha.LocalWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "VisibleFn",
+        "steps": [
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.DocOnly",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "D"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "D"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "D"
+          }
+        ]
+      },
+      {
+        "name": "DocOnly",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!DocOnly' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!DocOnly' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!DocOnly' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Needed",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@arg:Sheet1.Needed",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "N11"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "N11"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "N11"
+          }
+        ]
+      },
+      {
+        "name": "@arg:Sheet1.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352562,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352562,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352562,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.OptionalArg",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "O7"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "O7"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "O7"
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.WriteOnly",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "Z"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "Z"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "Z"
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Label",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Alpha.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Alpha.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Alpha.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Label",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Sheet1.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Sheet1.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_latebound.xlsm'!Sheet1.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:VBAProject.Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:'missing.xlsm'!Alpha.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "ファイル 'C:\\Users\\ryuji\\OneDrive\\ドキュメント\\missing.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "ファイル 'C:\\Users\\ryuji\\OneDrive\\ドキュメント\\missing.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "ファイル 'C:\\Users\\ryuji\\OneDrive\\ドキュメント\\missing.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ 'Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ 'Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ 'Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      }
+    ],
+    "measurement": {
+      "name": "project_entry_latebound",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "ThisWorkbook",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Driver.Trace = Driver.Trace & \"b\"\n    Who = \"book\"\nEnd Function\nPrivate Function PrivateWho() As String\n    Driver.Trace = Driver.Trace & \"bp\"\n    PrivateWho = \"book-private\"\nEnd Function\n",
+          "kind": 100,
+          "old": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Driver.Trace = Driver.Trace & \"s\"\n    Who = \"sheet\"\nEnd Function\nPrivate Function PrivateWho() As String\n    Driver.Trace = Driver.Trace & \"sp\"\n    PrivateWho = \"sheet-private\"\nEnd Function\nPublic Function DocOnly() As String\nDriver.Trace = Driver.Trace & \"D\"\nDocOnly = \"doc-only\"\nEnd Function\nPublic Function Needed(ByVal n As Long) As String\nDriver.Trace = Driver.Trace & \"N\" & CStr(n)\nNeeded = \"doc-need:\" & CStr(n)\nEnd Function\nPublic Function OptionalArg(Optional n As Long = 7) As String\nDriver.Trace = Driver.Trace & \"O\" & CStr(n)\nOptionalArg = \"doc-optional:\" & CStr(n)\nEnd Function\nPublic Sub WriteOnly()\nDriver.Trace = Driver.Trace & \"Z\"\nEnd Sub\nPublic Property Get Label() As String\nDriver.Trace = Driver.Trace & \"Q\"\nLabel = \"sheet-label\"\nEnd Property\n",
+          "kind": 100,
+          "old": "Sheet1"
+        },
+        {
+          "name": "Alpha",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Who = \"alpha\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"alpha-private\"\nEnd Function\nPublic Function Needed(ByVal n As Long) As String\nNeeded = \"need:\" & CStr(n)\nEnd Function\nPublic Function OptionalArg(Optional n As Long = 7) As String\nOptionalArg = \"optional:\" & CStr(n)\nEnd Function\nPublic Function Many(ParamArray values() As Variant) As String\nMany = \"many:\" & CStr(UBound(values) - LBound(values) + 1)\nEnd Function\nPrivate Function SharedChoice() As String\n    SharedChoice = \"alpha-hidden\"\nEnd Function\nPublic Function LocalWho() As String\nDim value As Variant\nDriver.Trace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Application.Run(\"Who\")\nLocalWho = CStr(Err.Number) & \"~\" & CStr(value) & \"~\" & Driver.Trace\nEnd Function\nPublic Property Get Label() As String\nDriver.Trace = Driver.Trace & \"L\"\nLabel = \"alpha-label\"\nEnd Property\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Beta",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Who = \"beta\"\nEnd Function\nPublic Function SharedChoice() As String\n    SharedChoice = \"beta-public\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Plain",
+          "body": "Option Explicit\nPrivate Sub Class_Initialize()\nDriver.Trace = Driver.Trace & \"P\"\nEnd Sub\nPublic Function Who() As String\n    Who = \"plain\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"plain-private\"\nEnd Function\n",
+          "kind": 2,
+          "old": null,
+          "predeclared": false
+        },
+        {
+          "name": "Singleton",
+          "body": "Option Explicit\nPrivate Sub Class_Initialize()\nDriver.Trace = Driver.Trace & \"S\"\nEnd Sub\nPublic Function Who() As String\n    Who = \"singleton\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"singleton-private\"\nEnd Function\n",
+          "kind": 2,
+          "old": null,
+          "predeclared": true
+        },
+        {
+          "name": "Hidden",
+          "body": "Option Explicit\nOption Private Module\nPublic Function VisibleFn() As String\n    VisibleFn = \"hidden-module\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "標準モジュール",
+          "body": "Option Explicit\nPublic Function 報告() As String\n    報告 = \"unicode\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Trace As String\nPublic Sub ResetTrace()\nTrace = \"\"\nEnd Sub\nPublic Function ReadTrace() As String\nReadTrace = Trace\nEnd Function\nPrivate Function TryRun(ByVal entryName As String) As String\nDim value As Variant, macroName As String, withArgument As Boolean\nIf Left(entryName, 5) = \"@raw:\" Then\n    macroName = Mid(entryName, 6)\nElseIf Left(entryName, 5) = \"@arg:\" Then\n    macroName = \"'\" & ThisWorkbook.Name & \"'!\" & Mid(entryName, 6)\n    withArgument = True\nElse\n    macroName = \"'\" & ThisWorkbook.Name & \"'!\" & entryName\nEnd If\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nIf withArgument Then\n    value = CallByName(Application, \"Run\", 1, macroName, 11)\nElse\n    value = CallByName(Application, \"Run\", 1, macroName)\nEnd If\nTryRun = CStr(Err.Number) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPublic Function Probe() As String\nDim report As String\nreport = report & \"Who=\" & TryRun(\"Who\") & vbLf\nreport = report & \"Alpha.Who=\" & TryRun(\"Alpha.Who\") & vbLf\nreport = report & \"Beta.Who=\" & TryRun(\"Beta.Who\") & vbLf\nreport = report & \"Alpha.PrivateWho=\" & TryRun(\"Alpha.PrivateWho\") & vbLf\nreport = report & \"Alpha.Needed=\" & TryRun(\"Alpha.Needed\") & vbLf\nreport = report & \"Alpha.OptionalArg=\" & TryRun(\"Alpha.OptionalArg\") & vbLf\nreport = report & \"Alpha.Many=\" & TryRun(\"Alpha.Many\") & vbLf\nreport = report & \"Hidden.VisibleFn=\" & TryRun(\"Hidden.VisibleFn\") & vbLf\nreport = report & \"Plain.Who=\" & TryRun(\"Plain.Who\") & vbLf\nreport = report & \"Plain.PrivateWho=\" & TryRun(\"Plain.PrivateWho\") & vbLf\nreport = report & \"Singleton.Who=\" & TryRun(\"Singleton.Who\") & vbLf\nreport = report & \"Sheet1.Who=\" & TryRun(\"Sheet1.Who\") & vbLf\nreport = report & \"Sheet1.PrivateWho=\" & TryRun(\"Sheet1.PrivateWho\") & vbLf\nreport = report & \"ThisWorkbook.Who=\" & TryRun(\"ThisWorkbook.Who\") & vbLf\nreport = report & \"ThisWorkbook.PrivateWho=\" & TryRun(\"ThisWorkbook.PrivateWho\") & vbLf\nreport = report & \"標準モジュール.報告=\" & TryRun(\"標準モジュール.報告\") & vbLf\nreport = report & \"報告=\" & TryRun(\"報告\") & vbLf\nreport = report & \"Alpha.Absent=\" & TryRun(\"Alpha.Absent\") & vbLf\nreport = report & \"PrivateWho=\" & TryRun(\"PrivateWho\") & vbLf\nreport = report & \"SharedChoice=\" & TryRun(\"SharedChoice\") & vbLf\nreport = report & \"Alpha.SharedChoice=\" & TryRun(\"Alpha.SharedChoice\") & vbLf\nreport = report & \"Beta.SharedChoice=\" & TryRun(\"Beta.SharedChoice\") & vbLf\nreport = report & \"Alpha.LocalWho=\" & TryRun(\"Alpha.LocalWho\") & vbLf\nreport = report & \"@raw:Alpha.LocalWho=\" & TryRun(\"@raw:Alpha.LocalWho\") & vbLf\nreport = report & \"VisibleFn=\" & TryRun(\"VisibleFn\") & vbLf\nreport = report & \"Sheet1.DocOnly=\" & TryRun(\"Sheet1.DocOnly\") & vbLf\nreport = report & \"DocOnly=\" & TryRun(\"DocOnly\") & vbLf\nreport = report & \"Sheet1.Needed=\" & TryRun(\"Sheet1.Needed\") & vbLf\nreport = report & \"@arg:Sheet1.Needed=\" & TryRun(\"@arg:Sheet1.Needed\") & vbLf\nreport = report & \"@arg:Sheet1.Who=\" & TryRun(\"@arg:Sheet1.Who\") & vbLf\nreport = report & \"Sheet1.OptionalArg=\" & TryRun(\"Sheet1.OptionalArg\") & vbLf\nreport = report & \"Sheet1.WriteOnly=\" & TryRun(\"Sheet1.WriteOnly\") & vbLf\nreport = report & \"Alpha.Label=\" & TryRun(\"Alpha.Label\") & vbLf\nreport = report & \"Sheet1.Label=\" & TryRun(\"Sheet1.Label\") & vbLf\nreport = report & \"@raw:VBAProject.Alpha.Who=\" & TryRun(\"@raw:VBAProject.Alpha.Who\") & vbLf\nreport = report & \"@raw:'missing.xlsm'!Alpha.Who=\" & TryRun(\"@raw:'missing.xlsm'!Alpha.Who\") & vbLf\nreport = report & \"@raw:Alpha.Who=\" & TryRun(\"@raw:Alpha.Who\") & vbLf\nreport = report & \"@raw:Who=\" & TryRun(\"@raw:Who\") & vbLf\nreport = report & \"flag_1=\" & TryFlag(1) & vbLf\nreport = report & \"flag_2=\" & TryFlag(2) & vbLf\nreport = report & \"flag_3=\" & TryFlag(3) & vbLf\nreport = report & \"flag_4=\" & TryFlag(4) & vbLf\nreport = report & \"flag_8=\" & TryFlag(8) & vbLf\nreport = report & \"flag_0=\" & TryFlag(0) & vbLf\nreport = report & \"flag_16=\" & TryFlag(16) & vbLf\nProbe = report\nEnd Function\nPrivate Function TryFlag(ByVal flag As Long) As String\nDim value As Variant\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = CallByName(Application, \"Run\", flag, \"'\" & ThisWorkbook.Name & \"'!Alpha.OptionalArg\")\nTryFlag = CStr(Err.Number) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "entry_names": [
+        "Who",
+        "Alpha.Who",
+        "Beta.Who",
+        "Alpha.PrivateWho",
+        "Alpha.Needed",
+        "Alpha.OptionalArg",
+        "Alpha.Many",
+        "Hidden.VisibleFn",
+        "Plain.Who",
+        "Plain.PrivateWho",
+        "Singleton.Who",
+        "Sheet1.Who",
+        "Sheet1.PrivateWho",
+        "ThisWorkbook.Who",
+        "ThisWorkbook.PrivateWho",
+        "標準モジュール.報告",
+        "報告",
+        "Alpha.Absent",
+        "PrivateWho",
+        "SharedChoice",
+        "Alpha.SharedChoice",
+        "Beta.SharedChoice",
+        "Alpha.LocalWho",
+        "@raw:Alpha.LocalWho",
+        "VisibleFn",
+        "Sheet1.DocOnly",
+        "DocOnly",
+        "Sheet1.Needed",
+        "@arg:Sheet1.Needed",
+        "@arg:Sheet1.Who",
+        "Sheet1.OptionalArg",
+        "Sheet1.WriteOnly",
+        "Alpha.Label",
+        "Sheet1.Label",
+        "@raw:VBAProject.Alpha.Who",
+        "@raw:'missing.xlsm'!Alpha.Who",
+        "@raw:Alpha.Who",
+        "@raw:Who"
+      ],
+      "expose_class": true
+    }
+  },
+  {
+    "name": "project_entry_with",
+    "source": "project_entry_with.bas",
+    "package_fixture": "project_entry_with.xlsm",
+    "procedure": "Driver.Probe",
+    "expected": "Who=1004|Empty||\nAlpha.Who=0|String|alpha|\nBeta.Who=0|String|beta|\nAlpha.PrivateWho=0|String|alpha-private|\nAlpha.Needed=449|Empty||\nAlpha.OptionalArg=0|String|optional:7|\nAlpha.Many=0|String|many:0|\nHidden.VisibleFn=0|String|hidden-module|\nPlain.Who=1004|Empty||\nPlain.PrivateWho=1004|Empty||\nSingleton.Who=1004|Empty||\nSheet1.Who=0|Empty||s\nSheet1.PrivateWho=0|Empty||sp\nThisWorkbook.Who=0|Empty||b\nThisWorkbook.PrivateWho=0|Empty||bp\n標準モジュール.報告=0|String|unicode|\n報告=0|String|unicode|\nAlpha.Absent=1004|Empty||\nPrivateWho=0|String|alpha-private|\nSharedChoice=1004|Empty||\nAlpha.SharedChoice=0|String|alpha-hidden|\nBeta.SharedChoice=0|String|beta-public|\nAlpha.LocalWho=1004|String|1004~~|\n@raw:Alpha.LocalWho=1004|String|1004~~|\nVisibleFn=0|String|hidden-module|\nSheet1.DocOnly=0|Empty||D\nDocOnly=1004|Empty||\nSheet1.Needed=449|Empty||\n@arg:Sheet1.Needed=0|Empty||N11\n@arg:Sheet1.Who=450|Empty||\nSheet1.OptionalArg=0|Empty||O7\nSheet1.WriteOnly=0|Empty||Z\nAlpha.Label=1004|Empty||\nSheet1.Label=1004|Empty||\n@raw:VBAProject.Alpha.Who=0|String|alpha|\n@raw:'missing.xlsm'!Alpha.Who=1004|Empty||\n@raw:Alpha.Who=0|String|alpha|\n@raw:Who=1004|Empty||\n",
+    "measured_cases": 38,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "project_entry_with.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "expected_procedures": [
+      {
+        "name": "ThisWorkbook.Who",
+        "module_name": "ThisWorkbook",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "ThisWorkbook.PrivateWho",
+        "module_name": "ThisWorkbook",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.Who",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.PrivateWho",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.DocOnly",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.Needed",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Sheet1.OptionalArg",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.WriteOnly",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "sub",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Who",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.PrivateWho",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Needed",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Alpha.OptionalArg",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Many",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.SharedChoice",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.LocalWho",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Beta.Who",
+        "module_name": "Beta",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Beta.SharedChoice",
+        "module_name": "Beta",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Hidden.VisibleFn",
+        "module_name": "Hidden",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "標準モジュール.報告",
+        "module_name": "標準モジュール",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.ResetTrace",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "sub",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.ReadTrace",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.TryRun",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Driver.Probe",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      }
+    ],
+    "direct_entries": [
+      {
+        "name": "Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Beta.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Needed",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.OptionalArg",
+        "steps": [
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Many",
+        "steps": [
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Hidden.VisibleFn",
+        "steps": [
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Plain.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Plain.PrivateWho",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Singleton.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "s"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "s"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "s"
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "sp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "sp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "sp"
+          }
+        ]
+      },
+      {
+        "name": "ThisWorkbook.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "b"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "b"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "b"
+          }
+        ]
+      },
+      {
+        "name": "ThisWorkbook.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "bp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "bp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "bp"
+          }
+        ]
+      },
+      {
+        "name": "標準モジュール.報告",
+        "steps": [
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "報告",
+        "steps": [
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Absent",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "SharedChoice",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!SharedChoice' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!SharedChoice' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!SharedChoice' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.SharedChoice",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-hidden",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-hidden",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-hidden",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Beta.SharedChoice",
+        "steps": [
+          {
+            "ok": true,
+            "value": "beta-public",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta-public",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta-public",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.LocalWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:Alpha.LocalWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "VisibleFn",
+        "steps": [
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.DocOnly",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "D"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "D"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "D"
+          }
+        ]
+      },
+      {
+        "name": "DocOnly",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!DocOnly' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!DocOnly' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!DocOnly' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Needed",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@arg:Sheet1.Needed",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "N11"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "N11"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "N11"
+          }
+        ]
+      },
+      {
+        "name": "@arg:Sheet1.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352562,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352562,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352562,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.OptionalArg",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "O7"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "O7"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "O7"
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.WriteOnly",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "Z"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "Z"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "Z"
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Label",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Alpha.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Alpha.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Alpha.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Label",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Sheet1.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Sheet1.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_with.xlsm'!Sheet1.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:VBAProject.Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:'missing.xlsm'!Alpha.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "ファイル 'C:\\Users\\ryuji\\OneDrive\\ドキュメント\\missing.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "ファイル 'C:\\Users\\ryuji\\OneDrive\\ドキュメント\\missing.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "ファイル 'C:\\Users\\ryuji\\OneDrive\\ドキュメント\\missing.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ 'Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ 'Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ 'Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      }
+    ],
+    "measurement": {
+      "name": "project_entry_with",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "ThisWorkbook",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Driver.Trace = Driver.Trace & \"b\"\n    Who = \"book\"\nEnd Function\nPrivate Function PrivateWho() As String\n    Driver.Trace = Driver.Trace & \"bp\"\n    PrivateWho = \"book-private\"\nEnd Function\n",
+          "kind": 100,
+          "old": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Driver.Trace = Driver.Trace & \"s\"\n    Who = \"sheet\"\nEnd Function\nPrivate Function PrivateWho() As String\n    Driver.Trace = Driver.Trace & \"sp\"\n    PrivateWho = \"sheet-private\"\nEnd Function\nPublic Function DocOnly() As String\nDriver.Trace = Driver.Trace & \"D\"\nDocOnly = \"doc-only\"\nEnd Function\nPublic Function Needed(ByVal n As Long) As String\nDriver.Trace = Driver.Trace & \"N\" & CStr(n)\nNeeded = \"doc-need:\" & CStr(n)\nEnd Function\nPublic Function OptionalArg(Optional n As Long = 7) As String\nDriver.Trace = Driver.Trace & \"O\" & CStr(n)\nOptionalArg = \"doc-optional:\" & CStr(n)\nEnd Function\nPublic Sub WriteOnly()\nDriver.Trace = Driver.Trace & \"Z\"\nEnd Sub\nPublic Property Get Label() As String\nDriver.Trace = Driver.Trace & \"Q\"\nLabel = \"sheet-label\"\nEnd Property\n",
+          "kind": 100,
+          "old": "Sheet1"
+        },
+        {
+          "name": "Alpha",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Who = \"alpha\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"alpha-private\"\nEnd Function\nPublic Function Needed(ByVal n As Long) As String\nNeeded = \"need:\" & CStr(n)\nEnd Function\nPublic Function OptionalArg(Optional n As Long = 7) As String\nOptionalArg = \"optional:\" & CStr(n)\nEnd Function\nPublic Function Many(ParamArray values() As Variant) As String\nMany = \"many:\" & CStr(UBound(values) - LBound(values) + 1)\nEnd Function\nPrivate Function SharedChoice() As String\n    SharedChoice = \"alpha-hidden\"\nEnd Function\nPublic Function LocalWho() As String\nDim value As Variant\nDriver.Trace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Application.Run(\"Who\")\nLocalWho = CStr(Err.Number) & \"~\" & CStr(value) & \"~\" & Driver.Trace\nEnd Function\nPublic Property Get Label() As String\nDriver.Trace = Driver.Trace & \"L\"\nLabel = \"alpha-label\"\nEnd Property\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Beta",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Who = \"beta\"\nEnd Function\nPublic Function SharedChoice() As String\n    SharedChoice = \"beta-public\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Plain",
+          "body": "Option Explicit\nPrivate Sub Class_Initialize()\nDriver.Trace = Driver.Trace & \"P\"\nEnd Sub\nPublic Function Who() As String\n    Who = \"plain\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"plain-private\"\nEnd Function\n",
+          "kind": 2,
+          "old": null,
+          "predeclared": false
+        },
+        {
+          "name": "Singleton",
+          "body": "Option Explicit\nPrivate Sub Class_Initialize()\nDriver.Trace = Driver.Trace & \"S\"\nEnd Sub\nPublic Function Who() As String\n    Who = \"singleton\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"singleton-private\"\nEnd Function\n",
+          "kind": 2,
+          "old": null,
+          "predeclared": true
+        },
+        {
+          "name": "Hidden",
+          "body": "Option Explicit\nOption Private Module\nPublic Function VisibleFn() As String\n    VisibleFn = \"hidden-module\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "標準モジュール",
+          "body": "Option Explicit\nPublic Function 報告() As String\n    報告 = \"unicode\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Trace As String\nPublic Sub ResetTrace()\nTrace = \"\"\nEnd Sub\nPublic Function ReadTrace() As String\nReadTrace = Trace\nEnd Function\nPrivate Function TryRun(ByVal entryName As String) As String\nDim value As Variant, macroName As String, withArgument As Boolean\nIf Left(entryName, 5) = \"@raw:\" Then\n    macroName = Mid(entryName, 6)\nElseIf Left(entryName, 5) = \"@arg:\" Then\n    macroName = \"'\" & ThisWorkbook.Name & \"'!\" & Mid(entryName, 6)\n    withArgument = True\nElse\n    macroName = \"'\" & ThisWorkbook.Name & \"'!\" & entryName\nEnd If\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nIf withArgument Then\n    With Application\n    value = .Run(macroName, 11)\n    End With\nElse\n    With Application\n    value = .Run(macroName)\n    End With\nEnd If\nTryRun = CStr(Err.Number) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPublic Function Probe() As String\nDim report As String\nreport = report & \"Who=\" & TryRun(\"Who\") & vbLf\nreport = report & \"Alpha.Who=\" & TryRun(\"Alpha.Who\") & vbLf\nreport = report & \"Beta.Who=\" & TryRun(\"Beta.Who\") & vbLf\nreport = report & \"Alpha.PrivateWho=\" & TryRun(\"Alpha.PrivateWho\") & vbLf\nreport = report & \"Alpha.Needed=\" & TryRun(\"Alpha.Needed\") & vbLf\nreport = report & \"Alpha.OptionalArg=\" & TryRun(\"Alpha.OptionalArg\") & vbLf\nreport = report & \"Alpha.Many=\" & TryRun(\"Alpha.Many\") & vbLf\nreport = report & \"Hidden.VisibleFn=\" & TryRun(\"Hidden.VisibleFn\") & vbLf\nreport = report & \"Plain.Who=\" & TryRun(\"Plain.Who\") & vbLf\nreport = report & \"Plain.PrivateWho=\" & TryRun(\"Plain.PrivateWho\") & vbLf\nreport = report & \"Singleton.Who=\" & TryRun(\"Singleton.Who\") & vbLf\nreport = report & \"Sheet1.Who=\" & TryRun(\"Sheet1.Who\") & vbLf\nreport = report & \"Sheet1.PrivateWho=\" & TryRun(\"Sheet1.PrivateWho\") & vbLf\nreport = report & \"ThisWorkbook.Who=\" & TryRun(\"ThisWorkbook.Who\") & vbLf\nreport = report & \"ThisWorkbook.PrivateWho=\" & TryRun(\"ThisWorkbook.PrivateWho\") & vbLf\nreport = report & \"標準モジュール.報告=\" & TryRun(\"標準モジュール.報告\") & vbLf\nreport = report & \"報告=\" & TryRun(\"報告\") & vbLf\nreport = report & \"Alpha.Absent=\" & TryRun(\"Alpha.Absent\") & vbLf\nreport = report & \"PrivateWho=\" & TryRun(\"PrivateWho\") & vbLf\nreport = report & \"SharedChoice=\" & TryRun(\"SharedChoice\") & vbLf\nreport = report & \"Alpha.SharedChoice=\" & TryRun(\"Alpha.SharedChoice\") & vbLf\nreport = report & \"Beta.SharedChoice=\" & TryRun(\"Beta.SharedChoice\") & vbLf\nreport = report & \"Alpha.LocalWho=\" & TryRun(\"Alpha.LocalWho\") & vbLf\nreport = report & \"@raw:Alpha.LocalWho=\" & TryRun(\"@raw:Alpha.LocalWho\") & vbLf\nreport = report & \"VisibleFn=\" & TryRun(\"VisibleFn\") & vbLf\nreport = report & \"Sheet1.DocOnly=\" & TryRun(\"Sheet1.DocOnly\") & vbLf\nreport = report & \"DocOnly=\" & TryRun(\"DocOnly\") & vbLf\nreport = report & \"Sheet1.Needed=\" & TryRun(\"Sheet1.Needed\") & vbLf\nreport = report & \"@arg:Sheet1.Needed=\" & TryRun(\"@arg:Sheet1.Needed\") & vbLf\nreport = report & \"@arg:Sheet1.Who=\" & TryRun(\"@arg:Sheet1.Who\") & vbLf\nreport = report & \"Sheet1.OptionalArg=\" & TryRun(\"Sheet1.OptionalArg\") & vbLf\nreport = report & \"Sheet1.WriteOnly=\" & TryRun(\"Sheet1.WriteOnly\") & vbLf\nreport = report & \"Alpha.Label=\" & TryRun(\"Alpha.Label\") & vbLf\nreport = report & \"Sheet1.Label=\" & TryRun(\"Sheet1.Label\") & vbLf\nreport = report & \"@raw:VBAProject.Alpha.Who=\" & TryRun(\"@raw:VBAProject.Alpha.Who\") & vbLf\nreport = report & \"@raw:'missing.xlsm'!Alpha.Who=\" & TryRun(\"@raw:'missing.xlsm'!Alpha.Who\") & vbLf\nreport = report & \"@raw:Alpha.Who=\" & TryRun(\"@raw:Alpha.Who\") & vbLf\nreport = report & \"@raw:Who=\" & TryRun(\"@raw:Who\") & vbLf\nProbe = report\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "entry_names": [
+        "Who",
+        "Alpha.Who",
+        "Beta.Who",
+        "Alpha.PrivateWho",
+        "Alpha.Needed",
+        "Alpha.OptionalArg",
+        "Alpha.Many",
+        "Hidden.VisibleFn",
+        "Plain.Who",
+        "Plain.PrivateWho",
+        "Singleton.Who",
+        "Sheet1.Who",
+        "Sheet1.PrivateWho",
+        "ThisWorkbook.Who",
+        "ThisWorkbook.PrivateWho",
+        "標準モジュール.報告",
+        "報告",
+        "Alpha.Absent",
+        "PrivateWho",
+        "SharedChoice",
+        "Alpha.SharedChoice",
+        "Beta.SharedChoice",
+        "Alpha.LocalWho",
+        "@raw:Alpha.LocalWho",
+        "VisibleFn",
+        "Sheet1.DocOnly",
+        "DocOnly",
+        "Sheet1.Needed",
+        "@arg:Sheet1.Needed",
+        "@arg:Sheet1.Who",
+        "Sheet1.OptionalArg",
+        "Sheet1.WriteOnly",
+        "Alpha.Label",
+        "Sheet1.Label",
+        "@raw:VBAProject.Alpha.Who",
+        "@raw:'missing.xlsm'!Alpha.Who",
+        "@raw:Alpha.Who",
+        "@raw:Who"
+      ],
+      "expose_class": true
+    }
+  },
+  {
+    "name": "project_entry_global",
+    "source": "project_entry_global.bas",
+    "package_fixture": "project_entry_global.xlsm",
+    "procedure": "Driver.Probe",
+    "expected": "Who=1004|Empty||\nAlpha.Who=0|String|alpha|\nBeta.Who=0|String|beta|\nAlpha.PrivateWho=0|String|alpha-private|\nAlpha.Needed=449|Empty||\nAlpha.OptionalArg=0|String|optional:7|\nAlpha.Many=0|String|many:0|\nHidden.VisibleFn=0|String|hidden-module|\nPlain.Who=1004|Empty||\nPlain.PrivateWho=1004|Empty||\nSingleton.Who=1004|Empty||\nSheet1.Who=0|Empty||s\nSheet1.PrivateWho=0|Empty||sp\nThisWorkbook.Who=0|Empty||b\nThisWorkbook.PrivateWho=0|Empty||bp\n標準モジュール.報告=0|String|unicode|\n報告=0|String|unicode|\nAlpha.Absent=1004|Empty||\nPrivateWho=0|String|alpha-private|\nSharedChoice=1004|Empty||\nAlpha.SharedChoice=0|String|alpha-hidden|\nBeta.SharedChoice=0|String|beta-public|\nAlpha.LocalWho=1004|String|1004~~|\n@raw:Alpha.LocalWho=1004|String|1004~~|\nVisibleFn=0|String|hidden-module|\nSheet1.DocOnly=0|Empty||D\nDocOnly=1004|Empty||\nSheet1.Needed=449|Empty||\n@arg:Sheet1.Needed=0|Empty||N11\n@arg:Sheet1.Who=450|Empty||\nSheet1.OptionalArg=0|Empty||O7\nSheet1.WriteOnly=0|Empty||Z\nAlpha.Label=1004|Empty||\nSheet1.Label=1004|Empty||\n@raw:VBAProject.Alpha.Who=0|String|alpha|\n@raw:'missing.xlsm'!Alpha.Who=1004|Empty||\n@raw:Alpha.Who=0|String|alpha|\n@raw:Who=1004|Empty||\n",
+    "measured_cases": 38,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "project_entry_global.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "expected_procedures": [
+      {
+        "name": "ThisWorkbook.Who",
+        "module_name": "ThisWorkbook",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "ThisWorkbook.PrivateWho",
+        "module_name": "ThisWorkbook",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.Who",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.PrivateWho",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.DocOnly",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.Needed",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Sheet1.OptionalArg",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Sheet1.WriteOnly",
+        "module_name": "Sheet1",
+        "module_kind": "document",
+        "kind": "sub",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Who",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.PrivateWho",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Needed",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Alpha.OptionalArg",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.Many",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 1,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.SharedChoice",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Alpha.LocalWho",
+        "module_name": "Alpha",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Beta.Who",
+        "module_name": "Beta",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Beta.SharedChoice",
+        "module_name": "Beta",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Hidden.VisibleFn",
+        "module_name": "Hidden",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "標準モジュール.報告",
+        "module_name": "標準モジュール",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.ResetTrace",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "sub",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.ReadTrace",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      },
+      {
+        "name": "Driver.TryRun",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "private",
+        "parameter_count": 1,
+        "required_parameter_count": 1
+      },
+      {
+        "name": "Driver.Probe",
+        "module_name": "Driver",
+        "module_kind": "standard",
+        "kind": "function",
+        "visibility": "public",
+        "parameter_count": 0,
+        "required_parameter_count": 0
+      }
+    ],
+    "direct_entries": [
+      {
+        "name": "Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Beta.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Needed",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.OptionalArg",
+        "steps": [
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "optional:7",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Many",
+        "steps": [
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "many:0",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Hidden.VisibleFn",
+        "steps": [
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Plain.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Plain.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Plain.PrivateWho",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Plain.PrivateWho' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Singleton.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Singleton.Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "s"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "s"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "s"
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "sp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "sp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "sp"
+          }
+        ]
+      },
+      {
+        "name": "ThisWorkbook.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "b"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "b"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "b"
+          }
+        ]
+      },
+      {
+        "name": "ThisWorkbook.PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "bp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "bp"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "bp"
+          }
+        ]
+      },
+      {
+        "name": "標準モジュール.報告",
+        "steps": [
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "報告",
+        "steps": [
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "unicode",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Absent",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Alpha.Absent' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "PrivateWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-private",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "SharedChoice",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!SharedChoice' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!SharedChoice' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!SharedChoice' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.SharedChoice",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha-hidden",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-hidden",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha-hidden",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Beta.SharedChoice",
+        "steps": [
+          {
+            "ok": true,
+            "value": "beta-public",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta-public",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "beta-public",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Alpha.LocalWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:Alpha.LocalWho",
+        "steps": [
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "1004~~",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "VisibleFn",
+        "steps": [
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "hidden-module",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.DocOnly",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "D"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "D"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "D"
+          }
+        ]
+      },
+      {
+        "name": "DocOnly",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!DocOnly' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!DocOnly' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!DocOnly' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Needed",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352561,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@arg:Sheet1.Needed",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "N11"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "N11"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "N11"
+          }
+        ]
+      },
+      {
+        "name": "@arg:Sheet1.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352562,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352562,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": null,
+            "source": null,
+            "scode": -2147352562,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.OptionalArg",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "O7"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "O7"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "O7"
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.WriteOnly",
+        "steps": [
+          {
+            "ok": true,
+            "value": null,
+            "trace": "Z"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "Z"
+          },
+          {
+            "ok": true,
+            "value": null,
+            "trace": "Z"
+          }
+        ]
+      },
+      {
+        "name": "Alpha.Label",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Alpha.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Alpha.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Alpha.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "Sheet1.Label",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Sheet1.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Sheet1.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ ''project_entry_global.xlsm'!Sheet1.Label' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:VBAProject.Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:'missing.xlsm'!Alpha.Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "ファイル 'C:\\Users\\ryuji\\OneDrive\\ドキュメント\\missing.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "ファイル 'C:\\Users\\ryuji\\OneDrive\\ドキュメント\\missing.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "ファイル 'C:\\Users\\ryuji\\OneDrive\\ドキュメント\\missing.xlsm' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:Alpha.Who",
+        "steps": [
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          },
+          {
+            "ok": true,
+            "value": "alpha",
+            "trace": ""
+          }
+        ]
+      },
+      {
+        "name": "@raw:Who",
+        "steps": [
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ 'Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ 'Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          },
+          {
+            "ok": false,
+            "hresult": -2147352567,
+            "description": "マクロ 'Who' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。",
+            "source": "Microsoft Excel",
+            "scode": -2146827284,
+            "trace": ""
+          }
+        ]
+      }
+    ],
+    "measurement": {
+      "name": "project_entry_global",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "ThisWorkbook",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Driver.Trace = Driver.Trace & \"b\"\n    Who = \"book\"\nEnd Function\nPrivate Function PrivateWho() As String\n    Driver.Trace = Driver.Trace & \"bp\"\n    PrivateWho = \"book-private\"\nEnd Function\n",
+          "kind": 100,
+          "old": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Driver.Trace = Driver.Trace & \"s\"\n    Who = \"sheet\"\nEnd Function\nPrivate Function PrivateWho() As String\n    Driver.Trace = Driver.Trace & \"sp\"\n    PrivateWho = \"sheet-private\"\nEnd Function\nPublic Function DocOnly() As String\nDriver.Trace = Driver.Trace & \"D\"\nDocOnly = \"doc-only\"\nEnd Function\nPublic Function Needed(ByVal n As Long) As String\nDriver.Trace = Driver.Trace & \"N\" & CStr(n)\nNeeded = \"doc-need:\" & CStr(n)\nEnd Function\nPublic Function OptionalArg(Optional n As Long = 7) As String\nDriver.Trace = Driver.Trace & \"O\" & CStr(n)\nOptionalArg = \"doc-optional:\" & CStr(n)\nEnd Function\nPublic Sub WriteOnly()\nDriver.Trace = Driver.Trace & \"Z\"\nEnd Sub\nPublic Property Get Label() As String\nDriver.Trace = Driver.Trace & \"Q\"\nLabel = \"sheet-label\"\nEnd Property\n",
+          "kind": 100,
+          "old": "Sheet1"
+        },
+        {
+          "name": "Alpha",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Who = \"alpha\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"alpha-private\"\nEnd Function\nPublic Function Needed(ByVal n As Long) As String\nNeeded = \"need:\" & CStr(n)\nEnd Function\nPublic Function OptionalArg(Optional n As Long = 7) As String\nOptionalArg = \"optional:\" & CStr(n)\nEnd Function\nPublic Function Many(ParamArray values() As Variant) As String\nMany = \"many:\" & CStr(UBound(values) - LBound(values) + 1)\nEnd Function\nPrivate Function SharedChoice() As String\n    SharedChoice = \"alpha-hidden\"\nEnd Function\nPublic Function LocalWho() As String\nDim value As Variant\nDriver.Trace = \"\"\nOn Error Resume Next\nErr.Clear\nvalue = Run(\"Who\")\nLocalWho = CStr(Err.Number) & \"~\" & CStr(value) & \"~\" & Driver.Trace\nEnd Function\nPublic Property Get Label() As String\nDriver.Trace = Driver.Trace & \"L\"\nLabel = \"alpha-label\"\nEnd Property\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Beta",
+          "body": "Option Explicit\nPublic Function Who() As String\n    Who = \"beta\"\nEnd Function\nPublic Function SharedChoice() As String\n    SharedChoice = \"beta-public\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Plain",
+          "body": "Option Explicit\nPrivate Sub Class_Initialize()\nDriver.Trace = Driver.Trace & \"P\"\nEnd Sub\nPublic Function Who() As String\n    Who = \"plain\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"plain-private\"\nEnd Function\n",
+          "kind": 2,
+          "old": null,
+          "predeclared": false
+        },
+        {
+          "name": "Singleton",
+          "body": "Option Explicit\nPrivate Sub Class_Initialize()\nDriver.Trace = Driver.Trace & \"S\"\nEnd Sub\nPublic Function Who() As String\n    Who = \"singleton\"\nEnd Function\nPrivate Function PrivateWho() As String\n    PrivateWho = \"singleton-private\"\nEnd Function\n",
+          "kind": 2,
+          "old": null,
+          "predeclared": true
+        },
+        {
+          "name": "Hidden",
+          "body": "Option Explicit\nOption Private Module\nPublic Function VisibleFn() As String\n    VisibleFn = \"hidden-module\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "標準モジュール",
+          "body": "Option Explicit\nPublic Function 報告() As String\n    報告 = \"unicode\"\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        },
+        {
+          "name": "Driver",
+          "body": "Option Explicit\nPublic Trace As String\nPublic Sub ResetTrace()\nTrace = \"\"\nEnd Sub\nPublic Function ReadTrace() As String\nReadTrace = Trace\nEnd Function\nPrivate Function TryRun(ByVal entryName As String) As String\nDim value As Variant, macroName As String, withArgument As Boolean\nIf Left(entryName, 5) = \"@raw:\" Then\n    macroName = Mid(entryName, 6)\nElseIf Left(entryName, 5) = \"@arg:\" Then\n    macroName = \"'\" & ThisWorkbook.Name & \"'!\" & Mid(entryName, 6)\n    withArgument = True\nElse\n    macroName = \"'\" & ThisWorkbook.Name & \"'!\" & entryName\nEnd If\nTrace = \"\"\nOn Error Resume Next\nErr.Clear\nIf withArgument Then\n    value = Run(macroName, 11)\nElse\n    value = Run(macroName)\nEnd If\nTryRun = CStr(Err.Number) & \"|\" & TypeName(value) & \"|\" & CStr(value) & \"|\" & Trace\nEnd Function\nPublic Function Probe() As String\nDim report As String\nreport = report & \"Who=\" & TryRun(\"Who\") & vbLf\nreport = report & \"Alpha.Who=\" & TryRun(\"Alpha.Who\") & vbLf\nreport = report & \"Beta.Who=\" & TryRun(\"Beta.Who\") & vbLf\nreport = report & \"Alpha.PrivateWho=\" & TryRun(\"Alpha.PrivateWho\") & vbLf\nreport = report & \"Alpha.Needed=\" & TryRun(\"Alpha.Needed\") & vbLf\nreport = report & \"Alpha.OptionalArg=\" & TryRun(\"Alpha.OptionalArg\") & vbLf\nreport = report & \"Alpha.Many=\" & TryRun(\"Alpha.Many\") & vbLf\nreport = report & \"Hidden.VisibleFn=\" & TryRun(\"Hidden.VisibleFn\") & vbLf\nreport = report & \"Plain.Who=\" & TryRun(\"Plain.Who\") & vbLf\nreport = report & \"Plain.PrivateWho=\" & TryRun(\"Plain.PrivateWho\") & vbLf\nreport = report & \"Singleton.Who=\" & TryRun(\"Singleton.Who\") & vbLf\nreport = report & \"Sheet1.Who=\" & TryRun(\"Sheet1.Who\") & vbLf\nreport = report & \"Sheet1.PrivateWho=\" & TryRun(\"Sheet1.PrivateWho\") & vbLf\nreport = report & \"ThisWorkbook.Who=\" & TryRun(\"ThisWorkbook.Who\") & vbLf\nreport = report & \"ThisWorkbook.PrivateWho=\" & TryRun(\"ThisWorkbook.PrivateWho\") & vbLf\nreport = report & \"標準モジュール.報告=\" & TryRun(\"標準モジュール.報告\") & vbLf\nreport = report & \"報告=\" & TryRun(\"報告\") & vbLf\nreport = report & \"Alpha.Absent=\" & TryRun(\"Alpha.Absent\") & vbLf\nreport = report & \"PrivateWho=\" & TryRun(\"PrivateWho\") & vbLf\nreport = report & \"SharedChoice=\" & TryRun(\"SharedChoice\") & vbLf\nreport = report & \"Alpha.SharedChoice=\" & TryRun(\"Alpha.SharedChoice\") & vbLf\nreport = report & \"Beta.SharedChoice=\" & TryRun(\"Beta.SharedChoice\") & vbLf\nreport = report & \"Alpha.LocalWho=\" & TryRun(\"Alpha.LocalWho\") & vbLf\nreport = report & \"@raw:Alpha.LocalWho=\" & TryRun(\"@raw:Alpha.LocalWho\") & vbLf\nreport = report & \"VisibleFn=\" & TryRun(\"VisibleFn\") & vbLf\nreport = report & \"Sheet1.DocOnly=\" & TryRun(\"Sheet1.DocOnly\") & vbLf\nreport = report & \"DocOnly=\" & TryRun(\"DocOnly\") & vbLf\nreport = report & \"Sheet1.Needed=\" & TryRun(\"Sheet1.Needed\") & vbLf\nreport = report & \"@arg:Sheet1.Needed=\" & TryRun(\"@arg:Sheet1.Needed\") & vbLf\nreport = report & \"@arg:Sheet1.Who=\" & TryRun(\"@arg:Sheet1.Who\") & vbLf\nreport = report & \"Sheet1.OptionalArg=\" & TryRun(\"Sheet1.OptionalArg\") & vbLf\nreport = report & \"Sheet1.WriteOnly=\" & TryRun(\"Sheet1.WriteOnly\") & vbLf\nreport = report & \"Alpha.Label=\" & TryRun(\"Alpha.Label\") & vbLf\nreport = report & \"Sheet1.Label=\" & TryRun(\"Sheet1.Label\") & vbLf\nreport = report & \"@raw:VBAProject.Alpha.Who=\" & TryRun(\"@raw:VBAProject.Alpha.Who\") & vbLf\nreport = report & \"@raw:'missing.xlsm'!Alpha.Who=\" & TryRun(\"@raw:'missing.xlsm'!Alpha.Who\") & vbLf\nreport = report & \"@raw:Alpha.Who=\" & TryRun(\"@raw:Alpha.Who\") & vbLf\nreport = report & \"@raw:Who=\" & TryRun(\"@raw:Who\") & vbLf\nProbe = report\nEnd Function\n",
+          "kind": 1,
+          "old": null
+        }
+      ],
+      "entry_names": [
+        "Who",
+        "Alpha.Who",
+        "Beta.Who",
+        "Alpha.PrivateWho",
+        "Alpha.Needed",
+        "Alpha.OptionalArg",
+        "Alpha.Many",
+        "Hidden.VisibleFn",
+        "Plain.Who",
+        "Plain.PrivateWho",
+        "Singleton.Who",
+        "Sheet1.Who",
+        "Sheet1.PrivateWho",
+        "ThisWorkbook.Who",
+        "ThisWorkbook.PrivateWho",
+        "標準モジュール.報告",
+        "報告",
+        "Alpha.Absent",
+        "PrivateWho",
+        "SharedChoice",
+        "Alpha.SharedChoice",
+        "Beta.SharedChoice",
+        "Alpha.LocalWho",
+        "@raw:Alpha.LocalWho",
+        "VisibleFn",
+        "Sheet1.DocOnly",
+        "DocOnly",
+        "Sheet1.Needed",
+        "@arg:Sheet1.Needed",
+        "@arg:Sheet1.Who",
+        "Sheet1.OptionalArg",
+        "Sheet1.WriteOnly",
+        "Alpha.Label",
+        "Sheet1.Label",
+        "@raw:VBAProject.Alpha.Who",
+        "@raw:'missing.xlsm'!Alpha.Who",
+        "@raw:Alpha.Who",
+        "@raw:Who"
+      ],
+      "expose_class": true
+    }
+  }
+]

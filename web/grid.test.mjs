@@ -62,7 +62,7 @@ const tables = ['LISTS', 'TAIL', 'INDENT', 'DAY', 'EPOCH'].map(liftBinding).join
 const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside',
   'pasteGrid', 'clearSelection', 'goTo', 'contentOf', 'selectionText', 'fieldOf',
   'asGrid', 'change', 'restore', 'undo', 'redo', 'remember', 'edited',
-  'markSaved', 'markSteps', 'put', 'heldAt',
+  'calculationPendingSave', 'markSaved', 'markSteps', 'put', 'heldAt', 'bandStyleAt',
   // put() asks these before it writes: a protected sheet and a validated
   // range both refuse a value, and the page refuses it in one place.
   'ruleAt', 'allows', 'listItems',
@@ -142,6 +142,7 @@ let step = null;
 const DEPTH = 100;
 const describe = () => {};
 const saveButton = { disabled: true, textContent: '' };
+const savedCalculation = { mode: 'auto', on_save: true };
 // markSaved() writes the word for "save" in whichever language the page is set
 // to. Nothing here reads that word — only whether the button is live — so the
 // lookup just has to answer, and the page keeps its own dictionary.
@@ -151,6 +152,7 @@ const onButton = { disabled: true };
 let anyFormulas = false;
 let filling = null;
 let beyondValues = false;
+let macroSourceDirty = false;
 // Moving a formula's references is the engine's job and has its own test.
 // Here it only has to be visible when a formula is carried across.
 const translate_formula = (text, rows, cols) =>
@@ -1621,6 +1623,39 @@ grid.seed(2, 0, String(serialOf('2026-02-28')));
 pull(1, 0, 2, 0, 3);
 is('without a date format they are numbers, and step by the gap',
   column(0, 3, 3), [String(serialOf('2026-02-28') + 28)]);
+
+// Paint the page's real canvas routine with sparse band styles. Existing
+// cells keep their own style; empty cells inherit the row, then column.
+const bandPainter = await import('data:text/javascript,' + encodeURIComponent(`
+const geom = {lastRow: 2, lastCol: 1, cols: [0, 10, 20], tops: [0, 0, 10, 20], covered: new Map()};
+const boxOf = (row, col) => ({left: geom.cols[col], right: geom.cols[col + 1], top: geom.tops[row], bottom: geom.tops[row + 1]});
+const dressed = (row, col, style) => style;
+const tint = (color, fallback) => color ? '#' + color : fallback;
+const ruleOf = () => null;
+const indentStep = () => 0;
+const shownText = () => '';
+${lift('paintCells')}
+export function paint(sheet) {
+  const fills = [];
+  const ink = {fillStyle: '', fillRect(x, y, w, h) { fills.push([x, y, w, h, this.fillStyle]); },
+    beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, setLineDash() {}};
+  paintCells(ink, sheet, {x0: 0, x1: 20, y0: 0, y1: 20, dx: 0, dy: 0}, {w: 20, h: 20});
+  return fills.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+}`));
+is('canvas paints band formatting on empty cells and keeps an explicit cell style',
+  bandPainter.paint({rows: [{index: 1, cells: [{col: 0, style: {bg_color: '0000FF'}}]}],
+    band_styles: {rows: [[1, {bg_color: 'FF0000'}]], columns: [[0, {bg_color: '00FF00'}]]}}),
+  [[0, 0, 10, 10, '#0000FF'], [10, 0, 10, 10, '#FF0000'], [0, 10, 10, 10, '#00FF00']]);
+grid.forget();
+grid.sheetOf().band_styles = {rows: [[2, {bg_color: 'FF0000'}]], columns: [[1, {bg_color: '00FF00'}]]};
+grid.select(2, 25, 2, 25);
+is('the format toolbar reads the empty cell\'s inherited colour', grid.agreedOn('bg_color'), 'FF0000');
+grid.put(2, 25, 'row');
+grid.put(40, 1, 'column');
+is('typing in a blank row preserves its inherited style', grid.styleAt(2, 25), {bg_color: 'FF0000'});
+is('typing in a blank column preserves its inherited style', grid.styleAt(40, 1), {bg_color: '00FF00'});
+is('typing inherited formatting selects the complete save path', grid.beyond(), true);
+delete grid.sheetOf().band_styles;
 
 console.log(failures === 0
   ? '\nthe grid behaves'

@@ -18,6 +18,15 @@
 //! small host-independent interpreter for pure VBA code. Excel's object model
 //! will be supplied separately by a browser host adapter.
 //!
+//! [`native_cache`] additionally reads version-checked project/module metadata,
+//! encoded identifiers and numeric instruction spans. Package extraction and
+//! runtime entry binding stay with the caller; these readers do not execute
+//! complete cached projects.
+//! A bounded scalar execution component can bind companion defaults and run
+//! whole supported runtime method images without consulting source. Cache
+//! Local scalar calls follow primary-cache bindings. Cache activation, managed
+//! values, cross-module calls and the full host VM remain separate work.
+//!
 //! # Status
 //!
 //! Lexer and parser. See `FEATURE-MAP.md` for the language surface this is
@@ -30,24 +39,35 @@
 pub mod analysis;
 pub mod ast;
 pub mod case_table;
+pub mod compiler;
+pub mod references;
 pub mod decimal;
+pub mod errors;
 pub mod files;
 pub mod fingerprint;
 pub mod lexer;
+pub mod native_cache;
 pub mod parser;
 pub mod precompile;
+pub mod project_edit;
 pub mod runtime;
+mod string_value;
 pub mod safety;
+
+pub use errors::{ErrorEnvironment, ErrorLanguage};
+pub use references::CompileReferenceLibrary;
+pub use compiler::{check_procedure, compile_project, compile_project_with_types, compile_project_with_references, CompileReferences, CompileError, CompileErrorKind, ProjectCompileError};
 
 pub use analysis::{analyse, Analysis, Class, Finding};
 pub use ast::{Expr, Module, ModuleItem, Procedure, Statement};
 pub use fingerprint::{compare, fingerprint_module, ModuleFingerprint, Similarity, Strength};
 pub use lexer::{tokenize, LexError, Punct, Span, Token, TokenKind};
-pub use parser::{parse_module, parse_project};
+pub use parser::{parse_module, parse_project, source_modules, ProjectSource};
+pub use project_edit::{apply_source_edits, project_edit_requires_reset, SourceEdit, SourceEditOutcome};
 pub use safety::{assess, assess_project, Capability, SafetyReport, Signal};
 pub use runtime::{
     execute, execute_with_host, host_error, host_error_described, host_error_explained, host_error_from, is_builtin_function, vba_date_text, vba_number_text,
     ArrayDimension,
     ArrayValue, Host, ObjectRef,
-    Runtime, RuntimeError, RuntimeErrorKind, Value,
+    ProjectState, Runtime, RuntimeError, RuntimeErrorKind, Value,
 };

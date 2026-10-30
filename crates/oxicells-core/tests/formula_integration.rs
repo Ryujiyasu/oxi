@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 
 fn cell(col: u32, value: CellValue, formula: Option<&str>) -> Cell {
     Cell {
+        formula_utf16: None,
         array_block: None,
         spill: Default::default(),
         col,
@@ -44,15 +45,22 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         .map(|(index, cells)| Row { index, cells, height: None, custom_height: false, style_font: None, thick_top: false, thick_bottom: false, hidden: false })
         .collect();
     let mut sheet = Sheet {
+        kind: Default::default(),
         visibility: Default::default(),
         name: "S".into(),
         rows,
         col_count: 10,
         col_widths: vec![],
+        col_custom_widths: Default::default(),
+        cached_spills: None,
+        pending_used_bounds: None,
+        column_width_font: None,
         default_col_width: 8.43,
+        default_col_width_explicit: false,
         default_row_height: 15.0,
         default_row_custom: false,
         col_fonts: vec![],
+        band_styles: Default::default(),
         normal_font: None,
         first_font: None,
         frozen_rows: 0,
@@ -64,6 +72,7 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         tables: Vec::new(),
         drawings: Vec::new(),
             comments: Vec::new(),
+        threaded_comments: Vec::new(),
         unsupported_elements: vec![],
         hyperlinks: vec![],
         protected: false,

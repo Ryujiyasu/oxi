@@ -1,0 +1,27 @@
+# Native Excel Application.Run default-type observations. CC BY-SA 4.0.
+procedure	type	value
+DByte	long	255
+DInt	long	-7
+DLong	long	-123456
+DLongLong	string	9007199254740993
+DSingle	double	1.25
+DDouble	double	1.125
+DCurrency	string	-12.3456
+DDate	string	2004|2|3|4|5|6
+DBool	bool	true
+DAscii	string	cache
+DJapanese	string	日本語
+DMissing	bool	true
+DEmpty	long	10
+DNull	long	1
+DObject	bool	true
+DEnum	long	3
+DPair	string	5|cache
+DTriple	double	8.25
+DLongText	string	300:7
+IEmpty	long	0
+INull	long	1
+IMissing	bool	true
+REmpty	long	10
+RNull	long	1
+RMissing	bool	true

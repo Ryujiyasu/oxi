@@ -1,0 +1,221 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "source": "directory_lifetime.bas",
+  "source_sha256": "42d3aa84d256a1aea02d43ca97d1f154392e1ee62b12749dd7a20377c835e1fd",
+  "package": "directory_lifetime.xlsm",
+  "package_sha256": "97ab9d99a40b98757629bedf4d84102e1bce1d461173d2b3fbd6639f5867fb29",
+  "initial_directory_state": {
+    "currentDrive": "C",
+    "directories": [
+      "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+      "D:\\"
+    ]
+  },
+  "folders": [
+    "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first",
+    "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first\\sub",
+    "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\second",
+    "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\second\\sub",
+    "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\third",
+    "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\third\\sub",
+    "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+    "D:\\"
+  ],
+  "cases": [
+    {
+      "procedure": "DirectoryRead",
+      "arguments": [],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "plain:C:\\Users\\ryuji\\OneDrive\\ドキュメント|qualified:C:\\Users\\ryuji\\OneDrive\\ドキュメント|C:C:\\Users\\ryuji\\OneDrive\\ドキュメント|D:D:\\|hits:1",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null,
+      "directory_state_after": {
+        "currentDrive": "C",
+        "directories": [
+          "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+          "D:\\"
+        ]
+      }
+    },
+    {
+      "procedure": "DirectorySet",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "plain:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first|qualified:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first|C:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first|D:D:\\|hits:2",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null,
+      "directory_state_after": {
+        "currentDrive": "C",
+        "directories": [
+          "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first",
+          "D:\\"
+        ]
+      }
+    },
+    {
+      "procedure": "DirectoryRead",
+      "arguments": [],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "plain:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first|qualified:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first|C:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first|D:D:\\|hits:3",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null,
+      "directory_state_after": {
+        "currentDrive": "C",
+        "directories": [
+          "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first",
+          "D:\\"
+        ]
+      }
+    },
+    {
+      "procedure": "DirectoryRemember",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\second\\sub"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "plain:D:\\|qualified:D:\\|C:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\second\\sub|D:D:\\|hits:4",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null,
+      "directory_state_after": {
+        "currentDrive": "D",
+        "directories": [
+          "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\second\\sub",
+          "D:\\"
+        ]
+      }
+    },
+    {
+      "procedure": "DirectoryRead",
+      "arguments": [],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "plain:D:\\|qualified:D:\\|C:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\second\\sub|D:D:\\|hits:5",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null,
+      "directory_state_after": {
+        "currentDrive": "D",
+        "directories": [
+          "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\second\\sub",
+          "D:\\"
+        ]
+      }
+    },
+    {
+      "procedure": "DirectoryReturnC",
+      "arguments": [],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "plain:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\second\\sub|qualified:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\second\\sub|C:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\second\\sub|D:D:\\|hits:6",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null,
+      "directory_state_after": {
+        "currentDrive": "C",
+        "directories": [
+          "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\second\\sub",
+          "D:\\"
+        ]
+      }
+    },
+    {
+      "procedure": "DirectoryStop",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first\\sub"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": null,
+      "expected_termination": true,
+      "native_automation_error": "com_error(-2147352567, '例外が発生しました。', (0, None, None, None, 0, -2146788248), None)",
+      "native_automation_scode": -2146788248,
+      "directory_state_after": {
+        "currentDrive": "C",
+        "directories": [
+          "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first\\sub",
+          "D:\\"
+        ]
+      }
+    },
+    {
+      "procedure": "DirectoryRead",
+      "arguments": [],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "plain:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first\\sub|qualified:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first\\sub|C:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first\\sub|D:D:\\|hits:1",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null,
+      "directory_state_after": {
+        "currentDrive": "C",
+        "directories": [
+          "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first\\sub",
+          "D:\\"
+        ]
+      }
+    },
+    {
+      "procedure": "DirectoryRead",
+      "arguments": [],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": "plain:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first\\sub|qualified:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first\\sub|C:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first\\sub|D:D:\\|hits:1",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null,
+      "directory_state_after": {
+        "currentDrive": "C",
+        "directories": [
+          "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\first\\sub",
+          "D:\\"
+        ]
+      }
+    },
+    {
+      "procedure": "DirectorySet",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\third"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": "plain:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\third|qualified:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\third|C:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\third|D:D:\\|hits:2",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null,
+      "directory_state_after": {
+        "currentDrive": "C",
+        "directories": [
+          "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\third",
+          "D:\\"
+        ]
+      }
+    },
+    {
+      "procedure": "DirectoryRead",
+      "arguments": [],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "plain:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\third|qualified:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\third|C:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\third|D:D:\\|hits:1",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null,
+      "directory_state_after": {
+        "currentDrive": "C",
+        "directories": [
+          "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_lifetime_20261020\\sequence\\third",
+          "D:\\"
+        ]
+      }
+    }
+  ]
+}

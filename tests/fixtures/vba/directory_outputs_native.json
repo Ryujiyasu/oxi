@@ -1,0 +1,404 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "groups": [
+    {
+      "name": "directory_outputs",
+      "source": "directory_outputs.bas",
+      "source_sha256": "2957763261434eb094b3d7c61163d228bbd5ca5871fd342b78f53e39d25a1155",
+      "package": "directory_outputs.xlsm",
+      "package_sha256": "5dc18b5aeec2989981f55e4f12ff633c4cfc2af979925095c9d3b02701256c25",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\input.xlsm",
+      "read_only": true,
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-0",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-0\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-0\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-1",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-1\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-1\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-2",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-2\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-2\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-3",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-3\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-3\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-4",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-4\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-4\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-5",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-5\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-5\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-6",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-6\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-6\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-7",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-7\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-7\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-8",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-8\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-8\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-9",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-9\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-9\\work\\sub"
+      ],
+      "initial_files": [],
+      "vba_help_file": "C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm",
+      "cases": [
+        {
+          "procedure": "DirectoryOutputs",
+          "arguments": [
+            0,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-0\\work"
+          ],
+          "expected": "0|||result:7|8|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-0\\work\\sub",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-0\\work\\same.txt",
+              "bytes": [
+                70,
+                73,
+                82,
+                83,
+                84,
+                13,
+                10
+              ]
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-0\\work\\sub\\same.txt",
+              "bytes": [
+                83,
+                69,
+                67,
+                79,
+                78,
+                68,
+                13,
+                10
+              ]
+            }
+          ],
+          "deleted_files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryOutputs",
+          "arguments": [
+            1,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-1\\work"
+          ],
+          "expected": "0|||result:7|8|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-1\\work\\sub",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-1\\work\\Mixed.txt",
+              "bytes": [
+                70,
+                73,
+                82,
+                83,
+                84,
+                13,
+                10
+              ]
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-1\\work\\sub\\mixed.txt",
+              "bytes": [
+                83,
+                69,
+                67,
+                79,
+                78,
+                68,
+                13,
+                10
+              ]
+            }
+          ],
+          "deleted_files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryOutputs",
+          "arguments": [
+            2,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-2\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-2\\work\\held.txt|6|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-2\\work\\sub",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-2\\work\\held.txt",
+              "bytes": [
+                82,
+                79,
+                79,
+                84,
+                13,
+                10
+              ]
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-2\\work\\sub\\held.txt",
+              "bytes": [
+                67,
+                72,
+                73,
+                76,
+                68,
+                13,
+                10
+              ]
+            }
+          ],
+          "deleted_files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryOutputs",
+          "arguments": [
+            3,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-3\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-3\\work\\held.txt|6|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-3\\work\\sub",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-3\\work\\held.txt",
+              "bytes": [
+                82,
+                79,
+                79,
+                84,
+                13,
+                10
+              ]
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-3\\work\\sub\\held.txt",
+              "bytes": [
+                67,
+                72,
+                73,
+                76,
+                68,
+                13,
+                10
+              ]
+            }
+          ],
+          "deleted_files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryOutputs",
+          "arguments": [
+            4,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-4\\work"
+          ],
+          "expected": "0|||result:1|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-4\\work\\held.txt|6|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-4\\work\\sub",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-4\\work\\held.txt",
+              "bytes": [
+                82,
+                79,
+                79,
+                84,
+                13,
+                10
+              ]
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-4\\work\\sub\\held.txt",
+              "bytes": [
+                67,
+                72,
+                73,
+                76,
+                68,
+                13,
+                10
+              ]
+            }
+          ],
+          "deleted_files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryOutputs",
+          "arguments": [
+            5,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-5\\work"
+          ],
+          "expected": "0|||result:6|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-5\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-5\\work\\renamed.txt",
+              "bytes": [
+                82,
+                79,
+                79,
+                84,
+                13,
+                10
+              ]
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-5\\work\\sub\\same.txt",
+              "bytes": [
+                67,
+                72,
+                73,
+                76,
+                68,
+                13,
+                10
+              ]
+            }
+          ],
+          "deleted_files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryOutputs",
+          "arguments": [
+            6,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-6\\work"
+          ],
+          "expected": "0|||result:|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-6\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-6\\work\\sub\\same.txt",
+              "bytes": [
+                67,
+                72,
+                73,
+                76,
+                68,
+                13,
+                10
+              ]
+            }
+          ],
+          "deleted_files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryOutputs",
+          "arguments": [
+            7,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-7\\work"
+          ],
+          "expected": "0|||result:6|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-7\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-7\\work\\copy.txt",
+              "bytes": [
+                82,
+                79,
+                79,
+                84,
+                13,
+                10
+              ]
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-7\\work\\same.txt",
+              "bytes": [
+                82,
+                79,
+                79,
+                84,
+                13,
+                10
+              ]
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-7\\work\\sub\\same.txt",
+              "bytes": [
+                67,
+                72,
+                73,
+                76,
+                68,
+                13,
+                10
+              ]
+            }
+          ],
+          "deleted_files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryOutputs",
+          "arguments": [
+            8,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-8\\work"
+          ],
+          "expected": "0|||result:6|7|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-8\\work\\sub",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-8\\work\\same.txt",
+              "bytes": [
+                82,
+                79,
+                79,
+                84,
+                13,
+                10
+              ]
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-8\\work\\sub\\same.txt",
+              "bytes": [
+                67,
+                72,
+                73,
+                76,
+                68,
+                13,
+                10
+              ]
+            }
+          ],
+          "deleted_files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryOutputs",
+          "arguments": [
+            9,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-9\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-9\\work\\same.txt|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-9\\work\\sub\\same.txt|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-9\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-9\\work\\same.txt",
+              "bytes": [
+                82,
+                79,
+                79,
+                84,
+                13,
+                10
+              ]
+            },
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_outputs_20261020\\typed\\case-9\\work\\sub\\same.txt",
+              "bytes": [
+                67,
+                72,
+                73,
+                76,
+                68,
+                13,
+                10
+              ]
+            }
+          ],
+          "deleted_files": [],
+          "result_includes_file_length": false
+        }
+      ]
+    }
+  ]
+}

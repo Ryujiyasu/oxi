@@ -1,0 +1,94 @@
+class_byref	class_args_class_byref.bas	DriverModule.Probe	values	11
+class_byref	class_args_class_byref.bas	DriverModule.Probe	values	11
+class_field_len	class_args_class_field_len.bas	DriverModule.Probe	compile	変数が必要です。
+class_field_len	class_args_class_field_len.bas	DriverModule.Probe	compile	変数が必要です。
+qualified_len	class_args_qualified_len.bas	DriverModule.Probe	values	3
+qualified_len	class_args_qualified_len.bas	DriverModule.Probe	values	3
+alias	class_args_alias.bas	DriverModule.Probe	values	4
+alias	class_args_alias.bas	DriverModule.Probe	values	4
+named	class_args_named.bas	DriverModule.Probe	values	4
+named	class_args_named.bas	DriverModule.Probe	values	4
+with	class_args_with.bas	DriverModule.Probe	values	4
+with	class_args_with.bas	DriverModule.Probe	values	4
+call	class_args_call.bas	DriverModule.Probe	values	4
+call	class_args_call.bas	DriverModule.Probe	values	4
+parentheses	class_args_parentheses.bas	DriverModule.Probe	values	3
+parentheses	class_args_parentheses.bas	DriverModule.Probe	values	3
+late	class_args_late.bas	DriverModule.Probe	values	4
+late	class_args_late.bas	DriverModule.Probe	values	4
+byval	class_args_byval.bas	DriverModule.Probe	values	1
+byval	class_args_byval.bas	DriverModule.Probe	values	1
+error	class_args_error.bas	DriverModule.Probe	values	513:9
+error	class_args_error.bas	DriverModule.Probe	values	513:9
+caller_scope	class_args_caller_scope.bas	DriverModule.Probe	values	11:50
+caller_scope	class_args_caller_scope.bas	DriverModule.Probe	values	11:50
+paramarray	class_args_paramarray.bas	DriverModule.Probe	values	12
+paramarray	class_args_paramarray.bas	DriverModule.Probe	values	12
+fixed_string	class_args_fixed_string.bas	DriverModule.Probe	values	[1234]
+fixed_string	class_args_fixed_string.bas	DriverModule.Probe	values	[1234]
+array	class_args_array.bas	DriverModule.Probe	values	11
+array	class_args_array.bas	DriverModule.Probe	values	11
+function	class_args_function.bas	DriverModule.Probe	values	11:11
+function	class_args_function.bas	DriverModule.Probe	values	11:11
+property_get	class_args_property_get.bas	DriverModule.Probe	values	11:11
+property_get	class_args_property_get.bas	DriverModule.Probe	values	11:11
+default	class_args_default.bas	DriverModule.Probe	values	11:11
+default	class_args_default.bas	DriverModule.Probe	values	11:11
+len_text_early	class_args_len_text_early.bas	DriverModule.Probe	values	Long:3
+len_text_early	class_args_len_text_early.bas	DriverModule.Probe	values	Long:3
+len_text_late	class_args_len_text_late.bas	DriverModule.Probe	values	Long:3
+len_text_late	class_args_len_text_late.bas	DriverModule.Probe	values	Long:3
+len_variant_early	class_args_len_variant_early.bas	DriverModule.Probe	values	Long:3
+len_variant_early	class_args_len_variant_early.bas	DriverModule.Probe	values	Long:3
+len_variant_late	class_args_len_variant_late.bas	DriverModule.Probe	values	Long:3
+len_variant_late	class_args_len_variant_late.bas	DriverModule.Probe	values	Long:3
+len_number_early	class_args_len_number_early.bas	DriverModule.Probe	compile	変数が必要です。
+len_number_early	class_args_len_number_early.bas	DriverModule.Probe	compile	変数が必要です。
+len_number_late	class_args_len_number_late.bas	DriverModule.Probe	values	Long:3
+len_number_late	class_args_len_number_late.bas	DriverModule.Probe	values	Long:3
+len_property	class_args_len_property.bas	DriverModule.Probe	compile	変数が必要です。
+len_property	class_args_len_property.bas	DriverModule.Probe	compile	変数が必要です。
+len_with	class_args_len_with.bas	DriverModule.Probe	compile	変数が必要です。
+len_with	class_args_len_with.bas	DriverModule.Probe	compile	変数が必要です。
+len_qualified_member	class_args_len_qualified_member.bas	DriverModule.Probe	values	Long:3
+len_qualified_member	class_args_len_qualified_member.bas	DriverModule.Probe	values	Long:3
+receiver_order	class_args_receiver_order.bas	DriverModule.Probe	values	ARC
+receiver_order	class_args_receiver_order.bas	DriverModule.Probe	values	ARC
+cross_instance	class_args_cross_instance.bas	DriverModule.Probe	values	11:50
+cross_instance	class_args_cross_instance.bas	DriverModule.Probe	values	11:50
+interface	class_args_interface.bas	DriverModule.Probe	values	11
+interface	class_args_interface.bas	DriverModule.Probe	values	11
+named_order	class_args_named_order.bas	DriverModule.Probe	values	FSC
+named_order	class_args_named_order.bas	DriverModule.Probe	values	FSC
+len_property_call	class_args_len_property_call.bas	DriverModule.Probe	compile	変数が必要です。
+len_property_call	class_args_len_property_call.bas	DriverModule.Probe	compile	変数が必要です。
+len_me	class_args_len_me.bas	DriverModule.Probe	compile	変数が必要です。
+len_me	class_args_len_me.bas	DriverModule.Probe	compile	変数が必要です。
+len_own	class_args_len_own.bas	DriverModule.Probe	values	Integer:4
+len_own	class_args_len_own.bas	DriverModule.Probe	values	Integer:4
+len_class_array	class_args_len_class_array.bas	DriverModule.Probe	compile	定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。
+len_class_array	class_args_len_class_array.bas	DriverModule.Probe	compile	定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。
+late_named_order	class_args_late_named_order.bas	DriverModule.Probe	values	SFC
+late_named_order	class_args_late_named_order.bas	DriverModule.Probe	values	SFC
+bad_class_unused	class_args_bad_class_unused.bas	DriverModule.Probe	values	ok
+bad_class_unused	class_args_bad_class_unused.bas	DriverModule.Probe	values	ok
+bad_class_dim	class_args_bad_class_dim.bas	DriverModule.Probe	compile	定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。
+bad_class_dim	class_args_bad_class_dim.bas	DriverModule.Probe	compile	定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。
+bad_class_late	class_args_bad_class_late.bas	DriverModule.Probe	compile	定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。
+bad_class_late	class_args_bad_class_late.bas	DriverModule.Probe	compile	定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。
+bad_class_fixed	class_args_bad_class_fixed.bas	DriverModule.Probe	compile	定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。
+bad_class_fixed	class_args_bad_class_fixed.bas	DriverModule.Probe	compile	定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。
+bad_class_const	class_args_bad_class_const.bas	DriverModule.Probe	compile	定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。
+bad_class_const	class_args_bad_class_const.bas	DriverModule.Probe	compile	定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。
+len_private_array	class_args_len_private_array.bas	DriverModule.Probe	values	Integer:4
+len_private_array	class_args_len_private_array.bas	DriverModule.Probe	values	Integer:4
+with_named_order	class_args_with_named_order.bas	DriverModule.Probe	values	FSC
+with_named_order	class_args_with_named_order.bas	DriverModule.Probe	values	FSC
+with_late_named_order	class_args_with_late_named_order.bas	DriverModule.Probe	values	SFC
+with_late_named_order	class_args_with_late_named_order.bas	DriverModule.Probe	values	SFC
+object_lifetime	class_args_object_lifetime.bas	DriverModule.Probe	values	IBTCA|True
+object_lifetime	class_args_object_lifetime.bas	DriverModule.Probe	values	IBTCA|True
+variant_lifetime	class_args_variant_lifetime.bas	DriverModule.Probe	values	IBCTA|True
+variant_lifetime	class_args_variant_lifetime.bas	DriverModule.Probe	values	IBCTA|True
+default_order	class_args_default_order.bas	DriverModule.Probe	values	AIC:11
+default_order	class_args_default_order.bas	DriverModule.Probe	values	AIC:11

@@ -1,0 +1,140 @@
+[
+  {
+    "name": "callbyname_evaluation_order",
+    "source": "callbyname_evaluation_order.bas",
+    "procedure": "Driver.Probe",
+    "expected": "valid=0~ONKRB~ok\nnull_name=94~ONKR~\nerror_name=13~ONKR~\nnull_kind=94~ONKR~\nbad_kind=13~ONKR~\noverflow_kind=6~ONKR~\nscalar_target=424~ONKR~\nnothing_target=5~ONKR~\nmissing_member=438~ONKR~\ninvalid_flags=438~ONKR~\n",
+    "measured_cases": 10,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "callbyname_evaluation_order.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "callbyname_evaluation_order",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic Function Echo(ByVal value As Variant) As String\n    Driver.Trace = Driver.Trace & \"B\"\n    Echo = \"ok\"\nEnd Function\n"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPublic Trace As String\nPrivate heldObject As Item\nPrivate Function GetTarget(ByVal mode As Long) As Variant\n    Trace = Trace & \"O\"\n    If mode = 1 Then\n        GetTarget = 42\n    ElseIf mode = 2 Then\n        Set GetTarget = Nothing\n    Else\n        Set GetTarget = heldObject\n    End If\nEnd Function\nPrivate Function GetMemberName(ByVal value As Variant) As Variant\n    Trace = Trace & \"N\"\n    GetMemberName = value\nEnd Function\nPrivate Function GetInvocation(ByVal value As Variant) As Variant\n    Trace = Trace & \"K\"\n    GetInvocation = value\nEnd Function\nPrivate Function GetRhs() As Variant\n    Trace = Trace & \"R\"\n    GetRhs = \"value\"\nEnd Function\nPrivate Function Case0() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(\"Echo\"), GetInvocation(1), GetRhs())\n    Case0 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case1() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(Null), GetInvocation(1), GetRhs())\n    Case1 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case2() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(CVErr(5)), GetInvocation(1), GetRhs())\n    Case2 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case3() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(\"Echo\"), GetInvocation(Null), GetRhs())\n    Case3 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case4() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(\"Echo\"), GetInvocation(\"bad\"), GetRhs())\n    Case4 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case5() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(\"Echo\"), GetInvocation(2147483648#), GetRhs())\n    Case5 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case6() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(1), GetMemberName(\"Echo\"), GetInvocation(1), GetRhs())\n    Case6 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case7() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(2), GetMemberName(\"Echo\"), GetInvocation(1), GetRhs())\n    Case7 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case8() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(\"Absent\"), GetInvocation(1), GetRhs())\n    Case8 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case9() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(\"Echo\"), GetInvocation(16), GetRhs())\n    Case9 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPublic Function Probe() As String\n    Dim report As String\n    report = report & \"valid=\" & Case0() & vbLf\n    report = report & \"null_name=\" & Case1() & vbLf\n    report = report & \"error_name=\" & Case2() & vbLf\n    report = report & \"null_kind=\" & Case3() & vbLf\n    report = report & \"bad_kind=\" & Case4() & vbLf\n    report = report & \"overflow_kind=\" & Case5() & vbLf\n    report = report & \"scalar_target=\" & Case6() & vbLf\n    report = report & \"nothing_target=\" & Case7() & vbLf\n    report = report & \"missing_member=\" & Case8() & vbLf\n    report = report & \"invalid_flags=\" & Case9() & vbLf\n    Probe = report\nEnd Function"
+        }
+      ]
+    }
+  },
+  {
+    "name": "callbyname_error_precedence",
+    "source": "callbyname_error_precedence.bas",
+    "procedure": "Driver.Probe",
+    "expected": "object_error=13~ONKR~\nobject_null=94~ONKR~\nobject_array=13~ONKR~\nobject_empty=438~ONKR~\nobject_kind_error=13~ONKR~\nobject_kind_array=13~ONKR~\nobject_kind_null=94~ONKR~\nobject_kind_bad=13~ONKR~\nobject_kind_overflow=6~ONKR~\nscalar_error=13~ONKR~\nscalar_null=94~ONKR~\nscalar_array=13~ONKR~\nscalar_empty=424~ONKR~\nscalar_kind_error=13~ONKR~\nscalar_kind_array=13~ONKR~\nscalar_kind_null=94~ONKR~\nscalar_kind_bad=13~ONKR~\nscalar_kind_overflow=6~ONKR~\nnothing_error=13~ONKR~\nnothing_null=94~ONKR~\nnothing_array=13~ONKR~\nnothing_empty=5~ONKR~\nnothing_kind_error=13~ONKR~\nnothing_kind_array=13~ONKR~\nnothing_kind_null=94~ONKR~\nnothing_kind_bad=13~ONKR~\nnothing_kind_overflow=6~ONKR~\nnull_bad=13~ONKR~\nerror_null=94~ONKR~\nabsent_bad=13~ONKR~\nnull_overflow=6~ONKR~\n",
+    "measured_cases": 31,
+    "source_code_page": 932,
+    "document_modules": [
+      {
+        "name": "ThisWorkbook",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "Sheet1",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Sheet1"
+      }
+    ],
+    "host_context": {
+      "book_name": "callbyname_error_precedence.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "Sheet1",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Sheet1"
+        }
+      ]
+    },
+    "execution_options": {
+      "hostAnsiCodePage": 932
+    },
+    "measurement": {
+      "name": "callbyname_error_precedence",
+      "entry": "Driver.Probe",
+      "modules": [
+        {
+          "name": "Item",
+          "kind": 2,
+          "old": null,
+          "body": "Option Explicit\nPublic Function Echo(ByVal value As Variant) As String\n    Driver.Trace = Driver.Trace & \"B\"\n    Echo = \"ok\"\nEnd Function\n"
+        },
+        {
+          "name": "Driver",
+          "kind": 1,
+          "old": null,
+          "body": "Option Explicit\nPublic Trace As String\nPrivate heldObject As Item\nPrivate Function GetTarget(ByVal mode As Long) As Variant\n    Trace = Trace & \"O\"\n    If mode = 1 Then\n        GetTarget = 42\n    ElseIf mode = 2 Then\n        Set GetTarget = Nothing\n    Else\n        Set GetTarget = heldObject\n    End If\nEnd Function\nPrivate Function GetMemberName(ByVal value As Variant) As Variant\n    Trace = Trace & \"N\"\n    GetMemberName = value\nEnd Function\nPrivate Function GetInvocation(ByVal value As Variant) As Variant\n    Trace = Trace & \"K\"\n    GetInvocation = value\nEnd Function\nPrivate Function GetRhs() As Variant\n    Trace = Trace & \"R\"\n    GetRhs = \"value\"\nEnd Function\nPrivate Function Case0() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(CVErr(5)), GetInvocation(1), GetRhs())\n    Case0 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case1() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(Null), GetInvocation(1), GetRhs())\n    Case1 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case2() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(Array(1)), GetInvocation(1), GetRhs())\n    Case2 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case3() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(Empty), GetInvocation(1), GetRhs())\n    Case3 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case4() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(\"Echo\"), GetInvocation(CVErr(5)), GetRhs())\n    Case4 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case5() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(\"Echo\"), GetInvocation(Array(1)), GetRhs())\n    Case5 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case6() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(\"Echo\"), GetInvocation(Null), GetRhs())\n    Case6 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case7() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(\"Echo\"), GetInvocation(\"bad\"), GetRhs())\n    Case7 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case8() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(\"Echo\"), GetInvocation(2147483648#), GetRhs())\n    Case8 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case9() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(1), GetMemberName(CVErr(5)), GetInvocation(1), GetRhs())\n    Case9 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case10() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(1), GetMemberName(Null), GetInvocation(1), GetRhs())\n    Case10 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case11() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(1), GetMemberName(Array(1)), GetInvocation(1), GetRhs())\n    Case11 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case12() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(1), GetMemberName(Empty), GetInvocation(1), GetRhs())\n    Case12 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case13() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(1), GetMemberName(\"Echo\"), GetInvocation(CVErr(5)), GetRhs())\n    Case13 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case14() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(1), GetMemberName(\"Echo\"), GetInvocation(Array(1)), GetRhs())\n    Case14 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case15() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(1), GetMemberName(\"Echo\"), GetInvocation(Null), GetRhs())\n    Case15 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case16() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(1), GetMemberName(\"Echo\"), GetInvocation(\"bad\"), GetRhs())\n    Case16 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case17() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(1), GetMemberName(\"Echo\"), GetInvocation(2147483648#), GetRhs())\n    Case17 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case18() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(2), GetMemberName(CVErr(5)), GetInvocation(1), GetRhs())\n    Case18 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case19() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(2), GetMemberName(Null), GetInvocation(1), GetRhs())\n    Case19 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case20() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(2), GetMemberName(Array(1)), GetInvocation(1), GetRhs())\n    Case20 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case21() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(2), GetMemberName(Empty), GetInvocation(1), GetRhs())\n    Case21 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case22() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(2), GetMemberName(\"Echo\"), GetInvocation(CVErr(5)), GetRhs())\n    Case22 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case23() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(2), GetMemberName(\"Echo\"), GetInvocation(Array(1)), GetRhs())\n    Case23 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case24() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(2), GetMemberName(\"Echo\"), GetInvocation(Null), GetRhs())\n    Case24 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case25() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(2), GetMemberName(\"Echo\"), GetInvocation(\"bad\"), GetRhs())\n    Case25 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case26() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(2), GetMemberName(\"Echo\"), GetInvocation(2147483648#), GetRhs())\n    Case26 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case27() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(Null), GetInvocation(\"bad\"), GetRhs())\n    Case27 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case28() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(CVErr(5)), GetInvocation(Null), GetRhs())\n    Case28 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case29() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(\"Absent\"), GetInvocation(\"bad\"), GetRhs())\n    Case29 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPrivate Function Case30() As String\n    Dim result As Variant\n    Set heldObject = New Item\n    Trace = \"\"\n    On Error Resume Next\n    result = CallByName(GetTarget(0), GetMemberName(Null), GetInvocation(2147483648#), GetRhs())\n    Case30 = CStr(Err.Number) & \"~\" & Trace & \"~\" & CStr(result)\nEnd Function\nPublic Function Probe() As String\n    Dim report As String\n    report = report & \"object_error=\" & Case0() & vbLf\n    report = report & \"object_null=\" & Case1() & vbLf\n    report = report & \"object_array=\" & Case2() & vbLf\n    report = report & \"object_empty=\" & Case3() & vbLf\n    report = report & \"object_kind_error=\" & Case4() & vbLf\n    report = report & \"object_kind_array=\" & Case5() & vbLf\n    report = report & \"object_kind_null=\" & Case6() & vbLf\n    report = report & \"object_kind_bad=\" & Case7() & vbLf\n    report = report & \"object_kind_overflow=\" & Case8() & vbLf\n    report = report & \"scalar_error=\" & Case9() & vbLf\n    report = report & \"scalar_null=\" & Case10() & vbLf\n    report = report & \"scalar_array=\" & Case11() & vbLf\n    report = report & \"scalar_empty=\" & Case12() & vbLf\n    report = report & \"scalar_kind_error=\" & Case13() & vbLf\n    report = report & \"scalar_kind_array=\" & Case14() & vbLf\n    report = report & \"scalar_kind_null=\" & Case15() & vbLf\n    report = report & \"scalar_kind_bad=\" & Case16() & vbLf\n    report = report & \"scalar_kind_overflow=\" & Case17() & vbLf\n    report = report & \"nothing_error=\" & Case18() & vbLf\n    report = report & \"nothing_null=\" & Case19() & vbLf\n    report = report & \"nothing_array=\" & Case20() & vbLf\n    report = report & \"nothing_empty=\" & Case21() & vbLf\n    report = report & \"nothing_kind_error=\" & Case22() & vbLf\n    report = report & \"nothing_kind_array=\" & Case23() & vbLf\n    report = report & \"nothing_kind_null=\" & Case24() & vbLf\n    report = report & \"nothing_kind_bad=\" & Case25() & vbLf\n    report = report & \"nothing_kind_overflow=\" & Case26() & vbLf\n    report = report & \"null_bad=\" & Case27() & vbLf\n    report = report & \"error_null=\" & Case28() & vbLf\n    report = report & \"absent_bad=\" & Case29() & vbLf\n    report = report & \"null_overflow=\" & Case30() & vbLf\n    Probe = report\nEnd Function"
+        }
+      ]
+    }
+  }
+]

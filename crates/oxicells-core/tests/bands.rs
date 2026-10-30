@@ -16,15 +16,22 @@ use oxicells_core::ir::{Cell, CellValue, MergeCell, Row, Sheet, Table, Workbook}
 /// formula in column B.
 fn a_sheet(name: &str) -> Sheet {
     let mut sheet = Sheet {
+        kind: Default::default(),
         name: name.to_string(),
         visibility: Default::default(),
         rows: Vec::new(),
         col_count: 4,
         col_widths: vec![8.0, 9.0, 10.0, 11.0],
+        col_custom_widths: Default::default(),
+        cached_spills: None,
+        pending_used_bounds: None,
+        column_width_font: None,
         default_col_width: 8.43,
+        default_col_width_explicit: false,
         default_row_height: 15.0,
         default_row_custom: false,
         col_fonts: Vec::new(),
+        band_styles: Default::default(),
         normal_font: None,
         first_font: None,
         frozen_rows: 0,
@@ -35,6 +42,7 @@ fn a_sheet(name: &str) -> Sheet {
         tables: Vec::new(),
         drawings: Vec::new(),
         comments: Vec::new(),
+        threaded_comments: Vec::new(),
         auto_filter: None,
         unsupported_elements: Vec::new(),
         hyperlinks: Vec::new(),
@@ -50,6 +58,7 @@ fn a_sheet(name: &str) -> Sheet {
             index,
             cells: vec![
                 Cell {
+                    formula_utf16: None,
                     array_block: None,
                     spill: Default::default(),
                     col: 0,
@@ -59,6 +68,7 @@ fn a_sheet(name: &str) -> Sheet {
                     runs: Vec::new(),
                 },
                 Cell {
+                    formula_utf16: None,
                     array_block: None,
                     spill: Default::default(),
                     col: 1,
@@ -257,6 +267,7 @@ fn a_freeze_loses_only_the_rows_it_was_holding() {
 fn a_table_the_row_lands_inside_grows() {
     let mut book = a_workbook();
     book.sheets[0].tables = vec![Table {
+        origin_part: None,
         name: "Staff".to_string(),
         columns: vec!["ID".to_string(), "PAY".to_string()],
         start_row: 1,
@@ -265,8 +276,16 @@ fn a_table_the_row_lands_inside_grows() {
         end_col: 1,
         header_rows: 1,
         totals_rows: 0,
+        totals: Vec::new(),
         style: None,
         banded_rows: false,
+        banded_columns: false,
+        emphasize_first_column: false,
+        emphasize_last_column: false,
+        show_auto_filter: true,
+        hidden_filter_buttons: Vec::new(),
+        insert_row: false,
+        auto_filter_xml: None,
         accent: None,
         band: None,
         rule: None,

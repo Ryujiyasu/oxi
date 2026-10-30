@@ -1,0 +1,322 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "excel_module_sha256": "368e548f9b5a96a47b834cc8b7e0b6354b876f830ce500240f25055b974006f9",
+  "scope": "Six direct scalar replay and callback body-read scheduling cases with complete independently observed current-module returns. Scalar-only arguments, body value reads, a provisional descendant and a computed reference argument are distinct controls. Every accepted result equals one entire Native return; stages are never combined. These variable cases remain separate from the unchanged stable strict-case total.",
+  "groups": [
+    {
+      "source": "udf_schedule_views.bas",
+      "package": "udf_schedule_views.xlsm",
+      "cases": [
+        {
+          "id": 708,
+          "steps": [
+            {
+              "procedure": "ScheduleCase",
+              "arguments": [
+                8
+              ],
+              "expected_returns": [
+                "entered:3:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;[5:1,5:1,0:]|calculated:7:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;[5:1,5:1,0:]|again:7:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;[5:1,5:1,0:]|full:10:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;FA:1::M1:1;FB:1:5:1:N1:1;FQ:1::Q1:1;[5:1,5:1,0:]|rebuilt:13:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;FA:1::M1:1;FB:1:5:1:N1:1;FQ:1::Q1:1;RQ:1::Q1:1;RA:1::M1:1;RB:1:5:1:N1:1;[5:1,5:1,0:]",
+                "entered:3:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;[5:1,5:1,0:]|calculated:7:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;[5:1,5:1,0:]|again:7:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;[5:1,5:1,0:]|full:10:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;FQ:1::Q1:1;FA:1::M1:1;FB:1:5:1:N1:1;[5:1,5:1,0:]|rebuilt:13:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;FQ:1::Q1:1;FA:1::M1:1;FB:1:5:1:N1:1;RQ:1::Q1:1;RA:1::M1:1;RB:1:5:1:N1:1;[5:1,5:1,0:]"
+              ]
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "entered:3:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;[5:1,5:1,0:]|calculated:7:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;[5:1,5:1,0:]|again:7:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;[5:1,5:1,0:]|full:10:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;FQ:1::Q1:1;FA:1::M1:1;FB:1:5:1:N1:1;[5:1,5:1,0:]|rebuilt:13:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;FQ:1::Q1:1;FA:1::M1:1;FB:1:5:1:N1:1;RQ:1::Q1:1;RA:1::M1:1;RB:1:5:1:N1:1;[5:1,5:1,0:]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "entered:3:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;[5:1,5:1,0:]|calculated:7:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;[5:1,5:1,0:]|again:7:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;[5:1,5:1,0:]|full:10:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;FQ:1::Q1:1;FA:1::M1:1;FB:1:5:1:N1:1;[5:1,5:1,0:]|rebuilt:13:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;FQ:1::Q1:1;FA:1::M1:1;FB:1:5:1:N1:1;RQ:1::Q1:1;RA:1::M1:1;RB:1:5:1:N1:1;[5:1,5:1,0:]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "entered:3:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;[5:1,5:1,0:]|calculated:7:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;[5:1,5:1,0:]|again:7:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;[5:1,5:1,0:]|full:10:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;FA:1::M1:1;FB:1:5:1:N1:1;FQ:1::Q1:1;[5:1,5:1,0:]|rebuilt:13:EA:1::M1:2;EQ:1::Q1:2;EB:1:5:1:N1:2;CB:0:0::N1:1;CA:1::M1:1;CQ:1::Q1:1;CB:1:5:1:N1:1;FA:1::M1:1;FB:1:5:1:N1:1;FQ:1::Q1:1;RQ:1::Q1:1;RA:1::M1:1;RB:1:5:1:N1:1;[5:1,5:1,0:]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 714,
+          "steps": [
+            {
+              "procedure": "ScheduleCase",
+              "arguments": [
+                14
+              ],
+              "expected_returns": [
+                "entered:3:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;[5:1,5:1,5:1]|calculated:8:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CA:1::M1:1;CB:0:5:1:O1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;[5:1,5:1,5:1]|again:8:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CA:1::M1:1;CB:0:5:1:O1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;[5:1,5:1,5:1]|full:11:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CA:1::M1:1;CB:0:5:1:O1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;FA:1::M1:1;FB:1:5:1:N1:1;FB:1:5:1:O1:1;[5:1,5:1,5:1]|rebuilt:14:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CA:1::M1:1;CB:0:5:1:O1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;FA:1::M1:1;FB:1:5:1:N1:1;FB:1:5:1:O1:1;RA:1::M1:1;RB:1:5:1:N1:1;RB:1:5:1:O1:1;[5:1,5:1,5:1]",
+                "entered:3:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;[5:1,5:1,5:1]|calculated:8:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CB:0:0::O1:1;CA:1::M1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;[5:1,5:1,5:1]|again:8:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CB:0:0::O1:1;CA:1::M1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;[5:1,5:1,5:1]|full:11:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CB:0:0::O1:1;CA:1::M1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;FA:1::M1:1;FB:1:5:1:N1:1;FB:1:5:1:O1:1;[5:1,5:1,5:1]|rebuilt:14:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CB:0:0::O1:1;CA:1::M1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;FA:1::M1:1;FB:1:5:1:N1:1;FB:1:5:1:O1:1;RA:1::M1:1;RB:1:5:1:N1:1;RB:1:5:1:O1:1;[5:1,5:1,5:1]"
+              ]
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "entered:3:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;[5:1,5:1,5:1]|calculated:8:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CB:0:0::O1:1;CA:1::M1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;[5:1,5:1,5:1]|again:8:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CB:0:0::O1:1;CA:1::M1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;[5:1,5:1,5:1]|full:11:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CB:0:0::O1:1;CA:1::M1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;FA:1::M1:1;FB:1:5:1:N1:1;FB:1:5:1:O1:1;[5:1,5:1,5:1]|rebuilt:14:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CB:0:0::O1:1;CA:1::M1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;FA:1::M1:1;FB:1:5:1:N1:1;FB:1:5:1:O1:1;RA:1::M1:1;RB:1:5:1:N1:1;RB:1:5:1:O1:1;[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "entered:3:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;[5:1,5:1,5:1]|calculated:8:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CA:1::M1:1;CB:0:5:1:O1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;[5:1,5:1,5:1]|again:8:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CA:1::M1:1;CB:0:5:1:O1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;[5:1,5:1,5:1]|full:11:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CA:1::M1:1;CB:0:5:1:O1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;FA:1::M1:1;FB:1:5:1:N1:1;FB:1:5:1:O1:1;[5:1,5:1,5:1]|rebuilt:14:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CA:1::M1:1;CB:0:5:1:O1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;FA:1::M1:1;FB:1:5:1:N1:1;FB:1:5:1:O1:1;RA:1::M1:1;RB:1:5:1:N1:1;RB:1:5:1:O1:1;[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "entered:3:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;[5:1,5:1,5:1]|calculated:8:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CA:1::M1:1;CB:0:5:1:O1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;[5:1,5:1,5:1]|again:8:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CA:1::M1:1;CB:0:5:1:O1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;[5:1,5:1,5:1]|full:11:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CA:1::M1:1;CB:0:5:1:O1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;FA:1::M1:1;FB:1:5:1:N1:1;FB:1:5:1:O1:1;[5:1,5:1,5:1]|rebuilt:14:EA:1::M1:2;EB:1:5:1:N1:2;EB:1:5:1:O1:2;CB:0:0::N1:1;CA:1::M1:1;CB:0:5:1:O1:1;CB:1:5:1:N1:1;CB:1:5:1:O1:1;FA:1::M1:1;FB:1:5:1:N1:1;FB:1:5:1:O1:1;RA:1::M1:1;RB:1:5:1:N1:1;RB:1:5:1:O1:1;[5:1,5:1,5:1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ],
+      "source_identity": 2026102088,
+      "source_packet_sha256": "7a64376fc9fcfba552b15c1eb49798a8fef3b9c01fc065dda76ae3a571168184"
+    },
+    {
+      "source": "udf_manual_dependencies.bas",
+      "package": "udf_manual_dependencies.xlsm",
+      "source_identity": 2026102087,
+      "source_packet_sha256": "fe21c52a9593837f9fea7263e0c190517ddc0700e18857689ac984d9940f06b0",
+      "cases": [
+        {
+          "id": 606,
+          "steps": [
+            {
+              "procedure": "DependencyCase",
+              "arguments": [
+                5
+              ],
+              "expected_returns": [
+                "m:1:A:1:M1:2;|pre:2:A:1:M1:2;Q:1:Q1:2;|n:3:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;|all:7:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;Q:1:Q1:1;B:0:N1:1;A:1:M1:1;B:1:N1:1;|range:8:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;Q:1:Q1:1;B:0:N1:1;A:1:M1:1;B:1:N1:1;A:7:M1:1;|final:10:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;Q:1:Q1:1;B:0:N1:1;A:1:M1:1;B:1:N1:1;A:7:M1:1;A:7:M1:1;B:7:N1:1;",
+                "m:1:A:1:M1:2;|pre:2:A:1:M1:2;Q:1:Q1:2;|n:3:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;|all:7:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;B:0:N1:1;Q:1:Q1:1;A:1:M1:1;B:1:N1:1;|range:8:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;B:0:N1:1;Q:1:Q1:1;A:1:M1:1;B:1:N1:1;A:7:M1:1;|final:10:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;B:0:N1:1;Q:1:Q1:1;A:1:M1:1;B:1:N1:1;A:7:M1:1;A:7:M1:1;B:7:N1:1;",
+                "m:1:A:1:M1:2;|pre:2:A:1:M1:2;Q:1:Q1:2;|n:3:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;|all:6:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;A:1:M1:1;B:1:N1:1;Q:1:Q1:1;|range:7:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;A:1:M1:1;B:1:N1:1;Q:1:Q1:1;A:7:M1:1;|final:10:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;A:1:M1:1;B:1:N1:1;Q:1:Q1:1;A:7:M1:1;B:0:N1:1;A:7:M1:1;B:7:N1:1;"
+              ]
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "m:1:A:1:M1:2;|pre:2:A:1:M1:2;Q:1:Q1:2;|n:3:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;|all:7:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;Q:1:Q1:1;B:0:N1:1;A:1:M1:1;B:1:N1:1;|range:8:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;Q:1:Q1:1;B:0:N1:1;A:1:M1:1;B:1:N1:1;A:7:M1:1;|final:10:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;Q:1:Q1:1;B:0:N1:1;A:1:M1:1;B:1:N1:1;A:7:M1:1;A:7:M1:1;B:7:N1:1;",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "m:1:A:1:M1:2;|pre:2:A:1:M1:2;Q:1:Q1:2;|n:3:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;|all:7:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;B:0:N1:1;Q:1:Q1:1;A:1:M1:1;B:1:N1:1;|range:8:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;B:0:N1:1;Q:1:Q1:1;A:1:M1:1;B:1:N1:1;A:7:M1:1;|final:10:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;B:0:N1:1;Q:1:Q1:1;A:1:M1:1;B:1:N1:1;A:7:M1:1;A:7:M1:1;B:7:N1:1;",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "m:1:A:1:M1:2;|pre:2:A:1:M1:2;Q:1:Q1:2;|n:3:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;|all:6:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;A:1:M1:1;B:1:N1:1;Q:1:Q1:1;|range:7:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;A:1:M1:1;B:1:N1:1;Q:1:Q1:1;A:7:M1:1;|final:10:A:1:M1:2;Q:1:Q1:2;B:1:N1:2;A:1:M1:1;B:1:N1:1;Q:1:Q1:1;A:7:M1:1;B:0:N1:1;A:7:M1:1;B:7:N1:1;",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source": "udf_schedule_events.bas",
+      "package": "udf_schedule_events.xlsm",
+      "source_identity": 2026102089,
+      "source_packet_sha256": "cfadbecae16d9b40a74431d4ca0e394e98ed34de67fbc5c31443e74f0e732c3f",
+      "cases": [
+        {
+          "id": 804,
+          "steps": [
+            {
+              "procedure": "EventCase",
+              "arguments": [
+                4
+              ],
+              "expected_returns": [
+                "entered:3:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;|calculated:7:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CQ:4:1;-CQ:4:0:;+CB:5:0;-CB:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;|dirty:9:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CQ:4:1;-CQ:4:0:;+CB:5:0;-CB:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:0:;|full:12:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CQ:4:1;-CQ:4:0:;+CB:5:0;-CB:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:0:;+FQ:10:1;-FQ:10:0:;+FA:11:7;-FA:11:0:;+FB:12:7;-FB:12:0:;",
+                "entered:3:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;|calculated:7:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;|dirty:9:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:0:;|full:12:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:0:;+FQ:10:1;-FQ:10:0:;+FA:11:7;-FA:11:0:;+FB:12:7;-FB:12:0:;"
+              ]
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "entered:3:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;|calculated:7:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CQ:4:1;-CQ:4:0:;+CB:5:0;-CB:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;|dirty:9:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CQ:4:1;-CQ:4:0:;+CB:5:0;-CB:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:0:;|full:12:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CQ:4:1;-CQ:4:0:;+CB:5:0;-CB:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:0:;+FQ:10:1;-FQ:10:0:;+FA:11:7;-FA:11:0:;+FB:12:7;-FB:12:0:;",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "entered:3:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;|calculated:7:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;|dirty:9:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:0:;|full:12:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:0:;+FQ:10:1;-FQ:10:0:;+FA:11:7;-FA:11:0:;+FB:12:7;-FB:12:0:;",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "entered:3:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;|calculated:7:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;|dirty:9:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:0:;|full:12:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:0:;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:0:;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:0:;+FQ:10:1;-FQ:10:0:;+FA:11:7;-FA:11:0:;+FB:12:7;-FB:12:0:;",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 805,
+          "steps": [
+            {
+              "procedure": "EventCase",
+              "arguments": [
+                5
+              ],
+              "expected_returns": [
+                "entered:3:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;|calculated:7:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:5:1;|dirty:9:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:5:1;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:5:7;|full:12:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:5:1;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:5:7;+FQ:10:1;-FQ:10:0:;+FA:11:7;-FA:11:0:;+FB:12:7;-FB:12:5:7;",
+                "entered:3:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;|calculated:7:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CA:5:1;-CA:5:0:;+CQ:6:1;-CQ:6:0:;+CB:7:1;-CB:7:5:1;|dirty:9:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CA:5:1;-CA:5:0:;+CQ:6:1;-CQ:6:0:;+CB:7:1;-CB:7:5:1;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:5:7;|full:12:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CA:5:1;-CA:5:0:;+CQ:6:1;-CQ:6:0:;+CB:7:1;-CB:7:5:1;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:5:7;+FQ:10:1;-FQ:10:0:;+FA:11:7;-FA:11:0:;+FB:12:7;-FB:12:5:7;"
+              ]
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "entered:3:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;|calculated:7:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:5:1;|dirty:9:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:5:1;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:5:7;|full:12:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:5:1;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:5:7;+FQ:10:1;-FQ:10:0:;+FA:11:7;-FA:11:0:;+FB:12:7;-FB:12:5:7;",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "entered:3:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;|calculated:7:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CA:5:1;-CA:5:0:;+CQ:6:1;-CQ:6:0:;+CB:7:1;-CB:7:5:1;|dirty:9:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CA:5:1;-CA:5:0:;+CQ:6:1;-CQ:6:0:;+CB:7:1;-CB:7:5:1;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:5:7;|full:12:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CA:5:1;-CA:5:0:;+CQ:6:1;-CQ:6:0:;+CB:7:1;-CB:7:5:1;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:5:7;+FQ:10:1;-FQ:10:0:;+FA:11:7;-FA:11:0:;+FB:12:7;-FB:12:5:7;",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "entered:3:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;|calculated:7:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:5:1;|dirty:9:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:5:1;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:5:7;|full:12:+EA:1:1;-EA:1:0:;+EQ:2:1;-EQ:2:0:;+EB:3:1;-EB:3:5:1;+CB:4:0;-CB:4:0:;+CQ:5:1;-CQ:5:0:;+CA:6:1;-CA:6:0:;+CB:7:1;-CB:7:5:1;+DA:8:7;-DA:8:0:;+DB:9:7;-DB:9:5:7;+FQ:10:1;-FQ:10:0:;+FA:11:7;-FA:11:0:;+FB:12:7;-FB:12:5:7;",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source": "udf_indirect_argument_access.bas",
+      "package": "udf_indirect_argument_access.xlsm",
+      "source_identity": 2026102129,
+      "source_packet_sha256": "df49bb01037d5b832150c249c0e2b58814cc096499ceea5be5709c3323dc8449",
+      "cases": [
+        {
+          "id": 3362,
+          "steps": [
+            {
+              "procedure": "TextCase",
+              "arguments": [
+                0,
+                0,
+                1
+              ],
+              "expected_returns": [
+                "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:0:1:1,5:9,8:M1]|normal:2,3,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;[5:0,8:0:2:2,5:9,8:M1]|dirty:3,4,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;[5:1,8:1:3:2,5:9,8:M1]|switch:3,5,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;[5:1,8:1:3:2,5:9,8:M1]|other:3,6,3,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;[5:1,8:1:3:3,5:13,8:M1]|full:4,7,4,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;[5:1,8:1:4:4,5:13,8:M1]|rebuilt:5,8,5,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;RC:13;RA:1;RB:5/5;[5:1,8:1:5:5,5:13,8:M1]",
+                "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:0:1:1,5:9,8:M1]|normal:2,3,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NA:0;NC:9;NB:2/2;[5:0,8:0:2:2,5:9,8:M1]|dirty:3,4,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NA:0;NC:9;NB:2/2;DA:1;DB:3/2;[5:1,8:1:3:2,5:9,8:M1]|switch:3,5,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NA:0;NC:9;NB:2/2;DA:1;DB:3/2;SB:3/2;[5:1,8:1:3:2,5:9,8:M1]|other:3,6,3,0:EA:0;EC:9;EB:1/1;NB:1/1;NA:0;NC:9;NB:2/2;DA:1;DB:3/2;SB:3/2;OB:3/2;OC:13;[5:1,8:1:3:2,5:13,8:M1]|full:4,7,4,0:EA:0;EC:9;EB:1/1;NB:1/1;NA:0;NC:9;NB:2/2;DA:1;DB:3/2;SB:3/2;OB:3/2;OC:13;FC:13;FA:1;FB:4/4;[5:1,8:1:4:4,5:13,8:M1]|rebuilt:5,8,5,0:EA:0;EC:9;EB:1/1;NB:1/1;NA:0;NC:9;NB:2/2;DA:1;DB:3/2;SB:3/2;OB:3/2;OC:13;FC:13;FA:1;FB:4/4;RC:13;RA:1;RB:5/5;[5:1,8:1:5:5,5:13,8:M1]"
+              ]
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "return_value": "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:0:1:1,5:9,8:M1]|normal:2,3,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;[5:0,8:0:2:2,5:9,8:M1]|dirty:3,4,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;[5:1,8:1:3:2,5:9,8:M1]|switch:3,5,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;[5:1,8:1:3:2,5:9,8:M1]|other:3,6,3,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;[5:1,8:1:3:3,5:13,8:M1]|full:4,7,4,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;[5:1,8:1:4:4,5:13,8:M1]|rebuilt:5,8,5,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;RC:13;RA:1;RB:5/5;[5:1,8:1:5:5,5:13,8:M1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "return_value": "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:0:1:1,5:9,8:M1]|normal:2,3,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;[5:0,8:0:2:2,5:9,8:M1]|dirty:3,4,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;[5:1,8:1:3:2,5:9,8:M1]|switch:3,5,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;[5:1,8:1:3:2,5:9,8:M1]|other:3,6,3,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;[5:1,8:1:3:3,5:13,8:M1]|full:4,7,4,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;[5:1,8:1:4:4,5:13,8:M1]|rebuilt:5,8,5,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;RC:13;RA:1;RB:5/5;[5:1,8:1:5:5,5:13,8:M1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "return_value": "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:0:1:1,5:9,8:M1]|normal:2,3,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NA:0;NC:9;NB:2/2;[5:0,8:0:2:2,5:9,8:M1]|dirty:3,4,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NA:0;NC:9;NB:2/2;DA:1;DB:3/2;[5:1,8:1:3:2,5:9,8:M1]|switch:3,5,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NA:0;NC:9;NB:2/2;DA:1;DB:3/2;SB:3/2;[5:1,8:1:3:2,5:9,8:M1]|other:3,6,3,0:EA:0;EC:9;EB:1/1;NB:1/1;NA:0;NC:9;NB:2/2;DA:1;DB:3/2;SB:3/2;OB:3/2;OC:13;[5:1,8:1:3:2,5:13,8:M1]|full:4,7,4,0:EA:0;EC:9;EB:1/1;NB:1/1;NA:0;NC:9;NB:2/2;DA:1;DB:3/2;SB:3/2;OB:3/2;OC:13;FC:13;FA:1;FB:4/4;[5:1,8:1:4:4,5:13,8:M1]|rebuilt:5,8,5,0:EA:0;EC:9;EB:1/1;NB:1/1;NA:0;NC:9;NB:2/2;DA:1;DB:3/2;SB:3/2;OB:3/2;OC:13;FC:13;FA:1;FB:4/4;RC:13;RA:1;RB:5/5;[5:1,8:1:5:5,5:13,8:M1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 6,
+              "return_value": "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:0:1:1,5:9,8:M1]|normal:2,3,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;[5:0,8:0:2:2,5:9,8:M1]|dirty:3,4,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;[5:1,8:1:3:2,5:9,8:M1]|switch:3,5,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;[5:1,8:1:3:2,5:9,8:M1]|other:3,6,3,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;[5:1,8:1:3:3,5:13,8:M1]|full:4,7,4,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;[5:1,8:1:4:4,5:13,8:M1]|rebuilt:5,8,5,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;RC:13;RA:1;RB:5/5;[5:1,8:1:5:5,5:13,8:M1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 7,
+              "return_value": "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:0:1:1,5:9,8:M1]|normal:2,3,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;[5:0,8:0:2:2,5:9,8:M1]|dirty:3,4,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;[5:1,8:1:3:2,5:9,8:M1]|switch:3,5,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;[5:1,8:1:3:2,5:9,8:M1]|other:3,6,3,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;[5:1,8:1:3:3,5:13,8:M1]|full:4,7,4,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;[5:1,8:1:4:4,5:13,8:M1]|rebuilt:5,8,5,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;RC:13;RA:1;RB:5/5;[5:1,8:1:5:5,5:13,8:M1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 8,
+              "return_value": "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:0:1:1,5:9,8:M1]|normal:2,3,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;[5:0,8:0:2:2,5:9,8:M1]|dirty:3,4,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;[5:1,8:1:3:2,5:9,8:M1]|switch:3,5,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;[5:1,8:1:3:2,5:9,8:M1]|other:3,6,3,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;[5:1,8:1:3:3,5:13,8:M1]|full:4,7,4,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;[5:1,8:1:4:4,5:13,8:M1]|rebuilt:5,8,5,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;RC:13;RA:1;RB:5/5;[5:1,8:1:5:5,5:13,8:M1]",
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3420,
+          "steps": [
+            {
+              "procedure": "TextCase",
+              "arguments": [
+                5,
+                0,
+                5
+              ],
+              "expected_returns": [
+                "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:0:1:1,5:9,8:M1]|normal:2,2,2,0:EA:0;EC:9;EB:1/1;NA:0;NC:9;NB:2/2;[5:0,8:0:2:2,5:9,8:M1]|dirty:3,4,2,0:EA:0;EC:9;EB:1/1;NA:0;NC:9;NB:2/2;DB:2/2;DA:1;DB:3/2;[5:1,8:1:3:2,5:9,8:M1]|switch:3,5,2,0:EA:0;EC:9;EB:1/1;NA:0;NC:9;NB:2/2;DB:2/2;DA:1;DB:3/2;SB:3/2;[5:1,8:1:3:2,5:9,8:M1]|other:3,6,3,0:EA:0;EC:9;EB:1/1;NA:0;NC:9;NB:2/2;DB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;[5:1,8:1:3:3,5:13,8:M1]|full:4,7,4,0:EA:0;EC:9;EB:1/1;NA:0;NC:9;NB:2/2;DB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;[5:1,8:1:4:4,5:13,8:M1]|rebuilt:5,8,5,0:EA:0;EC:9;EB:1/1;NA:0;NC:9;NB:2/2;DB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;RA:1;RC:13;RB:5/5;[5:1,8:1:5:5,5:13,8:M1]",
+                "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:0:1:1,5:9,8:M1]|normal:2,2,2,0:EA:0;EC:9;EB:1/1;NC:9;NA:0;NB:2/2;[5:0,8:0:2:2,5:9,8:M1]|dirty:3,3,2,0:EA:0;EC:9;EB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;[5:1,8:1:3:2,5:9,8:M1]|switch:3,4,2,0:EA:0;EC:9;EB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;[5:1,8:1:3:2,5:9,8:M1]|other:3,5,3,0:EA:0;EC:9;EB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OB:3/2;OC:13;[5:1,8:1:3:2,5:13,8:M1]|full:4,7,4,0:EA:0;EC:9;EB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OB:3/2;OC:13;FB:3/3;FC:13;FA:1;FB:4/4;[5:1,8:1:4:4,5:13,8:M1]|rebuilt:5,8,5,0:EA:0;EC:9;EB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OB:3/2;OC:13;FB:3/3;FC:13;FA:1;FB:4/4;RC:13;RA:1;RB:5/5;[5:1,8:1:5:5,5:13,8:M1]",
+                "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:0:1:1,5:9,8:M1]|normal:2,3,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;[5:0,8:0:2:2,5:9,8:M1]|dirty:3,4,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;[5:1,8:1:3:2,5:9,8:M1]|switch:3,5,2,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;[5:1,8:1:3:2,5:9,8:M1]|other:3,6,3,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;[5:1,8:1:3:3,5:13,8:M1]|full:4,7,4,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;[5:1,8:1:4:4,5:13,8:M1]|rebuilt:5,8,5,0:EA:0;EC:9;EB:1/1;NB:1/1;NC:9;NA:0;NB:2/2;DA:1;DB:3/2;SB:3/2;OC:13;OB:3/3;FC:13;FA:1;FB:4/4;RC:13;RA:1;RB:5/5;[5:1,8:1:5:5,5:13,8:M1]"
+              ]
+            }
+          ]
+        },
+        {
+          "id": 3408,
+          "steps": [
+            {
+              "procedure": "TextCase",
+              "arguments": [
+                5,
+                0,
+                4
+              ],
+              "expected_returns": [
+                "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:$M$1:1:1,5:9,8:M1]|normal:2,2,2,0:EA:0;EC:9;EB:1/1;NA:0;NC:9;NB:2/2;[5:0,8:$M$1:2:2,5:9,8:M1]|dirty:3,3,2,0:EA:0;EC:9;EB:1/1;NA:0;NC:9;NB:2/2;DB:2/2;DA:1;[5:1,8:$M$1:2:2,5:9,8:M1]|switch:3,4,2,0:EA:0;EC:9;EB:1/1;NA:0;NC:9;NB:2/2;DB:2/2;DA:1;SB:3/2;[5:1,8:$M$1:3:2,5:9,8:M1]|other:3,5,3,0:EA:0;EC:9;EB:1/1;NA:0;NC:9;NB:2/2;DB:2/2;DA:1;SB:3/2;OB:3/2;OC:13;[5:1,8:$M$1:3:2,5:13,8:M1]|full:4,6,4,0:EA:0;EC:9;EB:1/1;NA:0;NC:9;NB:2/2;DB:2/2;DA:1;SB:3/2;OB:3/2;OC:13;FB:3/3;FA:1;FC:13;[5:1,8:$M$1:3:3,5:13,8:M1]|rebuilt:5,7,5,0:EA:0;EC:9;EB:1/1;NA:0;NC:9;NB:2/2;DB:2/2;DA:1;SB:3/2;OB:3/2;OC:13;FB:3/3;FA:1;FC:13;RB:4/4;RC:13;RA:1;[5:1,8:$M$1:4:4,5:13,8:M1]",
+                "entry:1,1,1,0:EA:0;EC:9;EB:1/1;[5:0,8:$M$1:1:1,5:9,8:M1]|normal:2,2,2,0:EA:0;EC:9;EB:1/1;NC:9;NA:0;NB:2/2;[5:0,8:$M$1:2:2,5:9,8:M1]|dirty:3,3,2,0:EA:0;EC:9;EB:1/1;NC:9;NA:0;NB:2/2;DB:2/2;DA:1;[5:1,8:$M$1:2:2,5:9,8:M1]|switch:3,4,2,0:EA:0;EC:9;EB:1/1;NC:9;NA:0;NB:2/2;DB:2/2;DA:1;SB:3/2;[5:1,8:$M$1:3:2,5:9,8:M1]|other:3,5,3,0:EA:0;EC:9;EB:1/1;NC:9;NA:0;NB:2/2;DB:2/2;DA:1;SB:3/2;OB:3/2;OC:13;[5:1,8:$M$1:3:2,5:13,8:M1]|full:4,6,4,0:EA:0;EC:9;EB:1/1;NC:9;NA:0;NB:2/2;DB:2/2;DA:1;SB:3/2;OB:3/2;OC:13;FB:3/3;FC:13;FA:1;[5:1,8:$M$1:3:3,5:13,8:M1]|rebuilt:5,7,5,0:EA:0;EC:9;EB:1/1;NC:9;NA:0;NB:2/2;DB:2/2;DA:1;SB:3/2;OB:3/2;OC:13;FB:3/3;FC:13;FA:1;RB:4/4;RC:13;RA:1;[5:1,8:$M$1:4:4,5:13,8:M1]"
+              ]
+            }
+          ]
+        },
+        {
+          "id": 3409,
+          "steps": [
+            {
+              "procedure": "TextCase",
+              "arguments": [
+                5,
+                1,
+                4
+              ],
+              "expected_returns": [
+                "entry:1,1,1,0:EA:1;EC:9;EB:1/1;[5:1,8:$M$1:1:1,5:9,8:M1]|normal:2,2,2,0:EA:1;EC:9;EB:1/1;NA:1;NC:9;NB:2/2;[5:1,8:$M$1:2:2,5:9,8:M1]|dirty:3,3,2,0:EA:1;EC:9;EB:1/1;NA:1;NC:9;NB:2/2;DB:2/2;DA:0;[5:0,8:$M$1:2:2,5:9,8:M1]|switch:3,4,2,0:EA:1;EC:9;EB:1/1;NA:1;NC:9;NB:2/2;DB:2/2;DA:0;SB:3/2;[5:0,8:$M$1:3:2,5:9,8:M1]|other:3,5,3,0:EA:1;EC:9;EB:1/1;NA:1;NC:9;NB:2/2;DB:2/2;DA:0;SB:3/2;OB:3/2;OC:13;[5:0,8:$M$1:3:2,5:13,8:M1]|full:4,6,4,0:EA:1;EC:9;EB:1/1;NA:1;NC:9;NB:2/2;DB:2/2;DA:0;SB:3/2;OB:3/2;OC:13;FB:3/3;FC:13;FA:0;[5:0,8:$M$1:3:3,5:13,8:M1]|rebuilt:5,7,5,0:EA:1;EC:9;EB:1/1;NA:1;NC:9;NB:2/2;DB:2/2;DA:0;SB:3/2;OB:3/2;OC:13;FB:3/3;FC:13;FA:0;RB:4/4;RA:0;RC:13;[5:0,8:$M$1:4:4,5:13,8:M1]",
+                "entry:1,1,1,0:EA:1;EC:9;EB:1/1;[5:1,8:$M$1:1:1,5:9,8:M1]|normal:2,2,2,0:EA:1;EC:9;EB:1/1;NC:9;NA:1;NB:2/2;[5:1,8:$M$1:2:2,5:9,8:M1]|dirty:3,3,2,0:EA:1;EC:9;EB:1/1;NC:9;NA:1;NB:2/2;DB:2/2;DA:0;[5:0,8:$M$1:2:2,5:9,8:M1]|switch:3,4,2,0:EA:1;EC:9;EB:1/1;NC:9;NA:1;NB:2/2;DB:2/2;DA:0;SB:3/2;[5:0,8:$M$1:3:2,5:9,8:M1]|other:3,5,3,0:EA:1;EC:9;EB:1/1;NC:9;NA:1;NB:2/2;DB:2/2;DA:0;SB:3/2;OB:3/2;OC:13;[5:0,8:$M$1:3:2,5:13,8:M1]|full:4,6,4,0:EA:1;EC:9;EB:1/1;NC:9;NA:1;NB:2/2;DB:2/2;DA:0;SB:3/2;OB:3/2;OC:13;FB:3/3;FC:13;FA:0;[5:0,8:$M$1:3:3,5:13,8:M1]|rebuilt:5,7,5,0:EA:1;EC:9;EB:1/1;NC:9;NA:1;NB:2/2;DB:2/2;DA:0;SB:3/2;OB:3/2;OC:13;FB:3/3;FC:13;FA:0;RB:4/4;RC:13;RA:0;[5:0,8:$M$1:4:4,5:13,8:M1]"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+[
+  {
+    "mode": 0,
+    "inside": "123|False|1|A1:5",
+    "after": "123|False|3|A1:5",
+    "again": "123|False|4|A1:9",
+    "returned": "123|False|2|A1:5",
+    "failed": false
+  },
+  {
+    "mode": 1,
+    "inside": "123|False|1|A1:5",
+    "after": "0|True|1|none",
+    "again": "0|True|2|none",
+    "returned": null,
+    "failed": true
+  },
+  {
+    "mode": 2,
+    "inside": "123|False|1|A1:5",
+    "after": "123|False|2|A1:5",
+    "again": "123|False|3|A1:9",
+    "returned": null,
+    "failed": true
+  },
+  {
+    "mode": 3,
+    "inside": "123|False|1|A1:5",
+    "after": "123|False|3|A1:5",
+    "again": "123|False|4|A1:9",
+    "returned": "123|False|2|A1:5",
+    "failed": false
+  },
+  {
+    "mode": 4,
+    "inside": "123|False|1|A1:5",
+    "after": "0|True|1|none",
+    "again": "0|True|2|none",
+    "returned": null,
+    "failed": true
+  },
+  {
+    "mode": 5,
+    "inside": "123|False|1|A1:5",
+    "after": "0|True|1|none",
+    "again": "0|True|2|none",
+    "returned": null,
+    "failed": true
+  },
+  {
+    "mode": 6,
+    "inside": "123|False|1|A1:5",
+    "after": "0|True|1|none",
+    "again": "0|True|2|none",
+    "returned": null,
+    "failed": true
+  }
+]

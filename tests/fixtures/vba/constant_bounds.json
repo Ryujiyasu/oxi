@@ -1,0 +1,840 @@
+[
+  {
+    "name": "const_no_value",
+    "source": "const_bound_const_no_value.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "const_typed_no_value",
+    "source": "const_bound_const_typed_no_value.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "const_missing_expression",
+    "source": "const_bound_const_missing_expression.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_scalar",
+    "source": "const_bound_new_scalar.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "static_initializer",
+    "source": "const_bound_static_initializer.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "fixed_missing_width",
+    "source": "const_bound_fixed_missing_width.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "negative_bound",
+    "source": "const_bound_negative_bound.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "reversed_bounds",
+    "source": "const_bound_reversed_bounds.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "const_valid",
+    "source": "const_bound_const_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "const_typed",
+    "source": "const_bound_const_typed.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "const_expression",
+    "source": "const_bound_const_expression.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "5"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "5"
+      }
+    ]
+  },
+  {
+    "name": "const_string",
+    "source": "const_bound_const_string.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ab"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ab"
+      }
+    ]
+  },
+  {
+    "name": "const_unreachable",
+    "source": "const_bound_const_unreachable.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "const_uncalled",
+    "source": "const_bound_const_uncalled.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "new_boolean",
+    "source": "const_bound_new_boolean.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_byte",
+    "source": "const_bound_new_byte.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_integer",
+    "source": "const_bound_new_integer.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_longlong",
+    "source": "const_bound_new_longlong.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_longptr",
+    "source": "const_bound_new_longptr.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_single",
+    "source": "const_bound_new_single.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_double",
+    "source": "const_bound_new_double.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_currency",
+    "source": "const_bound_new_currency.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_date",
+    "source": "const_bound_new_date.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_string",
+    "source": "const_bound_new_string.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_variant",
+    "source": "const_bound_new_variant.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_decimal",
+    "source": "const_bound_new_decimal.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_object",
+    "source": "const_bound_new_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "new_collection",
+    "source": "const_bound_new_collection.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Collection"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Collection"
+      }
+    ]
+  },
+  {
+    "name": "width_zero",
+    "source": "const_bound_width_zero.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "固定長文字列の長さが不正です。"
+  },
+  {
+    "name": "width_negative",
+    "source": "const_bound_width_negative.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "width_fraction",
+    "source": "const_bound_width_fraction.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "width_expression",
+    "source": "const_bound_width_expression.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "width_const",
+    "source": "const_bound_width_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "width_variable",
+    "source": "const_bound_width_variable.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "width_function",
+    "source": "const_bound_width_function.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "bound_zero",
+    "source": "const_bound_bound_zero.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:0"
+      }
+    ]
+  },
+  {
+    "name": "bound_negative_lower",
+    "source": "const_bound_bound_negative_lower.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "-2:-1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "-2:-1"
+      }
+    ]
+  },
+  {
+    "name": "bound_negative_reversed",
+    "source": "const_bound_bound_negative_reversed.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "bound_arithmetic",
+    "source": "const_bound_bound_arithmetic.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:3"
+      }
+    ]
+  },
+  {
+    "name": "bound_negative_expression",
+    "source": "const_bound_bound_negative_expression.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "bound_base_one_zero",
+    "source": "const_bound_bound_base_one_zero.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "bound_base_one_explicit_zero",
+    "source": "const_bound_bound_base_one_explicit_zero.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:0"
+      }
+    ]
+  },
+  {
+    "name": "bound_half_negative",
+    "source": "const_bound_bound_half_negative.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:0"
+      }
+    ]
+  },
+  {
+    "name": "bound_fraction_negative",
+    "source": "const_bound_bound_fraction_negative.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "bound_half_positive",
+    "source": "const_bound_bound_half_positive.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:2"
+      }
+    ]
+  },
+  {
+    "name": "bound_text_number",
+    "source": "const_bound_bound_text_number.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:2"
+      }
+    ]
+  },
+  {
+    "name": "bound_text_bad",
+    "source": "const_bound_bound_text_bad.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "型が一致しません。"
+  },
+  {
+    "name": "bound_boolean",
+    "source": "const_bound_bound_boolean.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "bound_local_const",
+    "source": "const_bound_bound_local_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "bound_module_const",
+    "source": "const_bound_bound_module_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "bound_variable",
+    "source": "const_bound_bound_variable.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "bound_function",
+    "source": "const_bound_bound_function.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "redim_negative",
+    "source": "const_bound_redim_negative.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "9:ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "9:ran"
+      }
+    ]
+  },
+  {
+    "name": "redim_reversed",
+    "source": "const_bound_redim_reversed.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "9:ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "9:ran"
+      }
+    ]
+  },
+  {
+    "name": "bound_enum_negative",
+    "source": "const_bound_bound_enum_negative.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "bound_enum_positive",
+    "source": "const_bound_bound_enum_positive.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:2"
+      }
+    ]
+  },
+  {
+    "name": "width_decimal_integral",
+    "source": "const_bound_width_decimal_integral.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "width_typed",
+    "source": "const_bound_width_typed.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "width_hex",
+    "source": "const_bound_width_hex.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "width_binary",
+    "source": "const_bound_width_binary.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "width_group",
+    "source": "const_bound_width_group.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "width_max_a",
+    "source": "const_bound_width_max_a.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "65526"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "65526"
+      }
+    ]
+  },
+  {
+    "name": "width_max_b",
+    "source": "const_bound_width_max_b.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "固定長文字列の長さが不正です。"
+  },
+  {
+    "name": "width_max_c",
+    "source": "const_bound_width_max_c.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "固定長文字列の長さが不正です。"
+  },
+  {
+    "name": "width_max_d",
+    "source": "const_bound_width_max_d.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "width_const_fraction",
+    "source": "const_bound_width_const_fraction.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "width_module_const",
+    "source": "const_bound_width_module_const.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3"
+      }
+    ]
+  },
+  {
+    "name": "bound_function_abs",
+    "source": "const_bound_bound_function_abs.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:1"
+      }
+    ]
+  },
+  {
+    "name": "bound_function_len",
+    "source": "const_bound_bound_function_len.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:2"
+      }
+    ]
+  },
+  {
+    "name": "bound_function_cint",
+    "source": "const_bound_bound_function_cint.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:2"
+      }
+    ]
+  },
+  {
+    "name": "bound_function_clng_negative",
+    "source": "const_bound_bound_function_clng_negative.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "bound_function_conversion_overflow",
+    "source": "const_bound_bound_function_conversion_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "bound_const_later",
+    "source": "const_bound_bound_const_later.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "変数が定義されていません。"
+  },
+  {
+    "name": "bound_function_shadow",
+    "source": "const_bound_bound_function_shadow.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "bound_enum_implicit",
+    "source": "const_bound_bound_enum_implicit.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "custom_bound",
+    "source": "const_bound_custom_bound.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "shadow_conversion_direct",
+    "source": "const_bound_shadow_conversion_direct.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "shadow_conversion_uncalled",
+    "source": "const_bound_shadow_conversion_uncalled.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "shadow_len_bound",
+    "source": "const_bound_shadow_len_bound.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "procedure_cint_uncalled",
+    "source": "const_bound_procedure_cint_uncalled.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "procedure_cstr_uncalled",
+    "source": "const_bound_procedure_cstr_uncalled.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "procedure_cbool_uncalled",
+    "source": "const_bound_procedure_cbool_uncalled.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "procedure_len_uncalled",
+    "source": "const_bound_procedure_len_uncalled.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "procedure_len_direct",
+    "source": "const_bound_procedure_len_direct.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "procedure_abs_uncalled",
+    "source": "const_bound_procedure_abs_uncalled.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  }
+]

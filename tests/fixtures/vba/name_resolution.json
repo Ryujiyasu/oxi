@@ -1,0 +1,866 @@
+[
+  {
+    "name": "initial_ambiguous_missing",
+    "source": "name_resolution_initial_ambiguous_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "名前が適切ではありません: SharedHelper",
+    "steps": []
+  },
+  {
+    "name": "initial_ambiguous_valid_arity",
+    "source": "name_resolution_initial_ambiguous_valid_arity.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "名前が適切ではありません: SharedHelper",
+    "steps": []
+  },
+  {
+    "name": "initial_qualified_missing",
+    "source": "name_resolution_initial_qualified_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "initial_qualified_valid",
+    "source": "name_resolution_initial_qualified_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "initial_own_shadow",
+    "source": "name_resolution_initial_own_shadow.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "initial_private_self_missing",
+    "source": "name_resolution_initial_private_self_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "initial_private_self_valid",
+    "source": "name_resolution_initial_private_self_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "initial_private_self_runtime",
+    "source": "name_resolution_initial_private_self_runtime.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "control_private_self_missing",
+    "source": "name_resolution_control_private_self_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "control_private_self_valid",
+    "source": "name_resolution_control_private_self_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "control_private_self_runtime",
+    "source": "name_resolution_control_private_self_runtime.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "control_class_member_Invoke",
+    "source": "name_resolution_control_class_member_Invoke.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "control_class_member_GetTypeInfo",
+    "source": "name_resolution_control_class_member_GetTypeInfo.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "control_class_member_GetTypeInfoCount",
+    "source": "name_resolution_control_class_member_GetTypeInfoCount.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "control_class_member_GetIDsOfNames",
+    "source": "name_resolution_control_class_member_GetIDsOfNames.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "control_class_member_QueryInterface",
+    "source": "name_resolution_control_class_member_QueryInterface.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "control_class_member_AddRef",
+    "source": "name_resolution_control_class_member_AddRef.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "control_class_member_Release",
+    "source": "name_resolution_control_class_member_Release.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "control_class_member_RunInner",
+    "source": "name_resolution_control_class_member_RunInner.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_private_function_QueryInterface",
+    "source": "name_resolution_boundary_private_function_QueryInterface.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_private_variable_QueryInterface",
+    "source": "name_resolution_boundary_private_variable_QueryInterface.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_local_variable_QueryInterface",
+    "source": "name_resolution_boundary_local_variable_QueryInterface.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_private_function_AddRef",
+    "source": "name_resolution_boundary_private_function_AddRef.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_private_variable_AddRef",
+    "source": "name_resolution_boundary_private_variable_AddRef.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_local_variable_AddRef",
+    "source": "name_resolution_boundary_local_variable_AddRef.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_private_function_Release",
+    "source": "name_resolution_boundary_private_function_Release.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_private_variable_Release",
+    "source": "name_resolution_boundary_private_variable_Release.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_local_variable_Release",
+    "source": "name_resolution_boundary_local_variable_Release.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_private_function_GetTypeInfoCount",
+    "source": "name_resolution_boundary_private_function_GetTypeInfoCount.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_private_variable_GetTypeInfoCount",
+    "source": "name_resolution_boundary_private_variable_GetTypeInfoCount.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_local_variable_GetTypeInfoCount",
+    "source": "name_resolution_boundary_local_variable_GetTypeInfoCount.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_private_function_GetTypeInfo",
+    "source": "name_resolution_boundary_private_function_GetTypeInfo.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_private_variable_GetTypeInfo",
+    "source": "name_resolution_boundary_private_variable_GetTypeInfo.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_local_variable_GetTypeInfo",
+    "source": "name_resolution_boundary_local_variable_GetTypeInfo.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_private_function_GetIDsOfNames",
+    "source": "name_resolution_boundary_private_function_GetIDsOfNames.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_private_variable_GetIDsOfNames",
+    "source": "name_resolution_boundary_private_variable_GetIDsOfNames.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_local_variable_GetIDsOfNames",
+    "source": "name_resolution_boundary_local_variable_GetIDsOfNames.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_private_function_Invoke",
+    "source": "name_resolution_boundary_private_function_Invoke.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_private_variable_Invoke",
+    "source": "name_resolution_boundary_private_variable_Invoke.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_local_variable_Invoke",
+    "source": "name_resolution_boundary_local_variable_Invoke.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_standard_public_Invoke",
+    "source": "name_resolution_boundary_standard_public_Invoke.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_standard_private_Invoke",
+    "source": "name_resolution_boundary_standard_private_Invoke.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_reserved_public_variable",
+    "source": "name_resolution_boundary_reserved_public_variable.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_reserved_public_property",
+    "source": "name_resolution_boundary_reserved_public_property.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_reserved_private_property",
+    "source": "name_resolution_boundary_reserved_private_property.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_reserved_public_sub",
+    "source": "name_resolution_boundary_reserved_public_sub.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_reserved_private_sub",
+    "source": "name_resolution_boundary_reserved_private_sub.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_reserved_private_type",
+    "source": "name_resolution_boundary_reserved_private_type.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_reserved_private_enum",
+    "source": "name_resolution_boundary_reserved_private_enum.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_reserved_private_enum_member",
+    "source": "name_resolution_boundary_reserved_private_enum_member.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_reserved_private_const",
+    "source": "name_resolution_boundary_reserved_private_const.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_declaration_before_body",
+    "source": "name_resolution_boundary_declaration_before_body.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。",
+    "steps": []
+  },
+  {
+    "name": "boundary_private_lexical_missing",
+    "source": "name_resolution_boundary_private_lexical_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_private_lexical_valid",
+    "source": "name_resolution_boundary_private_lexical_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_private_with_missing",
+    "source": "name_resolution_boundary_private_with_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_private_with_valid",
+    "source": "name_resolution_boundary_private_with_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_private_lexical_runtime",
+    "source": "name_resolution_boundary_private_lexical_runtime.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      }
+    ]
+  },
+  {
+    "name": "boundary_ambiguous_nothing",
+    "source": "name_resolution_boundary_ambiguous_nothing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "名前が適切ではありません: SharedHelper",
+    "steps": []
+  },
+  {
+    "name": "boundary_ambiguous_unknown_value",
+    "source": "name_resolution_boundary_ambiguous_unknown_value.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_standard_self_private_missing",
+    "source": "name_resolution_boundary_standard_self_private_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_standard_self_private_valid",
+    "source": "name_resolution_boundary_standard_self_private_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_hidden_import_missing",
+    "source": "name_resolution_boundary_hidden_import_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "Sub または Function が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_hidden_import_valid",
+    "source": "name_resolution_boundary_hidden_import_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "Sub または Function が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_hidden_import_nothing",
+    "source": "name_resolution_boundary_hidden_import_nothing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "Sub または Function が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_hidden_import_qualified_missing",
+    "source": "name_resolution_boundary_hidden_import_qualified_missing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_hidden_import_qualified_nothing",
+    "source": "name_resolution_boundary_hidden_import_qualified_nothing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。",
+    "steps": []
+  },
+  {
+    "name": "priority_ambiguous_bad_intrinsic",
+    "source": "name_resolution_priority_ambiguous_bad_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "priority_ambiguous_unknown_function",
+    "source": "name_resolution_priority_ambiguous_unknown_function.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "Sub または Function が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "priority_ambiguous_group_nothing",
+    "source": "name_resolution_priority_ambiguous_group_nothing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。",
+    "steps": []
+  },
+  {
+    "name": "priority_unknown_function_unknown_value",
+    "source": "name_resolution_priority_unknown_function_unknown_value.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "priority_hidden_unknown_value",
+    "source": "name_resolution_priority_hidden_unknown_value.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "priority_hidden_qualified_unknown_value",
+    "source": "name_resolution_priority_hidden_qualified_unknown_value.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "priority_known_extra_unknown_last",
+    "source": "name_resolution_priority_known_extra_unknown_last.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "priority_known_extra_unknown_first",
+    "source": "name_resolution_priority_known_extra_unknown_first.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "priority_known_bad_named_unknown_value",
+    "source": "name_resolution_priority_known_bad_named_unknown_value.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "priority_qualified_extra_unknown",
+    "source": "name_resolution_priority_qualified_extra_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "priority_private_unknown_value",
+    "source": "name_resolution_priority_private_unknown_value.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "priority_missing_member_unknown_value",
+    "source": "name_resolution_priority_missing_member_unknown_value.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  }
+]

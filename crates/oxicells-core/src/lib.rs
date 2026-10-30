@@ -3,13 +3,19 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub mod chart;
+mod chart_edit;
 pub mod conditional;
 pub mod editor;
 pub mod fill;
 pub mod formula;
+pub mod recalculation;
 pub mod ir;
+mod string_value;
+mod compatibility;
+mod rich_text;
 pub mod parser;
 pub mod row_defaults;
+pub mod row_height;
 
 pub mod bands;
 

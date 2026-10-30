@@ -1,0 +1,78 @@
+literal_long	literal_long.bas		compile	型が一致しません。	
+literal_double	literal_double.bas		compile	型が一致しません。	
+literal_string	literal_string.bas		compile	型が一致しません。	
+literal_boolean	literal_boolean.bas		compile	型が一致しません。	
+literal_date	literal_date.bas		compile	型が一致しません。	
+empty	empty.bas		return	424|Empty|	entry
+null	null.bas		return	424|Empty|	entry
+nothing	nothing.bas		return	5|Empty|	entry
+numeric_expression	numeric_expression.bas		compile	型が一致しません。	
+cstr	cstr.bas		compile	型が一致しません。	
+cint	cint.bas		compile	型が一致しません。	
+cvar	cvar.bas		return	424|Empty|	entry
+cdec	cdec.bas		return	424|Empty|	entry
+variant_long	variant_long.bas		return	424|Empty|	entry
+variant_string	variant_string.bas		return	424|Empty|	entry
+variant_empty	variant_empty.bas		return	424|Empty|	entry
+variant_null	variant_null.bas		return	424|Empty|	entry
+variant_nothing	variant_nothing.bas		return	5|Empty|	entry
+object_nothing	object_nothing.bas		return	5|Empty|	entry
+long_variable	long_variable.bas		compile	型が一致しません。	
+string_variable	string_variable.bas		compile	型が一致しません。	
+byte_variable	byte_variable.bas		compile	型が一致しません。	
+date_variable	date_variable.bas		compile	型が一致しません。	
+object_err	object_err.bas		return	0|Long|0	entry
+auto_new_collection	auto_new_collection.bas		return	438|Empty|	entry
+variant_expression	variant_expression.bas		return	424|Empty|	entry
+suffix_variable	suffix_variable.bas		compile	型が一致しません。	
+forward_long	forward_long.bas		compile	変数が定義されていません。	
+unicode_long	unicode_long.bas		compile	型が一致しません。	
+scalar_function	scalar_function.bas		compile	型が一致しません。	
+variant_function	variant_function.bas		return	424|Empty|	entry
+record_field	record_field.bas		compile	型が一致しません。	
+long_array_element	long_array_element.bas		compile	型が一致しません。	
+variant_array_element	variant_array_element.bas		return	424|Empty|	entry
+whole_long_array	whole_long_array.bas		compile	型が一致しません。	
+qualified	qualified.bas		compile	型が一致しません。	
+module_qualified	module_qualified.bas		compile	型が一致しません。	
+named_scalar	named_scalar.bas		compile	ParamArray 内の引数は、名前付き引数ではありません。	
+named_variant	named_variant.bas		compile	ParamArray 内の引数は、名前付き引数ではありません。	
+arity_0	arity_0.bas		compile	引数は省略できません。	
+arity_1	arity_1.bas		compile	引数は省略できません。	
+arity_2	arity_2.bas		compile	引数は省略できません。	
+omitted_object	omitted_object.bas		compile	引数は省略できません。	
+shadow_procedure	shadow_procedure.bas		return	0|Long|7	entry
+shadow_array	shadow_array.bas		return	0|Long|7	entry
+unused_same	unused_same.bas		return	0|Empty|	entry
+unused_other	unused_other.bas	unused_other-other.bas	return	0|Empty|	entry
+called_same	called_same.bas		compile	型が一致しません。	entry
+called_other	called_other.bas	called_other-other.bas	compile	型が一致しません。	entry
+dead_branch	dead_branch.bas		compile	型が一致しません。	
+dead_callee	dead_callee.bas		return	0|Empty|	entry
+precompile_dead	precompile_dead.bas		return	0|Empty|	entry
+argument_order	argument_order.bas		compile	型が一致しません。	entry|argument
+last_named	last_named.bas		compile	ParamArray 内の引数は、名前付き引数ではありません。	
+two_named	two_named.bas		compile	ParamArray 内の引数は、名前付き引数ではありません。	
+object_named	object_named.bas		compile	ParamArray 内の引数は、名前付き引数ではありません。	
+paramarray_named	paramarray_named.bas		compile	ParamArray 内の引数は、名前付き引数ではありません。	
+paramarray_omitted	paramarray_omitted.bas		compile	構文エラー	
+procname_omitted	procname_omitted.bas		compile	引数は省略できません。	
+calltype_omitted	calltype_omitted.bas		compile	構文エラー	
+return_type_0	return_type_0.bas		return	424|Empty|	entry
+return_type_1	return_type_1.bas		compile	型が一致しません。	
+return_type_2	return_type_2.bas		return	424|Empty|	entry
+return_type_3	return_type_3.bas		compile	型が一致しません。	
+return_type_4	return_type_4.bas		return	424|Empty|	entry
+return_type_5	return_type_5.bas		compile	型が一致しません。	
+return_type_6	return_type_6.bas		compile	型が一致しません。	
+return_type_7	return_type_7.bas		compile	型が一致しません。	
+return_type_8	return_type_8.bas		compile	型が一致しません。	
+return_type_9	return_type_9.bas		compile	型が一致しません。	
+return_type_10	return_type_10.bas		compile	型が一致しません。	
+return_type_11	return_type_11.bas		compile	型が一致しません。	
+return_type_12	return_type_12.bas		compile	型が一致しません。	
+return_type_13	return_type_13.bas		compile	型が一致しません。	
+return_type_14	return_type_14.bas		compile	型が一致しません。	
+return_type_15	return_type_15.bas		compile	型が一致しません。	
+return_type_16	return_type_16.bas		return	424|Empty|	entry
+return_type_17	return_type_17.bas		return	424|Empty|	entry

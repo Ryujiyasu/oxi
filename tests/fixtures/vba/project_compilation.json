@@ -1,0 +1,533 @@
+[
+  {
+    "name": "valid",
+    "source": "project_compile_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "uncalled_undefined",
+    "source": "project_compile_uncalled_undefined.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "変数が定義されていません。"
+  },
+  {
+    "name": "uncalled_bound",
+    "source": "project_compile_uncalled_bound.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "dead_branch",
+    "source": "project_compile_dead_branch.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "変数が定義されていません。"
+  },
+  {
+    "name": "uncalled_type_mismatch",
+    "source": "project_compile_uncalled_type_mismatch.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "型が一致しません。"
+  },
+  {
+    "name": "uncalled_syntax",
+    "source": "project_compile_uncalled_syntax.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "global_byte",
+    "source": "project_compile_global_byte.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "global_null",
+    "source": "project_compile_global_null.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "global_nothing",
+    "source": "project_compile_global_nothing.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "定数のデータ型が不正です。"
+  },
+  {
+    "name": "global_call",
+    "source": "project_compile_global_call.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "global_division",
+    "source": "project_compile_global_division.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "0 で除算しました。"
+  },
+  {
+    "name": "global_array",
+    "source": "project_compile_global_array.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "値が有効範囲にありません。"
+  },
+  {
+    "name": "global_width",
+    "source": "project_compile_global_width.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "固定長文字列の長さが不正です。"
+  },
+  {
+    "name": "global_unknown_type",
+    "source": "project_compile_global_unknown_type.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "ユーザ定義型は定義されていません。"
+  },
+  {
+    "name": "global_enum_overflow",
+    "source": "project_compile_global_enum_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "global_enum_valid",
+    "source": "project_compile_global_enum_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "unused_class_private_const",
+    "source": "project_compile_unused_class_private_const.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "unused_class_public_const",
+    "source": "project_compile_unused_class_public_const.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "定数、固定長文字列、配列、ユーザー定義型および Declare ステートメントは、オブジェクト モジュールのパブリック メンバーとしては使用できません。"
+  },
+  {
+    "name": "unused_class_procedure",
+    "source": "project_compile_unused_class_procedure.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "変数が定義されていません。"
+  },
+  {
+    "name": "unused_module_procedure",
+    "source": "project_compile_unused_module_procedure.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "変数が定義されていません。"
+  },
+  {
+    "name": "builtin_name",
+    "source": "project_compile_builtin_name.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "precedence_driver",
+    "source": "project_compile_precedence_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "precedence_alpha",
+    "source": "project_compile_precedence_alpha.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "AlphaModule",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "precedence_beta",
+    "source": "project_compile_precedence_beta.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "BetaModule",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "valid_auto_new",
+    "source": "project_compile_valid_auto_new.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0"
+      }
+    ]
+  },
+  {
+    "name": "precedence_reverse_driver",
+    "source": "project_compile_precedence_reverse_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "precedence_reverse_alpha",
+    "source": "project_compile_precedence_reverse_alpha.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "AlphaModule",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "class_precedence_driver",
+    "source": "project_compile_class_precedence_driver.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "class_precedence_alpha",
+    "source": "project_compile_class_precedence_alpha.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "AlphaClass",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "class_before_standard",
+    "source": "project_compile_class_before_standard.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "enum_null",
+    "source": "project_compile_enum_null.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "Null の使い方が不正です。"
+  },
+  {
+    "name": "enum_abs",
+    "source": "project_compile_enum_abs.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "enum_cint",
+    "source": "project_compile_enum_cint.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "enum_min",
+    "source": "project_compile_enum_min.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "enum_implicit_overflow",
+    "source": "project_compile_enum_implicit_overflow.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "enum_abs_bound",
+    "source": "project_compile_enum_abs_bound.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2"
+      }
+    ]
+  },
+  {
+    "name": "enum_cint_bound",
+    "source": "project_compile_enum_cint_bound.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2"
+      }
+    ]
+  },
+  {
+    "name": "enum_len_bound",
+    "source": "project_compile_enum_len_bound.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2"
+      }
+    ]
+  },
+  {
+    "name": "enum_vba_abs_bound",
+    "source": "project_compile_enum_vba_abs_bound.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "enum_fraction",
+    "source": "project_compile_enum_fraction.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:3"
+      }
+    ]
+  },
+  {
+    "name": "enum_implicit_value",
+    "source": "project_compile_enum_implicit_value.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2147483647:-2147483648:3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2147483647:-2147483648:3"
+      }
+    ]
+  },
+  {
+    "name": "enum_custom_call",
+    "source": "project_compile_enum_custom_call.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "モジュール間で循環参照が定義されています。"
+  },
+  {
+    "name": "enum_date",
+    "source": "project_compile_enum_date.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "定数式が必要です。"
+  },
+  {
+    "name": "global_before_driver_body",
+    "source": "project_compile_global_before_driver_body.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "global_before_driver_body_focus_helper",
+    "source": "project_compile_global_before_driver_body_focus_helper.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "HelperModule",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "class_global_before_driver_body",
+    "source": "project_compile_class_global_before_driver_body.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "DriverModule",
+    "outcome": "compile",
+    "message": "オーバーフローしました。"
+  },
+  {
+    "name": "body_module_order",
+    "source": "project_compile_body_module_order.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "focus_module": "HelperModule",
+    "outcome": "compile",
+    "message": "型が一致しません。"
+  }
+]

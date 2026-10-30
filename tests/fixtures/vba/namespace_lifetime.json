@@ -1,0 +1,301 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "source": "namespace_lifetime.bas",
+  "source_sha256": "d6ff9389567238c3d97a90994492337b7e34ec61c7802df238c2268c296479e2",
+  "package": "namespace_lifetime.xlsm",
+  "package_sha256": "e268a39e03b8d8ab96dc8d04a9ce4d4da5f42be85d1b6bb0f62e90088f69a59e",
+  "initial_directory_state": {
+    "currentDrive": "C",
+    "directories": [
+      "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+      "D:\\"
+    ]
+  },
+  "folders": [
+    "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs",
+    "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs\\seed-empty",
+    "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs\\gone-empty",
+    "C:\\Users\\ryuji\\OneDrive\\ドキュメント",
+    "D:\\"
+  ],
+  "files": [
+    {
+      "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs\\seed.txt",
+      "bytes": [
+        105,
+        110,
+        105,
+        116,
+        105,
+        97,
+        108
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "hits:1|folder:seed-empty:True|folder:gone-empty:True|folder:made-empty:False|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:True:initial|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceMake",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "hits:2|folder:seed-empty:True|folder:gone-empty:True|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:True:initial|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "hits:3|folder:seed-empty:True|folder:gone-empty:True|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:True:initial|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": "hits:1|folder:seed-empty:True|folder:gone-empty:True|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:True:initial|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceKill",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": "hits:2|folder:seed-empty:True|folder:gone-empty:True|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:False|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": "hits:3|folder:seed-empty:True|folder:gone-empty:True|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:False|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "hits:1|folder:seed-empty:True|folder:gone-empty:True|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:False|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRemove",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "hits:2|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:False|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "hits:3|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:False|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": "hits:1|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:False|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceTree",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": "hits:2|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:True|folder:parent:True|folder:parent\\child:True|folder:after-end:False|file:seed.txt:False|file:renamed.txt:False|file:parent\\child\\child.txt:True:child|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": "hits:3|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:True|folder:parent:True|folder:parent\\child:True|folder:after-end:False|file:seed.txt:False|file:renamed.txt:False|file:parent\\child\\child.txt:True:child|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceDeleteTree",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": "hits:4|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:False|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": "hits:5|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:False|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "hits:1|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:False|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceReplace",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "hits:2|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:True:replacement|file:renamed.txt:False|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRename",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "hits:3|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:False|file:renamed.txt:True:replacement|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "hits:4|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:False|file:renamed.txt:True:replacement|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": "hits:1|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:True|folder:parent:False|folder:parent\\child:False|folder:after-end:False|file:seed.txt:False|file:renamed.txt:True:replacement|file:parent\\child\\child.txt:False|file:after-end\\end.txt:False",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceStop",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": null,
+      "expected_termination": true,
+      "native_automation_error": "com_error(-2147352567, '例外が発生しました。', (0, None, None, None, 0, -2146788248), None)",
+      "native_automation_scode": -2146788248
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-b.xlsm",
+      "project": "b",
+      "expected": "hits:1|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:False|folder:parent:False|folder:parent\\child:False|folder:after-end:True|file:seed.txt:False|file:renamed.txt:True:replacement|file:parent\\child\\child.txt:False|file:after-end\\end.txt:True:before End",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    },
+    {
+      "procedure": "NamespaceRead",
+      "arguments": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\fs"
+      ],
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_namespace_lifetime_20261020\\sequence\\input-a.xlsm",
+      "project": "a",
+      "expected": "hits:1|folder:seed-empty:True|folder:gone-empty:False|folder:made-empty:False|folder:parent:False|folder:parent\\child:False|folder:after-end:True|file:seed.txt:False|file:renamed.txt:True:replacement|file:parent\\child\\child.txt:False|file:after-end\\end.txt:True:before End",
+      "expected_termination": false,
+      "native_automation_error": null,
+      "native_automation_scode": null
+    }
+  ]
+}

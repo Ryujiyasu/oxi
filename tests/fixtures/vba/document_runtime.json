@@ -1,0 +1,2020 @@
+[
+  {
+    "name": "sheet_helper",
+    "source": "document_runtime_sheet_helper.bas",
+    "measurement_source": "document_runtime_sheet_helper_driver.bas",
+    "document_source": "document_runtime_sheet_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "book_helper",
+    "source": "document_runtime_book_helper.bas",
+    "measurement_source": "document_runtime_book_helper_driver.bas",
+    "document_source": "document_runtime_book_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "book_typed_helper",
+    "source": "document_runtime_book_typed_helper.bas",
+    "measurement_source": "document_runtime_book_typed_helper_driver.bas",
+    "document_source": "document_runtime_book_typed_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "book_chained_helper",
+    "source": "document_runtime_book_chained_helper.bas",
+    "measurement_source": "document_runtime_book_chained_helper_driver.bas",
+    "document_source": "document_runtime_book_chained_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "book_object_helper",
+    "source": "document_runtime_book_object_helper.bas",
+    "measurement_source": "document_runtime_book_object_helper_driver.bas",
+    "document_source": "document_runtime_book_object_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "sheet_object_helper",
+    "source": "document_runtime_sheet_object_helper.bas",
+    "measurement_source": "document_runtime_sheet_object_helper_driver.bas",
+    "document_source": "document_runtime_sheet_object_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0:7"
+      }
+    ]
+  },
+  {
+    "name": "sheet_document_alias",
+    "source": "document_runtime_sheet_document_alias.bas",
+    "measurement_source": "document_runtime_sheet_document_alias_driver.bas",
+    "document_source": "document_runtime_sheet_document_alias_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7:True"
+      }
+    ]
+  },
+  {
+    "name": "sheet_ticks",
+    "source": "document_runtime_sheet_ticks.bas",
+    "measurement_source": "document_runtime_sheet_ticks_driver.bas",
+    "document_source": "document_runtime_sheet_ticks_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "document_runtime_sheet.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ],
+    "package_fixture": "document_runtime_sheet.xlsm"
+  },
+  {
+    "name": "book_ticks",
+    "source": "document_runtime_book_ticks.bas",
+    "measurement_source": "document_runtime_book_ticks_driver.bas",
+    "document_source": "document_runtime_book_ticks_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "document_runtime_book.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ],
+    "package_fixture": "document_runtime_book.xlsm"
+  },
+  {
+    "name": "sheet_me_native",
+    "source": "document_runtime_sheet_me_native.bas",
+    "measurement_source": "document_runtime_sheet_me_native_driver.bas",
+    "document_source": "document_runtime_sheet_me_native_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Sheet1:Ledger:7:True:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Sheet1:Ledger:7:True:True"
+      }
+    ]
+  },
+  {
+    "name": "sheet_bare_native",
+    "source": "document_runtime_sheet_bare_native.bas",
+    "measurement_source": "document_runtime_sheet_bare_native_driver.bas",
+    "document_source": "document_runtime_sheet_bare_native_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Sheet1:Ledger:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Sheet1:Ledger:7"
+      }
+    ]
+  },
+  {
+    "name": "book_me_native",
+    "source": "document_runtime_book_me_native.bas",
+    "measurement_source": "document_runtime_book_me_native_driver.bas",
+    "document_source": "document_runtime_book_me_native_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Book1:ThisWorkbook:True:1",
+        "value_template": "{BOOK_NAME}:ThisWorkbook:True:1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Book1:ThisWorkbook:True:1",
+        "value_template": "{BOOK_NAME}:ThisWorkbook:True:1"
+      }
+    ]
+  },
+  {
+    "name": "renamed_book_native",
+    "source": "document_runtime_renamed_book_native.bas",
+    "measurement_source": "document_runtime_renamed_book_native_driver.bas",
+    "document_source": "document_runtime_renamed_book_native_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ArchiveHost",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Book1:ThisWorkbook:True",
+        "value_template": "{BOOK_NAME}:ThisWorkbook:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Book1:ThisWorkbook:True",
+        "value_template": "{BOOK_NAME}:ThisWorkbook:True"
+      }
+    ]
+  },
+  {
+    "name": "sheet_type_identity",
+    "source": "document_runtime_sheet_type_identity.bas",
+    "measurement_source": "document_runtime_sheet_type_identity_driver.bas",
+    "document_source": "document_runtime_sheet_type_identity_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Worksheet:True:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Worksheet:True:True"
+      }
+    ]
+  },
+  {
+    "name": "book_type_identity",
+    "source": "document_runtime_book_type_identity.bas",
+    "measurement_source": "document_runtime_book_type_identity_driver.bas",
+    "document_source": "document_runtime_book_type_identity_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Workbook:True:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Workbook:True:True"
+      }
+    ]
+  },
+  {
+    "name": "sheet_public_field",
+    "source": "document_runtime_sheet_public_field.bas",
+    "measurement_source": "document_runtime_sheet_public_field_driver.bas",
+    "document_source": "document_runtime_sheet_public_field_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "sheet_private_bare",
+    "source": "document_runtime_sheet_private_bare.bas",
+    "measurement_source": "document_runtime_sheet_private_bare_driver.bas",
+    "document_source": "document_runtime_sheet_private_bare_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "sheet_new_document",
+    "source": "document_runtime_sheet_new_document.bas",
+    "measurement_source": "document_runtime_sheet_new_document_driver.bas",
+    "document_source": "document_runtime_sheet_new_document_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "compile",
+    "message": "New キーワードの使用法が不正です。"
+  },
+  {
+    "name": "bare_set_name",
+    "source": "document_runtime_bare_set_name.bas",
+    "measurement_source": "document_runtime_bare_set_name_driver.bas",
+    "document_source": "document_runtime_bare_set_name_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Changed:Ledger"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Changed:Ledger"
+      }
+    ]
+  },
+  {
+    "name": "me_set_name",
+    "source": "document_runtime_me_set_name.bas",
+    "measurement_source": "document_runtime_me_set_name_driver.bas",
+    "document_source": "document_runtime_me_set_name_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Changed:Ledger"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Changed:Ledger"
+      }
+    ]
+  },
+  {
+    "name": "local_name_shadow",
+    "source": "document_runtime_local_name_shadow.bas",
+    "measurement_source": "document_runtime_local_name_shadow_driver.bas",
+    "document_source": "document_runtime_local_name_shadow_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "local:Sheet1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "local:Sheet1"
+      }
+    ]
+  },
+  {
+    "name": "return_self",
+    "source": "document_runtime_return_self.bas",
+    "measurement_source": "document_runtime_return_self_driver.bas",
+    "document_source": "document_runtime_return_self_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Worksheet:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Worksheet:True"
+      }
+    ]
+  },
+  {
+    "name": "return_native",
+    "source": "document_runtime_return_native.bas",
+    "measurement_source": "document_runtime_return_native_driver.bas",
+    "document_source": "document_runtime_return_native_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Worksheet:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Worksheet:True"
+      }
+    ]
+  },
+  {
+    "name": "byref_direct",
+    "source": "document_runtime_byref_direct.bas",
+    "measurement_source": "document_runtime_byref_direct_driver.bas",
+    "document_source": "document_runtime_byref_direct_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "8"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "8"
+      }
+    ]
+  },
+  {
+    "name": "byref_object",
+    "source": "document_runtime_byref_object.bas",
+    "measurement_source": "document_runtime_byref_object_driver.bas",
+    "document_source": "document_runtime_byref_object_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "8"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "8"
+      }
+    ]
+  },
+  {
+    "name": "byref_workbook",
+    "source": "document_runtime_byref_workbook.bas",
+    "measurement_source": "document_runtime_byref_workbook_driver.bas",
+    "document_source": "document_runtime_byref_workbook_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Sheet1"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "8"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "8"
+      }
+    ]
+  },
+  {
+    "name": "field_object",
+    "source": "document_runtime_field_object.bas",
+    "measurement_source": "document_runtime_field_object_driver.bas",
+    "document_source": "document_runtime_field_object_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Range:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Range:7"
+      }
+    ]
+  },
+  {
+    "name": "property_counter",
+    "source": "document_runtime_property_counter.bas",
+    "measurement_source": "document_runtime_property_counter_driver.bas",
+    "document_source": "document_runtime_property_counter_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "with_helper_named",
+    "source": "document_runtime_with_helper_named.bas",
+    "measurement_source": "document_runtime_with_helper_named_driver.bas",
+    "document_source": "document_runtime_with_helper_named_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "with_me_base",
+    "source": "document_runtime_with_me_base.bas",
+    "measurement_source": "document_runtime_with_me_base_driver.bas",
+    "document_source": "document_runtime_with_me_base_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Sheet1:7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Sheet1:7"
+      }
+    ]
+  },
+  {
+    "name": "object_private_member",
+    "source": "document_runtime_object_private_member.bas",
+    "measurement_source": "document_runtime_object_private_member_driver.bas",
+    "document_source": "document_runtime_object_private_member_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:0"
+      }
+    ]
+  },
+  {
+    "name": "callbyname_helper",
+    "source": "document_runtime_callbyname_helper.bas",
+    "measurement_source": "document_runtime_callbyname_helper_driver.bas",
+    "document_source": "document_runtime_callbyname_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "native_move",
+    "source": "document_runtime_native_move.bas",
+    "measurement_source": "document_runtime_native_move_driver.bas",
+    "document_source": "document_runtime_native_move_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "setup_sheets": 2,
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Sheet2"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Sheet1:Ledger:1:True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Sheet1:Ledger:2:True"
+      }
+    ]
+  },
+  {
+    "name": "external_rename",
+    "source": "document_runtime_external_rename.bas",
+    "measurement_source": "document_runtime_external_rename_driver.bas",
+    "document_source": "document_runtime_external_rename_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "rename_after_first": "Changed",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Sheet1:1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Changed:2"
+      }
+    ]
+  },
+  {
+    "name": "class_initialize_ignored",
+    "source": "document_runtime_class_initialize_ignored.bas",
+    "measurement_source": "document_runtime_class_initialize_ignored_driver.bas",
+    "document_source": "document_runtime_class_initialize_ignored_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "new_declaration",
+    "source": "document_runtime_new_declaration.bas",
+    "measurement_source": "document_runtime_new_declaration_driver.bas",
+    "document_source": "document_runtime_new_declaration_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "compile",
+    "message": "New キーワードの使用法が不正です。"
+  },
+  {
+    "name": "readonly_codename",
+    "source": "document_runtime_readonly_codename.bas",
+    "measurement_source": "document_runtime_readonly_codename_driver.bas",
+    "document_source": "document_runtime_readonly_codename_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "compile",
+    "message": "値の取得のみ可能なプロパティに値を設定することはできません。"
+  },
+  {
+    "name": "doc_default_call",
+    "source": "document_runtime_doc_default_call.bas",
+    "measurement_source": "document_runtime_doc_default_call_driver.bas",
+    "document_source": "document_runtime_doc_default_call_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:Nothing"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "438:Nothing"
+      }
+    ]
+  },
+  {
+    "name": "scoped_range",
+    "source": "document_runtime_scoped_range.bas",
+    "measurement_source": "document_runtime_scoped_range_driver.bas",
+    "document_source": "document_runtime_scoped_range_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "setup_sheets": 2,
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Sheet2"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7:"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7:"
+      }
+    ]
+  },
+  {
+    "name": "scoped_cells",
+    "source": "document_runtime_scoped_cells.bas",
+    "measurement_source": "document_runtime_scoped_cells_driver.bas",
+    "document_source": "document_runtime_scoped_cells_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "runtime_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "codeName": "Ledger",
+          "sheetIndex": 0
+        }
+      ]
+    },
+    "outcome": "values",
+    "setup_sheets": 2,
+    "host_context": {
+      "book_name": "Book1",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 1,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger"
+        },
+        {
+          "name": "Sheet2",
+          "code_name": "Sheet2"
+        }
+      ]
+    },
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7:"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7:"
+      }
+    ]
+  }
+]

@@ -59,6 +59,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     let mut buf = Vec::new();
 
     let mut chart = Chart::default();
+    chart.title=main_title(xml);
     let mut series: Vec<ChartSeries> = Vec::new();
     let mut current = ChartSeries::default();
     let mut point = ChartPoint::default();
@@ -163,6 +164,9 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                         in_line = true;
                         paint.line = Some(ShapeLine {
                             color: "000000".into(),
+                            color_theme: None,
+                            legacy_color_index: None,
+                            color_brightness: None, color_shade: None,
                             width: get_attr(e, "w")
                                 .and_then(|w| w.parse().ok())
                                 .unwrap_or(9525),
@@ -170,6 +174,15 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                             cap: get_attr(e, "cap"),
                             head_end: None,
                             tail_end: None,
+                            head_end_length: None,
+                            head_end_width: None,
+                            tail_end_length: None,
+                            tail_end_width: None,
+                            pattern: None,
+                            back_color: None,
+                            back_color_theme: None,
+                            back_legacy_color_index: None,
+                            back_color_brightness: None, back_color_shade: None,
                         });
                     }
                     "noFill" => {
@@ -459,7 +472,9 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     }
 
     chart.series = series;
-    if chart.kind.is_empty() || chart.series.is_empty() {
+    // An empty chart is still an object: VBA can name it, set its properties
+    // and add series later. Keep it even when there is nothing to plot yet.
+    if chart.kind.is_empty() {
         return None;
     }
     Some(chart)
@@ -467,6 +482,41 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
 
 fn number(value: &Option<String>) -> Option<f64> {
     value.as_deref()?.trim().parse().ok()
+}
+
+/// Only the chart's own title, not a series, axis or extension's text.
+fn main_title(xml:&str)->Option<String> {
+    use quick_xml::{reader::NsReader,name::ResolveResult};
+    let mut reader=NsReader::from_str(xml);
+    let mut parents:Vec<(String,bool,bool)>=Vec::new();
+    let mut title=None;
+    let mut depth=None;
+    loop {
+        let (namespace,event)=reader.read_resolved_event().ok()?;
+        let chart=matches!(&namespace,ResolveResult::Bound(ns) if matches!(ns.as_ref(),b"http://schemas.openxmlformats.org/drawingml/2006/chart"|b"http://purl.oclc.org/ooxml/drawingml/chart"));
+        let drawing=matches!(&namespace,ResolveResult::Bound(ns) if matches!(ns.as_ref(),b"http://schemas.openxmlformats.org/drawingml/2006/main"|b"http://purl.oclc.org/ooxml/drawingml/main"));
+        match event {
+            Event::Start(ref element)|Event::Empty(ref element)=> {
+                let name=local_name(element.name().as_ref());
+                if chart && name=="title" && parents.len()==2 && parents[0].0=="chartSpace" && parents[0].1 && parents[1].0=="chart" && parents[1].1 {
+                    title=Some(String::new());
+                    if matches!(event,Event::Start(_)) {depth=Some(parents.len()+1);}
+                }
+                if matches!(event,Event::Start(_)) {parents.push((name,chart,drawing));}
+            }
+            Event::Text(text) if depth.is_some() && parents.last().is_some_and(|(name,chart,drawing)|(name=="t" && *drawing)||(name=="v" && *chart))=> {
+                let raw=std::str::from_utf8(text.as_ref()).ok()?.replace("\r\n","\n").replace('\r',"\n");
+                title.as_mut()?.push_str(&quick_xml::escape::unescape(&raw).ok()?);
+            }
+            Event::CData(text) if depth.is_some() && parents.last().is_some_and(|(name,chart,drawing)|(name=="t" && *drawing)||(name=="v" && *chart))=> {
+                title.as_mut()?.push_str(&String::from_utf8_lossy(text.as_ref()).replace("\r\n","\n").replace('\r',"\n"));
+            }
+            Event::End(_)=> {if depth==Some(parents.len()) {depth=None;} parents.pop();}
+            Event::Eof=>break,
+            _=>{}
+        }
+    }
+    title
 }
 
 #[cfg(test)]

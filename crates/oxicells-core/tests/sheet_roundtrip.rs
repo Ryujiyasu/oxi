@@ -16,15 +16,22 @@ fn names(workbook: &oxicells_core::ir::Workbook) -> Vec<String> {
 
 fn blank_sheet(name: &str) -> Sheet {
     Sheet {
+        kind: Default::default(),
         visibility: Default::default(),
         name: name.to_string(),
         rows: Vec::new(),
         col_count: 0,
         col_widths: Vec::new(),
+        col_custom_widths: Default::default(),
+        cached_spills: None,
+        pending_used_bounds: None,
+        column_width_font: None,
         default_col_width: 8.43,
+        default_col_width_explicit: false,
         default_row_height: 15.0,
         default_row_custom: false,
         col_fonts: vec![],
+        band_styles: Default::default(),
         normal_font: None,
         first_font: None,
         frozen_rows: 0,
@@ -36,6 +43,7 @@ fn blank_sheet(name: &str) -> Sheet {
         tables: Vec::new(),
         drawings: Vec::new(),
             comments: Vec::new(),
+        threaded_comments: Vec::new(),
         unsupported_elements: Vec::new(),
         hyperlinks: Vec::new(),
         protected: false,
@@ -70,6 +78,7 @@ fn a_sheet_a_run_added_is_saved() {
             thick_bottom: false,
             hidden: false,
             cells: vec![Cell {
+                formula_utf16: None,
                 array_block: None,
                 spill: Default::default(),
                 col: 0,
@@ -164,6 +173,7 @@ fn an_array_formula_is_saved_on_its_anchor_and_read_back_whole() {
                 hidden: false,
                 cells: vec![
                     Cell {
+                        formula_utf16: None,
                         array_block: None,
                         spill: Default::default(),
                         col: 0,
@@ -173,6 +183,7 @@ fn an_array_formula_is_saved_on_its_anchor_and_read_back_whole() {
                         runs: Vec::new(),
                     },
                     Cell {
+                        formula_utf16: None,
                         array_block: Some((1, 2, 2, 2)),
                         spill: Default::default(),
                         col: 2,

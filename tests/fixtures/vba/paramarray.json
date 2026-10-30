@@ -1,0 +1,212 @@
+[
+  {
+    "name": "paramarray_alias",
+    "source": "param_paramarray_alias.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2:2|12"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2:2|12"
+      }
+    ]
+  },
+  {
+    "name": "implicit_len",
+    "source": "param_implicit_len.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4:Long"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4:Long"
+      }
+    ]
+  },
+  {
+    "name": "nested_array_byref",
+    "source": "param_nested_array_byref.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "12"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "12"
+      }
+    ]
+  },
+  {
+    "name": "copy",
+    "source": "param_copy.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1:2:2:2:2|2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1:2:2:2:2|2"
+      }
+    ]
+  },
+  {
+    "name": "whole_reads",
+    "source": "param_whole_reads.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2,2:4|2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2,2:4|2"
+      }
+    ]
+  },
+  {
+    "name": "temporaries",
+    "source": "param_temporaries.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2,11,101|2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2,11,101|2"
+      }
+    ]
+  },
+  {
+    "name": "narrowing",
+    "source": "param_narrowing.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3:Long:13|3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:3:Long:13|3"
+      }
+    ]
+  },
+  {
+    "name": "fixed_string",
+    "source": "param_fixed_string.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "longtext:abcd:abcd|abcd"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "longtext:abcd:abcd|abcd"
+      }
+    ]
+  },
+  {
+    "name": "error",
+    "source": "param_error.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "513:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "513:2"
+      }
+    ]
+  },
+  {
+    "name": "nested_forward",
+    "source": "param_nested_forward.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "12:12|12"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "12:12|12"
+      }
+    ]
+  },
+  {
+    "name": "len_defaults",
+    "source": "param_len_defaults.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4:2:2:1:8:8:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4:2:2:1:8:8:2"
+      }
+    ]
+  },
+  {
+    "name": "len_values",
+    "source": "param_len_values.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:3"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:3"
+      }
+    ]
+  },
+  {
+    "name": "nested_alias",
+    "source": "param_nested_alias.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:3:3|13:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3:3:3|13:4"
+      }
+    ]
+  },
+  {
+    "name": "function_array",
+    "source": "param_function_array.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "lifetime",
+    "source": "param_lifetime.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "IBAT|True"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "IBAT|True"
+      }
+    ]
+  }
+]

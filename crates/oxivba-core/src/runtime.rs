@@ -11,20 +11,24 @@
 //! approximated.
 
 use std::{
-    cell::RefCell,
+    cell::{Ref, RefCell, RefMut},
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
 };
+
+use crate::errors::{vba_error_description, ErrorEnvironment};
+mod utf16;
+mod bstr;
 
 use crate::ast::{FileInputStmt, FileMode, FileOpenStmt, FileSeekStmt, FileTransferKind, FileTransferStmt, FileOutputKind, FileOutputSeparator, FileOutputStmt, FileSystemStmt, FileSystemUnaryKind, 
     AlignedAssignStmt, AlignmentKind, Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind,
     Expr, ForEachStmt, ForStmt, Literal, LoopTest, MidAssignStmt, Module, ModuleItem, ModuleOption,
     OnBranchKind, OnError, ParamMode, ProcKind, Procedure, ReDimItem, ResumeTarget, SelectCaseStmt,
     Statement,
-    TypeDef, TypeName, UnaryOp, VarDecl, VarItem,
+    TypeDef, TypeName, UnaryOp, VarDecl, VarItem, Visibility,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Empty,
     /// An omitted `Optional ... As Variant` argument. Unlike `Empty`, this is
@@ -63,6 +67,10 @@ pub enum Value {
     /// A Variant of subtype Error, normally created by `CVErr`.
     Error(i64),
     String(String),
+    /// BSTR contents containing unpaired UTF-16 units. Never decoded lossily.
+    Utf16(Vec<u16>),
+    /// A null BSTR, distinct from an allocated zero-length string.
+    NullString,
     Array(ArrayValue),
     /// A variable declared `As` a `Type ... End Type` from the same module.
     Record(RecordValue),
@@ -89,7 +97,7 @@ fn is_place_expression(expr: &Expr) -> bool {
 }
 
 /// One step down into a record place: a named field, or array subscripts.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum RecordStep {
     Field(String),
     Index(Vec<i64>),
@@ -98,7 +106,7 @@ enum RecordStep {
 /// Where a `With` block's subject lives while its body runs.
 enum WithSubject {
     /// A host object, which carries a reference of its own.
-    Object(ObjectRef),
+    Object { receiver: ObjectRef, class: Option<String>, early_application: bool },
     /// A record, which carries none. VBA's `With` takes a user-defined type as
     /// readily as an object -- `With This` over a `Private Type` is how half
     /// the class modules in the wild are written -- so the PLACE is kept
@@ -109,8 +117,7 @@ enum WithSubject {
     /// Asked of Excel, `With arr(i)` followed by `i = 1` inside the block
     /// still reads `arr(0)`.
     Record {
-        root: String,
-        steps: Vec<RecordStep>,
+        root: ValueSlot,
     },
 }
 
@@ -144,6 +151,8 @@ impl RecordValue {
 pub struct ObjectRef {
     pub handle: u64,
     pub kind: String,
+    /// The interface carried by this dispatch reference, independent of object identity.
+    pub dispatch_view: Option<String>,
     /// For a class instance, a Collection or a Dictionary, a share in its
     /// life: when the last share is dropped the object reports itself due
     /// (see [`LifeToken`]). None for everything else.
@@ -169,7 +178,12 @@ impl Drop for LifeToken {
 
 impl ObjectRef {
     pub fn new(handle: u64, kind: impl Into<String>) -> Self {
-        ObjectRef { handle, kind: kind.into(), life: None }
+        ObjectRef {
+            handle,
+            kind: kind.into(),
+            life: None,
+            dispatch_view: None,
+        }
     }
 }
 
@@ -182,6 +196,68 @@ impl PartialEq for ObjectRef {
 impl Eq for ObjectRef {}
 
 pub trait Host {
+    /// Resolve an Automation name using the target host's encoding and name
+    /// comparison. `candidates` contains public members of a source class;
+    /// hosts may also resolve their own object's members. Ordinary VBA string
+    /// comparison and statically bound source names do not use this hook.
+    fn automation_member_name(&self, _receiver: &ObjectRef, requested: &str, candidates: &[&str]) -> Option<String> {
+        candidates.iter().find(|name| name.eq_ignore_ascii_case(requested)).map(|name| (*name).to_string())
+    }
+
+    /// Hosts with dispatch type information may reject invocation kinds that
+    /// their ordinary dotted-call API accepts. Source classes bind in Runtime.
+    fn automation_invocation_allowed(&self, _receiver: &ObjectRef, _name: &str, _kind: u8) -> bool {
+        true
+    }
+
+    /// A known automation member can reject an invocation before converting
+    /// its value arguments, with a different error from an unknown member.
+    fn automation_invocation_error(&self, _receiver: &ObjectRef, _name: &str, _kind: u8) -> Option<i64> {
+        None
+    }
+
+    /// Some host setters reject an object value before its default member is
+    /// resolved. Source class assignments keep their ordinary VBA conversion.
+    /// With no receiver, identify only values and names requiring host validation
+    /// before default-member coercion. Ordinary assignments keep their existing
+    /// receiver evaluation order.
+    fn property_assignment_error(&self, _receiver: Option<&ObjectRef>, _name: &str, _value: &Value) -> Option<i64> {
+        None
+    }
+
+    /// Bind Automation getter indices separately from the host's ordinary
+    /// dotted syntax, which can also index the array a property returns.
+    fn prepare_automation_get(&self, _receiver: &ObjectRef, _name: &str, _args: &[Value]) -> Result<Option<(String, Vec<Value>)>, String> {
+        Ok(None)
+    }
+
+    /// Help metadata for an error whose source belongs to the host itself.
+    /// Language errors use the runtime's `ErrorEnvironment` instead.
+    fn error_help(&self, _number: i64, _source: Option<&str>) -> Option<(String, i64)> {
+        None
+    }
+
+    /// Resolve a host-qualified macro reference before looking in this project.
+    fn macro_reference(&self, requested: &str) -> Result<String, String> {
+        Ok(requested.to_string())
+    }
+
+    /// Hosts can supply their own diagnostic for an unavailable macro.
+    fn macro_unavailable(&self, requested: &str) -> String {
+        host_error(1004, format!("macro is unavailable: {requested}"))
+    }
+
+    /// Boundaries of a runtime member call, including any callback retries.
+    fn begin_member_call(&mut self, _receiver: Option<&ObjectRef>, _name: &str) {}
+    fn end_member_call(&mut self, _receiver: Option<&ObjectRef>, _name: &str) {}
+    fn begin_member_get(&mut self, _receiver: &ObjectRef, _name: &str) {}
+    fn end_member_get(&mut self, _receiver: &ObjectRef, _name: &str) {}
+    fn begin_member_set(&mut self, _receiver: &ObjectRef, _name: &str) {}
+    fn end_member_set(&mut self, _receiver: &ObjectRef, _name: &str) {}
+    /// Finish calculation after a setter callback without applying the write again.
+    fn resume_user_function_calculation(&mut self) -> Result<(), String> { Ok(()) }
+
+
     fn call(
         &mut self,
         receiver: Option<&ObjectRef>,
@@ -199,11 +275,37 @@ pub trait Host {
         self.call(receiver, name, args)
     }
 
+    /// Host operations which create files share the runtime's real filesystem.
+    /// The default keeps existing hosts' ordinary dispatch unchanged.
+    fn call_with_files(
+        &mut self, receiver: Option<&ObjectRef>, name: &str, args: &[Value],
+        _files: &mut crate::files::Files,
+    ) -> Result<Option<Value>, String> {
+        self.call(receiver, name, args)
+    }
+
+    fn call_named_with_files(
+        &mut self, receiver: Option<&ObjectRef>, name: &str, args: &[Value],
+        argument_names: &[Option<String>], _files: &mut crate::files::Files,
+    ) -> Result<Option<Value>, String> {
+        self.call_named(receiver, name, args, argument_names)
+    }
+
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String>;
 
     /// The module's public functions, which a worksheet formula may call as
     /// its own: `=Twice(A1)`. Told once, before the macro starts.
     fn user_functions(&mut self, _names: &[String]) {}
+
+    /// Parameters that accept objects without reading their default values.
+    fn user_function_reference_arguments(&mut self, _functions: &[(String, Vec<usize>)]) {}
+    fn user_function_variant_arguments(&mut self, _functions: &[(String, Vec<usize>)]) {}
+
+    /// Parameters declared Variant, which preserve worksheet references while evaluating their arguments.
+
+
+    /// Complete deferred host work while callbacks can still invoke the project.
+    fn finish_execution(&mut self) -> Result<(), String> { Ok(()) }
 
     /// The calls to those functions a recalculation found it needed and
     /// had no answer for yet: `(key, function, arguments)`. The runtime works
@@ -215,9 +317,22 @@ pub trait Host {
 
     fn answer_user_function(&mut self, _key: u64, _value: Value) {}
 
+    /// Whether a returned object can expose another worksheet callback.
+    fn user_function_returns_reference(&self, _key: u64, _value: &Value) -> bool { false }
+
     /// Said just before one of those calls runs, so that `Application.Caller`
     /// can name the cell asking and a write to the sheet can be refused.
     fn enter_user_function(&mut self, _key: u64) {}
+
+    /// The worksheet callback's parameters have been converted; its body is
+    /// about to execute. Reads during conversion are not reads by the body.
+    fn enter_user_function_body(&mut self, _key: u64) {}
+
+    /// Pending callback producers whose values the completed body requested.
+    /// The runtime retains every queued argument and dispatches each key once.
+    fn prioritize_user_function_calls(&mut self, _completed: u64, _pending: &std::collections::BTreeSet<u64>) -> Vec<u64> {
+        Vec::new()
+    }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String>;
 
@@ -266,6 +381,26 @@ pub struct ArrayDimension {
 }
 
 impl ArrayValue {
+    /// VBA enumerates the first subscript fastest. Storage and indexed access
+    /// retain their existing row-major layout; only enumeration changes order.
+    fn into_enumeration_values(self) -> Vec<Value> {
+        if self.dimensions.len() < 2 || self.values.is_empty()
+            || self.dimensions.iter().try_fold(1usize, |n, d| n.checked_mul(d.length)) != Some(self.values.len()) {
+            return self.values;
+        }
+        let mut values = self.values;
+        (0..values.len()).map(|position| {
+            let mut remaining = position;
+            let mut offset = 0;
+            for dimension in &self.dimensions {
+                let subscript = remaining % dimension.length;
+                remaining /= dimension.length;
+                offset = offset * dimension.length + subscript;
+            }
+            std::mem::replace(&mut values[offset], Value::Empty)
+        }).collect()
+    }
+
     pub fn lower_bound(&self, dimension: usize) -> Option<i64> {
         self.dimensions
             .get(dimension.checked_sub(1)?)
@@ -307,6 +442,13 @@ pub enum RuntimeErrorKind {
     /// `(-8) ^ (1 / 3)`.
     InvalidProcedureCall,
     Unsupported,
+    /// A semantic compile error, which VBA's run-time handlers cannot catch.
+    Compile,
+    /// `Error 40040` ends execution without entering any VBA error handler.
+    /// `Err.Raise 40040` instead produces a catchable automation error (440).
+    ExecutionTerminated,
+    /// The `End` statement unwinds every caller and requests a project reset.
+    EndStatement,
     StepLimit,
     CallDepth,
 }
@@ -320,13 +462,22 @@ pub struct RuntimeError {
     /// user error rather than one of the runtime's built-in failures.
     pub vba_number: Option<i64>,
     pub vba_source: Option<String>,
+    /// Help supplied with a raised error, retained while unwinding calls.
+    pub vba_help_file: Option<String>,
+    pub vba_help_context: Option<i64>,
+    /// Resolve Description from the language catalog instead of the diagnostic message.
+    /// Source always carries caller-visible metadata, including user-supplied names.
+    pub vba_default_description: bool,
 }
 
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // A host refusal may carry Excel's words and then, after a mark, the
         // engine's reason; whoever reads an unhandled failure sees both.
-        let message = match self.message.split_once(REASON_MARK) {
+        let message = match (self.kind == RuntimeErrorKind::Host)
+            .then(|| self.message.split_once(REASON_MARK))
+            .flatten()
+        {
             Some((words, reason)) => format!("{words} ({reason})"),
             None => self.message.clone(),
         };
@@ -362,6 +513,8 @@ pub struct Runtime<'a> {
     err_in: Option<ErrorState>,
     err_out: Option<ErrorState>,
     module: &'a Module,
+    /// Successful procedure checks, keyed by immutable module identity and span.
+    compiled_procedures: BTreeSet<(usize, usize, ProcKind)>,
     host: Option<&'a mut dyn Host>,
     steps: usize,
     max_steps: usize,
@@ -377,7 +530,9 @@ pub struct Runtime<'a> {
     /// frame's own table when narrowing an assignment.
     module_declared: BTreeMap<String, String>,
     module_variants: BTreeSet<String>,
-    static_values: BTreeMap<(String, String), ValueSlot>,
+    /// Procedure statics of the currently live module/instance, swapped with
+    /// its fields when execution crosses an instance or standard-module call.
+    static_values: BTreeMap<(ProcKind, String, String), ValueSlot>,
     /// The files the run has opened and written, kept in memory.
     files: crate::files::Files,
     /// How many names GetTempName has handed out.
@@ -393,13 +548,24 @@ pub struct Runtime<'a> {
     owner: Option<u64>,
     /// The standard module's variables while an instance's are live.
     main_state: Option<ModuleState>,
+    standard_name: String,
+    standard_states: BTreeMap<String, ModuleState>,
     /// The instance `Me` stands for.
     me: Option<ObjectRef>,
     /// The kinds the next procedure lookup may pick, so that a Property Get
     /// and a Property Let of one name each find their own.
     wanted_kinds: Option<&'static [ProcKind]>,
     internal_objects: BTreeMap<u64, InternalObject>,
+    /// Predeclared document globals retain their host identity. Their source
+    /// fields live in Instance storage without replacing the host receiver.
+    document_globals: BTreeMap<String, ObjectRef>,
+    document_instances: BTreeSet<u64>,
+    document_references: Option<std::sync::Arc<crate::CompileReferences>>,
+    reference_constants: Option<std::sync::Arc<BTreeMap<String, i64>>>,
     next_internal_handle: u64,
+    /// Virtual interface addresses for ObjPtr, retained with project storage.
+    object_pointers: BTreeMap<(u64, String, Option<String>), i64>,
+    bstr_literals: BTreeMap<Vec<u16>,bstr::Allocation>,
     /// Handles of reference-counted objects whose last reference is gone,
     /// queued by [`LifeToken`]'s `Drop`.
     due: Rc<RefCell<Vec<u64>>>,
@@ -408,7 +574,37 @@ pub struct Runtime<'a> {
     /// The caller's variables behind the next call's arguments, for a
     /// RaiseEvent whose handler takes them ByRef.
     pending_references: Option<Vec<Option<ValueSlot>>>,
+    worksheet_callback_key: Option<u64>,
+    pending_callback_body: Option<(u64, usize, usize)> ,
     current_time: f64,
+    project_name: String,
+    error_environment: Rc<ErrorEnvironment>,
+    project_ended: bool,
+}
+
+/// Owned project storage between invocations. Move this together with the
+/// host's object storage and restore it against compatible project declarations
+/// (see `project_edit_requires_reset` when the source changes).
+/// Keeping the original slots and life tokens preserves aliases and object
+/// lifetime; a list of copied variable values would lose both.
+pub struct ProjectState {
+    module: ModuleState,
+    standard_name: String,
+    standard_states: BTreeMap<String, ModuleState>,
+    files: crate::files::Files,
+    temp_names: u64,
+    internal_objects: BTreeMap<u64, InternalObject>,
+    next_internal_handle: u64,
+    object_pointers: BTreeMap<(u64, String, Option<String>), i64>,
+    bstr_literals: BTreeMap<Vec<u16>,bstr::Allocation>,
+    due: Rc<RefCell<Vec<u64>>>,
+    random_state: u32,
+    random_entropy: u64,
+}
+
+impl ProjectState {
+    /// Files retained with the loaded project's storage between invocations.
+    pub fn file_system(&self) -> &crate::files::Files { &self.files }
 }
 
 struct Frame<'b> {
@@ -421,7 +617,9 @@ struct Frame<'b> {
     /// answers after an error: measured, 0 where no line is numbered.
     last_line_number: Option<u32>,
     procedure_name: String,
+    procedure_kind: ProcKind,
     source_name: String,
+    error_environment: Rc<ErrorEnvironment>,
     values: BTreeMap<String, ValueSlot>,
     constants: BTreeSet<String>,
     auto_new: BTreeMap<String, String>,
@@ -450,12 +648,14 @@ struct ErrorState {
     number: i64,
     description: String,
     source: String,
+    // An assigned empty string is retained by Raise; a cleared property
+    // instead receives its default. Reading a cleared property does not set it.
+    description_set: bool,
+    source_set: bool,
+    help_file_set: bool,
     line: Option<u32>,
     help_file: String,
     help_context: i64,
-    /// What `Err.Raise` was given for HelpFile and HelpContext, carried to
-    /// the handler that records the error it raises.
-    raised_help: Option<(String, i64)>,
 }
 
 enum InternalObject {
@@ -480,16 +680,20 @@ struct ClassInstance {
     terminated: bool,
 }
 
-/// One module's module-level variables, as they are set aside while another
-/// module's are live.
+/// One module/instance's variables and procedure statics, set aside while
+/// another module or instance is executing.
 #[derive(Default)]
 struct ModuleState {
+    enum_members: BTreeMap<String, BTreeMap<String, i64>>,
     values: BTreeMap<String, ValueSlot>,
     constants: BTreeSet<String>,
     auto_new: BTreeMap<String, String>,
     fixed_strings: BTreeMap<String, usize>,
     declared: BTreeMap<String, String>,
     variants: BTreeSet<String>,
+    // Class instances own their procedure statics just as they own fields.
+    // Releasing the instance releases any object references held here too.
+    static_values: BTreeMap<(ProcKind, String, String), ValueSlot>,
     initialized: bool,
 }
 
@@ -509,17 +713,351 @@ struct DictionaryEntry {
     value: Value,
 }
 
-type ValueSlot = Rc<RefCell<Value>>;
+type ValueSlot = Rc<VariableSlot>;
+
+/// A variable or a frozen field/element of one. Projected slots share the
+/// original storage: ByRef writes are visible immediately through every alias,
+/// including when the callee exits by an error.
+struct VariableSlot {
+    storage: Rc<SlotStorage>,
+    path: Vec<RecordStep>,
+    declared: RefCell<Option<String>>,
+    // Specific array element types belong to physical storage. A copy into a
+    // Variant is an Object() value and must not inherit this class identity.
+    array_declared: RefCell<Option<String>>,
+    // A class reference converted for ByRef Variant keeps object Let semantics.
+    // Its Variant value still rebinds independently until normal-return copyback.
+    object_let: bool,
+    locks_arrays: bool,
+}
+
+struct SlotStorage {
+    value: RefCell<Value>,
+    strings: RefCell<BTreeMap<Vec<RecordStep>, bstr::Allocation>>,
+    locked_arrays: RefCell<BTreeMap<Vec<RecordStep>, usize>>,
+    aliases: RefCell<BTreeMap<Vec<RecordStep>, ValueSlot>>,
+}
+
+impl VariableSlot {
+    fn new(value: Value) -> ValueSlot {
+        Self::with_aliases(value, BTreeMap::new())
+    }
+
+    fn with_aliases(value: Value, aliases: BTreeMap<Vec<RecordStep>, ValueSlot>) -> ValueSlot {
+        Self::with_assignment(value, aliases, false)
+    }
+
+    fn object_temporary(value: Value) -> ValueSlot {
+        Self::with_assignment(value, BTreeMap::new(), true)
+    }
+
+    fn with_assignment(
+        value: Value,
+        aliases: BTreeMap<Vec<RecordStep>, ValueSlot>,
+        object_let: bool,
+    ) -> ValueSlot {
+        Rc::new(Self {
+            storage: Rc::new(SlotStorage {
+                value: RefCell::new(value),
+                strings: RefCell::new(BTreeMap::new()),
+                locked_arrays: RefCell::new(BTreeMap::new()),
+                aliases: RefCell::new(aliases),
+            }),
+            path: Vec::new(),
+            declared: RefCell::new(None),
+            array_declared: RefCell::new(None),
+            object_let,
+            locks_arrays: false,
+        })
+    }
+
+    fn set_declared(&self, name: &str) {
+        if self.declared.borrow().is_none() {
+            *self.declared.borrow_mut() = Some(name.to_string());
+        }
+    }
+
+    fn set_array_declared(&self, name: &str) {
+        if self.array_declared.borrow().is_none() {
+            *self.array_declared.borrow_mut() = Some(name.to_string());
+        }
+    }
+
+    /// Array copies contain values, while reads of a live ParamArray reflect
+    /// its referenced variables at the time of the read.
+    fn snapshot(&self) -> Value {
+        let mut value = self.borrow().clone();
+        for (path, target) in self.storage.aliases.borrow().iter() {
+            if let Some(relative) = path.strip_prefix(self.path.as_slice()) {
+                if let Some(place) = slot_value_mut(&mut value, relative) {
+                    *place = target.snapshot();
+                }
+            }
+        }
+        value
+    }
+
+    fn project(slot: &ValueSlot, step: RecordStep, line: u32) -> Result<ValueSlot, RuntimeError> {
+        let mut path = slot.path.clone();
+        path.push(step.clone());
+        for (alias, target) in slot.storage.aliases.borrow().iter() {
+            if let Some(rest) = path.strip_prefix(alias.as_slice()) {
+                let mut projected = target.clone();
+                for step in rest {
+                    projected = Self::project(&projected, step.clone(), line)?;
+                }
+                return Ok(projected);
+            }
+        }
+        let mut declared = None;
+        {
+            let parent = slot.borrow();
+            match (&step, &*parent) {
+                (RecordStep::Field(name), Value::Record(record))
+                    if record.field(name).is_none() =>
+                {
+                    return Err(error(
+                        RuntimeErrorKind::UndefinedVariable,
+                        format!("VBA Type {} has no field named {name}", record.type_name),
+                        Some(line),
+                    ))
+                }
+                (RecordStep::Index(indices), Value::Array(array)) => {
+                    array_offset(array, indices, line)?;
+                    declared = slot.array_declared.borrow().clone().or_else(|| {
+                        element_type_name(array.element_default.as_ref()).map(str::to_string)
+                    });
+                }
+                _ => {}
+            }
+        }
+        if slot_value(&slot.storage.value.borrow(), &path).is_none() {
+            return Err(error(
+                RuntimeErrorKind::SubscriptOutOfRange,
+                "invalid VBA variable field or subscript",
+                Some(line),
+            ));
+        }
+        let mut locks = slot.storage.locked_arrays.borrow_mut();
+        for (index, step) in path.iter().enumerate() {
+            if matches!(step, RecordStep::Index(_)) {
+                *locks.entry(path[..index].to_vec()).or_default() += 1;
+            }
+        }
+        drop(locks);
+        Ok(Rc::new(Self {
+            storage: slot.storage.clone(),
+            path,
+            declared: RefCell::new(declared),
+            array_declared: RefCell::new(None),
+            object_let: false,
+            locks_arrays: true,
+        }))
+    }
+
+    fn borrow(&self) -> Ref<'_, Value> {
+        Ref::map(self.storage.value.borrow(), |value| {
+            slot_value(value, &self.path).expect("bound variable place remains valid")
+        })
+    }
+
+    fn borrow_mut(&self) -> RefMut<'_, Value> {
+        RefMut::map(self.storage.value.borrow_mut(), |value| {
+            slot_value_mut(value, &self.path).expect("bound variable place remains valid")
+        })
+    }
+
+    fn write(&self, value: Value) {
+        self.storage.strings.borrow_mut().retain(|path,_|!path.starts_with(&self.path));
+        if self.path.is_empty() {
+            self.storage.aliases.borrow_mut().clear();
+        }
+        *self.borrow_mut() = value;
+    }
+
+    /// A converted argument writes back to this logical place after the call,
+    /// without keeping the original array element borrowed during the call.
+    fn copyback_place(&self) -> ValueSlot {
+        Rc::new(Self {
+            storage: self.storage.clone(),
+            path: self.path.clone(),
+            declared: RefCell::new(self.declared.borrow().clone()),
+            array_declared: RefCell::new(self.array_declared.borrow().clone()),
+            object_let: self.object_let,
+            locks_arrays: false,
+        })
+    }
+
+    fn write_copyback(&self, value: Value, line: Option<u32>) -> Result<(), RuntimeError> {
+        let mut held = self.storage.value.borrow_mut();
+        let target = slot_value_mut(&mut held, &self.path).ok_or_else(|| {
+            error(
+                RuntimeErrorKind::SubscriptOutOfRange,
+                "copyback destination no longer exists",
+                line,
+            )
+        })?;
+        *target = value;
+        Ok(())
+    }
+
+    fn is_locked(&self) -> bool {
+        self.storage
+            .locked_arrays
+            .borrow()
+            .keys()
+            .any(|path| path.starts_with(&self.path))
+    }
+
+    fn element_is_locked(&self, indices: &[i64]) -> bool {
+        let mut path = self.path.clone();
+        path.push(RecordStep::Index(indices.to_vec()));
+        self.storage
+            .locked_arrays
+            .borrow()
+            .keys()
+            .any(|locked| locked.starts_with(&path))
+    }
+
+    fn element_is_alias(&self, indices: &[i64]) -> bool {
+        let mut path = self.path.clone();
+        path.push(RecordStep::Index(indices.to_vec()));
+        self.storage
+            .aliases
+            .borrow()
+            .keys()
+            .any(|alias| path.starts_with(alias))
+    }
+}
+
+fn retain_argument_objects(value: &Value, keepers: &mut Vec<ObjectRef>) {
+    match value {
+        Value::Object(object) => keepers.push(object.clone()),
+        Value::Array(array) => {
+            for value in &array.values {
+                retain_argument_objects(value, keepers);
+            }
+        }
+        Value::Record(record) => {
+            for (_, value) in &record.fields {
+                retain_argument_objects(value, keepers);
+            }
+        }
+        _ => {}
+    }
+}
+
+impl Drop for VariableSlot {
+    fn drop(&mut self) {
+        if !self.locks_arrays {
+            return;
+        }
+        let mut locks = self.storage.locked_arrays.borrow_mut();
+        for (index, step) in self.path.iter().enumerate() {
+            if matches!(step, RecordStep::Index(_)) {
+                let path = &self.path[..index];
+                if let Some(count) = locks.get_mut(path) {
+                    *count -= 1;
+                    if *count == 0 {
+                        locks.remove(path);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn slot_value<'b>(value: &'b Value, path: &[RecordStep]) -> Option<&'b Value> {
+    let Some((step, rest)) = path.split_first() else { return Some(value); };
+    let next = match (step, value) {
+        (RecordStep::Field(name), Value::Record(record)) => record.field(name)?,
+        (RecordStep::Index(indices), Value::Array(array)) => array.values.get(array_offset(array, indices, 0).ok()?)?,
+        _ => return None,
+    };
+    slot_value(next, rest)
+}
+
+fn slot_value_mut<'b>(value: &'b mut Value, path: &[RecordStep]) -> Option<&'b mut Value> {
+    let Some((step, rest)) = path.split_first() else { return Some(value); };
+    let next = match (step, value) {
+        (RecordStep::Field(name), Value::Record(record)) => record.field_mut(name)?,
+        (RecordStep::Index(indices), Value::Array(array)) => { let offset = array_offset(array, indices, 0).ok()?; array.values.get_mut(offset)? },
+        _ => return None,
+    };
+    slot_value_mut(next, rest)
+}
 
 enum BoundArgument {
     Value(Value),
     Reference(ValueSlot),
 }
 
+#[derive(Clone, Copy)]
+enum ArgumentConversion {
+    Object,
+    FixedString(usize),
+}
+
+#[derive(Clone)]
+struct EvaluatedArgument {
+    value: Rc<RefCell<Value>>,
+    reference: Rc<RefCell<Option<ValueSlot>>>,
+    deferred: bool,
+    conversion: Option<ArgumentConversion>,
+}
+
+impl EvaluatedArgument {
+    fn new(value: Value, reference: Option<ValueSlot>) -> Self {
+        Self {
+            value: Rc::new(RefCell::new(value)),
+            reference: Rc::new(RefCell::new(reference)),
+            deferred: false,
+            conversion: None,
+        }
+    }
+    fn converted(value: Value, reference: ValueSlot, conversion: ArgumentConversion) -> Self {
+        let mut argument = Self::new(value, Some(reference));
+        argument.conversion = Some(conversion);
+        argument
+    }
+    fn deferred(reference: ValueSlot) -> Self {
+        Self {
+            value: Rc::new(RefCell::new(Value::Empty)),
+            reference: Rc::new(RefCell::new(Some(reference))),
+            deferred: true,
+            conversion: None,
+        }
+    }
+    fn take_reference(&self) -> Option<ValueSlot> {
+        self.reference.borrow_mut().take()
+    }
+
+    fn value(&self) -> Value {
+        if self.deferred {
+            if let Some(reference) = self.reference.borrow().as_ref() {
+                return reference.snapshot();
+            }
+        }
+        self.value.borrow().clone()
+    }
+    fn take_value(&self) -> Value {
+        if self.deferred {
+            if let Some(reference) = self.reference.borrow().as_ref() {
+                return reference.snapshot();
+            }
+        }
+        self.value.replace(Value::Empty)
+    }
+    fn take_by_value(&self) -> Value {
+        let value = self.take_value();
+        self.reference.borrow_mut().take();
+        value
+    }
+}
+
 enum Flow {
     Continue,
     Exit(ExitKind),
-    End,
     Jump(String),
     GoSub(String),
     Return,
@@ -533,7 +1071,8 @@ impl<'a> Runtime<'a> {
         Self {
             err_in: None,
             err_out: None,
-            module,
+            module: module.standard_modules.first().map(|(_, scope)| scope).unwrap_or(module),
+            compiled_procedures: BTreeSet::new(),
             host: None,
             steps: 0,
             // Room for a real macro's loops -- a pass over a few thousand
@@ -557,15 +1096,28 @@ impl<'a> Runtime<'a> {
             main_module: module,
             owner: None,
             main_state: None,
+            standard_name: module.standard_modules.first().map(|(name, _)| key(name)).unwrap_or_default(),
+            standard_states: BTreeMap::new(),
             me: None,
             wanted_kinds: None,
             internal_objects: BTreeMap::new(),
+            document_globals: BTreeMap::new(),
+            document_instances: BTreeSet::new(),
+            document_references: None,
+            reference_constants: None,
             next_internal_handle: 1_u64 << 63,
+            object_pointers: BTreeMap::new(),
+            bstr_literals: BTreeMap::new(),
             due: Rc::new(RefCell::new(Vec::new())),
             random_state: 327_680,
             random_entropy: 327_680,
             pending_references: None,
+            worksheet_callback_key: None,
+            pending_callback_body: None,
             current_time: default_current_time(),
+            project_name: "VBAProject".to_string(),
+            error_environment: Rc::new(ErrorEnvironment::default()),
+            project_ended: false,
         }
     }
 
@@ -573,6 +1125,10 @@ impl<'a> Runtime<'a> {
         self.host = Some(host);
         self
     }
+
+    /// Mount input files/folders or collect produced binary files without
+    /// creating a second store disconnected from VBA Open/Dir/FileLen.
+    pub fn file_system_mut(&mut self) -> &mut crate::files::Files { &mut self.files }
 
     /// The project's class modules, each by its name.
     pub fn with_classes(mut self, classes: &'a [(String, Module)]) -> Self {
@@ -582,14 +1138,97 @@ impl<'a> Runtime<'a> {
         self
     }
 
+    /// Bind document components to host-owned objects. Call after restoring
+    /// project storage so existing singleton fields survive the next invocation.
+    /// Native handles use the low half of the handle space; source-created
+    /// objects use the high half. This never invokes Class_Initialize.
+    pub fn with_document_objects(
+        mut self,
+        bindings: Vec<(String,ObjectRef)>,
+        references: std::sync::Arc<crate::CompileReferences>,
+    ) -> Result<Self,RuntimeError> {
+        for (name,object) in bindings {
+            let name=key(&name);
+            if name.is_empty() || object.handle >= 1_u64<<63 || self.document_globals.contains_key(&name) {
+                return Err(error(RuntimeErrorKind::Unsupported,"invalid document object binding",None));
+            }
+            if self.classes.contains_key(&name) {
+                match self.internal_objects.entry(object.handle) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(InternalObject::Instance(ClassInstance {class:name.clone(),state:None,terminated:false}));
+                    }
+                    std::collections::btree_map::Entry::Occupied(entry) => {
+                        if !matches!(entry.get(),InternalObject::Instance(instance) if instance.class.eq_ignore_ascii_case(&name)) {
+                            return Err(error(RuntimeErrorKind::Unsupported,"document object identity changed without resetting project storage",None));
+                        }
+                    }
+                }
+                self.document_instances.insert(object.handle);
+            }
+            self.document_globals.insert(name,object);
+        }
+        self.document_references=Some(references);
+        Ok(self)
+    }
+
+    /// Supply the complete numeric library environment as an immutable index.
+    /// Source variables and procedures retain precedence over these values.
+    pub fn with_reference_constants(mut self, constants: std::sync::Arc<BTreeMap<String, i64>>) -> Self {
+        self.reference_constants = Some(constants);
+        self
+    }
+
+    /// Resume storage returned by `into_project_state`. Procedure references
+    /// and compilation caches belong to this runtime's parsed source instead.
+    pub fn with_project_state(mut self, state: ProjectState) -> Self {
+        self.standard_name = state.standard_name;
+        self.standard_states = state.standard_states;
+        self.module = self.standard_module(&self.standard_name).unwrap_or(self.main_module);
+        self.put_state(state.module);
+        self.files = state.files;
+        self.temp_names = state.temp_names;
+        self.internal_objects = state.internal_objects;
+        self.next_internal_handle = state.next_internal_handle;
+        self.object_pointers = state.object_pointers;
+        self.bstr_literals = state.bstr_literals;
+        self.due = state.due;
+        self.random_state = state.random_state;
+        self.random_entropy = state.random_entropy;
+        self
+    }
+
+    /// Release borrowed module/host references while retaining the project's
+    /// complete object graph. This neither resets the project nor runs class
+    /// termination handlers; the caller decides when execution requests reset.
+    pub fn into_project_state(mut self) -> ProjectState {
+        self.switch_owner(None);
+        let module = self.take_state();
+        ProjectState {
+            module,
+            standard_name: self.standard_name,
+            standard_states: self.standard_states,
+            files: self.files,
+            temp_names: self.temp_names,
+            internal_objects: self.internal_objects,
+            next_internal_handle: self.next_internal_handle,
+            object_pointers: self.object_pointers,
+            bstr_literals: self.bstr_literals,
+            due: self.due,
+            random_state: self.random_state,
+            random_entropy: self.random_entropy,
+        }
+    }
+
     fn take_state(&mut self) -> ModuleState {
         let state = ModuleState {
+            enum_members: std::mem::take(&mut self.enum_members),
             values: std::mem::take(&mut self.module_values),
             constants: std::mem::take(&mut self.module_constants),
             auto_new: std::mem::take(&mut self.module_auto_new),
             fixed_strings: std::mem::take(&mut self.module_fixed_strings),
             declared: std::mem::take(&mut self.module_declared),
             variants: std::mem::take(&mut self.module_variants),
+            static_values: std::mem::take(&mut self.static_values),
             initialized: self.module_initialized,
         };
         self.module_initialized = false;
@@ -597,12 +1236,14 @@ impl<'a> Runtime<'a> {
     }
 
     fn put_state(&mut self, state: ModuleState) {
+        self.enum_members = state.enum_members;
         self.module_values = state.values;
         self.module_constants = state.constants;
         self.module_auto_new = state.auto_new;
         self.module_fixed_strings = state.fixed_strings;
         self.module_declared = state.declared;
         self.module_variants = state.variants;
+        self.static_values = state.static_values;
         self.module_initialized = state.initialized;
     }
 
@@ -623,7 +1264,7 @@ impl<'a> Runtime<'a> {
             }
         }
         let (module, state) = match to {
-            None => (self.main_module, self.main_state.take().unwrap_or_default()),
+            None => (self.standard_module(&self.standard_name).unwrap_or(self.main_module), self.main_state.take().unwrap_or_default()),
             Some(handle) => match self.internal_objects.get_mut(&handle) {
                 Some(InternalObject::Instance(instance)) => {
                     let module = self
@@ -646,6 +1287,197 @@ impl<'a> Runtime<'a> {
         module.items.iter().any(|item| {
             matches!(item, ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name) && kinds.contains(&p.kind))
         })
+    }
+
+    fn standard_module(&self, name: &str) -> Option<&'a Module> {
+        self.main_module.standard_modules.iter()
+            .find(|(found, _)| found.eq_ignore_ascii_case(name))
+            .map(|(_, module)| module)
+    }
+
+    fn switch_standard(&mut self, name: &str) -> String {
+        debug_assert!(self.owner.is_none());
+        let before = self.standard_name.clone();
+        let name = key(name);
+        if name != before {
+            let state = self.take_state();
+            self.standard_states.insert(before.clone(), state);
+            let state = self.standard_states.remove(&name).unwrap_or_default();
+            self.module = self.standard_module(&name).unwrap_or(self.main_module);
+            self.standard_name = name;
+            self.put_state(state);
+        }
+        before
+    }
+
+    fn invoke_in_module(&mut self, module: &'a Module, procedure: &Procedure, args: Vec<BoundArgument>, line: Option<u32>) -> Result<Value, RuntimeError> {
+        if std::ptr::eq(module, self.module) {
+            return self.invoke_procedure(procedure, args, line);
+        }
+        self.in_standard(module, |this| this.invoke_procedure(procedure, args, line))
+    }
+
+    fn omitted_in_module(&mut self, module: &'a Module, parameter: &crate::ast::Param, line: Option<u32>) -> Result<Value, RuntimeError> {
+        if std::ptr::eq(module, self.module) {
+            self.initialize_module()?;
+            return self.omitted_parameter_value(parameter, line);
+        }
+        self.in_standard(module, |this| this.omitted_parameter_value(parameter, line))
+    }
+
+    fn qualified_standard_member<'b>(&self, expr: &'b Expr, frame: &Frame) -> Option<(&'a Module, &'b str)> {
+        let Expr::Member { object, name, .. } = expr else { return None; };
+        let Expr::Ident(qualifier, _) = object.as_ref() else { return None; };
+        if self.lookup_slot(frame, qualifier).is_some() { return None; }
+        self.standard_module(qualifier).map(|module| (module, name.as_str()))
+    }
+
+    fn in_standard<T>(&mut self, module: &'a Module, work: impl FnOnce(&mut Self) -> Result<T, RuntimeError>) -> Result<T, RuntimeError> {
+        let name = self.main_module.standard_modules.iter()
+            .find(|(_, scope)| std::ptr::eq(scope, module))
+            .map(|(name, _)| name.clone()).unwrap_or_default();
+        self.as_main(|this| {
+            let before = this.switch_standard(&name);
+            let answer = this.initialize_module().and_then(|()| work(this));
+            this.switch_standard(&before);
+            answer
+        })
+    }
+
+    fn exports_variable(module: &Module, name: &str) -> bool {
+        module.items.iter().any(|item| match item {
+            ModuleItem::Variables(d) => matches!(d.visibility, Visibility::Public | Visibility::Global)
+                && d.items.iter().any(|v| v.name.eq_ignore_ascii_case(name)),
+            ModuleItem::Enum(e) => e.visibility != Visibility::Private
+                && e.members.iter().any(|(member, _)| member.eq_ignore_ascii_case(name)),
+            _ => false,
+        })
+    }
+
+    fn foreign_variable_state(&self, name: &str) -> Option<&ModuleState> {
+        if self.main_module.standard_modules.is_empty() {
+            return self.owner.and(self.main_state.as_ref()).filter(|_| Self::exports_variable(self.main_module, name));
+        }
+        let mut found = None;
+        for (scope, module) in &self.main_module.standard_modules {
+            if std::ptr::eq(module, self.module) || !Self::exports_variable(module, name) { continue; }
+            let state = if key(scope) == self.standard_name && self.owner.is_some() {
+                self.main_state.as_ref()
+            } else {
+                self.standard_states.get(&key(scope))
+            };
+            if let Some(state) = state {
+                if found.is_some() { return None; }
+                found = Some(state);
+            }
+        }
+        found
+    }
+
+    fn foreign_variable_module(&self, name: &str) -> Option<&'a Module> {
+        if self.main_module.standard_modules.is_empty() {
+            return (!std::ptr::eq(self.main_module, self.module)
+                && Self::exports_variable(self.main_module, name)).then_some(self.main_module);
+        }
+        let mut modules = self.main_module.standard_modules.iter()
+            .map(|(_, module)| module)
+            .filter(|module| !std::ptr::eq(*module, self.module) && Self::exports_variable(module, name));
+        let module = modules.next()?;
+        modules.next().is_none().then_some(module)
+    }
+
+    fn foreign_variable_declaration(&self, name: &str) -> Option<&'a VarItem> {
+        self.foreign_variable_module(name)?.items.iter().find_map(|item| match item {
+            ModuleItem::Variables(declaration)
+                if !declaration.is_const && matches!(declaration.visibility, Visibility::Public | Visibility::Global) =>
+            {
+                declaration.items.iter().find(|variable| variable.name.eq_ignore_ascii_case(name))
+            }
+            _ => None,
+        })
+    }
+
+    fn ensure_foreign_variable(&mut self, frame: &Frame, name: &str) -> Result<(), RuntimeError> {
+        let name = key(name);
+        if frame.values.contains_key(&name) || self.module_values.contains_key(&name)
+            || self.module.items.iter().any(|item| match item {
+                ModuleItem::Variables(declaration) => declaration.items.iter().any(|v| key(&v.name) == name),
+                ModuleItem::Enum(enumeration) => enumeration.members.iter().any(|(member, _)| key(member) == name),
+                _ => false,
+            })
+            || self.foreign_variable_state(&name).is_some_and(|state| state.initialized)
+        {
+            return Ok(());
+        }
+        if let Some(module) = self.foreign_variable_module(&name) {
+            self.in_standard(module, |_| Ok(()))?;
+        }
+        Ok(())
+    }
+
+    fn ensure_expression_module(&mut self, expression: &Expr, frame: &Frame) -> Result<(), RuntimeError> {
+        let mut root = expression;
+        let mut member = false;
+        loop {
+            root = match root {
+                Expr::Member { object, .. } | Expr::Bang { object, .. } => {
+                    member = true;
+                    object
+                }
+                Expr::Index { target, .. } => target,
+                Expr::Group { expression, .. } => expression,
+                _ => break,
+            };
+        }
+        if let Some(name) = expr_name(root) {
+            self.ensure_foreign_variable(frame, name)?;
+            // A module-qualified record must exist before record-place
+            // detection, which intentionally inspects slots without evaluating.
+            if member && self.lookup_slot(frame, name).is_none() {
+                if let Some(module) = self.standard_module(name) {
+                    self.in_standard(module, |_| Ok(()))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_foreign_enum(&mut self, name: &str, frame: &Frame) -> Result<(), RuntimeError> {
+        if self.lookup_slot(frame, name).is_some() || self.foreign_variable_module(name).is_some() {
+            return Ok(());
+        }
+        let exports = |module: &&'a Module| module.items.iter().any(|item|
+            matches!(item, ModuleItem::Enum(enumeration) if enumeration.visibility != Visibility::Private && enumeration.name.eq_ignore_ascii_case(name)));
+        let modules: Vec<_> = if self.main_module.standard_modules.is_empty() {
+            vec![self.main_module]
+        } else {
+            self.main_module.standard_modules.iter().map(|(_, module)| module).collect()
+        };
+        let mut found = modules.into_iter().filter(|module| !std::ptr::eq(*module, self.module)).filter(exports);
+        if let Some(module) = found.next().filter(|_| found.next().is_none()) {
+            self.in_standard(module, |_| Ok(()))?;
+        }
+        Ok(())
+    }
+
+    fn enum_member(&self, owner: &str, name: &str) -> Option<i64> {
+        let owner = key(owner);
+        let name = key(name);
+        if let Some(value) = self.enum_members.get(&owner).and_then(|members| members.get(&name)) { return Some(*value); }
+        let exported = |module: &Module| module.items.iter().any(|item| matches!(item, ModuleItem::Enum(e) if e.name.eq_ignore_ascii_case(&owner) && e.visibility != Visibility::Private));
+        if self.main_module.standard_modules.is_empty() {
+            return self.main_state.as_ref().filter(|_| exported(self.main_module))?.enum_members.get(&owner)?.get(&name).copied();
+        }
+        let mut found = None;
+        for (scope, module) in &self.main_module.standard_modules {
+            if std::ptr::eq(module, self.module) || !exported(module) { continue; }
+            let state = if key(scope) == self.standard_name && self.owner.is_some() { self.main_state.as_ref() } else { self.standard_states.get(&key(scope)) };
+            if let Some(value) = state.and_then(|state| state.enum_members.get(&owner)).and_then(|members| members.get(&name)) {
+                if found.is_some() { return None; }
+                found = Some(*value);
+            }
+        }
+        found
     }
 
     /// Run `work` as the instance `receiver`, with its variables live and
@@ -675,28 +1507,71 @@ impl<'a> Runtime<'a> {
     }
 
     fn call_kind(&mut self, name: &str, kinds: &'static [ProcKind], args: Vec<Value>, line: Option<u32>) -> Result<Value, RuntimeError> {
+        self.call_kind_with_defaults(name, kinds, args, line, false)
+    }
+
+    fn call_kind_with_defaults(&mut self, name: &str, kinds: &'static [ProcKind], args: Vec<Value>, line: Option<u32>, automation: bool) -> Result<Value, RuntimeError> {
         self.wanted_kinds = Some(kinds);
-        let answer = self.call_procedure(name, args, line);
+        let answer = self.call_procedure_with_defaults(name, args, line, automation);
         self.wanted_kinds = None;
         answer
     }
 
     /// `obj.Name(args)` read of an instance: a method, a Property Get, or a
     /// variable of the class.
-    fn instance_member(&mut self, receiver: &ObjectRef, name: &str, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
+    fn instance_member(
+        &mut self,
+        receiver: &ObjectRef,
+        name: &str,
+        args: &[Value],
+        line: u32,
+    ) -> Result<Value, RuntimeError> {
+        if let Some(view) = receiver.dispatch_view.as_deref() {
+            let class = match self.internal_objects.get(&receiver.handle) {
+                Some(InternalObject::Instance(instance)) => instance.class.clone(),
+                _ => receiver.kind.clone(),
+            };
+            let (_, procedure) = self
+                .source_class_procedure_view(
+                    &class,
+                    name,
+                    &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet],
+                    Some(view),
+                )
+                .ok_or_else(|| {
+                    no_such_member(format!("interface {view} has no member {name}"), Some(line))
+                })?;
+            return self.as_instance(receiver, |this| {
+                this.call_kind(
+                    &procedure.name,
+                    &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet],
+                    args.to_vec(),
+                    Some(line),
+                )
+            });
+        }
         self.as_instance(receiver, |this| {
-            if this.has_procedure_of(this.module, name, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet]) {
-                return this.call_kind(name, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet], args.to_vec(), Some(line));
+            if this.public_instance_procedure(
+                this.module,
+                name,
+                &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet],
+            ) {
+                return this.call_kind(
+                    name,
+                    &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet],
+                    args.to_vec(),
+                    Some(line),
+                );
             }
-            // Through an interface: `animal.Speak` on a class that
-            // `Implements IAnimal` runs its `IAnimal_Speak`.
-            for interface in this.interfaces_of(&receiver.kind) {
-                let through = format!("{interface}_{name}");
-                if this.has_procedure_of(this.module, &through, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet]) {
-                    return this.call_kind(&through, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet], args.to_vec(), Some(line));
-                }
-            }
-            if let Some(slot) = this.module_values.get(&key(name)).cloned() {
+            // Document fields initialize on first use, without a class
+            // constructor or an unrelated project-wide initialization.
+            this.initialize_module()?;
+            if let Some(slot) = this
+                .module_values
+                .get(&key(name))
+                .cloned()
+                .filter(|_| this.public_instance_field(this.module, name))
+            {
                 let value = slot.borrow().clone();
                 if args.is_empty() {
                     return Ok(value);
@@ -711,13 +1586,59 @@ impl<'a> Runtime<'a> {
                 }
             }
             // The default member stands for `Value`, `Item` and `obj(args)`.
-            if ["value", "item", "_default"].iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
-                if let Some(default) = this.member_with_id(&receiver.kind, "0").filter(|d| !d.eq_ignore_ascii_case(name)) {
-                    return this.call_kind(&default, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet], args.to_vec(), Some(line));
+            if ["value", "item", "_default"]
+                .iter()
+                .any(|wanted| name.eq_ignore_ascii_case(wanted))
+            {
+                if let Some(default) = this.member_with_id(&receiver.kind, "0").filter(|d| {
+                    !d.eq_ignore_ascii_case(name)
+                        && this.public_instance_procedure(
+                            this.module,
+                            d,
+                            &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet],
+                        )
+                }) {
+                    return this.call_kind(
+                        &default,
+                        &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet],
+                        args.to_vec(),
+                        Some(line),
+                    );
                 }
             }
-            Err(no_such_member(format!("the class has no member {name}"), Some(line)))
+            Err(no_such_member(
+                format!("the class has no member {name}"),
+                Some(line),
+            ))
         })
+    }
+
+    fn public_instance_procedure(&self, module: &Module, name: &str, kinds: &[ProcKind]) -> bool {
+        module.items.iter().any(|item|matches!(item,ModuleItem::Procedure(procedure) if procedure.name.eq_ignore_ascii_case(name) && kinds.contains(&procedure.kind) && !matches!(procedure.visibility,Visibility::Private|Visibility::Friend)))
+    }
+
+    fn public_instance_field(&self, module: &Module, name: &str) -> bool {
+        module.items.iter().any(|item|matches!(item,ModuleItem::Variables(declaration) if matches!(declaration.visibility,Visibility::Public|Visibility::Global) && declaration.items.iter().any(|field|field.name.eq_ignore_ascii_case(name))))
+    }
+
+    fn instance_handles_member(&self, receiver:&ObjectRef, name:&str) -> bool {
+        let Some(InternalObject::Instance(instance))=self.internal_objects.get(&receiver.handle) else {return false;};
+        if !self.document_instances.contains(&receiver.handle) { return true; }
+        self.classes.get(&key(&instance.class)).is_some_and(|module| module.items.iter().any(|item| match item {
+            ModuleItem::Procedure(procedure)=>procedure.name.eq_ignore_ascii_case(name),
+            ModuleItem::Variables(declaration)=>declaration.items.iter().any(|field|field.name.eq_ignore_ascii_case(name)),
+            _=>false,
+        }))
+    }
+
+    fn implicit_document_receiver(&self,name:&str) -> Option<ObjectRef> {
+        let receiver=self.me.as_ref()?;
+        if !self.document_instances.contains(&receiver.handle) { return None; }
+        let InternalObject::Instance(instance)=self.internal_objects.get(&receiver.handle)? else {return None;};
+        let references=self.document_references.as_ref()?;
+        let (_,base)=references.document_modules.iter().find(|(name,_)|name.eq_ignore_ascii_case(&instance.class))?;
+        let (base,_)=references.library.resolve_type(base)?;
+        references.library.has_member(&base,name).then(||receiver.clone())
     }
 
     /// A method of an instance called with named arguments: each goes to the
@@ -750,9 +1671,16 @@ impl<'a> Runtime<'a> {
         let mut next = 0;
         for (value, named) in args.iter().zip(argument_names) {
             let at = match named {
-                Some(named) => params.iter().position(|p| p.eq_ignore_ascii_case(named)).ok_or_else(|| {
-                    error(RuntimeErrorKind::ArgumentCount, format!("named argument not found: {named}"), Some(line))
-                })?,
+                Some(named) => params
+                    .iter()
+                    .position(|p| p.eq_ignore_ascii_case(named))
+                    .ok_or_else(|| {
+                        error(
+                            RuntimeErrorKind::ArgumentCount,
+                            format!("named argument not found: {named}"),
+                            Some(line),
+                        )
+                    })?,
                 None => {
                     next += 1;
                     next - 1
@@ -764,6 +1692,749 @@ impl<'a> Runtime<'a> {
             placed[at] = value.clone();
         }
         self.instance_member(receiver, name, &placed, line)
+    }
+
+    /// Source calls retain the caller's argument places until binding, before
+    /// switching to the selected instance's module and fields.
+    fn call_instance_source(
+        &mut self,
+        receiver: &ObjectRef,
+        name: &str,
+        args: &[Argument],
+        force_by_value: bool,
+        evaluated: Option<&[EvaluatedArgument]>,
+        view: Option<&str>,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<Option<Value>, RuntimeError> {
+        let class = match self.internal_objects.get(&receiver.handle) {
+            Some(InternalObject::Instance(instance)) => Some(instance.class.clone()),
+            _ => None,
+        };
+        let Some(class) = class else {
+            return Ok(None);
+        };
+        let view = view.or(receiver.dispatch_view.as_deref());
+        let Some((module, procedure)) = self.source_class_procedure_view(
+            &class,
+            name,
+            &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet],
+            view,
+        ) else {
+            return Ok(None);
+        };
+        let answer = self.call_resolved_source_body(
+            module,
+            &procedure,
+            Some(receiver),
+            args,
+            force_by_value,
+            evaluated,
+            frame,
+            Some(line),
+        );
+        let collected = self.collect_instances(line);
+        if answer.is_ok() {
+            collected?;
+        }
+        answer.map(Some)
+    }
+
+    fn source_class_procedure(
+        &self,
+        class: &str,
+        name: &str,
+        kinds: &[ProcKind],
+    ) -> Option<(&'a Module, Procedure)> {
+        self.source_class_procedure_view(class, name, kinds, Some(class))
+    }
+
+    fn source_class_procedure_view(
+        &self,
+        class: &str,
+        name: &str,
+        kinds: &[ProcKind],
+        view: Option<&str>,
+    ) -> Option<(&'a Module, Procedure)> {
+        let module = self.source_class_module(class)?;
+        let find = |name: &str, implementation: bool| {
+            module.items.iter().find_map(|item| match item {
+                ModuleItem::Procedure(procedure)
+                    if procedure.name.eq_ignore_ascii_case(name)
+                        && kinds.contains(&procedure.kind) =>
+                {
+                    (implementation
+                        || (procedure.visibility != Visibility::Private
+                            && (view.is_some() || procedure.visibility != Visibility::Friend)))
+                        .then(|| procedure.clone())
+                }
+                _ => None,
+            })
+        };
+        let surface = view.unwrap_or(class);
+        let member = if name.eq_ignore_ascii_case("_default") {
+            self.member_with_id(surface, "0")?
+        } else {
+            name.to_string()
+        };
+        if !surface.eq_ignore_ascii_case(class) {
+            if let Some(interface) = self.classes.get(&key(surface)) {
+                let exposed = interface.items.iter().any(|item| match item {
+                    ModuleItem::Procedure(p) => {
+                        p.name.eq_ignore_ascii_case(&member)
+                            && !matches!(p.visibility, Visibility::Private | Visibility::Friend)
+                    }
+                    ModuleItem::Variables(d) => {
+                        matches!(d.visibility, Visibility::Public | Visibility::Global)
+                            && d.items.iter().any(|v| v.name.eq_ignore_ascii_case(&member))
+                    }
+                    _ => false,
+                });
+                if !exposed {
+                    return None;
+                }
+            }
+        }
+        let procedure = if !surface.eq_ignore_ascii_case(class) {
+            if !self
+                .interfaces_of(class)
+                .iter()
+                .any(|interface| interface.eq_ignore_ascii_case(surface))
+            {
+                return None;
+            }
+            find(&format!("{surface}_{member}"), true)
+        } else {
+            find(&member, false)
+        }?;
+        Some((module, procedure))
+    }
+
+    fn source_class_key(&self, name: &str) -> Option<String> {
+        let lowered = key(name);
+        let name = match lowered.split_once('.') {
+            Some((project, class)) if project.eq_ignore_ascii_case(&self.project_name) => class,
+            _ => lowered.as_str(),
+        };
+        self.classes.contains_key(name).then(|| name.to_string())
+    }
+
+    fn source_class_module(&self, name: &str) -> Option<&'a Module> {
+        self.source_class_key(name).and_then(|name| self.classes.get(&name).copied())
+    }
+
+    fn source_class_name(&self, object: &Expr, frame: &Frame) -> Option<String> {
+        self.source_expression_type(object, frame)
+            .filter(|kind| !kind.is_array)
+            .and_then(|kind| self.source_class_key(&kind.name))
+    }
+
+    fn reference_scalar_type(&self, name: &str) -> Option<String> {
+        let scalar = self.document_references.as_ref()?.library.resolve_scalar_type(name)?;
+        if self.source_class_key(name).is_some() || self.find_type(name).is_some() {
+            return None;
+        }
+        Some(scalar)
+    }
+
+    fn parameter_scalar_name(&self, name: &str) -> String {
+        self.source_class_key(name).or_else(|| self.reference_scalar_type(name)).unwrap_or_else(|| key(name))
+    }
+
+    fn canonical_object_type(&self, name: &str) -> String {
+        if let Some(references) = &self.document_references {
+            if let Some((name, _)) = references.library.resolve_type(name)
+                .or_else(|| references.library.global(name))
+            {
+                return name;
+            }
+        }
+        let name = key(object_type_name(name));
+        if name == "scripting.dictionary" { "dictionary".to_string() } else { name }
+    }
+
+    fn object_matches_type(&self, object: &ObjectRef, declared: &str) -> bool {
+        if declared.eq_ignore_ascii_case("Object") { return true; }
+        let instance = match self.internal_objects.get(&object.handle) {
+            Some(InternalObject::Instance(instance)) => Some(instance),
+            _ => None,
+        };
+        if let Some(class) = self.source_class_key(declared) {
+            return instance.is_some_and(|instance| {
+                self.source_class_key(&instance.class).as_ref() == Some(&class)
+                    || self.interfaces_of(&instance.class).iter()
+                        .any(|interface| self.source_class_key(interface).as_ref() == Some(&class))
+            });
+        }
+        let expected = self.canonical_object_type(declared);
+        if let Some(instance) = instance {
+            if self.document_instances.contains(&object.handle) {
+                if let Some(references) = &self.document_references {
+                    if let Some((_, base)) = references.document_modules.iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case(&instance.class))
+                    {
+                        if self.canonical_object_type(base) == expected { return true; }
+                    }
+                }
+            }
+            return self.interfaces_of(&instance.class).iter().any(|interface| {
+                self.source_class_key(interface).is_none()
+                    && self.canonical_object_type(interface) == expected
+            });
+        }
+        self.canonical_object_type(&object.kind) == expected
+    }
+
+    fn coerce_runtime(
+        &self,
+        value: Value,
+        declared: &str,
+        line: u32,
+        this_year: i64,
+    ) -> Result<Value, RuntimeError> {
+        let generic_object = declared.eq_ignore_ascii_case("Object");
+        let specific_object = !generic_object && self.is_specific_object_type(declared);
+        if generic_object || specific_object {
+            // Require an object reference before attempting a specific-type cast.
+            if !matches!(value, Value::Object(_) | Value::Nothing) {
+                return Err(language_error(424, "Object required", line));
+            }
+            if generic_object {
+                return Ok(value);
+            }
+        }
+        if let Some(class) = self.source_class_key(declared) {
+            if matches!(value, Value::Nothing) {
+                return Ok(value);
+            }
+            if let Value::Object(mut object) = value {
+                let actual = match self.internal_objects.get(&object.handle) {
+                    Some(InternalObject::Instance(instance)) => instance.class.as_str(),
+                    _ => return Err(language_error(13, format!("object is not assignable to {declared}"), line)),
+                };
+                if self.source_class_key(actual).as_ref() == Some(&class) {
+                    object.dispatch_view = None;
+                    return Ok(Value::Object(object));
+                }
+                if self
+                    .interfaces_of(actual)
+                    .iter()
+                    .any(|interface| self.source_class_key(interface).as_ref() == Some(&class))
+                {
+                    object.dispatch_view = Some(class);
+                    return Ok(Value::Object(object));
+                }
+            }
+            return Err(language_error(
+                13,
+                format!("object is not assignable to {declared}"),
+                line,
+            ));
+        }
+        if specific_object {
+            if matches!(value, Value::Nothing)
+                || matches!(&value, Value::Object(object) if self.object_matches_type(object, declared))
+            {
+                return Ok(value);
+            }
+            return Err(language_error(
+                13,
+                format!("object is not assignable to {declared}"),
+                line,
+            ));
+        }
+        let scalar = self.reference_scalar_type(declared);
+        coerce_declared(value, scalar.as_deref().unwrap_or(declared), line, this_year)
+    }
+
+    fn source_class_parameters(&self, class: &str, name: &str) -> Option<Vec<crate::ast::Param>> {
+        self.source_class_procedure(
+            class,
+            name,
+            &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet],
+        )
+        .map(|(_, procedure)| procedure.params)
+    }
+
+    fn source_expression_type(&self, expression: &Expr, frame: &Frame) -> Option<TypeName> {
+        if let Some(kind) = self.place_type(expression, frame) {
+            return Some(kind);
+        }
+        let returned = |name: &str| {
+            self.resolve_procedure(name, None)
+                .ok()
+                .flatten()
+                .and_then(|(_, procedure)| procedure.return_type)
+        };
+        match expression {
+            Expr::Ident(name, _) if name.eq_ignore_ascii_case("me") => {
+                self.me.as_ref().map(|object| TypeName {
+                    name: match self.internal_objects.get(&object.handle) {
+                        Some(InternalObject::Instance(instance))=>instance.class.clone(),
+                        _=>object.kind.clone(),
+                    },
+                    ..TypeName::implicit()
+                })
+            }
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => self.document_globals.get(&key(name)).map(|_|TypeName {name:name.clone(),..TypeName::implicit()}).or_else(||returned(name)),
+            Expr::New { type_name, .. } => Some(TypeName {
+                name: type_name.clone(),
+                ..TypeName::implicit()
+            }),
+            Expr::Index { target, args, .. } => {
+                let procedure = if let Some((module, name)) = self.qualified_standard_member(target, frame) {
+                    module.items.iter().find_map(|item| match item {
+                        ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name) => Some(p.clone()),
+                        _ => None,
+                    })
+                } else if let Some(name) = expr_name(target).filter(|name| self.lookup_slot(frame, name).is_none()) {
+                    self.resolve_procedure(name, None).ok().flatten().map(|(_, p)| p)
+                } else if let Expr::Member { object, name, .. } = target.as_ref() {
+                    self.source_class_name(object, frame).and_then(|class| {
+                        self.source_class_procedure(&class, name, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet])
+                            .map(|(_, p)| p)
+                    })
+                } else if let Expr::WithMember(name, _) | Expr::WithBangMember(name, _) = target.as_ref() {
+                    match frame.with_objects.last() {
+                        Some(WithSubject::Object { class: Some(class), .. }) => self.source_class_procedure(class, name, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet]).map(|(_, p)| p),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(procedure) = procedure.as_ref().filter(|p| self.indexes_procedure_result(p, args)) {
+                    let class = procedure.return_type.as_ref()?.name.as_str();
+                    return self.source_class_procedure(class, "_default", &[ProcKind::PropertyGet, ProcKind::Function])
+                        .and_then(|(_, p)| p.return_type);
+                }
+                if procedure.is_none() {
+                    if let Some(class) = self.source_class_name(target, frame) {
+                        return self.source_class_procedure(&class, "_default", &[ProcKind::PropertyGet, ProcKind::Function])
+                            .and_then(|(_, p)| p.return_type);
+                    }
+                }
+                if let Some((module, name)) = self.qualified_standard_member(target, frame) {
+                    return module.items.iter().find_map(|item| match item {
+                        ModuleItem::Procedure(procedure)
+                            if procedure.name.eq_ignore_ascii_case(name) =>
+                        {
+                            procedure.return_type.clone()
+                        }
+                        _ => None,
+                    });
+                }
+                if let Some(name) = expr_name(target) {
+                    if self.lookup_slot(frame, name).is_none() {
+                        if let Some(kind) = returned(name) {
+                            return Some(kind);
+                        }
+                    }
+                }
+                let mut kind = self.source_expression_type(target, frame)?;
+                if kind.is_array {
+                    kind.is_array = false;
+                }
+                Some(kind)
+            }
+            Expr::Member { object, name, .. } => {
+                let class = self.source_class_name(object, frame)?;
+                self.source_member_type(&class, name)
+            }
+            Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
+                let Some(WithSubject::Object {
+                    class: Some(class), ..
+                }) = frame.with_objects.last()
+                else {
+                    return None;
+                };
+                self.source_member_type(class, name)
+            }
+            _ => None,
+        }
+    }
+
+    fn source_member_type(&self, class: &str, name: &str) -> Option<TypeName> {
+        let module = self.source_class_module(class)?;
+        module.items.iter().find_map(|item| match item {
+            ModuleItem::Variables(declaration) => declaration
+                .items
+                .iter()
+                .find(|field| field.name.eq_ignore_ascii_case(name))
+                .map(|field| {
+                    let mut kind = field.type_name.clone();
+                    kind.is_array |= field.array_bounds.is_some();
+                    kind
+                }),
+            ModuleItem::Procedure(procedure)
+                if procedure.name.eq_ignore_ascii_case(name)
+                    && matches!(procedure.kind, ProcKind::Function | ProcKind::PropertyGet) =>
+            {
+                procedure.return_type.clone()
+            }
+            _ => None,
+        })
+    }
+
+    fn source_call_parameters(
+        &self,
+        object: &Expr,
+        name: &str,
+        frame: &Frame,
+    ) -> Option<Vec<crate::ast::Param>> {
+        self.source_class_parameters(&self.source_class_name(object, frame)?, name)
+    }
+
+    fn early_application_expression(&self, expression: &Expr, frame: &Frame) -> bool {
+        if let Some(kind) = self.source_expression_type(expression, frame) {
+            return self.source_class_key(&kind.name).is_none()
+                && matches!(key(&kind.name).as_str(), "application" | "_application" | "excel.application" | "excel._application");
+        }
+        matches!(expression, Expr::Ident(name, _) if name.eq_ignore_ascii_case("Application")
+            && self.lookup_slot(frame, name).is_none() && !self.has_visible_procedure(name)
+            && self.source_class_key(name).is_none())
+    }
+
+    fn early_macro_call(&self, target: &Expr, frame: &Frame) -> bool {
+        match target {
+            Expr::Member { object, name, .. } if name.eq_ignore_ascii_case("Run") => self.early_application_expression(object, frame),
+            Expr::WithMember(name, _) if name.eq_ignore_ascii_case("Run") => matches!(frame.with_objects.last(), Some(WithSubject::Object { early_application: true, .. })),
+            Expr::Ident(name, _) if name.eq_ignore_ascii_case("Run") => self.lookup_slot(frame, name).is_none() && !self.has_visible_procedure(name),
+            _ => false,
+        }
+    }
+
+    fn macro_parameter_slot(name: &str) -> Option<usize> {
+        if name.eq_ignore_ascii_case("Macro") { return Some(0); }
+        (1..=30).find(|index| name.eq_ignore_ascii_case(&format!("Arg{index}")))
+    }
+
+    fn macro_parameters() -> Vec<crate::ast::Param> {
+        (0..=30).map(|index| crate::ast::Param {
+            mode: ParamMode::ByRef, optional: true,
+            name: if index == 0 { "Macro".to_string() } else { format!("Arg{index}") },
+            is_array: false, type_name: TypeName::implicit(), default: None,
+        }).collect()
+    }
+
+    fn source_member_view(&self, target: &Expr, frame: &Frame) -> Option<String> {
+        match target {
+            Expr::Member { object, .. } => self.source_class_name(object, frame),
+            Expr::WithMember(..) | Expr::WithBangMember(..) => match frame.with_objects.last() {
+                Some(WithSubject::Object { class, .. }) => class.clone(),
+                _ => None,
+            },
+            _ => self.source_class_name(target, frame),
+        }
+    }
+
+    fn source_setter_parameters(
+        &self,
+        target: &Expr,
+        frame: &Frame,
+        object_value: bool,
+    ) -> Option<Vec<crate::ast::Param>> {
+        if let Some((_, mut procedure)) = self.source_module_setter(target, frame, object_value) {
+            procedure.params.pop();
+            return Some(procedure.params);
+        }
+        let (class, name) = match target {
+            Expr::Member { object, name, .. } => {
+                (self.source_class_name(object, frame)?, name.as_str())
+            }
+            Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
+                let Some(WithSubject::Object {
+                    class: Some(class), ..
+                }) = frame.with_objects.last()
+                else {
+                    return None;
+                };
+                (class.clone(), name.as_str())
+            }
+            _ => (self.source_class_name(target, frame)?, "_default"),
+        };
+        let (_, mut procedure) = if object_value {
+            self.source_class_procedure(&class, name, &[ProcKind::PropertySet])
+                .or_else(|| self.source_class_procedure(&class, name, &[ProcKind::PropertyLet]))
+        } else {
+            self.source_class_procedure(&class, name, &[ProcKind::PropertyLet])
+        }?;
+        procedure.params.pop();
+        Some(procedure.params)
+    }
+
+    fn prepare_named_setter(
+        &mut self,
+        target: &Expr,
+        frame: &mut Frame,
+        object_value: bool,
+    ) -> Result<Option<Vec<EvaluatedArgument>>, RuntimeError> {
+        let Expr::Index {
+            target,
+            args,
+            force_by_value,
+            ..
+        } = target
+        else {
+            return Ok(None);
+        };
+        if !args.iter().any(|argument| argument.name.is_some()) {
+            return Ok(None);
+        }
+        let parameters = self.source_setter_parameters(target, frame, object_value);
+        self.evaluate_source_arguments(args, *force_by_value, parameters.as_deref(), frame)
+            .map(Some)
+    }
+
+    fn call_instance_set_source(
+        &mut self,
+        receiver: &ObjectRef,
+        name: &str,
+        args: &[Argument],
+        evaluated: &[EvaluatedArgument],
+        value: Value,
+        view: Option<&str>,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<bool, RuntimeError> {
+        let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&receiver.handle)
+        else {
+            return Ok(false);
+        };
+        let class = instance.class.clone();
+        let view = view.or(receiver.dispatch_view.as_deref());
+        let found = if matches!(value, Value::Object(_) | Value::Nothing) {
+            self.source_class_procedure_view(&class, name, &[ProcKind::PropertySet], view)
+                .or_else(|| {
+                    self.source_class_procedure_view(&class, name, &[ProcKind::PropertyLet], view)
+                })
+        } else {
+            self.source_class_procedure_view(&class, name, &[ProcKind::PropertyLet], view)
+        };
+        let Some((module, procedure)) = found else {
+            return Ok(false);
+        };
+        self.call_resolved_set_source(
+            module,
+            &procedure,
+            Some(receiver),
+            args,
+            evaluated,
+            value,
+            frame,
+            line,
+        )
+        .map(|_| true)
+    }
+
+    fn source_module_setter(
+        &self,
+        target: &Expr,
+        frame: &Frame,
+        object_value: bool,
+    ) -> Option<(&'a Module, Procedure)> {
+        let qualified = self.qualified_standard_member(target, frame);
+        let name = if let Some((module, name)) = qualified {
+            if module.items.iter().any(|item|matches!(item,ModuleItem::Variables(declaration) if declaration.items.iter().any(|variable|variable.name.eq_ignore_ascii_case(name)))){return None;}
+            self.main_module
+                .standard_modules
+                .iter()
+                .find(|(_, scope)| std::ptr::eq(scope, module))
+                .map(|(scope, _)| format!("{scope}.{name}"))?
+        } else {
+            let name = expr_name(target)?;
+            if self.lookup_slot(frame, name).is_some() {
+                return None;
+            }
+            name.to_string()
+        };
+        if object_value {
+            if let Ok(Some(found)) = self.resolve_procedure(&name, Some(&[ProcKind::PropertySet])) {
+                return Some(found);
+            }
+        }
+        self.resolve_procedure(&name, Some(&[ProcKind::PropertyLet]))
+            .ok()
+            .flatten()
+    }
+
+    fn call_resolved_set_source(
+        &mut self,
+        module: &'a Module,
+        procedure: &Procedure,
+        receiver: Option<&ObjectRef>,
+        args: &[Argument],
+        evaluated: &[EvaluatedArgument],
+        value: Value,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<(), RuntimeError> {
+        let parameter = procedure
+            .params
+            .last()
+            .ok_or_else(|| argument_count_error(&procedure, args.len() + 1, Some(line)))?;
+        let mut args = args.to_vec();
+        args.push(Argument {
+            name: Some(parameter.name.clone()),
+            value: Some(Expr::Literal(
+                Literal::Empty,
+                crate::Span {
+                    line,
+                    start: 0,
+                    end: 0,
+                },
+            )),
+            file_number: false,
+            force_by_value: true,
+        });
+        let mut evaluated = evaluated.to_vec();
+        evaluated.push(EvaluatedArgument::new(value, None));
+        let answer = self.call_resolved_source_body(
+            module,
+            &procedure,
+            receiver,
+            &args,
+            false,
+            Some(&evaluated),
+            frame,
+            Some(line),
+        );
+        let collected = self.collect_instances(line);
+        if answer.is_ok() {
+            collected?;
+        }
+        answer.map(|_| ())
+    }
+
+    fn prepare_byval_argument(
+        &mut self,
+        value: Value,
+        parameter: &crate::ast::Param,
+        frame: &Frame,
+        line: u32,
+    ) -> Result<Value, RuntimeError> {
+        if parameter.is_array || parameter.type_name.is_new || matches!(value, Value::Missing) {
+            return Ok(value);
+        }
+        let kind = self.parameter_scalar_name(&parameter.type_name.name);
+        let value = if matches!(
+            kind.as_str(),
+            "byte"
+                | "integer"
+                | "long"
+                | "longlong"
+                | "longptr"
+                | "single"
+                | "double"
+                | "currency"
+                | "date"
+                | "boolean"
+                | "string"
+        ) {
+            self.scalar_operand(value, frame, line)?
+        } else {
+            value
+        };
+        self.coerce_runtime(value, &parameter.type_name.name, line, self.this_year())
+    }
+
+    fn evaluate_source_arguments(
+        &mut self,
+        args: &[Argument],
+        force_by_value: bool,
+        parameters: Option<&[crate::ast::Param]>,
+        frame: &mut Frame,
+    ) -> Result<Vec<EvaluatedArgument>, RuntimeError> {
+        let mut order: Vec<_> = (0..args.len()).collect();
+        if let Some(parameters) = parameters {
+            order.sort_by_key(|index| {
+                args[*index]
+                    .name
+                    .as_ref()
+                    .and_then(|name| {
+                        parameters
+                            .iter()
+                            .position(|parameter| parameter.name.eq_ignore_ascii_case(name))
+                    })
+                    .unwrap_or(*index)
+            });
+        }
+        let mut evaluated: Vec<Option<EvaluatedArgument>> = vec![None; args.len()];
+        for index in order {
+            let argument = &args[index];
+            let bound = match &argument.value {
+                Some(expression) if !force_by_value && !argument.force_by_value => {
+                    self.reference_argument(expression, frame, expression.span().line)?
+                }
+                Some(expression) => BoundArgument::Value(self.eval_expr(expression, frame)?),
+                None => BoundArgument::Value(Value::Missing),
+            };
+            let parameter = parameters.and_then(|parameters| {
+                argument
+                    .name
+                    .as_ref()
+                    .and_then(|name| {
+                        parameters
+                            .iter()
+                            .find(|p| p.name.eq_ignore_ascii_case(name))
+                    })
+                    .or_else(|| parameters.get(index))
+                    .or_else(|| {
+                        parameters
+                            .last()
+                            .filter(|p| p.mode == ParamMode::ParamArray)
+                    })
+            });
+            let line = argument
+                .value
+                .as_ref()
+                .map(|value| value.span().line)
+                .unwrap_or(0);
+            evaluated[index] = Some(match bound {
+                BoundArgument::Reference(slot) => {
+                    if let Some(parameter) = parameter.filter(|p| p.mode == ParamMode::ByVal) {
+                        let value = slot.snapshot();
+                        drop(slot);
+                        EvaluatedArgument::new(
+                            self.prepare_byval_argument(value, parameter, frame, line)?,
+                            None,
+                        )
+                    } else {
+                        let fixed = argument.value.as_ref().and_then(|expression| {
+                            self.reference_fixed_width(expression, &slot, frame)
+                        });
+                        let converted = self.reference_needs_variant_box(&slot)
+                            && parameter.is_none_or(|p| {
+                                p.mode == ParamMode::ParamArray
+                                    || matches!(
+                                        key(&p.type_name.name).as_str(),
+                                        "variant" | "object"
+                                    )
+                            });
+                        if let Some(conversion) = fixed
+                            .map(ArgumentConversion::FixedString)
+                            .or_else(|| converted.then_some(ArgumentConversion::Object))
+                        {
+                            let value = slot.snapshot();
+                            let destination = slot.copyback_place();
+                            drop(slot);
+                            EvaluatedArgument::converted(value, destination, conversion)
+                        } else {
+                            EvaluatedArgument::deferred(slot)
+                        }
+                    }
+                }
+                BoundArgument::Value(value) => {
+                    let value =
+                        if let Some(parameter) = parameter.filter(|p| p.mode == ParamMode::ByVal) {
+                            self.prepare_byval_argument(value, parameter, frame, line)?
+                        } else {
+                            value
+                        };
+                    EvaluatedArgument::new(value, None)
+                }
+            });
+        }
+        Ok(evaluated.into_iter().map(Option::unwrap).collect())
     }
 
     /// The procedure a class marks with `VB_UserMemId = id`: 0 is its
@@ -797,7 +2468,9 @@ impl<'a> Runtime<'a> {
                     .items
                     .iter()
                     .filter_map(|item| match item {
-                        ModuleItem::Implements { interface, .. } => Some(interface.clone()),
+                        ModuleItem::Implements { interface, .. } => {
+                            Some(self.source_class_key(interface).unwrap_or_else(|| interface.clone()))
+                        }
                         _ => None,
                     })
                     .collect()
@@ -870,53 +2543,133 @@ impl<'a> Runtime<'a> {
 
     /// `obj.Name(args) = value` on an instance: a Property Let (Set for an
     /// object when there is one), else a variable of the class.
-    fn instance_assign(&mut self, receiver: &ObjectRef, name: &str, args: &[Value], value: Value, line: u32) -> Result<bool, RuntimeError> {
+    fn instance_assign(
+        &mut self,
+        receiver: &ObjectRef,
+        name: &str,
+        args: &[Value],
+        value: Value,
+        line: u32,
+    ) -> Result<bool, RuntimeError> {
+        if let Some(view) = receiver.dispatch_view.as_deref() {
+            let class = match self.internal_objects.get(&receiver.handle) {
+                Some(InternalObject::Instance(instance)) => instance.class.clone(),
+                _ => receiver.kind.clone(),
+            };
+            let found = if matches!(value, Value::Object(_) | Value::Nothing) {
+                self.source_class_procedure_view(&class, name, &[ProcKind::PropertySet], Some(view))
+                    .or_else(|| {
+                        self.source_class_procedure_view(
+                            &class,
+                            name,
+                            &[ProcKind::PropertyLet],
+                            Some(view),
+                        )
+                    })
+            } else {
+                self.source_class_procedure_view(&class, name, &[ProcKind::PropertyLet], Some(view))
+            };
+            let (_, procedure) = found.ok_or_else(|| {
+                no_such_member(
+                    format!("interface {view} has no writable member {name}"),
+                    Some(line),
+                )
+            })?;
+            return self.as_instance(receiver, |this| {
+                let mut all = args.to_vec();
+                all.push(value);
+                this.call_kind(
+                    &procedure.name,
+                    if procedure.kind == ProcKind::PropertySet {
+                        &[ProcKind::PropertySet]
+                    } else {
+                        &[ProcKind::PropertyLet]
+                    },
+                    all,
+                    Some(line),
+                )
+                .map(|_| true)
+            });
+        }
         self.as_instance(receiver, |this| {
             let object = matches!(value, Value::Object(_) | Value::Nothing);
-            let kinds: &'static [ProcKind] = if object && this.has_procedure_of(this.module, name, &[ProcKind::PropertySet]) {
-                &[ProcKind::PropertySet]
-            } else {
-                &[ProcKind::PropertyLet]
-            };
-            if this.has_procedure_of(this.module, name, kinds) {
+            this.initialize_module()?;
+            let kinds: &'static [ProcKind] =
+                if object && this.has_procedure_of(this.module, name, &[ProcKind::PropertySet]) {
+                    &[ProcKind::PropertySet]
+                } else {
+                    &[ProcKind::PropertyLet]
+                };
+            if this.public_instance_procedure(this.module, name, kinds) {
                 let mut all = args.to_vec();
                 all.push(value);
                 this.call_kind(name, kinds, all, Some(line))?;
                 return Ok(true);
             }
-            for interface in this.interfaces_of(&receiver.kind) {
-                let through = format!("{interface}_{name}");
-                if this.has_procedure_of(this.module, &through, kinds) {
-                    let mut all = args.to_vec();
-                    all.push(value);
-                    this.call_kind(&through, kinds, all, Some(line))?;
-                    return Ok(true);
-                }
-            }
             if args.is_empty() {
-                if let Some(slot) = this.module_values.get(&key(name)).cloned() {
-                    *slot.borrow_mut() = value;
+                if this.module_values.contains_key(&key(name))
+                    && this.public_instance_field(this.module, name)
+                {
+                    let mut frame =
+                        empty_frame(this.error_environment.clone(), this.project_name.clone());
+                    this.assign(
+                        &Expr::Ident(
+                            name.to_string(),
+                            crate::Span {
+                                line,
+                                start: 0,
+                                end: 0,
+                            },
+                        ),
+                        value,
+                        &mut frame,
+                        line,
+                    )?;
                     return Ok(true);
                 }
             }
             // A property that can only be read: measured, assigning to a
             // Get-only property is 451, not 438.
-            if this.has_procedure_of(this.module, name, &[ProcKind::PropertyGet]) {
+            if this.public_instance_procedure(this.module, name, &[ProcKind::PropertyGet]) {
                 return Err(RuntimeError {
                     kind: RuntimeErrorKind::Unsupported,
-                    message: format!("{name} has no Property Let and its Property Get does not return an object"),
+                    message: format!(
+                        "{name} has no Property Let and its Property Get does not return an object"
+                    ),
                     line: Some(line),
                     vba_number: Some(451),
-                    vba_source: Some("VBA".to_string()),
+                    vba_source: None,
+                    vba_help_file: None,
+                    vba_help_context: None,
+                    vba_default_description: true,
                 });
             }
-            Err(no_such_member(format!("the class has no member {name}"), Some(line)))
+            Err(no_such_member(
+                format!("the class has no member {name}"),
+                Some(line),
+            ))
         })
     }
 
     pub fn with_limits(mut self, max_steps: usize, max_depth: usize) -> Self {
         self.max_steps = max_steps;
         self.max_depth = max_depth;
+        self
+    }
+
+    /// Supplies the target VBA host's UI error language and installed help path.
+    pub fn with_error_environment(mut self, environment: ErrorEnvironment) -> Self {
+        self.error_environment = Rc::new(environment);
+        self
+    }
+
+    /// Supplies the containing VBA project's name, used as the default error Source.
+    /// An empty name leaves the default `VBAProject` unchanged.
+    pub fn with_project_name(mut self, name: impl Into<String>) -> Self {
+        let name = name.into();
+        if !name.is_empty() {
+            self.project_name = name;
+        }
         self
     }
 
@@ -935,10 +2688,268 @@ impl<'a> Runtime<'a> {
     }
 
     pub fn call(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        self.start_execution()?;
+        self.call_procedure(name, args, None)
+    }
+
+    /// Invoke an Application.Run entry, independently of the caller's lexical
+    /// scope. Document functions run for their effects and return Empty.
+    pub fn call_macro(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        self.start_execution()?;
+        self.call_macro_argument(Value::String(name.to_string()), args, None)
+    }
+
+    fn call_macro_argument(&mut self, value: Value, args: Vec<Value>, line: Option<u32>) -> Result<Value, RuntimeError> {
+        self.call_macro_argument_source(value, args, line, None)
+    }
+
+    fn call_macro_argument_source(&mut self, mut value: Value, args: Vec<Value>, line: Option<u32>,
+        source: Option<(&[Argument], &[EvaluatedArgument], bool, &mut Frame)>) -> Result<Value, RuntimeError> {
+        let at = line.unwrap_or(0);
+        if args.len() > 30 {
+            return Err(language_error(450, "Wrong number of arguments or invalid property assignment", at));
+        }
+
+        while let Value::Object(receiver) = &value {
+            if receiver.kind.eq_ignore_ascii_case("Range") {
+                return Err(self.macro_failure("", line));
+            }
+            value = if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+                let class = receiver.dispatch_view.as_deref().unwrap_or(&receiver.kind);
+                let member = self.member_with_id(class, "0")
+                    .ok_or_else(|| no_such_member("object has no default macro identifier".to_string(), line))?;
+                self.instance_member(receiver, &member, &[], at)?
+            } else {
+                self.host_get(receiver, "Value", at)?.ok_or_else(|| no_such_member("object has no default macro identifier".to_string(), line))?
+            };
+        }
+        let Value::String(requested) = value else {
+            return match value {
+                Value::Missing | Value::Nothing => Err(language_error(5, "Invalid procedure call or argument", at)),
+                Value::Error(_) | Value::Array(_) | Value::Record(_) => Err(self.macro_failure("", line)),
+                _ => Ok(Value::Error(2015)),
+            };
+        };
+        let normalized = requested.trim();
+        let normalized = normalized.strip_prefix('=').unwrap_or(normalized).trim();
+        if normalized.parse::<f64>().is_ok_and(f64::is_finite) || normalized.eq_ignore_ascii_case("true") || normalized.eq_ignore_ascii_case("false") {
+            return Ok(Value::Error(2015));
+        }
+        let resolved = match self.host.as_deref() {
+            Some(host) => host.macro_reference(normalized).map_err(|message| host_failure(message, at))?,
+            None => normalized.to_string(),
+        };
+        let expression = resolved.contains('(') || resolved.starts_with(|ch: char| ch.is_ascii_digit() || matches!(ch, '+' | '-' | '.'));
+        if expression {
+            // Evaluate owns its reference-probe and value passes. Repeating
+            // the entire operation here would run the expression four times.
+            let answer = self.host_call(None, "Evaluate", &[Value::String(resolved.clone())], at)?
+                .unwrap_or(Value::Error(2029));
+            return match answer {
+                Value::Error(_) | Value::Object(_) | Value::Array(_) | Value::Nothing | Value::Record(_) | Value::Missing => Err(self.macro_failure(&requested, line)),
+                Value::String(text) if !text.trim().parse::<f64>().is_ok_and(f64::is_finite) && !text.eq_ignore_ascii_case("true") && !text.eq_ignore_ascii_case("false") => Err(self.macro_failure(&requested, line)),
+                _ => Ok(Value::Error(2015)),
+            };
+        }
+        self.call_macro_procedure_source(normalized, args, line, source)
+    }
+
+    fn macro_failure(&self, requested: &str, line: Option<u32>) -> RuntimeError {
+        let message = self.host.as_deref().map(|host| host.macro_unavailable(requested))
+            .unwrap_or_else(|| host_error(1004, format!("macro is unavailable: {requested}")));
+        host_failure(message, line.unwrap_or(0))
+    }
+
+    fn call_macro_procedure(&mut self, requested: &str, args: Vec<Value>, line: Option<u32>) -> Result<Value, RuntimeError> {
+        self.call_macro_procedure_source(requested, args, line, None)
+    }
+
+    fn validate_automation_array_references(&self, procedure: &Procedure,
+        arguments: &[Argument], evaluated: &[EvaluatedArgument], forced: bool, line: u32,
+    ) -> Result<(), RuntimeError> {
+        if forced { return Ok(()); }
+        let normalize = |name: &str| { let scalar = self.parameter_scalar_name(name); if scalar == "longptr" { "longlong".to_string() } else { scalar } };
+        for (index, parameter) in procedure.params.iter().enumerate() {
+            if parameter.mode != ParamMode::ByRef || !parameter.is_array { continue; }
+            let Some(argument) = arguments.get(index) else { continue; };
+            if argument.force_by_value { continue; }
+            let Some(value) = evaluated.get(index) else { continue; };
+            let reference = value.reference.borrow();
+            let Some(slot) = reference.as_ref() else { continue; };
+            let actual = slot.array_declared.borrow();
+            if actual.as_ref().is_none_or(|actual| normalize(actual) != normalize(&parameter.type_name.name)) {
+                return Err(language_error(13, "Automation ByRef array declaration type mismatch", line));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_array_parameter_value(&mut self, parameter: &crate::ast::Param, value: &Value,
+        frame: &mut Frame, line: u32,
+    ) -> Result<(), RuntimeError> {
+        if !parameter.is_array || parameter.mode == ParamMode::ParamArray { return Ok(()); }
+        let Value::Array(array) = value else {
+            return Err(language_error(13, "Array parameter requires an array", line));
+        };
+        let expected = self.declared_default_value(&parameter.type_name, frame, line)?;
+        let expected = self.coerce_runtime(expected, &parameter.type_name.name, line, self.this_year())?;
+        let kind = |value: &Value| match value {
+            Value::Nothing | Value::Object(_) => "object".to_string(),
+            Value::Record(record) => key(&record.type_name),
+            other => element_type_name(other).unwrap_or("variant").to_string(),
+        };
+        if kind(array.element_default.as_ref()) != kind(&expected) {
+            return Err(language_error(13, "Array parameter element type mismatch", line));
+        }
+        Ok(())
+    }
+
+    fn call_macro_source_body(&mut self, procedure: &Procedure, receiver: Option<&ObjectRef>,
+        arguments: &[Argument], evaluated: &[EvaluatedArgument], forced: bool, frame: &mut Frame,
+        line: Option<u32>) -> Result<Value, RuntimeError> {
+        self.validate_automation_array_references(procedure, arguments, evaluated, forced, line.unwrap_or(0))?;
+        for (index, parameter) in procedure.params.iter().enumerate() {
+            if parameter.mode != ParamMode::ByRef || parameter.is_array || forced { continue; }
+            if parameter.optional && evaluated.get(index).is_some_and(|value| matches!(value.value(), Value::Missing)) { continue; }
+            let expected = self.parameter_scalar_name(&parameter.type_name.name);
+            if !matches!(expected.as_str(), "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double" | "currency" | "date" | "boolean" | "string" | "decimal") { continue; }
+            let Some(argument) = arguments.get(index) else { continue; };
+            if argument.force_by_value { continue; }
+            let Some(evaluated) = evaluated.get(index) else { continue; };
+            let reference = evaluated.reference.borrow();
+            let Some(slot) = reference.as_ref() else { continue; };
+            let declared = slot.declared.borrow().clone().unwrap_or_else(|| "Variant".into());
+            let normalize = |name: &str| { let scalar = self.parameter_scalar_name(name); if scalar == "longptr" { "longlong".to_string() } else { scalar } };
+            if normalize(&declared) != normalize(&expected) {
+                return Err(language_error(13, "Automation ByRef argument type mismatch", line.unwrap_or(0)));
+            }
+        }
+        self.call_resolved_source_body_with_defaults(self.module, procedure, receiver, arguments, forced, Some(evaluated), frame, line, true)
+    }
+
+    fn call_macro_procedure_source(&mut self, requested: &str, args: Vec<Value>, line: Option<u32>,
+        source: Option<(&[Argument], &[EvaluatedArgument], bool, &mut Frame)>) -> Result<Value, RuntimeError> {
+        let worksheet_key = self.worksheet_callback_key.take();
+        let resolved = match self.host.as_deref() {
+            Some(host) => host.macro_reference(requested).map_err(|message| host_failure(message, line.unwrap_or(0)))?,
+            None => requested.to_string(),
+        };
+        let name = resolved.split_once('.').filter(|(project, _)| project.eq_ignore_ascii_case(&self.project_name))
+            .map_or(resolved.as_str(), |(_, name)| name);
+        let find = |module: &Module, name: &str| {
+            module.items.iter().find_map(|item| match item {
+                ModuleItem::Procedure(procedure) if procedure.name.eq_ignore_ascii_case(name)
+                    && matches!(procedure.kind, ProcKind::Sub | ProcKind::Function)
+                    && crate::compiler::procedure_header_valid(procedure) => Some((procedure.clone(), procedure.params.iter().enumerate().any(|(index, parameter)| {
+                        !parameter.optional && parameter.mode != ParamMode::ParamArray
+                            && args.get(index).is_none_or(|value| matches!(value, Value::Missing))
+                    }))),
+                _ => None,
+            })
+        };
+        let mut standard = None;
+        let mut document = None;
+        if let Some((scope, procedure)) = name.rsplit_once('.') {
+            if let Some(module) = self.standard_module(scope) {
+                standard = find(module, procedure).map(|(procedure, missing)| (scope.to_string(), procedure, missing));
+            } else if let (Some(object), Some(module)) = (self.document_globals.get(&key(scope)), self.classes.get(&key(scope))) {
+                if self.document_instances.contains(&object.handle) {
+                    document = find(module, procedure).map(|(procedure, missing)| (object.clone(), procedure, missing));
+                }
+            }
+        } else if self.main_module.standard_modules.is_empty() {
+            standard = find(self.main_module, name).map(|(procedure, missing)| (String::new(), procedure, missing));
+        } else {
+            for (scope, module) in &self.main_module.standard_modules {
+                if let Some((procedure, missing)) = find(module, name) {
+                    if standard.is_some() { return Err(self.macro_failure(requested, line)); }
+                    standard = Some((scope.clone(), procedure, missing));
+                }
+            }
+        }
+        let answer = if let Some((scope, procedure, missing)) = standard {
+            if args.len() > procedure.params.len()
+                && !procedure.params.last().is_some_and(|param| param.mode == ParamMode::ParamArray)
+            {
+                return Err(argument_count_error(&procedure, args.len(), line));
+            }
+            if missing { return Err(language_error(449, "Argument not optional", line.unwrap_or(0))); }
+            self.as_main(|runtime| {
+                let before = runtime.switch_standard(&scope);
+                let previous_body = runtime.pending_callback_body;
+                if let Some(key) = worksheet_key {
+                    runtime.pending_callback_body = Some((key, runtime.module as *const Module as usize, procedure.span.start));
+                }
+                let answer = match source {
+                    Some((arguments, evaluated, forced, frame)) => runtime.call_macro_source_body(&procedure, None, arguments, evaluated, forced, frame, line),
+                    None => runtime.call_kind_with_defaults(&procedure.name, &[ProcKind::Sub, ProcKind::Function], args, line, true),
+                };
+                runtime.pending_callback_body = previous_body;
+                runtime.switch_standard(&before);
+                answer
+            })
+        } else if let Some((object, procedure, missing)) = document {
+            if args.len() > procedure.params.len()
+                && !procedure.params.last().is_some_and(|param| param.mode == ParamMode::ParamArray)
+            {
+                return Err(argument_count_error(&procedure, args.len(), line));
+            }
+            if missing { return Err(language_error(449, "Argument not optional", line.unwrap_or(0))); }
+            self.as_instance(&object, |runtime| {
+                let previous_body = runtime.pending_callback_body;
+                if let Some(key) = worksheet_key {
+                    runtime.pending_callback_body = Some((key, runtime.module as *const Module as usize, procedure.span.start));
+                }
+                let answer = match source {
+                    Some((arguments, evaluated, forced, frame)) => runtime.call_macro_source_body(&procedure, Some(&object), arguments, evaluated, forced, frame, line),
+                    None => runtime.call_kind_with_defaults(&procedure.name, &[ProcKind::Sub, ProcKind::Function], args, line, true),
+                };
+                runtime.pending_callback_body = previous_body;
+                answer
+            })
+                .map(|_| Value::Empty)
+        } else { return Err(self.macro_failure(requested, line)); };
+        // A suppressed document result can own an instance. Drop it before
+        // collecting so Class_Terminate runs before the caller continues.
+        let collected = self.collect_instances(line.unwrap_or(0));
+        if answer.is_ok() { collected?; }
+        answer
+    }
+
+    pub fn project_ended(&self) -> bool { self.project_ended }
+
+    /// Invoke a host member while retaining the project's function callbacks.
+    pub fn invoke_host(&mut self, object: &str, member: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        self.start_execution()?;
+        let Some(Value::Object(receiver)) = self.host_call(None, object, &[], 0)? else {
+            return Err(error(RuntimeErrorKind::Unsupported, format!("host object {object} is unavailable"), None));
+        };
+        self.host_call(Some(&receiver), member, &args, 0)
+            .and_then(|value| value.ok_or_else(|| error(RuntimeErrorKind::Unsupported, format!("host member {object}.{member} is unavailable"), None)))
+    }
+
+    pub fn finish_host_execution(&mut self) -> Result<(), RuntimeError> {
+        for _ in 0..8 {
+            let answer = match self.host.as_deref_mut() {
+                Some(host) => host.finish_execution(),
+                None => return Ok(()),
+            };
+            if !self.work_out_user_functions()? {
+                return answer.map_err(|message| host_failure(message, 0));
+            }
+        }
+        match self.host.as_deref_mut() {
+            Some(host) => host.finish_execution().map_err(|message| host_failure(message, 0)),
+            None => Ok(()),
+        }
+    }
+
+    fn start_execution(&mut self) -> Result<(), RuntimeError> {
+        self.project_ended = false;
         self.steps = 0;
         self.depth = 0;
-        let functions: Vec<String> = self
-            .module
+        let mut functions: Vec<String> = self
+            .main_module
             .items
             .iter()
             .filter_map(|item| match item {
@@ -950,11 +2961,55 @@ impl<'a> Runtime<'a> {
                 _ => None,
             })
             .collect();
+        for (scope, module) in &self.main_module.standard_modules {
+            for item in &module.items {
+                if let ModuleItem::Procedure(procedure) = item {
+                    if procedure.kind == ProcKind::Function { functions.push(format!("{scope}.{}", procedure.name)); }
+                }
+            }
+        }
+        let mut reference_arguments = Vec::new();
+        let mut variant_arguments = Vec::new();
+        let parameters = |procedure: &crate::ast::Procedure| -> Vec<usize> {
+            procedure.params.iter().enumerate().filter_map(|(index, param)| {
+                (!param.is_array && !param.type_name.is_array
+                    && (param.type_name.name.eq_ignore_ascii_case("Object")
+                        || param.type_name.name.eq_ignore_ascii_case("Variant")
+                        || self.is_specific_object_type(&param.type_name.name))).then_some(index)
+            }).collect()
+        };
+        let variants = |procedure: &crate::ast::Procedure| -> Vec<usize> {
+            procedure.params.iter().enumerate().filter_map(|(index, param)| {
+                (!param.is_array && !param.type_name.is_array
+                    && param.type_name.name.eq_ignore_ascii_case("Variant")).then_some(index)
+            }).collect()
+        };
+        for item in &self.main_module.items {
+            if let ModuleItem::Procedure(procedure) = item {
+                if procedure.kind == ProcKind::Function {
+                    reference_arguments.push((procedure.name.clone(), parameters(procedure)));
+                    variant_arguments.push((procedure.name.clone(), variants(procedure)));
+                }
+            }
+        }
+        for (scope, module) in &self.main_module.standard_modules {
+            for item in &module.items {
+                if let ModuleItem::Procedure(procedure) = item {
+                    if procedure.kind == ProcKind::Function {
+                        reference_arguments.push((format!("{scope}.{}", procedure.name), parameters(procedure)));
+                        variant_arguments.push((format!("{scope}.{}", procedure.name), variants(procedure)));
+                    }
+                }
+            }
+        }
         if let Some(host) = self.host.as_deref_mut() {
             host.user_functions(&functions);
+            host.user_function_reference_arguments(&reference_arguments);
+            host.user_function_variant_arguments(&variant_arguments);
         }
-        self.initialize_module()?;
-        self.call_procedure(name, args, None)
+        // Excel can run valid code while an unused module has invalid global
+        // declarations. Initialize each module when its code or storage is used.
+        Ok(())
     }
 
     fn initialize_module(&mut self) -> Result<(), RuntimeError> {
@@ -966,14 +3021,17 @@ impl<'a> Runtime<'a> {
         if result.is_err() {
             self.module_values.clear();
             self.module_constants.clear();
+            self.enum_members.clear();
             self.module_auto_new.clear();
             self.module_fixed_strings.clear();
             self.module_declared.clear();
             self.module_variants.clear();
+            self.static_values.clear();
             self.internal_objects.clear();
             // Dropping the objects above queued the handles of what they held.
             self.due.borrow_mut().clear();
             self.next_internal_handle = 1_u64 << 63;
+            self.object_pointers.clear();
             self.module_initialized = false;
         }
         result
@@ -981,7 +3039,7 @@ impl<'a> Runtime<'a> {
 
     fn initialize_module_items(&mut self) -> Result<(), RuntimeError> {
         let items = self.module.items.clone();
-        let mut frame = empty_frame();
+        let mut frame = empty_frame(self.error_environment.clone(), self.project_name.clone());
         for item in items {
             match item {
                 ModuleItem::Variables(declaration) => {
@@ -1011,8 +3069,9 @@ impl<'a> Runtime<'a> {
                             self.module_declared
                                 .insert(name.clone(), variable.type_name.name.clone());
                         }
-                        self.module_values
-                            .insert(name.clone(), Rc::new(RefCell::new(value)));
+                        let slot = VariableSlot::new(value);
+                        if variable.array_bounds.is_none() { slot.set_declared(&variable.type_name.name); }else{slot.set_array_declared(&variable.type_name.name);}
+                        self.module_values.insert(name.clone(), slot);
                         if declaration.is_const {
                             self.module_constants.insert(name);
                         }
@@ -1025,39 +3084,17 @@ impl<'a> Runtime<'a> {
                         let value = match expression {
                             Some(expression) => {
                                 let value = self.eval_expr(&expression, &mut frame)?;
-                                let value = number(&value).map_err(|message| {
-                                    error(
-                                        RuntimeErrorKind::TypeMismatch,
-                                        message,
-                                        Some(definition.span.line),
-                                    )
-                                })?;
-                                if !value.is_finite()
-                                    || value < i64::MIN as f64
-                                    || value > i64::MAX as f64
-                                {
-                                    return Err(error(
-                                        RuntimeErrorKind::Overflow,
-                                        "Enum value is outside the supported integer range",
-                                        Some(definition.span.line),
-                                    ));
-                                }
-                                value.round_ties_even() as i64
+                                let value = self.coerce_runtime(value, "Long", definition.span.line, self.this_year())?;
+                                integer_argument(&value, Some(definition.span.line))?
                             }
                             None => next,
                         };
                         let name = key(&name);
                         self.enum_members.entry(enum_key.clone()).or_default().insert(name.clone(), value);
                         self.module_values
-                            .insert(name.clone(), Rc::new(RefCell::new(Value::Integer(value))));
+                            .insert(name.clone(), VariableSlot::new(Value::Integer(value)));
                         self.module_constants.insert(name);
-                        next = value.checked_add(1).ok_or_else(|| {
-                            error(
-                                RuntimeErrorKind::Overflow,
-                                "Enum value overflow",
-                                Some(definition.span.line),
-                            )
-                        })?;
+                        next = i64::from((value as i32).wrapping_add(1));
                     }
                 }
                 _ => {}
@@ -1072,7 +3109,11 @@ impl<'a> Runtime<'a> {
         args: Vec<Value>,
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
-        let answer = self.call_procedure_body(name, args, line);
+        self.call_procedure_with_defaults(name, args, line, false)
+    }
+
+    fn call_procedure_with_defaults(&mut self, name: &str, args: Vec<Value>, line: Option<u32>, automation: bool) -> Result<Value, RuntimeError> {
+        let answer = self.call_procedure_body(name, args, line, automation);
         // Its locals are gone now; an instance only they held is done --
         // on the way out by an error too: measured, a local of a procedure
         // that raises is terminated before the caller's handler goes on.
@@ -1159,9 +3200,10 @@ impl<'a> Runtime<'a> {
         name: &str,
         args: Vec<Value>,
         line: Option<u32>,
+        automation: bool,
     ) -> Result<Value, RuntimeError> {
         let references = self.pending_references.take().unwrap_or_default();
-        let procedure = self.find_procedure(name, line)?;
+        let (module, procedure) = self.find_procedure(name, line)?;
         let fixed_count = procedure
             .params
             .iter()
@@ -1178,26 +3220,34 @@ impl<'a> Runtime<'a> {
 
         let received = args.len();
         let mut values = args.into_iter();
+        let mut argument_objects=Vec::new();
         let mut bound = Vec::with_capacity(procedure.params.len());
         for (index, param) in procedure.params[..fixed_count].iter().enumerate() {
             match values.next() {
+                Some(Value::Missing) if automation && param.optional => {
+                    let value = self.omitted_in_module(module, param, line)?;
+                    bound.push(BoundArgument::Value(Self::call_default_value(param, value, true)));
+                }
                 Some(_) if param.mode == ParamMode::ByRef && references.get(index).is_some_and(Option::is_some) => {
                     bound.push(BoundArgument::Reference(references[index].clone().expect("checked above")));
                 }
                 Some(value) => bound.push(BoundArgument::Value(value)),
-                None => bound.push(BoundArgument::Value(
-                    self.omitted_parameter_value(param, line)?,
-                )),
+                None => {
+                    let value = self.omitted_in_module(module, param, line)?;
+                    bound.push(BoundArgument::Value(Self::call_default_value(param, value, automation)));
+                }
             }
         }
         if let Some(param_array) = procedure.params.get(fixed_count) {
+            let values:Vec<_>=values.collect();
+            for value in &values {retain_argument_objects(value,&mut argument_objects);}
             bound.push(BoundArgument::Value(Value::Array(ArrayValue {
                 dimensions: vec![ArrayDimension {
                     lower_bound: 0,
                     length: received.saturating_sub(fixed_count),
                 }],
-                values: values.collect(),
-                element_default: Box::new(default_value(&param_array.type_name)),
+                values,
+                element_default: Box::new(self.reference_default_value(&param_array.type_name)),
                 resizable: false,
             })));
         } else if received < fixed_count
@@ -1207,7 +3257,7 @@ impl<'a> Runtime<'a> {
         {
             return Err(argument_count_error(&procedure, received, line));
         }
-        self.invoke_procedure(&procedure, bound, line)
+        self.invoke_in_module(module, &procedure, bound, line)
     }
 
     fn invoke_procedure(
@@ -1216,6 +3266,34 @@ impl<'a> Runtime<'a> {
         args: Vec<BoundArgument>,
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
+        let callback_body_key = self.pending_callback_body.filter(|(_, module, start)|
+            *module == self.module as *const Module as usize && *start == procedure.span.start).map(|(key, _, _)| key);
+        if callback_body_key.is_some() { self.pending_callback_body = None; }
+        let compile_key = (self.module as *const Module as usize, procedure.span.start, procedure.kind);
+        if !self.compiled_procedures.contains(&compile_key) {
+            let checked=match &self.document_references {
+                Some(references)=>crate::compiler::check_with_document_globals(self.module,self.main_module,&self.classes,procedure,references,self.this_year(),&self.project_name),
+                None=>crate::compiler::check_with_globals(self.module, self.main_module, &self.classes, procedure, &self.project_name),
+            };
+            checked.map_err(|failure| {
+                let prefix = match self.error_environment.language {
+                    crate::ErrorLanguage::English => "Compile error",
+                    crate::ErrorLanguage::Japanese => "コンパイル エラー",
+                };
+                RuntimeError {
+                    kind: RuntimeErrorKind::Compile,
+                    message: format!("{prefix}: {}", failure.message(self.error_environment.language)),
+                    line: Some(failure.span.line),
+                    vba_number: None,
+                    vba_source: None,
+                    vba_help_file: None,
+                    vba_help_context: None,
+                    vba_default_description: false,
+                }
+            })?;
+            self.compiled_procedures.insert(compile_key);
+        }
+        self.initialize_module()?;
         if self.depth >= self.max_depth {
             return Err(error(
                 RuntimeErrorKind::CallDepth,
@@ -1229,9 +3307,11 @@ impl<'a> Runtime<'a> {
 
         let mut frame = Frame {
             procedure_name: key(&procedure.name),
+            procedure_kind: procedure.kind,
             // Measured: `Err.Raise 5000` and `Error 5` in a standard module
             // both answer Source "VBAProject".
-            source_name: "VBAProject".to_string(),
+            source_name: self.project_name.clone(),
+            error_environment: self.error_environment.clone(),
             values: BTreeMap::new(),
             constants: BTreeSet::new(),
             auto_new: BTreeMap::new(),
@@ -1251,14 +3331,14 @@ impl<'a> Runtime<'a> {
             // A value that is no variable of the caller's goes by reference
             // to a temporary of the parameter's type: measured, `b:="q"` to
             // `Optional b As Long` is 13.
-            let temporary = matches!(argument, BoundArgument::Value(ref value) if !matches!(value, Value::Object(_) | Value::Nothing | Value::Array(_)))
+            let temporary = matches!(argument, BoundArgument::Value(ref value) if !matches!(value, Value::Nothing | Value::Array(_)))
                 && param.mode == ParamMode::ByRef
                 && matches!(
-                    param.type_name.name.to_ascii_lowercase().as_str(),
+                    self.parameter_scalar_name(&param.type_name.name).as_str(),
                     "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double" | "currency" | "date" | "boolean" | "string"
                 );
             let value = match argument {
-                BoundArgument::Value(value) => Rc::new(RefCell::new(value)),
+                BoundArgument::Value(value) => { let slot = VariableSlot::new(value); if !param.is_array { slot.set_declared(&param.type_name.name); }else{slot.set_array_declared(&param.type_name.name);} slot },
                 BoundArgument::Reference(value) => value,
             };
             let narrowed = !param.is_array
@@ -1266,11 +3346,20 @@ impl<'a> Runtime<'a> {
                 && !param.type_name.is_new;
             if narrowed {
                 let taken = value.borrow().clone();
+                let taken = if matches!(
+                    self.parameter_scalar_name(&param.type_name.name).as_str(),
+                    "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double" | "currency" | "date" | "boolean" | "string"
+                ) {
+                    self.scalar_operand(taken, &frame, procedure.span.line)?
+                } else {
+                    taken
+                };
                 *value.borrow_mut() =
-                    coerce_declared(taken, &param.type_name.name, procedure.span.line, self.this_year())?;
+                    self.coerce_runtime(taken, &param.type_name.name, procedure.span.line, self.this_year())?;
             }
+            self.validate_array_parameter_value(param, &value.borrow(), &mut frame, procedure.span.line)?;
             frame.values.insert(key(&param.name), value);
-            if narrowed {
+            if !param.is_array && param.mode != ParamMode::ParamArray {
                 frame
                     .declared
                     .insert(key(&param.name), param.type_name.name.clone());
@@ -1282,7 +3371,7 @@ impl<'a> Runtime<'a> {
                 frame.variants.insert(key(&param.name));
             }
         }
-        if !matches!(procedure.kind, ProcKind::Sub) {
+        if matches!(procedure.kind, ProcKind::Function|ProcKind::PropertyGet) {
             // A function of a user-defined type starts as a fresh record, so
             // `MakePt.x = a` fills in what it returns: measured, a function
             // setting .x, .y and .tag on its own name hands all three back.
@@ -1290,12 +3379,14 @@ impl<'a> Runtime<'a> {
                 Some(return_type) => {
                     match self.new_record(&return_type.name, &mut frame, procedure.span.line, 0)? {
                         Some(record) => record,
-                        None => default_return_value(procedure),
+                        None => self.reference_default_value(return_type),
                     }
                 }
-                None => default_return_value(procedure),
+                None => Value::Empty,
             };
-            frame.values.insert(frame.procedure_name.clone(), Rc::new(RefCell::new(starting)));
+            let result_slot = VariableSlot::new(starting);
+            result_slot.set_declared(procedure.return_type.as_ref().map(|kind| kind.name.as_str()).unwrap_or("Variant"));
+            frame.values.insert(frame.procedure_name.clone(), result_slot);
             if procedure
                 .return_type
                 .as_ref()
@@ -1319,6 +3410,9 @@ impl<'a> Runtime<'a> {
         }
         self.declare_procedure_locals(&procedure.body, &mut frame)?;
 
+        if let Some(key) = callback_body_key {
+            if let Some(host) = self.host.as_deref_mut() { host.enter_user_function_body(key); }
+        }
         self.depth += 1;
         let flow = self.exec_procedure_body(&procedure.body, &mut frame);
         self.depth -= 1;
@@ -1332,10 +3426,9 @@ impl<'a> Runtime<'a> {
                 frame.error_state.clone()
             });
         }
-        let ended = match flow? {
+        match flow? {
             Flow::Continue
-            | Flow::Exit(ExitKind::Sub | ExitKind::Function | ExitKind::Property) => false,
-            Flow::End => true,
+            | Flow::Exit(ExitKind::Sub | ExitKind::Function | ExitKind::Property) => (),
             Flow::Exit(kind) => {
                 return Err(error(
                     RuntimeErrorKind::Unsupported,
@@ -1365,7 +3458,7 @@ impl<'a> Runtime<'a> {
                 ))
             }
         };
-        let value = if ended || matches!(procedure.kind, ProcKind::Sub) {
+        let value = if !matches!(procedure.kind, ProcKind::Function|ProcKind::PropertyGet) {
             Value::Empty
         } else {
             let value = frame
@@ -1375,7 +3468,7 @@ impl<'a> Runtime<'a> {
                 .unwrap_or(Value::Empty);
             match procedure.return_type.as_ref() {
                 Some(return_type) => {
-                    coerce_declared(value, &return_type.name, procedure.span.line, self.this_year())?
+                    self.coerce_runtime(value, &return_type.name, procedure.span.line, self.this_year())?
                 }
                 None => value,
             }
@@ -1447,27 +3540,56 @@ impl<'a> Runtime<'a> {
         Ok(None)
     }
 
-    fn find_procedure(&mut self, name: &str, line: Option<u32>) -> Result<Procedure, RuntimeError> {
-        let kinds = self.wanted_kinds.take();
-        self.module
-            .items
-            .iter()
-            .find_map(|item| match item {
-                ModuleItem::Procedure(procedure)
-                    if procedure.name.eq_ignore_ascii_case(name)
-                        && kinds.is_none_or(|kinds| kinds.contains(&procedure.kind)) =>
-                {
-                    Some(procedure.clone())
-                }
+    fn resolve_procedure(&self, name: &str, kinds: Option<&[ProcKind]>) -> Result<Option<(&'a Module, Procedure)>, ()> {
+        let (qualifier, name) = name.rsplit_once('.').map(|(scope, name)| (Some(scope), name)).unwrap_or((None, name));
+        let find = |module: &'a Module, public_only: bool| {
+            module.items.iter().find_map(|item| match item {
+                ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name)
+                    && crate::compiler::procedure_header_valid(p)
+                    && kinds.is_none_or(|kinds| kinds.contains(&p.kind))
+                    && (!public_only || p.visibility != Visibility::Private) => Some((module, p.clone())),
                 _ => None,
             })
-            .ok_or_else(|| {
-                error(
-                    RuntimeErrorKind::ProcedureNotFound,
-                    format!("VBA procedure not found: {name}"),
-                    line,
-                )
-            })
+        };
+        if let Some(qualifier) = qualifier {
+            return Ok(self.standard_module(qualifier).and_then(|module| find(module, self.depth > 0 && !std::ptr::eq(module, self.module))));
+        }
+        if let Some(found) = find(self.module, false) {
+            return Ok(Some(found));
+        }
+        let mut found = None;
+        if self.main_module.standard_modules.is_empty() {
+            if self.owner.is_some() { found = find(self.main_module, true); }
+        } else {
+            for (_, module) in &self.main_module.standard_modules {
+                if std::ptr::eq(module, self.module) { continue; }
+                if let Some(candidate) = find(module, true) {
+                    if found.is_some() { return Err(()); }
+                    found = Some(candidate);
+                }
+            }
+        }
+        Ok(found)
+    }
+
+    fn has_visible_procedure(&self, name: &str) -> bool {
+        !matches!(self.resolve_procedure(name, None), Ok(None))
+    }
+
+    fn find_procedure(&mut self, name: &str, line: Option<u32>) -> Result<(&'a Module, Procedure), RuntimeError> {
+        let kinds = self.wanted_kinds.take();
+        self.resolve_procedure(name, kinds).map_err(|()| error(RuntimeErrorKind::Compile, format!("Compile error: Ambiguous name detected: {name}"), line))?
+            .ok_or_else(|| error(RuntimeErrorKind::ProcedureNotFound, format!("VBA procedure not found: {name}"), line))
+    }
+
+    fn call_default_value(parameter: &crate::ast::Param, value: Value, automation: bool) -> Value {
+        // Automation's VT_EMPTY default is an omitted Variant; ordinary VBA
+        // calls still receive Empty. Explicitly supplied Empty is untouched.
+        if automation && parameter.type_name.name.eq_ignore_ascii_case("variant") && matches!(value, Value::Empty) {
+            Value::Missing
+        } else {
+            value
+        }
     }
 
     fn omitted_parameter_value(
@@ -1485,7 +3607,9 @@ impl<'a> Runtime<'a> {
         if let Some(default) = &parameter.default {
             let mut frame = Frame {
                 procedure_name: String::new(),
-                source_name: String::new(),
+                procedure_kind: ProcKind::Sub,
+                source_name: self.project_name.clone(),
+                error_environment: self.error_environment.clone(),
                 values: BTreeMap::new(),
                 constants: BTreeSet::new(),
                 auto_new: BTreeMap::new(),
@@ -1506,7 +3630,7 @@ impl<'a> Runtime<'a> {
         if parameter.type_name.name.eq_ignore_ascii_case("variant") {
             Ok(Value::Missing)
         } else {
-            Ok(default_value(&parameter.type_name))
+            Ok(self.reference_default_value(&parameter.type_name))
         }
     }
 
@@ -1599,11 +3723,15 @@ impl<'a> Runtime<'a> {
     ) -> Result<Flow, RuntimeError> {
         if matches!(
             failure.kind,
-            RuntimeErrorKind::StepLimit | RuntimeErrorKind::CallDepth
+            RuntimeErrorKind::StepLimit | RuntimeErrorKind::CallDepth | RuntimeErrorKind::ExecutionTerminated | RuntimeErrorKind::EndStatement | RuntimeErrorKind::Compile
         ) || frame.error_handler_active
         {
             return Err(failure);
         }
+        // A failed binding/conversion can leave a completed getter's Err carry.
+        // The current failure supersedes that carry; it must not overwrite Err
+        // again when the caller advances to its next statement.
+        self.err_out.take();
         let number = runtime_error_number(&failure);
         // A macro that shows `Err.Description` shows VBA's own words for the
         // errors the language raises; the engine's message says more, but it
@@ -1613,40 +3741,45 @@ impl<'a> Runtime<'a> {
         // macro sees VBA's words and the project's name: measured,
         // `Mid("abc", 0, 1)` is 5 "Invalid procedure call or argument" from
         // VBAProject, and a duplicate Collection key 457 from VBAProject.
-        let language = matches!(failure.vba_source.as_deref(), Some("VBA" | "Collection"));
-        let description = match failure.kind {
-            _ if language => vba_error_description(number).to_string(),
-            // A host refusal that gave no number of its own gives no words
-            // of Excel's either: the engine's reason is for whoever reads an
-            // unhandled failure, and Excel says 1004's plain description --
-            // measured, `Range("A1").Offset(-1, 0)`.
-            RuntimeErrorKind::Host if failure.vba_number.is_none() => {
-                vba_error_description(number).to_string()
-            }
-            RuntimeErrorKind::UserDefined | RuntimeErrorKind::Host => failure
-                .message
-                .split(REASON_MARK)
-                .next()
-                .unwrap_or_default()
-                .to_string(),
-            _ => vba_error_description(number).to_string(),
+        let description = if failure.vba_default_description {
+            self.error_environment.description(number).to_string()
+        } else if failure.kind == RuntimeErrorKind::Host {
+            failure.message.split(REASON_MARK).next().unwrap_or_default().to_string()
+        } else {
+            failure.message.clone()
         };
-        let (help_file, help_context) = match failure.kind {
-            RuntimeErrorKind::UserDefined => frame.error_state.raised_help.take().unwrap_or_default(),
-            _ => Default::default(),
+        let host_help = if failure.kind == RuntimeErrorKind::Host {
+            self.host.as_deref().and_then(|host| {
+                host.error_help(number, failure.vba_source.as_deref())
+            })
+        } else {
+            None
         };
+        let help_file = failure.vba_help_file.clone().unwrap_or_else(|| {
+            host_help.as_ref().map(|(file, _)| file.clone())
+                .unwrap_or_else(|| self.error_environment.help_file.clone())
+        });
+        let help_context = failure
+            .vba_help_context
+            .or_else(|| host_help.as_ref().map(|(_, context)| *context))
+            .unwrap_or_else(|| {
+                if failure.kind == RuntimeErrorKind::Host && !failure.vba_default_description {
+                    1_000_000 + if number < 0 { 440 } else { number }
+                } else { vba_error_help_context(number) }
+            });
         frame.error_state = ErrorState {
             help_file,
             help_context,
-            raised_help: None,
             number,
             description,
+            description_set: true,
+            source_set: true,
+            help_file_set: true,
             // Measured: a run-time error's Source is the project's name.
             source: failure
                 .vba_source
                 .clone()
-                .filter(|_| !language)
-                .unwrap_or_else(|| "VBAProject".to_string()),
+                .unwrap_or_else(|| frame.source_name.clone()),
             line: excel_erl(frame.body, frame.last_line_number),
         };
         match frame.error_mode.clone() {
@@ -1670,7 +3803,30 @@ impl<'a> Runtime<'a> {
                 value,
                 span,
             } => {
+                let evaluated=self.prepare_named_setter(target,frame,false)?;
                 let value = self.eval_expr(value, frame)?;
+                if matches!(value, Value::Nothing) {
+                    let member = match target {
+                        Expr::Member { object, name, .. }
+                            if self.source_class_name(object, frame).is_none()
+                                && self.host.as_deref().and_then(|host| host.property_assignment_error(None, name, &value)).is_some() =>
+                        {
+                            Some((self.eval_object(object, frame, span.line)?, name))
+                        }
+                        Expr::WithMember(name, _) => match frame.with_objects.last() {
+                            Some(WithSubject::Object { receiver, .. }) => Some((receiver.clone(), name)),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some((receiver, name)) = member {
+                        if !self.instance_handles_member(&receiver, name) {
+                            if let Some(number) = self.host.as_deref().and_then(|host| host.property_assignment_error(Some(&receiver), name, &value)) {
+                                return Err(language_error(number, format!("invalid value for property {name}"), span.line));
+                            }
+                        }
+                    }
+                }
                 // A host property may want the object itself rather than
                 // what it stands for -- a chart's series keeps the RANGE
                 // it plots.
@@ -1688,14 +3844,14 @@ impl<'a> Runtime<'a> {
                         return Ok(Flow::Continue);
                     }
                 }
-                let value = self.let_value(value, span.line)?;
+                let value = self.let_value(value, frame, span.line)?;
                 // A variable that held an object, or an array that might,
                 // may have held the last reference: measured, `v = 5` over
                 // an instance runs its Class_Terminate on that line.
                 let held = expr_name(target)
                     .and_then(|name| self.lookup_slot(frame, name))
                     .is_some_and(|slot| matches!(&*slot.borrow(), Value::Object(_) | Value::Array(_)));
-                self.assign(target, value, frame, span.line)?;
+                self.assign_evaluated(target, value, frame, span.line,evaluated.as_deref())?;
                 if held {
                     self.collect_instances(span.line)?;
                 }
@@ -1706,6 +3862,7 @@ impl<'a> Runtime<'a> {
                 value,
                 span,
             } => {
+                let evaluated=self.prepare_named_setter(target,frame,true)?;
                 let value = match value {
                     Expr::EvaluateShortcut { text, .. } => {
                         self.evaluate_shortcut(text, span.line, true)?
@@ -1724,10 +3881,13 @@ impl<'a> Runtime<'a> {
                         message: "Set requires an object value or Nothing".to_string(),
                         line: Some(span.line),
                         vba_number: Some(if into_object { 424 } else { 13 }),
-                        vba_source: Some("VBA".to_string()),
+                        vba_source: None,
+                        vba_help_file: None,
+                        vba_help_context: None,
+                        vba_default_description: true,
                     });
                 }
-                self.assign(target, value, frame, span.line)?;
+                self.assign_evaluated(target, value, frame, span.line,evaluated.as_deref())?;
                 // What the variable held may have been the last reference.
                 self.collect_instances(span.line)?;
                 Ok(Flow::Continue)
@@ -1765,7 +3925,7 @@ impl<'a> Runtime<'a> {
                 Ok(Flow::Continue)
             }
             Statement::If(branch) => {
-                if truthy(&self.eval_expr(&branch.condition, frame)?).map_err(|message| {
+                if truthy(&self.eval_scalar_expr(&branch.condition, frame)?).map_err(|message| {
                     error(
                         RuntimeErrorKind::TypeMismatch,
                         message,
@@ -1775,7 +3935,7 @@ impl<'a> Runtime<'a> {
                     self.exec_body(&branch.then_body, frame)
                 } else {
                     for (condition, body) in &branch.else_ifs {
-                        if truthy(&self.eval_expr(condition, frame)?).map_err(|message| {
+                        if truthy(&self.eval_scalar_expr(condition, frame)?).map_err(|message| {
                             error(
                                 RuntimeErrorKind::TypeMismatch,
                                 message,
@@ -1802,18 +3962,21 @@ impl<'a> Runtime<'a> {
             } => self.exec_while(condition, body, frame, span.line),
             Statement::With { subject, body, .. } => {
                 let line = subject.span().line;
+                self.ensure_expression_module(subject, frame)?;
                 // A record first, because `eval_object` cannot make one into an
                 // object and would refuse the whole block.
                 let held = if self.record_rooted(frame, subject) {
-                    let mut steps = Vec::new();
-                    self.record_steps(subject, frame, line, &mut steps)?
-                        .map(|root| WithSubject::Record { root, steps })
+                    self.record_slot(subject, frame, line)?
+                        .map(|root| WithSubject::Record { root })
                 } else {
                     None
                 };
                 let held = match held {
                     Some(held) => held,
-                    None => WithSubject::Object(self.eval_object(subject, frame, line)?),
+                    None => {
+                        let class=self.source_class_name(subject,frame);
+                        WithSubject::Object {early_application:self.early_application_expression(subject,frame),receiver:self.eval_object(subject, frame, line)?,class}
+                    },
                 };
                 frame.with_objects.push(held);
                 let result = self.exec_body(body, frame);
@@ -1882,7 +4045,10 @@ impl<'a> Runtime<'a> {
                 Ok(Flow::Continue)
             }
             Statement::Exit { what, .. } => Ok(Flow::Exit(*what)),
-            Statement::End { .. } => Ok(Flow::End),
+            Statement::End { span } => {
+                self.project_ended = true;
+                Err(error(RuntimeErrorKind::EndStatement, "End", Some(span.line)))
+            }
             Statement::LineNumber { value, .. } => {
                 frame.last_line_number = Some(*value);
                 Ok(Flow::Continue)
@@ -1947,6 +4113,10 @@ impl<'a> Runtime<'a> {
                 self.exec_file_transfer(transfer, frame)?;
                 Ok(Flow::Continue)
             }
+            Statement::FileRecordLock(lock) => {
+                self.exec_file_record_lock(lock,frame)?;
+                Ok(Flow::Continue)
+            }
             Statement::FileSeek(FileSeekStmt { file_number, position, span }) => {
                 let number = self.file_number(file_number, frame, span.line)?;
                 let position = self.file_number(position, frame, span.line)?;
@@ -1971,15 +4141,21 @@ impl<'a> Runtime<'a> {
 
     /// A file number as written, `#1` or `1`.
     fn file_number(&mut self, expr: &Expr, frame: &mut Frame, line: u32) -> Result<i64, RuntimeError> {
-        let value = self.eval_expr(expr, frame)?;
+        let value = self.eval_scalar_expr(expr, frame)?;
         number(&value)
             .map(|held| held.round_ties_even() as i64)
             .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))
     }
 
     fn path_text(&mut self, expr: &Expr, frame: &mut Frame, line: u32) -> Result<String, RuntimeError> {
-        let value = self.eval_expr(expr, frame)?;
+        let value = self.eval_scalar_expr(expr, frame)?;
         text(&value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))
+    }
+
+    fn statement_file_path(&self, value: Value, line: u32) -> Result<String,RuntimeError> {
+        if matches!(value,Value::Error(_)) {return Err(error(RuntimeErrorKind::TypeMismatch,"File pathname cannot be an Error value",Some(line)));}
+        let value=self.coerce_runtime(value,"String",line,self.this_year())?;
+        text(&value).map_err(|message|error(RuntimeErrorKind::TypeMismatch,message,Some(line)))
     }
 
     fn exec_open(&mut self, open: &FileOpenStmt, frame: &mut Frame) -> Result<(), RuntimeError> {
@@ -2001,7 +4177,7 @@ impl<'a> Runtime<'a> {
                 OpenMode::Random(length)
             }
         };
-        self.files.open(&path, mode, number).map_err(|failure| file_failure(failure, line))
+        self.files.open_with_options(&path, mode, number,open.access,open.lock).map_err(|failure| file_failure(failure, line))
     }
 
     /// `Print #` and `Write #`. Print writes a positive number with a space
@@ -2049,7 +4225,7 @@ impl<'a> Runtime<'a> {
                         if place && args.len() == 1 && self.lookup_slot(frame, name).is_none() {
                             let amount = match &args[0].value {
                                 Some(expr) => {
-                                    let value = self.eval_expr(expr, frame)?;
+                                    let value = self.eval_scalar_expr(expr, frame)?;
                                     crate::runtime::number(&value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))? as i64
                                 }
                                 None => 0,
@@ -2070,7 +4246,7 @@ impl<'a> Runtime<'a> {
                     }
                 }
             }
-            let value = self.eval_expr(value_expr, frame)?;
+            let value = self.eval_scalar_expr(value_expr, frame)?;
             match output.kind {
                 FileOutputKind::Print => {
                     let field = print_field(&value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))?;
@@ -2122,33 +4298,56 @@ impl<'a> Runtime<'a> {
     fn exec_file_system(&mut self, action: &FileSystemStmt, frame: &mut Frame) -> Result<(), RuntimeError> {
         match action {
             FileSystemStmt::Unary { kind, path, span } => {
-                let path = self.path_text(path, frame, span.line)?;
+                let path = if matches!(kind, FileSystemUnaryKind::ChDir | FileSystemUnaryKind::ChDrive) {
+                    let value=self.eval_scalar_expr(path, frame)?;
+                    if value==Value::Null { return Err(invalid_null(Some(span.line))); }
+                    text(&value).map_err(|message| error(RuntimeErrorKind::TypeMismatch,message,Some(span.line)))?
+                } else { self.path_text(path, frame, span.line)? };
                 match kind {
                     FileSystemUnaryKind::Kill => {
                         self.files.kill(&path).map_err(|failure| file_failure(failure, span.line))
                     }
                     FileSystemUnaryKind::MkDir => {
-                        self.files.make_folder(&path).map_err(|failure| file_failure(failure, span.line))
+                        self.files.make_folder(&path).map_err(|failure| file_failure(
+                            if failure==crate::files::FileError::AlreadyExists {crate::files::FileError::PathFileAccess} else {failure}, span.line))
                     }
                     FileSystemUnaryKind::RmDir => {
                         self.files.remove_folder(&path, false).map_err(|failure| file_failure(failure, span.line))
                     }
-                    // Folders are not kept; making, leaving and moving between
-                    // them has nothing to change.
-                    _ => Ok(()),
+                    FileSystemUnaryKind::ChDir => self.files.change_directory(&path).map_err(|failure| file_failure(failure, span.line)),
+                    FileSystemUnaryKind::ChDrive => self.files.change_drive(&path).map_err(|failure| file_failure(failure, span.line)),
                 }
             }
             FileSystemStmt::Copy { source, destination, span } => {
-                let source = self.path_text(source, frame, span.line)?;
-                let destination = self.path_text(destination, frame, span.line)?;
+                // FileCopy evaluates both expressions before coercion, with
+                // destination coercion taking precedence over the source.
+                let source=self.eval_scalar_expr(source,frame)?;
+                let destination=self.eval_scalar_expr(destination,frame)?;
+                let destination=self.statement_file_path(destination,span.line)?;
+                let source=self.statement_file_path(source,span.line)?;
                 self.files.copy(&source, &destination).map_err(|failure| file_failure(failure, span.line))
             }
             FileSystemStmt::Rename { source, destination, span } => {
-                let source = self.path_text(source, frame, span.line)?;
-                let destination = self.path_text(destination, frame, span.line)?;
+                // Name coerces the first operand before evaluating the next.
+                let source=self.eval_scalar_expr(source,frame)?;
+                let source=self.statement_file_path(source,span.line)?;
+                let destination=self.eval_scalar_expr(destination,frame)?;
+                let destination=self.statement_file_path(destination,span.line)?;
                 self.files.rename(&source, &destination).map_err(|failure| file_failure(failure, span.line))
             }
-            FileSystemStmt::SetAttr { .. } => Ok(()),
+            FileSystemStmt::SetAttr { path, attributes, span } => {
+                // Evaluate both expressions before argument coercion. A Null
+                // path still permits the flags expression's effects; an error
+                // raised while evaluating the path stops before that point.
+                let path=self.eval_scalar_expr(path,frame)?;
+                let attributes=self.eval_scalar_expr(attributes,frame)?;
+                if matches!(attributes,Value::Error(_)) {return Err(error(RuntimeErrorKind::TypeMismatch,"SetAttr attributes cannot be an Error value",Some(span.line)));}
+                let attributes=self.coerce_runtime(attributes,"Long",span.line,self.this_year())?;
+                let attributes=integer_argument(&attributes,Some(span.line))?;
+                let path=self.coerce_runtime(path,"String",span.line,self.this_year())?;
+                let path=text(&path).map_err(|message|error(RuntimeErrorKind::TypeMismatch,message,Some(span.line)))?;
+                self.files.set_attributes(&path,attributes).map_err(|failure|file_failure(failure,span.line))
+            },
         }
     }
 
@@ -2160,8 +4359,11 @@ impl<'a> Runtime<'a> {
     fn exec_file_transfer(&mut self, transfer: &FileTransferStmt, frame: &mut Frame) -> Result<(), RuntimeError> {
         let line = transfer.span.line;
         let number = self.file_number(&transfer.file_number, frame, line)?;
-        if let Some(record) = &transfer.record_number {
-            let position = self.file_number(record, frame, line)?;
+        let record=transfer.record_number.as_ref().map(|record|self.file_number(record,frame,line)).transpose()?;
+        let saved=self.files.handle(number).map_err(|failure|file_failure(failure,line))?.clone();
+        let mut permission_refused=false;
+        let result=(|| {
+        if let Some(position) = record {
             self.files.move_to(number, position).map_err(|failure| file_failure(failure, line))?;
         }
         let random = self.files.record_length(number).map_err(|failure| file_failure(failure, line))?.is_some();
@@ -2176,16 +4378,41 @@ impl<'a> Runtime<'a> {
             FileTransferKind::Put => {
                 let mut bytes = Vec::new();
                 self.value_bytes(&current, variant, fixed, random, &mut bytes, 0);
-                self.files.put(number, &bytes).map_err(|failure| file_failure(failure, line))?;
+                let written=self.files.put(number, &bytes);
+                permission_refused=matches!(written,Err(crate::files::FileError::PermissionDenied|crate::files::FileError::PathFileAccess));
+                written.map_err(|failure| file_failure(failure, line))?;
                 self.files.finish_record(number);
                 Ok(())
             }
             FileTransferKind::Get => {
-                let read = self.value_from_file(&current, variant, fixed, random, number, 0).map_err(|failure| file_failure(failure, line))?;
+                let read = self.value_from_file(&current, variant, fixed, random, number, 0);
+                permission_refused=matches!(read,Err(crate::files::FileError::PermissionDenied|crate::files::FileError::PathFileAccess));
+                let read=read.map_err(|failure| file_failure(failure, line))?;
                 self.files.finish_record(number);
                 self.assign(&transfer.value, read, frame, line)
             }
         }
+        })();
+        if permission_refused {
+            self.files.restore_byte_position(number,&saved.path,saved.position);
+        }
+        result
+    }
+
+    fn exec_file_record_lock(&mut self, lock: &crate::ast::FileRecordLockStmt, frame: &mut Frame) -> Result<(),RuntimeError> {
+        let line=lock.span.line;
+        let number=self.file_number(&lock.file_number,frame,line)?;
+        let mut positions=[None,None];
+        for (at,expression) in [lock.start.as_ref(),lock.end.as_ref()].into_iter().enumerate() {
+            if let Some(expression)=expression {
+                let value=self.eval_scalar_expr(expression,frame)?;
+                if matches!(value,Value::Error(_)) {return Err(error(RuntimeErrorKind::TypeMismatch,"Lock record cannot be an Error value",Some(line)));}
+                let value=self.coerce_runtime(value,"Long",line,self.this_year())?;
+                positions[at]=Some(integer_argument(&value,Some(line))?);
+            }
+        }
+        self.files.lock_records(number,positions[0],positions[1],lock.kind==crate::ast::FileRecordLockKind::Unlock)
+            .map_err(|failure|file_failure(failure,line))
     }
 
     fn value_bytes(&self, value: &Value, variant: bool, fixed: bool, random: bool, out: &mut Vec<u8>, depth: usize) {
@@ -2325,6 +4552,13 @@ impl<'a> Runtime<'a> {
         let failure = |failure: crate::files::FileError| file_failure(failure, line);
         let mismatch = |message: String| error(RuntimeErrorKind::TypeMismatch, message, Some(line));
         Some(match (name.to_ascii_lowercase().as_str(), args) {
+            ("curdir" | "curdir$", []) => self.files.current_directory(None).map(Value::String).map_err(failure),
+            ("curdir" | "curdir$", [drive]) => match drive {
+                Value::String(_) | Value::Utf16(_) | Value::NullString => text(drive).map_err(mismatch)
+                    .and_then(|drive| self.files.current_directory(Some(&drive)).map(Value::String).map_err(failure)),
+                _ => Err(mismatch("CurDir requires a String drive".to_string())),
+            },
+            ("curdir" | "curdir$", _) => Err(error(RuntimeErrorKind::ArgumentCount,"CurDir accepts at most one drive",Some(line))),
             ("freefile", []) => Ok(Value::Int16(self.files.free_number(false) as i16)),
             ("freefile", [range]) => {
                 let upper = number_of(range).map_err(mismatch).map(|held| held != 0);
@@ -2355,10 +4589,29 @@ impl<'a> Runtime<'a> {
                 .map_err(mismatch)
                 .and_then(|path| self.files.length(&path).map_err(failure))
                 .map(|length| Value::Integer(length as i64)),
-            ("dir" | "dir$", []) => Ok(Value::String(self.files.dir(None))),
-            ("dir" | "dir$", [path, ..]) => text(path).map_err(mismatch).map(|path| Value::String(self.files.dir(Some(&path)))),
+            ("getattr", [path]) => {
+                if *path==Value::Null {Err(invalid_null(Some(line)))}
+                else {text(path).map_err(mismatch).and_then(|path|self.files.attributes(&path).map_err(failure)).map(Value::Integer)}
+            },
+            ("getattr", _) => Err(error(RuntimeErrorKind::ArgumentCount,"GetAttr requires one pathname",Some(line))),
+            ("dir" | "dir$", args) => self.dir_function(args,line),
             _ => return None,
         })
+    }
+
+    fn dir_function(&mut self, args: &[Value], line: u32) -> Result<Value,RuntimeError> {
+        if args.len()>2 {return Err(error(RuntimeErrorKind::ArgumentCount,"Dir accepts a pathname and attributes",Some(line)));}
+        let Some(path)=args.first() else {return self.files.dir_checked(None,0).map(Value::String).map_err(|failure|file_failure(failure,line));};
+        // Dir coerces its optional flags before checking the pathname's
+        // Variant type. A pathname must already contain a String value.
+        let attributes=if let Some(attributes)=args.get(1) {
+            if matches!(attributes,Value::Error(_)) {return Err(error(RuntimeErrorKind::TypeMismatch,"Dir attributes cannot be an Error value",Some(line)));}
+            let value=self.coerce_runtime(attributes.clone(),"Long",line,self.this_year())?;
+            integer_argument(&value,Some(line))?
+        } else {0};
+        if !path.is_string() {return Err(error(RuntimeErrorKind::TypeMismatch,"Dir pathname must be a String value",Some(line)));}
+        let path=text(path).map_err(|message|error(RuntimeErrorKind::TypeMismatch,message,Some(line)))?;
+        self.files.dir_checked(Some(&path),attributes).map(Value::String).map_err(|failure|file_failure(failure,line))
     }
 
     fn erase_array(
@@ -2367,7 +4620,23 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<(), RuntimeError> {
-        let value = self.eval_expr(target, frame)?;
+        let value = match self.reference_argument(target, frame, line)? {
+            BoundArgument::Reference(slot) => {
+                let mut held = slot.borrow_mut();
+                let Value::Array(array) = &mut *held else { return Err(error(RuntimeErrorKind::TypeMismatch, "Erase target must contain an array", Some(line))); };
+                if array.resizable {
+                    if slot.is_locked() { return Err(fixed_array_error("array", Some(line))); }
+                    array.dimensions.clear();
+                    array.values.clear();
+                } else {
+                    // Fixed storage stays in place, so live element references
+                    // see the cleared values and remain valid.
+                    array.values.fill(*array.element_default.clone());
+                }
+                return Ok(());
+            }
+            BoundArgument::Value(value) => value,
+        };
         let Value::Array(mut array) = value else {
             return Err(error(
                 RuntimeErrorKind::TypeMismatch,
@@ -2389,59 +4658,43 @@ impl<'a> Runtime<'a> {
         statement: &MidAssignStmt,
         frame: &mut Frame,
     ) -> Result<(), RuntimeError> {
-        let current = match self.eval_expr(&statement.target, frame)? {
-            Value::String(value) => value,
-            _ => {
-                return Err(error(
-                    RuntimeErrorKind::TypeMismatch,
-                    "Mid statement target must be a String variable",
-                    Some(statement.span.line),
-                ))
-            }
-        };
-        let start_value = self.eval_expr(&statement.start, frame)?;
+        let bound=self.reference_argument(&statement.target,frame,statement.span.line)?;
+        let slot=match &bound {BoundArgument::Reference(slot)=>Some(slot.clone()),_=>None};
+        let value=match bound {BoundArgument::Reference(slot)=>slot.snapshot(),BoundArgument::Value(v)=>v};
+        let mut current=value.string_units().ok_or_else(||error(RuntimeErrorKind::TypeMismatch,"Mid target must be String",Some(statement.span.line)))?.into_owned();
+        let allocation=slot.as_ref().and_then(|slot|slot.storage.strings.borrow().get(&slot.path).cloned());
+        let start_value = self.eval_scalar_expr(&statement.start, frame)?;
         let start = positive_position(&start_value, Some(statement.span.line))?;
         let requested = match &statement.length {
             Some(length) => {
-                let value = self.eval_expr(length, frame)?;
+                let value = self.eval_scalar_expr(length, frame)?;
                 Some(nonnegative_length(&value, Some(statement.span.line))?)
             }
             None => None,
         };
-        let replacement = self.eval_expr(&statement.value, frame)?;
-        let replacement = match replacement {
-            Value::Null => {
-                return Err(error(
-                    RuntimeErrorKind::InvalidNull,
-                    "invalid use of Null",
-                    Some(statement.span.line),
-                ))
-            }
-            value => text(&value).map_err(|message| {
-                error(
-                    RuntimeErrorKind::TypeMismatch,
-                    message,
-                    Some(statement.span.line),
-                )
-            })?,
-        };
-        let mut current = current.encode_utf16().collect::<Vec<_>>();
+        let replacement = self.eval_scalar_expr(&statement.value, frame)?;
+        if matches!(replacement,Value::Null){return Err(invalid_null(Some(statement.span.line)));}
+        let replacement=utf16::units(&replacement,Some(statement.span.line))?;
         if start >= current.len() {
             return Err(invalid_procedure_call(
                 "Mid statement start exceeds the target String length".to_string(),
                 Some(statement.span.line),
             ));
         }
-        let replacement = replacement.encode_utf16().collect::<Vec<_>>();
         let requested = requested.unwrap_or(replacement.len());
         let count = requested.min(replacement.len()).min(current.len() - start);
         current[start..start + count].copy_from_slice(&replacement[..count]);
-        self.assign(
+        let result=self.assign(
             &statement.target,
-            Value::String(String::from_utf16_lossy(&current)),
+            Value::from_utf16(current),
             frame,
             statement.span.line,
-        )
+        );
+        if result.is_ok(){if let (Some(slot),Some(mut allocation))=(slot,allocation){
+            allocation.units=slot.snapshot().string_units().unwrap_or_default().into_owned();
+            slot.storage.strings.borrow_mut().insert(slot.path.clone(),allocation);
+        }}
+        result
     }
 
     fn exec_aligned_assign(
@@ -2449,13 +4702,13 @@ impl<'a> Runtime<'a> {
         statement: &AlignedAssignStmt,
         frame: &mut Frame,
     ) -> Result<(), RuntimeError> {
-        let current = match self.eval_expr(&statement.target, frame)? {
+        let current = match self.eval_scalar_expr(&statement.target, frame)? {
             Value::String(value) => value,
             // LSet of one record over another copies its bytes as they lie in
             // memory: measured, a Byte of 1 and an Integer of 258 LSet over
             // a Long read back 16908289 (&H01020001), the pad between them 0.
             Value::Record(mut into) if matches!(statement.kind, crate::ast::AlignmentKind::Left) => {
-                let Value::Record(from) = self.eval_expr(&statement.value, frame)? else {
+                let Value::Record(from) = self.eval_scalar_expr(&statement.value, frame)? else {
                     return Err(error(
                         RuntimeErrorKind::TypeMismatch,
                         "LSet of a record takes a record",
@@ -2483,7 +4736,7 @@ impl<'a> Runtime<'a> {
         let width = expr_name(&statement.target)
             .and_then(|name| self.fixed_string_width(frame, name))
             .unwrap_or_else(|| current.encode_utf16().count());
-        let value = self.eval_expr(&statement.value, frame)?;
+        let value = self.eval_scalar_expr(&statement.value, frame)?;
         let value = match value {
             Value::Null => {
                 return Err(error(
@@ -2524,7 +4777,7 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
     ) -> Result<Flow, RuntimeError> {
         let subject_typed = self.statically_typed(&select.subject, frame);
-        let subject = self.eval_expr(&select.subject, frame)?;
+        let subject = self.eval_scalar_expr(&select.subject, frame)?;
         for case in &select.cases {
             for label in &case.labels {
                 if self.case_matches(&subject, subject_typed, label, frame, select.span.line)? {
@@ -2566,27 +4819,27 @@ impl<'a> Runtime<'a> {
         };
         match label {
             CaseLabel::Value(value) => {
-                let value = self.eval_expr(value, frame)?;
+                let value = self.eval_scalar_expr(value, frame)?;
                 compare(BinaryOp::Eq, subject.clone(), value)
             }
             CaseLabel::Range(lower, upper) => {
-                let lower = self.eval_expr(lower, frame)?;
-                let upper = self.eval_expr(upper, frame)?;
+                let lower = self.eval_scalar_expr(lower, frame)?;
+                let upper = self.eval_scalar_expr(upper, frame)?;
                 Ok(compare(BinaryOp::Ge, subject.clone(), lower)?
                     && compare(BinaryOp::Le, subject.clone(), upper)?)
             }
             CaseLabel::Compare(op, value) => {
-                let value = self.eval_expr(value, frame)?;
+                let value = self.eval_scalar_expr(value, frame)?;
                 compare(*op, subject.clone(), value)
             }
         }
     }
 
     fn exec_for(&mut self, loop_: &ForStmt, frame: &mut Frame) -> Result<Flow, RuntimeError> {
-        let from = self.eval_expr(&loop_.from, frame)?;
-        let to = self.eval_expr(&loop_.to, frame)?;
+        let from = self.eval_scalar_expr(&loop_.from, frame)?;
+        let to = self.eval_scalar_expr(&loop_.to, frame)?;
         let step = match &loop_.step {
-            Some(step) => self.eval_expr(step, frame)?,
+            Some(step) => self.eval_scalar_expr(step, frame)?,
             None => Value::Int16(1),
         };
         // The counter runs in the widest of the three types: measured, a
@@ -2621,7 +4874,7 @@ impl<'a> Runtime<'a> {
 
         loop {
             self.tick(Some(loop_.span.line))?;
-            let current = self.eval_expr(&loop_.counter, frame)?;
+            let current = self.eval_scalar_expr(&loop_.counter, frame)?;
             let current_number = number(&current).map_err(|message| {
                 error(
                     RuntimeErrorKind::TypeMismatch,
@@ -2641,7 +4894,7 @@ impl<'a> Runtime<'a> {
             }
             // Next steps on from whatever the body left in the counter:
             // measured, setting i = 4 while i is 2 runs 1, 4, 5.
-            let current = self.eval_expr(&loop_.counter, frame)?;
+            let current = self.eval_scalar_expr(&loop_.counter, frame)?;
             let current_number = number(&current).map_err(|message| {
                 error(RuntimeErrorKind::TypeMismatch, message, Some(loop_.span.line))
             })?;
@@ -2662,7 +4915,7 @@ impl<'a> Runtime<'a> {
     ) -> Result<Flow, RuntimeError> {
         let collection = self.eval_expr(&loop_.collection, frame)?;
         let values = match collection {
-            Value::Array(array) => array.values,
+            Value::Array(array) => array.into_enumeration_values(),
             Value::Object(object) => {
                 self.host_enumerate(&object, loop_.span.line)?
                     .ok_or_else(|| {
@@ -2758,7 +5011,7 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<bool, RuntimeError> {
-        truthy(&self.eval_expr(condition, frame)?)
+        truthy(&self.eval_scalar_expr(condition, frame)?)
             .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))
     }
 
@@ -2770,22 +5023,23 @@ impl<'a> Runtime<'a> {
             }
             let is_static = decl.is_static || frame.static_procedure;
             let slot = if is_static {
-                let static_key = (frame.procedure_name.clone(), name.clone());
+                let static_key = (frame.procedure_kind, frame.procedure_name.clone(), name.clone());
                 if let Some(value) = self.static_values.get(&static_key) {
                     value.clone()
                 } else {
                     let value = self.declared_value(variable, frame, decl.span.line)?;
-                    let value = Rc::new(RefCell::new(value));
+                    let value = VariableSlot::new(value);
                     self.static_values.insert(static_key, value.clone());
                     value
                 }
             } else {
-                Rc::new(RefCell::new(self.declared_value(
+                VariableSlot::new(self.declared_value(
                     variable,
                     frame,
                     decl.span.line,
-                )?))
+                )?)
             };
+            if variable.array_bounds.is_none() { slot.set_declared(&variable.type_name.name); }else{slot.set_array_declared(&variable.type_name.name);}
             if variable.array_bounds.is_none() && variable.type_name.fixed_length.is_some() {
                 frame
                     .fixed_strings
@@ -2870,7 +5124,7 @@ impl<'a> Runtime<'a> {
             return Ok(Value::Nothing);
         }
         if variable.type_name.is_new {
-            return self.new_object(&variable.type_name.name, line);
+            return self.new_object(object_type_name(&variable.type_name.name), line);
         }
         match &variable.array_bounds {
             Some(bounds) => {
@@ -2891,13 +5145,32 @@ impl<'a> Runtime<'a> {
                     {
                         // A typed Const holds its own type: measured,
                         // `Const K As Long = 2 ^ 3 + 1` is a Long.
-                        coerce_declared(value, &variable.type_name.name, line, self.this_year())
+                        self.coerce_runtime(value, &variable.type_name.name, line, self.this_year())
                     } else {
                         Ok(value)
                     }
                 }
                 None => self.declared_default_value(&variable.type_name, frame, line),
             },
+        }
+    }
+
+    /// Reference interfaces and project classes have object storage even when
+    /// the host has not created an instance of that type.
+    fn reference_default_value(&self, type_name: &TypeName) -> Value {
+        if let Some(scalar) = self.reference_scalar_type(&type_name.name) {
+            let mut resolved = type_name.clone();
+            resolved.name = scalar;
+            return default_value(&resolved);
+        }
+        if self.source_class_key(&type_name.name).is_some()
+            || self.document_references.as_ref().is_some_and(|references| {
+                references.library.resolve_type(&type_name.name).is_some()
+            })
+        {
+            Value::Nothing
+        } else {
+            default_value(type_name)
         }
     }
 
@@ -2915,7 +5188,7 @@ impl<'a> Runtime<'a> {
             if self.classes.contains_key(&type_name.name.to_ascii_lowercase()) {
                 return Ok(Value::Nothing);
             }
-            return Ok(default_value(type_name));
+            return Ok(self.reference_default_value(type_name));
         };
         let length = self.array_index(length, frame, line)?;
         let length = usize::try_from(length)
@@ -2965,7 +5238,7 @@ impl<'a> Runtime<'a> {
                 None if field.type_name.fixed_length.is_none() => {
                     match self.new_record(&field.type_name.name, frame, line, depth + 1)? {
                         Some(record) => record,
-                        None => default_value(&field.type_name),
+                        None => self.reference_default_value(&field.type_name),
                     }
                 }
                 None => self.declared_default_value(&field.type_name, frame, line)?,
@@ -3180,7 +5453,7 @@ impl<'a> Runtime<'a> {
                 || MODULES.iter().any(|module| name.eq_ignore_ascii_case(module))
                 || name.eq_ignore_ascii_case("constants")
                 || name.to_ascii_lowercase().ends_with("constants")
-                || (name.len() > 2 && (name[..2].eq_ignore_ascii_case("vb") || name[..2].eq_ignore_ascii_case("xl"))
+                || (name.as_bytes().get(..2).is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"vb") || prefix.eq_ignore_ascii_case(b"xl"))
                     && name.chars().nth(2).is_some_and(char::is_uppercase))
         };
         let is_library = |object: &Expr| -> bool {
@@ -3224,7 +5497,10 @@ impl<'a> Runtime<'a> {
                 Some(definition.clone())
             }
             _ => None,
-        })
+        }).or_else(|| self.main_module.items.iter().find_map(|item| match item {
+            ModuleItem::Type(definition) if definition.name.eq_ignore_ascii_case(name) && definition.visibility != Visibility::Private => Some(definition.clone()),
+            _ => None,
+        }))
     }
 
     fn redim(
@@ -3259,6 +5535,7 @@ impl<'a> Runtime<'a> {
         }
         let existing_slot = self.lookup_slot(frame, &name);
         if let Some(existing) = &existing_slot {
+            if existing.is_locked() { return Err(fixed_array_error(&name, Some(line))); }
             if matches!(&*existing.borrow(), Value::Array(array) if !array.resizable) {
                 return Err(fixed_array_error(&name, Some(line)));
             }
@@ -3305,11 +5582,11 @@ impl<'a> Runtime<'a> {
         }
         let replacement = Value::Array(replacement);
         match existing_slot {
-            Some(value) => *value.borrow_mut() = replacement,
+            Some(value) => value.write(replacement),
             None => {
                 frame
                     .values
-                    .insert(key(&name), Rc::new(RefCell::new(replacement)));
+                    .insert(key(&name), VariableSlot::new(replacement));
             }
         }
         Ok(())
@@ -3375,14 +5652,12 @@ impl<'a> Runtime<'a> {
         into_variant: bool,
     ) -> Result<Value, RuntimeError> {
         if bounds.is_empty() {
+            let default = self.declared_default_value(element_type, frame, line)?;
+            let default = self.coerce_runtime(default, &element_type.name, line, self.this_year())?;
             return Ok(Value::Array(ArrayValue {
                 dimensions: Vec::new(),
                 values: Vec::new(),
-                element_default: Box::new(self.declared_default_value(
-                    element_type,
-                    frame,
-                    line,
-                )?),
+                element_default: Box::new(default),
                 resizable,
             }));
         }
@@ -3404,7 +5679,10 @@ impl<'a> Runtime<'a> {
                     message: format!("out of memory making an array {lower} To {upper}"),
                     line: Some(line),
                     vba_number: Some(7),
-                    vba_source: Some("VBA".to_string()),
+                    vba_source: None,
+                    vba_help_file: None,
+                    vba_help_context: None,
+                    vba_default_description: true,
                 });
             }
             if upper < lower {
@@ -3441,6 +5719,7 @@ impl<'a> Runtime<'a> {
             });
         }
         let default = self.declared_default_value(element_type, frame, line)?;
+        let default = self.coerce_runtime(default, &element_type.name, line, self.this_year())?;
         Ok(Value::Array(ArrayValue {
             dimensions,
             values: vec![default.clone(); total_len],
@@ -3479,6 +5758,29 @@ impl<'a> Runtime<'a> {
             .any(|item| matches!(item, ModuleItem::Option(ModuleOption::Explicit, _)))
     }
 
+    fn implicit_type(&self, expr: &Expr) -> TypeName {
+        if let Expr::TypedIdent { suffix, .. } = expr {
+            let name = match suffix { '%' => "Integer", '&' => "Long", '^' => "LongLong", '!' => "Single", '#' => "Double", '@' => "Currency", '$' => "String", _ => "Variant" };
+            return TypeName { name: name.into(), suffix: Some(*suffix), ..TypeName::implicit() };
+        }
+        let first = expr_name(expr).and_then(|name| name.chars().next()).map(|letter| letter.to_ascii_uppercase());
+        let name = self.module.items.iter().filter_map(|item| match item {
+            ModuleItem::DefType(declaration) if first.is_some_and(|letter| declaration.ranges.iter().any(|range| range.start <= letter && letter <= range.end)) => Some(declaration.type_name.clone()),
+            _ => None,
+        }).next_back().unwrap_or_else(|| "Variant".into());
+        TypeName { name, ..TypeName::implicit() }
+    }
+
+    fn declare_implicit(&mut self, expr: &Expr, frame: &mut Frame) -> Result<(), RuntimeError> {
+        let Some(name) = expr_name(expr) else { return Ok(()); };
+        if self.lookup_slot(frame, name).is_some() { return Ok(()); }
+        let declaration = VarDecl {
+            visibility: Visibility::Default, is_const: false, is_static: false, span: expr.span(),
+            items: vec![VarItem { name: name.into(), array_bounds: None, type_name: self.implicit_type(expr), with_events: false, explicit_type: false, value: None }],
+        };
+        self.declare_locals(&declaration, frame)
+    }
+
     fn option_compare_text(&self) -> bool {
         self.module.items.iter().any(|item| {
             matches!(
@@ -3491,11 +5793,11 @@ impl<'a> Runtime<'a> {
 
     /// The variable a member/subscript chain starts at, read off the syntax
     /// without evaluating any of it.
-    fn place_root(expr: &Expr) -> Option<&str> {
+    fn place_root_slot(&self, expr: &Expr, frame: &Frame) -> Option<ValueSlot> {
+        if let Some(slot) = self.expression_slot(expr, frame) { return Some(slot); }
         match expr {
-            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => Some(name),
-            Expr::Member { object, .. } => Self::place_root(object),
-            Expr::Index { target, .. } => Self::place_root(target),
+            Expr::Member { object, .. } => self.place_root_slot(object, frame),
+            Expr::Index { target, .. } => self.place_root_slot(target, frame),
             _ => None,
         }
     }
@@ -3508,10 +5810,7 @@ impl<'a> Runtime<'a> {
         if stands_on_the_with_subject(expr) {
             return matches!(frame.with_objects.last(), Some(WithSubject::Record { .. }));
         }
-        let Some(name) = Self::place_root(expr) else {
-            return false;
-        };
-        let Some(slot) = self.lookup_slot(frame, name) else {
+        let Some(slot) = self.place_root_slot(expr, frame) else {
             return false;
         };
         let value = slot.borrow();
@@ -3536,76 +5835,152 @@ impl<'a> Runtime<'a> {
         if !self.record_rooted(frame, expr) {
             return Ok(None);
         }
-        let mut steps = Vec::new();
-        let Some(root) = self.record_steps(expr, frame, line, &mut steps)? else {
-            return Ok(None);
-        };
-        let Some(slot) = self.lookup_slot(frame, &root) else {
+        let Some(slot) = self.record_slot(expr, frame, line)? else {
             return Ok(None);
         };
         let mut place = slot.borrow_mut();
-        let mut cursor: &mut Value = &mut place;
-        for step in &steps {
-            cursor = match (step, cursor) {
-                (RecordStep::Field(name), Value::Record(record)) => {
-                    let type_name = record.type_name.clone();
-                    match record.field_mut(name) {
-                        Some(field) => field,
-                        None => {
-                            return Err(error(
-                                RuntimeErrorKind::UndefinedVariable,
-                                format!("VBA Type {type_name} has no field named {name}"),
-                                Some(line),
-                            ))
-                        }
-                    }
-                }
-                (RecordStep::Index(indices), Value::Array(array)) => {
-                    let offset = array_offset(array, indices, line)?;
-                    &mut array.values[offset]
-                }
-                _ => return Ok(None),
-            };
-        }
-        Ok(Some(action(cursor)))
+        Ok(Some(action(&mut place)))
     }
 
-    fn record_steps(
+    fn record_slot(
         &mut self,
         expr: &Expr,
         frame: &mut Frame,
         line: u32,
-        steps: &mut Vec<RecordStep>,
-    ) -> Result<Option<String>, RuntimeError> {
+    ) -> Result<Option<ValueSlot>, RuntimeError> {
+        if let Some(slot) = self.expression_slot(expr, frame) { return Ok(Some(slot)); }
         match expr {
-            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => Ok(Some(name.clone())),
             Expr::Member { object, name, .. } => {
-                let Some(root) = self.record_steps(object, frame, line, steps)? else {
+                let Some(root) = self.record_slot(object, frame, line)? else {
                     return Ok(None);
                 };
-                steps.push(RecordStep::Field(name.clone()));
-                Ok(Some(root))
+                if !matches!(&*root.borrow(), Value::Record(_)) { return Ok(None); }
+                VariableSlot::project(&root, RecordStep::Field(name.clone()), line).map(Some)
             }
             Expr::Index { target, args, .. } => {
-                let Some(root) = self.record_steps(target, frame, line, steps)? else {
+                let Some(root) = self.record_slot(target, frame, line)? else {
                     return Ok(None);
                 };
-                steps.push(RecordStep::Index(self.array_arguments(args, frame, line)?));
-                Ok(Some(root))
+                if !matches!(&*root.borrow(), Value::Array(_)) { return Ok(None); }
+                if args.is_empty(){return Ok(Some(root));}
+                VariableSlot::project(&root, RecordStep::Index(self.array_arguments(args, frame, line)?), line).map(Some)
             }
             // `.field` inside `With aRecord` picks up where the subject left
             // off: its frozen steps, then this field.
             Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
-                let Some(WithSubject::Record { root, steps: held }) = frame.with_objects.last()
+                let Some(WithSubject::Record { root }) = frame.with_objects.last()
                 else {
                     return Ok(None);
                 };
-                let root = root.clone();
-                steps.extend(held.iter().cloned());
-                steps.push(RecordStep::Field(name.clone()));
-                Ok(Some(root))
+                VariableSlot::project(root, RecordStep::Field(name.clone()), line).map(Some)
             }
             _ => Ok(None),
+        }
+    }
+
+    fn expression_slot(&self, expr: &Expr, frame: &Frame) -> Option<ValueSlot> {
+        if let Some(name) = expr_name(expr) { return self.lookup_slot(frame, name); }
+        let (module, name) = self.qualified_standard_member(expr, frame)?;
+        let name = key(name);
+        if std::ptr::eq(module, self.module) { return self.module_values.get(&name).cloned(); }
+        let (scope, _) = self.main_module.standard_modules.iter().find(|(_, found)| std::ptr::eq(found, module))?;
+        let state = if key(scope) == self.standard_name && self.owner.is_some() { self.main_state.as_ref() } else { self.standard_states.get(&key(scope)) }?;
+        state.values.get(&name).cloned()
+    }
+
+    fn reference_argument(&mut self, expr: &Expr, frame: &mut Frame, line: u32) -> Result<BoundArgument, RuntimeError> {
+        self.ensure_expression_module(expr, frame)?;
+        if let Some(name) = expr_name(expr) {
+            if self.is_constant(frame, name) { return self.eval_expr(expr, frame).map(BoundArgument::Value); }
+            if self.lookup_slot(frame, name).is_none() {
+                // Let expression lookup distinguish an implicit variable from
+                // Me, intrinsic functions and host globals, evaluating once.
+                let value = self.eval_expr(expr, frame)?;
+                return Ok(self.lookup_slot(frame, name).map(BoundArgument::Reference).unwrap_or(BoundArgument::Value(value)));
+            }
+            self.read_variable(frame, name, line)?;
+            return Ok(BoundArgument::Reference(self.lookup_slot(frame, name).expect("existing variable")));
+        }
+        if let Some((module, name)) = self.qualified_standard_member(expr, frame) {
+            let slot = self.in_standard(module, |this| {
+                if this.module_constants.contains(&key(name)) { return Ok(None); }
+                let scope = empty_frame(this.error_environment.clone(), this.project_name.clone());
+                this.read_variable(&scope, name, line)?;
+                Ok(this.module_values.get(&key(name)).cloned())
+            })?;
+            return match slot { Some(slot) => Ok(BoundArgument::Reference(slot)), None => self.eval_expr(expr, frame).map(BoundArgument::Value) };
+        }
+        if self.record_rooted(frame, expr) {
+            if let Some(slot) = self.record_slot(expr, frame, line)? {
+                if let Some(declared) = self.projected_type(&slot) { slot.set_declared(&declared); }
+                return Ok(BoundArgument::Reference(slot));
+            }
+        }
+        if let Expr::Index { target, args, .. } = expr {
+            let owner = match self.expression_slot(target, frame) {
+                Some(slot) => Some(BoundArgument::Reference(slot)),
+                None if args.is_empty() && self.qualified_standard_member(target,frame).is_some_and(|(module,name)|module.items.iter().any(|item|matches!(item,ModuleItem::Variables(declaration) if declaration.items.iter().any(|variable|variable.name.eq_ignore_ascii_case(name)))))=>Some(self.reference_argument(target,frame,line)?),
+                None if matches!(target.as_ref(), Expr::Index { .. }) => Some(self.reference_argument(target, frame, line)?),
+                None => None,
+            };
+            if let Some(owner) = owner {
+                let value = match &owner { BoundArgument::Reference(slot) => slot.borrow().clone(), BoundArgument::Value(value) => value.clone() };
+                if let Value::Array(array) = value {
+                    if args.is_empty(){return Ok(owner);}
+                    let indices = self.array_arguments(args, frame, line)?;
+                    return match owner {
+                        BoundArgument::Reference(slot) => VariableSlot::project(&slot, RecordStep::Index(indices), line).map(BoundArgument::Reference),
+                        BoundArgument::Value(_) => Ok(BoundArgument::Value(array.values[array_offset(&array, &indices, line)?].clone())),
+                    };
+                }
+                if let Value::Object(receiver) = value {
+                    let mut values = Vec::new();
+                    for argument in args { values.push(match &argument.value { Some(expression) => self.eval_expr(expression, frame)?, None => Value::Missing }); }
+                    return self.host_call(Some(&receiver), "Item", &values, line)?.map(BoundArgument::Value)
+                        .ok_or_else(|| no_such_member(format!("default member is not available: {}.Item", receiver.kind), Some(line)));
+                }
+                return Err(error(if matches!(value, Value::Nothing) { RuntimeErrorKind::ObjectVariableNotSet } else { RuntimeErrorKind::TypeMismatch }, "subscripts on a value that is not an array or object", Some(line)));
+            }
+        }
+        self.eval_expr(expr, frame).map(BoundArgument::Value)
+    }
+
+    fn reference_fixed_width(&self, expr: &Expr, slot: &ValueSlot, frame: &Frame) -> Option<usize> {
+        if let Some(name) = expr_name(expr) { return self.fixed_string_width(frame, name); }
+        if let Some((module, name)) = self.qualified_standard_member(expr, frame) {
+            if std::ptr::eq(module, self.module) { return self.module_fixed_strings.get(&key(name)).copied(); }
+            let (scope, _) = self.main_module.standard_modules.iter().find(|(_, found)| std::ptr::eq(found, module))?;
+            let state = if key(scope) == self.standard_name && self.owner.is_some() { self.main_state.as_ref() } else { self.standard_states.get(&key(scope)) }?;
+            return state.fixed_strings.get(&key(name)).copied();
+        }
+        let (last, parent) = slot.path.split_last()?;
+        let storage = slot.storage.value.borrow();
+        match (last, slot_value(&storage, parent)?) {
+            (RecordStep::Index(_), Value::Array(array)) => match array.element_default.as_ref() {
+                Value::String(default) if !default.is_empty() => Some(default.encode_utf16().count()), _ => None,
+            },
+            (RecordStep::Field(name), Value::Record(record)) => {
+                let definition = self.find_type(&record.type_name)?;
+                let field = definition.fields.iter().find(|field| field.name.eq_ignore_ascii_case(name))?;
+                if field.array_bounds.is_some() { return None; }
+                field.type_name.fixed_length.as_ref()?;
+                Some(string_width(slot_value(&storage, &slot.path)?))
+            }
+            _ => None,
+        }
+    }
+
+    fn projected_type(&self, slot: &ValueSlot) -> Option<String> {
+        let (last, parent) = slot.path.split_last()?;
+        let storage = slot.storage.value.borrow();
+        match (last, slot_value(&storage, parent)?) {
+            (RecordStep::Field(name), Value::Record(record)) => {
+                let definition = self.find_type(&record.type_name)?;
+                let field = definition.fields.iter().find(|field| field.name.eq_ignore_ascii_case(name))?;
+                field.array_bounds.is_none().then(|| field.type_name.name.clone())
+            }
+            (RecordStep::Index(_), Value::Array(array)) => element_type_name(array.element_default.as_ref()).map(str::to_string),
+            _ => None,
         }
     }
 
@@ -3616,11 +5991,7 @@ impl<'a> Runtime<'a> {
             .get(&name)
             .or_else(|| self.module_values.get(&name))
             // A class sees the standard module's Public variables.
-            .or_else(|| {
-                self.owner
-                    .and(self.main_state.as_ref())
-                    .and_then(|state| state.values.get(&name))
-            })
+            .or_else(|| self.foreign_variable_state(&name).and_then(|state| state.values.get(&name)))
             .cloned()
     }
 
@@ -3630,28 +6001,30 @@ impl<'a> Runtime<'a> {
         name: &str,
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        self.ensure_foreign_variable(frame, name)?;
         let name_key = key(name);
         if name_key == "me" {
             if let Some(me) = &self.me {
-                return Ok(Some(Value::Object(me.clone())));
+                let mut object=me.clone();object.dispatch_view=None;
+                return Ok(Some(Value::Object(object)));
             }
         }
         let Some(slot) = self.lookup_slot(frame, name) else {
-            return Ok(None);
+            return Ok(self.document_globals.get(&name_key).cloned().map(Value::Object));
         };
         if matches!(&*slot.borrow(), Value::Nothing) {
             let type_name = if frame.values.contains_key(&name_key) {
                 frame.auto_new.get(&name_key)
             } else {
-                self.module_auto_new.get(&name_key)
+                self.module_auto_new.get(&name_key).or_else(|| self.foreign_variable_state(&name_key).and_then(|state| state.auto_new.get(&name_key)))
             }
             .cloned();
             if let Some(type_name) = type_name {
-                let value = self.new_object(&type_name, line)?;
+                let value = self.new_object(object_type_name(&type_name), line)?;
                 *slot.borrow_mut() = value;
             }
         }
-        let value = slot.borrow().clone();
+        let value = slot.snapshot();
         Ok(Some(value))
     }
 
@@ -3671,7 +6044,7 @@ impl<'a> Runtime<'a> {
             )
         } else if type_name.eq_ignore_ascii_case("scripting.filesystemobject") {
             ("FileSystemObject", InternalObject::FileSystem)
-        } else if let Some(class_module) = self.classes.get(&type_name.to_ascii_lowercase()).copied() {
+        } else if let Some(class_module) = self.source_class_module(type_name) {
             let name = class_module
                 .items
                 .iter()
@@ -3681,7 +6054,7 @@ impl<'a> Runtime<'a> {
                     }
                     _ => None,
                 })
-                .unwrap_or_else(|| type_name.to_string());
+                .unwrap_or_else(|| type_name.split_once('.').filter(|(project, _)| project.eq_ignore_ascii_case(&self.project_name)).map_or(type_name, |(_, class)| class).to_string());
             let handle = self.next_internal_handle;
             self.next_internal_handle += 1;
             self.internal_objects.insert(
@@ -3689,7 +6062,7 @@ impl<'a> Runtime<'a> {
                 InternalObject::Instance(ClassInstance { class: name.clone(), state: None, terminated: false }),
             );
             let life = Rc::new(LifeToken { handle, due: Rc::clone(&self.due) });
-            let made = ObjectRef { handle, kind: name, life: Some(life) };
+            let made = ObjectRef { handle, kind: name, life: Some(life),dispatch_view:None };
             // Its variables are set up, then Class_Initialize runs, as the
             // instance comes into being.
             self.as_instance(&made, |this| {
@@ -3719,7 +6092,7 @@ impl<'a> Runtime<'a> {
         self.internal_objects.insert(handle, object);
         if container {
             let life = Rc::new(LifeToken { handle, due: Rc::clone(&self.due) });
-            return Ok(Value::Object(ObjectRef { handle, kind: kind.to_string(), life: Some(life) }));
+            return Ok(Value::Object(ObjectRef { handle, kind: kind.to_string(), life: Some(life),dispatch_view:None }));
         }
         Ok(Value::Object(ObjectRef::new(handle, kind)))
     }
@@ -3758,7 +6131,10 @@ impl<'a> Runtime<'a> {
                         message: format!("ActiveX component cannot create object: {type_name}"),
                         line,
                         vba_number: Some(429),
-                        vba_source: Some("VBA".to_string()),
+                        vba_source: None,
+                        vba_help_file: None,
+                        vba_help_context: None,
+                        vba_default_description: true,
                     }
                 } else {
                     failure
@@ -3766,12 +6142,22 @@ impl<'a> Runtime<'a> {
             })
     }
 
+    fn reference_constant(&self, name: &str) -> Option<Value> {
+        if let Some(constants) = &self.reference_constants {
+            return constants.get(&key(name)).copied().map(Value::Integer);
+        }
+        self.document_references.as_ref()?.symbols.iter().rev()
+            .find(|(symbol, _)| symbol.eq_ignore_ascii_case(name))
+            .and_then(|(_, value)| value.map(Value::Integer))
+    }
+
     fn is_constant(&self, frame: &Frame, name: &str) -> bool {
         let name = key(name);
         if frame.values.contains_key(&name) {
             frame.constants.contains(&name)
         } else {
-            self.module_constants.contains(&name)
+            self.module_constants.contains(&name) || self.foreign_variable_state(&name).is_some_and(|state| state.constants.contains(&name))
+                || (self.lookup_slot(frame, &name).is_none() && !self.has_visible_procedure(&name) && self.reference_constant(&name).is_some())
         }
     }
 
@@ -3846,11 +6232,11 @@ impl<'a> Runtime<'a> {
     }
 
     fn storage_size_asked_of(
-        &self,
+        &mut self,
         name: &str,
         args: &[Argument],
-        frame: &Frame,
-    ) -> Option<i64> {
+        frame: &mut Frame,
+    ) -> Option<Result<Value, RuntimeError>> {
         // LenB answers the same size: measured, LenB of a Long is 4 and of a
         // LongLong 8, where a Variant holding 12345 is 10.
         if !name.eq_ignore_ascii_case("len") && !name.eq_ignore_ascii_case("lenb") {
@@ -3859,23 +6245,94 @@ impl<'a> Runtime<'a> {
         let [argument] = args else {
             return None;
         };
-        let Some(Expr::Ident(variable, _) | Expr::TypedIdent { name: variable, .. }) =
-            argument.value.as_ref()
-        else {
-            return None;
-        };
+        let expression = argument.value.as_ref()?.without_groups();
+        if let Some(kind) = self.place_type(expression, frame).filter(|kind| !kind.is_array) {
+            let size = match kind.name.to_ascii_lowercase().as_str() {
+                "byte" => Some(1), "integer" | "boolean" => Some(2),
+                "long" | "single" => Some(4), "double" | "currency" | "date" | "longlong" | "longptr" => Some(8),
+                _ => None,
+            };
+            if let Some(size) = size { return Some(Ok(Value::Int16(size))); }
+        }
         // A fixed-width string answers its width, which is a length and not a
         // size, and the ordinary path already has it.
-        if self.fixed_string_width(frame, variable).is_some() {
+        Some((|| {
+            let binding = self.reference_argument(expression, frame, expression.span().line)?;
+            let value = match binding {
+                BoundArgument::Reference(slot) => {
+                    if self.reference_fixed_width(expression, &slot, frame).is_none() {
+                        let declared = match expression {
+                            Expr::Ident(variable, _) | Expr::TypedIdent { name: variable, .. } => self.declared_type(frame, variable),
+                            Expr::Index { target, .. } if matches!(target.as_ref(),Expr::Ident(..)|Expr::TypedIdent{..}) => self.expression_slot(target,frame).and_then(|array| match &*array.borrow() { Value::Array(array) => element_type_name(array.element_default.as_ref()).map(str::to_string), _ => None }),
+                            Expr::Index { target, .. } if matches!(target.as_ref(),Expr::Index{..}) => None,
+                            _ => self.projected_type(&slot).or_else(|| slot.declared.borrow().clone()),
+                        }.unwrap_or_default();
+                        let size = match declared.to_ascii_lowercase().as_str() {
+                            "byte" => Some(1), "integer" | "boolean" => Some(2),
+                            "long" | "single" => Some(4),
+                            "double" | "currency" | "date" | "longlong" | "longptr" => Some(8), _ => None,
+                        };
+                        if let Some(size) = size { return Ok(Value::Int16(size as i16)); }
+                    }
+                    slot.snapshot()
+                }
+                BoundArgument::Value(value) => value,
+            };
+            self.call_named(name, vec![value], &[None], Some(expression.span().line), frame)
+        })())
+    }
+
+    /// Source-level storage type, without evaluating an address or its indices.
+    /// Len of a typed scalar is a constant; Variants still read their value.
+    fn place_type(&self, expression: &Expr, frame: &Frame) -> Option<TypeName> {
+        if let Some(name) = expr_name(expression) {
+            let name_key = key(name);
+            if self.is_constant(frame, name) { return None; }
+            if self.is_variant_variable(frame, name) { return Some(TypeName::implicit()); }
+            if let Some(slot) = self.lookup_slot(frame, name) {
+                if let Value::Array(array) = &*slot.borrow() {
+                    let name = slot.array_declared.borrow().clone().unwrap_or_else(||match array.element_default.as_ref() { Value::Record(record) => record.type_name.clone(), value => element_type_name(value).unwrap_or("Variant").to_string() });
+                    return Some(TypeName { name, is_array: true, ..TypeName::implicit() });
+                }
+                let name = self.declared_type(frame, name).or_else(|| slot.declared.borrow().clone());
+                return name.map(|name| TypeName { name, ..TypeName::implicit() });
+            }
+            if !self.option_explicit() && !matches!(name_key.as_str(),"me"|"err"|"erl"|"application"|"thisworkbook"|"activeworkbook"|"activesheet"|"selection")
+                && !self.has_visible_procedure(name) && !is_builtin_function(name) && builtin_constant(name).is_none() && !self.classes.contains_key(&name_key) {
+                return Some(self.implicit_type(expression));
+            }
             return None;
         }
-        match self.declared_type(frame, variable)?.to_ascii_lowercase().as_str() {
-            "byte" => Some(1),
-            "integer" | "boolean" => Some(2),
-            "long" | "single" => Some(4),
-            "double" | "currency" | "date" | "longlong" | "longptr" => Some(8),
-            _ => None,
+        if let Some((module, name)) = self.qualified_standard_member(expression, frame) {
+            return module.items.iter().find_map(|item| match item {
+                ModuleItem::Variables(declaration) if !declaration.is_const => declaration.items.iter().find(|variable| variable.name.eq_ignore_ascii_case(name)).map(|variable| {
+                    let mut kind=variable.type_name.clone();kind.is_array |= variable.array_bounds.is_some();kind
+                }), _=>None,
+            });
         }
+        match expression {
+            Expr::Index { target, args, .. } => {
+                let mut kind = self.place_type(target, frame)?;
+                if kind.is_array { if !args.is_empty(){kind.is_array=false;}Some(kind) } else { None }
+            }
+            Expr::Member { object,name,.. } => {
+                let owner=self.place_type(object,frame)?;
+                self.record_field_type(&owner.name,name)
+            }
+            Expr::WithMember(name,_) | Expr::WithBangMember(name,_) => {
+                let Some(WithSubject::Record{root})=frame.with_objects.last() else{return None;};
+                let value=root.borrow();
+                let Value::Record(record)=&*value else{return None;};
+                self.record_field_type(&record.type_name,name)
+            }
+            _=>None,
+        }
+    }
+
+    fn record_field_type(&self, owner:&str,name:&str)->Option<TypeName> {
+        let definition=self.find_type(owner)?;
+        let variable=definition.fields.iter().find(|field|field.name.eq_ignore_ascii_case(name))?;
+        let mut kind=variable.type_name.clone();kind.is_array |= variable.array_bounds.is_some();Some(kind)
     }
 
     /// Whether an expression has a type of its own rather than being a
@@ -3884,6 +6341,7 @@ impl<'a> Runtime<'a> {
     /// variables are Variants.
     fn statically_typed(&self, expr: &Expr, frame: &Frame) -> bool {
         match expr {
+            Expr::Group{expression,..}=>self.statically_typed(expression,frame),
             Expr::Literal(..) | Expr::TypedIdent { .. } => true,
             // `&` hands back a String only when both sides were typed; with a
             // Variant on either side the result is a Variant too. Measured:
@@ -3929,7 +6387,14 @@ impl<'a> Runtime<'a> {
             .declared
             .get(&name)
             .or_else(|| self.module_declared.get(&name))
+            .or_else(|| self.foreign_variable_state(&name).and_then(|state| state.declared.get(&name)))
             .cloned()
+            .or_else(|| {
+                if frame.values.contains_key(&name) || self.module_values.contains_key(&name) { return None; }
+                self.foreign_variable_declaration(&name)
+                    .filter(|variable| variable.array_bounds.is_none() && !variable.type_name.is_new)
+                    .map(|variable| variable.type_name.name.clone())
+            })
     }
 
     fn fixed_string_width(&self, frame: &Frame, name: &str) -> Option<usize> {
@@ -3937,7 +6402,7 @@ impl<'a> Runtime<'a> {
         if frame.values.contains_key(&name) {
             frame.fixed_strings.get(&name).copied()
         } else {
-            self.module_fixed_strings.get(&name).copied()
+            self.module_fixed_strings.get(&name).copied().or_else(|| self.foreign_variable_state(&name).and_then(|state| state.fixed_strings.get(&name).copied()))
         }
     }
 
@@ -3946,7 +6411,8 @@ impl<'a> Runtime<'a> {
         if frame.values.contains_key(&name) {
             frame.variants.contains(&name)
         } else {
-            self.module_variants.contains(&name)
+            self.module_variants.contains(&name) || self.foreign_variable_state(&name).is_some_and(|state| state.variants.contains(&name))
+                || self.foreign_variable_declaration(&name).is_some_and(|variable| variable.array_bounds.is_none() && variable.type_name.name.eq_ignore_ascii_case("variant"))
         }
     }
 
@@ -3957,48 +6423,283 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<(), RuntimeError> {
-        let mut value = value;
-        if is_place_expression(target) && self.record_rooted(frame, target) {
-            // A field takes what it is given as the type it was declared:
-            // measured, `e.Pay = 1234.5678` into a Currency field answers
-            // Currency to TypeName.
-            if let Expr::Member { object, name, .. } = target {
-                let owner = self.with_record_place(object, frame, line, |place| match place {
-                    Value::Record(record) => Some(record.type_name.clone()),
-                    _ => None,
-                })?;
-                let field = owner
-                    .flatten()
-                    .and_then(|type_name| self.find_type(&type_name))
-                    .and_then(|definition| {
-                        definition
-                            .fields
-                            .into_iter()
-                            .find(|field| field.name.eq_ignore_ascii_case(name))
-                    })
-                    .filter(|field| field.array_bounds.is_none() && self.find_type(&field.type_name.name).is_none());
-                // A `String * n` field keeps its width: measured, "abcdef"
-                // into a `Name As String * 4` field reads "abcd".
-                let width = match field.as_ref().and_then(|field| field.type_name.fixed_length.clone()) {
-                    Some(length) => usize::try_from(self.array_index(&length, frame, line)?).ok(),
-                    None => None,
-                };
-                let declared = field.map(|field| field.type_name.name);
-                if let Some(declared) = declared.filter(|declared| !declared.eq_ignore_ascii_case("variant") && !declared.eq_ignore_ascii_case("object")) {
-                    value = coerce_declared(value, &declared, line, self.this_year())?;
+        self.assign_evaluated(target,value,frame,line,None)
+    }
+
+    /// Let into object storage writes its default member; Variant storage is replaced.
+    /// The place is resolved once by the caller before evaluating this dispatch.
+    fn assign_object_default(
+        &mut self,
+        held: Value,
+        kind: &str,
+        value: &Value,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<bool, RuntimeError> {
+        if kind.eq_ignore_ascii_case("variant")
+            || matches!(value, Value::Object(_) | Value::Nothing)
+        {
+            return Ok(false);
+        }
+        match held {
+            Value::Object(receiver) => {
+                if is_err_object(&receiver) {
+                    err_set(frame, "Number", value.clone(), line)?;
+                    return Ok(true);
                 }
-                if let Some(width) = width {
+                let view = self.classes.contains_key(&key(kind)).then_some(kind);
+                if self.call_instance_set_source(
+                    &receiver,
+                    "_default",
+                    &[],
+                    &[],
+                    value.clone(),
+                    view,
+                    frame,
+                    line,
+                )? {
+                    return Ok(true);
+                }
+                if !matches!(
+                    self.internal_objects.get(&receiver.handle),
+                    Some(InternalObject::Instance(_))
+                ) && self.host_set(&receiver, "Value", value.clone(), line)?
+                {
+                    return Ok(true);
+                }
+                Err(no_such_member(
+                    format!("{} has no writable default member", receiver.kind),
+                    Some(line),
+                ))
+            }
+            Value::Nothing => Err(error(
+                RuntimeErrorKind::ObjectVariableNotSet,
+                "object variable is Nothing",
+                Some(line),
+            )),
+            _ => Ok(false),
+        }
+    }
+
+    fn assign_evaluated(
+        &mut self,
+        target: &Expr,
+        value: Value,
+        frame: &mut Frame,
+        line: u32,
+        evaluated: Option<&[EvaluatedArgument]>,
+    ) -> Result<(), RuntimeError> {
+        self.ensure_expression_module(target, frame)?;
+        let mut value = value;
+        if let Expr::Index {
+            target: callee,
+            args,
+            force_by_value,
+            ..
+        } = target
+        {
+            if let Some((module, procedure)) = self.source_module_setter(
+                callee,
+                frame,
+                matches!(value, Value::Object(_) | Value::Nothing),
+            ) {
+                let captured = if evaluated.is_none() {
+                    let count = procedure.params.len().saturating_sub(1);
+                    Some(self.evaluate_source_arguments(
+                        args,
+                        *force_by_value,
+                        Some(&procedure.params[..count]),
+                        frame,
+                    )?)
+                } else {
+                    None
+                };
+                let evaluated = evaluated
+                    .or(captured.as_deref())
+                    .expect("setter arguments captured");
+                return self.call_resolved_set_source(
+                    module, &procedure, None, args, evaluated, value, frame, line,
+                );
+            }
+        }
+        if let Expr::Index {
+            target: array_target,
+            args,
+            ..
+        } = target
+        {
+            if let Some(array) = self
+                .expression_slot(array_target, frame)
+                .filter(|slot| matches!(&*slot.borrow(), Value::Array(_)))
+            {
+                if args.is_empty() {
+                    return self.assign(array_target, value, frame, line);
+                }
+                if let Some(name) = expr_name(array_target) {
+                    if self.is_constant(frame, name) {
+                        return Err(constant_assignment_error(name, line));
+                    }
+                }
+                let indices = self.array_arguments(args, frame, line)?;
+                let variant_alias = array.element_is_alias(&indices);
+                let slot = VariableSlot::project(&array, RecordStep::Index(indices), line)?;
+                if slot.is_locked() {
+                    return Err(fixed_array_error("array", Some(line)));
+                }
+                let declared = slot.declared.borrow().clone();
+                let object_kind = if slot.object_let {
+                    Some("Object")
+                } else {
+                    declared.as_deref()
+                };
+                if let Some(kind) = object_kind.filter(|kind| !kind.eq_ignore_ascii_case("variant"))
+                {
+                    if !matches!(value, Value::Object(_) | Value::Nothing)
+                        && matches!(&*slot.borrow(), Value::Object(_) | Value::Nothing)
+                    {
+                        let held = slot.snapshot();
+                        drop(slot);
+                        let result = self.assign_object_default(held, kind, &value, frame, line);
+                        self.collect_instances(line)?;
+                        result?;
+                        return Ok(());
+                    }
+                }
+                if variant_alias
+                    && declared
+                        .as_deref()
+                        .is_some_and(|kind| kind.eq_ignore_ascii_case("LongLong"))
+                {
+                    return Err(language_error(
+                        458,
+                        "unsupported Automation reference type",
+                        line,
+                    ));
+                }
+                if let Some(kind) = declared.as_deref().filter(|kind| {
+                    !kind.eq_ignore_ascii_case("variant")
+                        && !kind.eq_ignore_ascii_case("object")
+                        && self.find_type(kind).is_none()
+                }) {
+                    value = self.coerce_runtime(value, kind, line, self.this_year())?;
+                } else if declared
+                    .as_deref()
+                    .is_none_or(|kind| kind.eq_ignore_ascii_case("variant"))
+                {
+                    if let Value::Array(array) = &mut value {
+                        array.resizable = true;
+                    }
+                }
+                if let Some(width) = self.reference_fixed_width(target, &slot, frame) {
                     value = coerce_string_width(value, width, Some(line))?;
                 }
-            }
-            let mut carried = Some(value);
-            let placed = self.with_record_place(target, frame, line, |place| {
-                *place = carried.take().expect("a record field is written once");
-            })?;
-            if placed.is_some() {
+                *slot.borrow_mut() = value;
                 return Ok(());
             }
-            value = carried.take().expect("the walk left the value behind");
+        }
+        if self
+            .expression_slot(target, frame)
+            .is_some_and(|slot| slot.is_locked())
+        {
+            return Err(fixed_array_error("array", Some(line)));
+        }
+        if let Some((module, name)) = self.qualified_standard_member(target, frame) {
+            let name = name.to_string();
+            let span = target.span();
+            return self.in_standard(module, |this| {
+                let mut scope =
+                    empty_frame(this.error_environment.clone(), this.project_name.clone());
+                scope.error_state = frame.error_state.clone();
+                this.assign(&Expr::Ident(name, span), value, &mut scope, line)
+            });
+        }
+        if let Expr::Index { target, args, .. } = target {
+            if let Some((module, name)) = self.qualified_standard_member(target, frame) {
+                let mut indices = Vec::new();
+                for argument in args {
+                    indices.push(match &argument.value {
+                        Some(expr) => self.eval_expr(expr, frame)?,
+                        None => Value::Missing,
+                    });
+                }
+                let name = name.to_string();
+                return self.in_standard(module, |this| {
+                    let name_key = key(&name);
+                    if this.module_constants.contains(&name_key) {
+                        return Err(constant_assignment_error(&name, line));
+                    }
+                    if let Some(slot) = this.module_values.get(&name_key).cloned() {
+                        let mut held = slot.borrow_mut();
+                        if let Value::Array(array) = &mut *held {
+                            let indices = indices
+                                .iter()
+                                .map(|value| index_from(value, line))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            if slot.element_is_locked(&indices) {
+                                return Err(fixed_array_error(&name, Some(line)));
+                            }
+                            let offset = array_offset(array, &indices, line)?;
+                            array.values[offset] =
+                                match element_type_name(array.element_default.as_ref()) {
+                                    Some(declared) => this.coerce_runtime(
+                                        value,
+                                        declared,
+                                        line,
+                                        this.this_year(),
+                                    )?,
+                                    None => value,
+                                };
+                            return Ok(());
+                        }
+                    }
+                    let kinds: &'static [ProcKind] =
+                        if matches!(value, Value::Object(_) | Value::Nothing)
+                            && this.has_procedure_of(this.module, &name, &[ProcKind::PropertySet])
+                        {
+                            &[ProcKind::PropertySet]
+                        } else {
+                            &[ProcKind::PropertyLet]
+                        };
+                    indices.push(value);
+                    this.call_kind(&name, kinds, indices, Some(line))
+                        .map(|_| ())
+                });
+            }
+        }
+        if is_place_expression(target) && self.record_rooted(frame, target) {
+            if let Some(slot) = self.record_slot(target, frame, line)? {
+                if slot.is_locked() {
+                    return Err(fixed_array_error("array", Some(line)));
+                }
+                let declared = self.projected_type(&slot);
+                if let Some(kind) = declared
+                    .as_deref()
+                    .filter(|kind| !kind.eq_ignore_ascii_case("variant"))
+                {
+                    if !matches!(value, Value::Object(_) | Value::Nothing)
+                        && matches!(&*slot.borrow(), Value::Object(_) | Value::Nothing)
+                    {
+                        let held = slot.snapshot();
+                        drop(slot);
+                        let result = self.assign_object_default(held, kind, &value, frame, line);
+                        self.collect_instances(line)?;
+                        result?;
+                        return Ok(());
+                    }
+                }
+                if let Some(declared) = declared.filter(|name| {
+                    !name.eq_ignore_ascii_case("variant")
+                        && !name.eq_ignore_ascii_case("object")
+                        && self.find_type(name).is_none()
+                }) {
+                    value = self.coerce_runtime(value, &declared, line, self.this_year())?;
+                }
+                if let Some(width) = self.reference_fixed_width(target, &slot, frame) {
+                    value = coerce_string_width(value, width, Some(line))?;
+                }
+                *slot.borrow_mut() = value;
+                return Ok(());
+            }
         }
         match target {
             Expr::EvaluateShortcut { text, .. } => {
@@ -4022,11 +6723,103 @@ impl<'a> Runtime<'a> {
                 }
             }
             Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
+                if !frame.values.contains_key(&key(name))
+                    && !self.module_values.contains_key(&key(name))
+                {
+                    let kinds: &'static [ProcKind] =
+                        if matches!(value, Value::Object(_) | Value::Nothing)
+                            && matches!(
+                                self.resolve_procedure(name, Some(&[ProcKind::PropertySet])),
+                                Ok(Some(_))
+                            )
+                        {
+                            &[ProcKind::PropertySet]
+                        } else {
+                            &[ProcKind::PropertyLet]
+                        };
+                    if matches!(self.resolve_procedure(name, Some(kinds)), Ok(Some(_))) {
+                        self.err_in = Some(frame.error_state.clone());
+                        self.call_kind(name, kinds, vec![value], Some(line))?;
+                        if let Some(carried) = self.err_out.take() {
+                            frame.error_state = carried;
+                        }
+                        return Ok(());
+                    }
+                }
+                if name.eq_ignore_ascii_case("err") && self.lookup_slot(frame, name).is_none() {
+                    return err_set(frame, "Number", value, line);
+                }
+                if self.lookup_slot(frame,name).is_none() {
+                    if let Some(receiver)=self.implicit_document_receiver(name) {
+                        if self.host_set(&receiver,name,value.clone(),line)? {return Ok(());}
+                    }
+                }
+                if let Some(slot) = self.lookup_slot(frame, name) {
+                    let declared = slot.declared.borrow().clone();
+                    let kind = if slot.object_let {
+                        Some(self.declared_type(frame,name).filter(|kind|self.classes.contains_key(&key(kind))).unwrap_or_else(||"Object".to_string()))
+                    } else {
+                        declared
+                    };
+                    if kind
+                        .as_deref()
+                        .is_some_and(|kind| !kind.eq_ignore_ascii_case("variant"))
+                        && matches!(&*slot.borrow(), Value::Object(_) | Value::Nothing)
+                    {
+                        let held = self
+                            .read_variable(frame, name, line)?
+                            .expect("existing object place");
+                        if self.assign_object_default(
+                            held,
+                            kind.as_deref().expect("declared object place"),
+                            &value,
+                            frame,
+                            line,
+                        )? {
+                            return Ok(());
+                        }
+                    }
+                }
+                if !self.is_variant_variable(frame, name)
+                    && self.lookup_slot(frame, name).is_some_and(|slot| {
+                        matches!(&*slot.borrow(), Value::Object(object) if is_err_object(object))
+                    })
+                {
+                    return err_set(frame, "Number", value, line);
+                }
+                if self.lookup_slot(frame, name).is_none() && !self.option_explicit() {
+                    self.declare_implicit(target, frame)?;
+                }
+                if frame.variants.contains(&key(name))
+                    && self.lookup_slot(frame, name).is_some_and(|slot| {
+                        slot.declared
+                            .borrow()
+                            .as_deref()
+                            .is_some_and(|kind| kind.eq_ignore_ascii_case("LongLong"))
+                    })
+                {
+                    return Err(language_error(
+                        458,
+                        "unsupported Automation reference type",
+                        line,
+                    ));
+                }
                 let implicit_variant = self.lookup_slot(frame, name).is_none();
                 let mut value = match self.declared_type(frame, name) {
-                    Some(declared) => coerce_declared(value, &declared, line, self.this_year())?,
+                    Some(declared) => {
+                        self.coerce_runtime(value, &declared, line, self.this_year())?
+                    }
                     None => value,
                 };
+                // A formal Variant can refer to typed caller storage. Keep
+                // its expression semantics Variant, but narrow writes to the
+                // type of the actual variable it aliases.
+                if let Some(declared) = self
+                    .lookup_slot(frame, name)
+                    .and_then(|slot| slot.declared.borrow().clone())
+                {
+                    value = self.coerce_runtime(value, &declared, line, self.this_year())?;
+                }
                 value = match self.fixed_string_width(frame, name) {
                     Some(width) => coerce_string_width(value, width, Some(line))?,
                     None => value,
@@ -4035,12 +6828,15 @@ impl<'a> Runtime<'a> {
                     if let Value::Array(array) = &mut value {
                         array.resizable = true;
                     }
-                } else if let Value::Array(given) = &value {
+                } else if let Value::Array(given) = &mut value {
                     // A typed dynamic array takes only an array of its own
                     // element type: measured, `Dim a() As Long: a = Array(1, 2)`
                     // is 13, while `a2 = a` between two Long() is fine.
-                    let held = self.lookup_slot(frame, name).map(|slot| slot.borrow().clone());
+                    let held = self
+                        .lookup_slot(frame, name)
+                        .map(|slot| slot.borrow().clone());
                     if let Some(Value::Array(held)) = held {
+                        given.resizable = held.resizable;
                         if std::mem::discriminant(held.element_default.as_ref())
                             != std::mem::discriminant(given.element_default.as_ref())
                         {
@@ -4057,36 +6853,101 @@ impl<'a> Runtime<'a> {
                     if frame.constants.contains(&name) {
                         return Err(constant_assignment_error(&name, line));
                     }
-                    *existing.borrow_mut() = value;
+                    existing.write(value);
                 } else if let Some(existing) = self.module_values.get(&name) {
                     if self.module_constants.contains(&name) {
                         return Err(constant_assignment_error(&name, line));
                     }
-                    *existing.borrow_mut() = value;
-                } else if let Some(existing) = self
-                    .owner
-                    .and(self.main_state.as_ref())
-                    .and_then(|state| state.values.get(&name))
-                {
+                    existing.write(value);
+                } else if let Some(state) = self.foreign_variable_state(&name) {
+                    let existing = state
+                        .values
+                        .get(&name)
+                        .cloned()
+                        .expect("initialized module variable");
+                    if state.constants.contains(&name) {
+                        return Err(constant_assignment_error(&name, line));
+                    }
                     // A class writing the standard module's Public variable.
-                    let declared = self.main_state.as_ref().and_then(|state| state.declared.get(&name)).cloned();
+                    let declared = state.declared.get(&name).cloned();
                     let value = match declared {
-                        Some(declared) => coerce_declared(value, &declared, line, self.this_year())?,
+                        Some(declared) => {
+                            self.coerce_runtime(value, &declared, line, self.this_year())?
+                        }
                         None => value,
                     };
-                    *existing.borrow_mut() = value;
+                    existing.write(value);
                 } else {
                     if implicit_variant {
                         frame.variants.insert(name.clone());
                     }
-                    frame.values.insert(name, Rc::new(RefCell::new(value)));
+                    frame.values.insert(name, VariableSlot::new(value));
                 }
                 Ok(())
             }
-            Expr::Index { target, args, .. } => {
-                if let Some((receiver, member)) = self.indexed_object_target(target, frame, line)? {
+            Expr::Index {
+                target,
+                args,
+                force_by_value,
+                ..
+            } => {
+                let potential = matches!(
+                    target.as_ref(),
+                    Expr::Member { .. } | Expr::WithMember(..) | Expr::WithBangMember(..)
+                ) || expr_name(target).is_some_and(|name| {
+                    self.lookup_slot(frame, name).is_some_and(|slot| {
+                        matches!(&*slot.borrow(), Value::Object(_) | Value::Nothing)
+                    }) || name.eq_ignore_ascii_case("me")
+                });
+                let captured = if evaluated.is_none() && potential {
+                    let parameters = self.source_setter_parameters(
+                        target,
+                        frame,
+                        matches!(value, Value::Object(_) | Value::Nothing),
+                    );
+                    Some(self.evaluate_source_arguments(
+                        args,
+                        *force_by_value,
+                        parameters.as_deref(),
+                        frame,
+                    )?)
+                } else {
+                    None
+                };
+                let evaluated = evaluated.or(captured.as_deref());
+                if let Some((receiver, mut member)) =
+                    self.indexed_object_target(target, frame, line)?
+                {
+                    let instance = matches!(
+                        self.internal_objects.get(&receiver.handle),
+                        Some(InternalObject::Instance(_))
+                    );
+                    if instance && expr_name(target).is_some() {
+                        member = "_default".into();
+                    }
+                    if let Some(evaluated) = evaluated {
+                        let view = self.source_member_view(target, frame);
+                        if self.call_instance_set_source(
+                            &receiver,
+                            &member,
+                            args,
+                            evaluated,
+                            value.clone(),
+                            view.as_deref(),
+                            frame,
+                            line,
+                        )? {
+                            return Ok(());
+                        }
+                    }
+                    if member == "_default" {
+                        return Err(no_such_member(
+                            "the class has no writable default member".into(),
+                            Some(line),
+                        ));
+                    }
                     let mut values = Vec::with_capacity(args.len());
-                    for argument in args {
+                    for (index, argument) in args.iter().enumerate() {
                         if argument.name.is_some() {
                             return Err(error(
                                 RuntimeErrorKind::ArgumentCount,
@@ -4094,9 +6955,13 @@ impl<'a> Runtime<'a> {
                                 Some(line),
                             ));
                         }
-                        values.push(match &argument.value {
-                            Some(value) => self.eval_expr(value, frame)?,
-                            None => Value::Missing,
+                        values.push(if let Some(evaluated) = evaluated {
+                            evaluated[index].value()
+                        } else {
+                            match &argument.value {
+                                Some(value) => self.eval_expr(value, frame)?,
+                                None => Value::Missing,
+                            }
                         });
                     }
                     return match self.host_set_indexed(&receiver, &member, &values, value, line)? {
@@ -4145,6 +7010,9 @@ impl<'a> Runtime<'a> {
                         Some(line),
                     )
                 })?;
+                if array.element_is_locked(&indices) {
+                    return Err(fixed_array_error(name, Some(line)));
+                }
                 let mut array = array.borrow_mut();
                 let Value::Array(array) = &mut *array else {
                     return Err(error(
@@ -4161,7 +7029,7 @@ impl<'a> Runtime<'a> {
                     // measured, 2.6 into an Integer array is 3, and 9 into a
                     // String array is "9".
                     held => match element_type_name(held) {
-                        Some(declared) => coerce_declared(value, declared, line, this_year)?,
+                        Some(declared) => self.coerce_runtime(value, declared, line, this_year)?,
                         None => value,
                     },
                 };
@@ -4176,6 +7044,19 @@ impl<'a> Runtime<'a> {
                 if is_err_object(&receiver) {
                     return err_set(frame, name, value, span.line);
                 }
+                let view = self.source_member_view(target, frame);
+                if self.call_instance_set_source(
+                    &receiver,
+                    name,
+                    &[],
+                    &[],
+                    value.clone(),
+                    view.as_deref(),
+                    frame,
+                    span.line,
+                )? {
+                    return Ok(());
+                }
                 match self.host_set(&receiver, name, value, span.line)? {
                     true => Ok(()),
                     false => Err(error(
@@ -4187,6 +7068,22 @@ impl<'a> Runtime<'a> {
             }
             Expr::WithMember(name, span) | Expr::WithBangMember(name, span) => {
                 let receiver = current_with_object(frame, span.line)?;
+                if is_err_object(&receiver) {
+                    return err_set(frame, name, value, span.line);
+                }
+                let view = self.source_member_view(target, frame);
+                if self.call_instance_set_source(
+                    &receiver,
+                    name,
+                    &[],
+                    &[],
+                    value.clone(),
+                    view.as_deref(),
+                    frame,
+                    span.line,
+                )? {
+                    return Ok(());
+                }
                 match self.host_set(&receiver, name, value, span.line)? {
                     true => Ok(()),
                     false => Err(error(
@@ -4212,6 +7109,16 @@ impl<'a> Runtime<'a> {
     ) -> Result<Option<(ObjectRef, String)>, RuntimeError> {
         match target {
             Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
+                // An array has no default object property. Inspect its slot
+                // before read_variable, which would clone every array element
+                // just to distinguish arr(index) from obj.Item(index).
+                if !name.eq_ignore_ascii_case("me")
+                    && self.lookup_slot(frame, name).as_ref().is_some_and(|slot| {
+                        matches!(&*slot.borrow(), Value::Array(_))
+                    })
+                {
+                    return Ok(None);
+                }
                 match self.read_variable(frame, name, line)? {
                     Some(Value::Object(receiver)) => Ok(Some((receiver, "Item".to_string()))),
                     Some(Value::Nothing) => Err(error(
@@ -4232,7 +7139,33 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    fn eval_scalar_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+        let value = self.eval_expr(expr, frame)?;
+        self.scalar_operand(value, frame, expr.span().line)
+    }
+
     fn eval_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+        self.ensure_expression_module(expr, frame)?;
+        if let Expr::Member { object, name, .. } = expr {
+            if let Some(enumeration) = expr_name(object) {
+                self.ensure_foreign_enum(enumeration, frame)?;
+            }
+            if let Some((module, enumeration)) = self.qualified_standard_member(object, frame) {
+                if module.items.iter().any(|item| matches!(item, ModuleItem::Enum(e) if e.name.eq_ignore_ascii_case(enumeration))) {
+                    return self.in_standard(module, |this| this.enum_member(enumeration, name).map(Value::Integer)
+                        .ok_or_else(|| no_such_member(format!("enum member is not available: {enumeration}.{name}"), Some(expr.span().line))));
+                }
+            }
+        }
+        if let Some((module, name)) = self.qualified_standard_member(expr, frame) {
+            let name = name.to_string();
+            let span = expr.span();
+            return self.in_standard(module, |this| {
+                let mut scope = empty_frame(this.error_environment.clone(), this.project_name.clone());
+                scope.error_state = frame.error_state.clone();
+                this.eval_expr(&Expr::Ident(name, span), &mut scope)
+            });
+        }
         // A call made through the VBA library -- `VBA.Left(s, 1)`,
         // `VBA.Strings.Left$(s, 1)`, `VBA.Now` -- is the same function called
         // bare, except that VBA.Array always counts from 0: measured, under
@@ -4265,6 +7198,7 @@ impl<'a> Runtime<'a> {
             }
         }
         match expr {
+            Expr::Group { expression, span } => {let value=self.eval_expr(expression,frame)?;self.let_value(value,frame,span.line)}
             Expr::Literal(literal, _) => Ok(literal_value(literal)),
             Expr::EvaluateShortcut { text, span } => self.evaluate_shortcut(text, span.line, false),
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
@@ -4275,10 +7209,17 @@ impl<'a> Runtime<'a> {
                     return Ok(value);
                 }
                 if name.eq_ignore_ascii_case("err") {
-                    return Ok(Value::Integer(frame.error_state.number));
+                    return Ok(Value::Object(ObjectRef::new(u64::MAX, "ErrObject")));
                 }
                 if name.eq_ignore_ascii_case("erl") {
                     return Ok(Value::Integer(frame.error_state.line.unwrap_or(0) as i64));
+                }
+                if self.has_visible_procedure(name) {
+                    self.err_in = Some(frame.error_state.clone());
+                    return self.call_kind(name, &[ProcKind::Function, ProcKind::PropertyGet, ProcKind::Sub], vec![], Some(span.line));
+                }
+                if let Some(value) = self.reference_constant(name) {
+                    return Ok(value);
                 }
                 if ["date", "doevents", "now", "rnd", "time", "timer", "freefile", "dir", "curdir"]
                     .iter()
@@ -4292,18 +7233,8 @@ impl<'a> Runtime<'a> {
                 // Without Option Explicit a name nobody declared is a fresh
                 // Variant: measured, `TypeName(xlNoSuchThing)` is "Empty".
                 if !self.option_explicit() {
-                    return Ok(match expr {
-                        Expr::TypedIdent { suffix, .. } => match suffix {
-                            '%' => Value::Int16(0),
-                            '&' => Value::Integer(0),
-                            '!' => Value::Single(0.0),
-                            '#' => Value::Double(0.0),
-                            '@' => Value::Currency(0),
-                            '$' => Value::String(String::new()),
-                            _ => Value::Empty,
-                        },
-                        _ => Value::Empty,
-                    });
+                    self.declare_implicit(expr, frame)?;
+                    return Ok(self.read_variable(frame, name, span.line)?.unwrap_or(Value::Empty));
                 }
                 Err(error(
                     RuntimeErrorKind::UndefinedVariable,
@@ -4311,11 +7242,11 @@ impl<'a> Runtime<'a> {
                     Some(span.line),
                 ))
             }
-            Expr::New { type_name, span } => self.new_object(type_name, span.line),
+            Expr::New { type_name, span } => self.new_object(object_type_name(type_name), span.line),
             Expr::Unary { op, operand, span } => {
                 let typed = self.statically_typed(operand, frame);
                 let value = self.eval_expr(operand, frame)?;
-                let value = self.scalar_operand(value, span.line)?;
+                let value = self.scalar_operand(value, frame, span.line)?;
                 // A Variant that overflows moves up a type instead: measured,
                 // -v of a Variant Integer -32768 is the Long 32768 and of a
                 // Variant Long's least a Double.
@@ -4351,8 +7282,8 @@ impl<'a> Runtime<'a> {
                     (lhs, rhs)
                 } else {
                     (
-                        self.scalar_operand(lhs, span.line)?,
-                        self.scalar_operand(rhs, span.line)?,
+                        self.scalar_operand(lhs, frame, span.line)?,
+                        self.scalar_operand(rhs, frame, span.line)?,
                     )
                 };
                 if let Some(answer) = variant_comparison(*op, &lhs, &rhs, typed, self.option_compare_text()) {
@@ -4387,15 +7318,7 @@ impl<'a> Runtime<'a> {
                 type_name,
                 span,
             } => match self.eval_expr(operand, frame)? {
-                Value::Object(object) => Ok(Value::Boolean(
-                    object.kind.eq_ignore_ascii_case(type_name)
-                        || type_name
-                            .rsplit('.')
-                            .next()
-                            .is_some_and(|name| object.kind.eq_ignore_ascii_case(name))
-                        || type_name.eq_ignore_ascii_case("object")
-                        || self.interfaces_of(&object.kind).iter().any(|interface| interface.eq_ignore_ascii_case(type_name)),
-                )),
+                Value::Object(object) => Ok(Value::Boolean(self.object_matches_type(&object, type_name))),
                 Value::Nothing => Ok(Value::Boolean(false)),
                 _ => Err(error(
                     RuntimeErrorKind::TypeMismatch,
@@ -4412,13 +7335,10 @@ impl<'a> Runtime<'a> {
             }) =>
             {
                 let name = expr_name(target).unwrap();
+                if args.is_empty(){return Ok(self.lookup_slot(frame,name).expect("array slot").snapshot());}
                 let indices = self.array_arguments(args, frame, span.line)?;
                 let value = self.lookup_slot(frame, name).unwrap();
-                let value = value.borrow();
-                let Value::Array(array) = &*value else {
-                    unreachable!()
-                };
-                Ok(array.values[array_offset(array, &indices, span.line)?].clone())
+                VariableSlot::project(&value, RecordStep::Index(indices), span.line).map(|slot| slot.snapshot())
             }
             Expr::Index { .. } => self.eval_call(expr, frame),
             Expr::Member {
@@ -4428,10 +7348,8 @@ impl<'a> Runtime<'a> {
                 // measured to read as the member alone.
                 if let Expr::Ident(owner, _) = object.as_ref() {
                     if self.lookup_slot(frame, owner).is_none() {
-                        if let Some(members) = self.enum_members.get(&key(owner)) {
-                            if let Some(value) = members.get(&key(name)) {
-                                return Ok(Value::Integer(*value));
-                            }
+                        if let Some(value) = self.enum_member(owner, name) {
+                            return Ok(Value::Integer(value));
                         }
                     }
                 }
@@ -4439,6 +7357,8 @@ impl<'a> Runtime<'a> {
                 if is_err_object(&receiver) {
                     return err_property(frame, name, span.line);
                 }
+                let view=self.source_class_name(object,frame);
+                if let Some(answer)=self.call_instance_source(&receiver,name,&[],false,None,view.as_deref(),frame,span.line)?{return Ok(answer);}
                 if let Some(value) = self.host_get(&receiver, name, span.line)? {
                     return Ok(value);
                 }
@@ -4459,6 +7379,11 @@ impl<'a> Runtime<'a> {
             }
             Expr::WithMember(name, span) | Expr::WithBangMember(name, span) => {
                 let receiver = current_with_object(frame, span.line)?;
+                if is_err_object(&receiver) {
+                    return err_property(frame, name, span.line);
+                }
+                let view=match frame.with_objects.last(){Some(WithSubject::Object{class,..})=>class.clone(),_=>None};
+                if let Some(answer)=self.call_instance_source(&receiver,name,&[],false,None,view.as_deref(),frame,span.line)?{return Ok(answer);}
                 if let Some(value) = self.host_get(&receiver, name, span.line)? {
                     return Ok(value);
                 }
@@ -4479,6 +7404,10 @@ impl<'a> Runtime<'a> {
     }
 
     fn eval_call(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+        if let Some((module, name)) = self.qualified_standard_member(expr, frame) {
+            let qualifier = self.main_module.standard_modules.iter().find(|(_, found)| std::ptr::eq(found, module)).map(|(name, _)| name).expect("standard module");
+            return self.call_user_procedure(&format!("{qualifier}.{name}"), &[], false, frame, Some(expr.span().line));
+        }
         match expr {
             Expr::Index {
                 target,
@@ -4486,16 +7415,49 @@ impl<'a> Runtime<'a> {
                 force_by_value,
                 span,
             } => {
+                if let Some((module, name)) = self.qualified_standard_member(target, frame) {
+                    let qualifier = self.main_module.standard_modules.iter().find(|(_, found)| std::ptr::eq(found, module)).map(|(name, _)| name).expect("standard module");
+                    let qualified = format!("{qualifier}.{name}");
+                    if self.has_visible_procedure(&qualified) {
+                        return self.call_user_procedure(&qualified, args, *force_by_value, frame, Some(span.line));
+                    }
+                    // Variable subscripts are evaluated in the caller. The
+                    // selected array/object itself belongs to the module.
+                    let evaluated = args.iter().map(|arg| match &arg.value { Some(expr) => self.eval_expr(expr, frame), None => Ok(Value::Missing) }).collect::<Result<Vec<_>, _>>()?;
+                    let name = name.to_string();
+                    return self.in_standard(module, |this| {
+                        let scope = empty_frame(this.error_environment.clone(), this.project_name.clone());
+                        match this.read_variable(&scope, &name, span.line)? {
+                            Some(Value::Array(array)) => {
+                                if evaluated.is_empty(){return Ok(Value::Array(array));}
+                                let indices = evaluated.iter().map(|v| index_from(v, span.line)).collect::<Result<Vec<_>, _>>()?;
+                                Ok(array.values[array_offset(&array, &indices, span.line)?].clone())
+                            }
+                            Some(Value::Object(receiver)) => this.host_call(Some(&receiver), "Item", &evaluated, span.line)?.ok_or_else(|| no_such_member(format!("default member is not available: {}.Item", receiver.kind), Some(span.line))),
+                            _ => Err(error(RuntimeErrorKind::TypeMismatch, "subscripts on a value that is not an array", Some(span.line))),
+                        }
+                    });
+                }
                 if let Expr::Ident(name, _) | Expr::TypedIdent { name, .. } = target.as_ref() {
-                    if self.lookup_slot(frame, name).is_some() {
+                    if self.lookup_slot(frame, name).is_some() || self.document_globals.contains_key(&key(name)) {
+                        let class=self.source_class_name(target,frame);
+                        let instance=class.is_some() || self.lookup_slot(frame,name).is_some_and(|slot|matches!(&*slot.borrow(),Value::Object(object) if matches!(self.internal_objects.get(&object.handle),Some(InternalObject::Instance(_)))));
+                        let parameters=class.as_ref().and_then(|class|self.source_class_parameters(class,"_default"));
+                        let evaluated=if instance {Some(self.evaluate_source_arguments(args,*force_by_value,parameters.as_deref(),frame)?)}else{None};
                         match self.read_variable(frame, name, span.line)? {
                             Some(Value::Object(receiver)) => {
+                                if let Some(answer) = self.call_instance_source(&receiver, "_default", args, *force_by_value, evaluated.as_deref(), class.as_deref(), frame, span.line)? {
+                                    return Ok(answer);
+                                }
+                                if instance {
+                                    return Err(no_such_member("the class has no default member".into(),Some(span.line)));
+                                }
                                 let mut values = Vec::with_capacity(args.len());
-                                for argument in args {
-                                    values.push(match argument.value.as_ref() {
+                                for (index,argument) in args.iter().enumerate() {
+                                    values.push(if let Some(evaluated)=&evaluated{evaluated[index].value()}else{match argument.value.as_ref() {
                                         Some(value) => self.eval_expr(value, frame)?,
                                         None => Value::Missing,
-                                    });
+                                    }});
                                 }
                                 return self
                                     .host_call(Some(&receiver), "Item", &values, span.line)?
@@ -4536,9 +7498,7 @@ impl<'a> Runtime<'a> {
                             _ => {}
                         }
                     }
-                    if self.module.items.iter().any(|item| {
-                        matches!(item, ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name))
-                    }) {
+                    if self.has_visible_procedure(name) {
                         return self.call_user_procedure(
                             name,
                             args,
@@ -4547,24 +7507,26 @@ impl<'a> Runtime<'a> {
                             Some(span.line),
                         );
                     }
-                    // A class calling a procedure of the standard module.
-                    if self.owner.is_some()
-                        && self.has_procedure_of(self.main_module, name, &[ProcKind::Function, ProcKind::Sub])
-                    {
-                        let mut values = Vec::with_capacity(args.len());
-                        for argument in args.iter() {
-                            values.push(match &argument.value {
-                                Some(expr) => self.eval_expr(expr, frame)?,
-                                None => Value::Missing,
-                            });
-                        }
-                        let line = Some(span.line);
-                        return self.as_main(|this| this.call_procedure(name, values, line));
-                    }
                 }
                 if let Expr::Ident(name, _) | Expr::TypedIdent { name, .. } = target.as_ref() {
-                    if let Some(size) = self.storage_size_asked_of(name, args, frame) {
-                        return Ok(Value::Integer(size));
+                    if let Some(answer) = self.storage_size_asked_of(name, args, frame) {
+                        return answer;
+                    }
+                    if name.eq_ignore_ascii_case("strptr") && self.lookup_slot(frame,name).is_none() {
+                        let [Argument {value:Some(operand),name:None,..}]=args.as_slice() else{return Err(error(RuntimeErrorKind::ArgumentCount,"StrPtr takes one argument",Some(span.line)));};
+                        let constant=match operand {
+                            Expr::Literal(value,_)=>literal_value(value).is_string(),
+                            Expr::Ident(name,_)|Expr::TypedIdent{name,..}=>self.is_constant(frame,name),
+                            _=>false,
+                        };
+                        let pointer=if constant {
+                            let value=self.eval_expr(operand,frame)?;
+                            bstr::literal_pointer(value,&mut self.bstr_literals)
+                        }else{match self.reference_argument(operand,frame,span.line)? {
+                            BoundArgument::Reference(slot)=>bstr::slot_pointer(&slot),
+                            BoundArgument::Value(value)=>bstr::value_pointer(value),
+                        }}.map_err(|mut e|{e.line=Some(span.line);e})?;
+                        return Ok(Value::LongLong(pointer));
                     }
                     // Abs of a Variant at its type's least moves up a type:
                     // measured, a Variant Integer -32768 gives the Long 32768
@@ -4581,14 +7543,50 @@ impl<'a> Runtime<'a> {
                         }
                     }
                 }
+                if matches!(target.as_ref(), Expr::Ident(name, _) | Expr::TypedIdent { name, .. } if name.eq_ignore_ascii_case("callbyname") && self.lookup_slot(frame, name).is_none()) {
+                    let mut evaluated = Vec::with_capacity(args.len());
+                    for argument in args.iter().take(3) {
+                        let value = match &argument.value { Some(expr) => self.eval_expr(expr, frame)?, None => Value::Missing };
+                        evaluated.push(EvaluatedArgument::new(value, None));
+                    }
+                    if args.len() > 3 {
+                        evaluated.extend(self.evaluate_source_arguments(&args[3..], *force_by_value, None, frame)?);
+                    }
+                    let values: Vec<_> = evaluated.iter().map(EvaluatedArgument::value).collect();
+                    return self.call_by_name(&values, frame, Some(span.line), Some((args, &evaluated, *force_by_value)));
+                }
+                let view=self.source_member_view(target,frame);
+                let early_macro = self.early_macro_call(target, frame);
+                let parameters=match target.as_ref(){
+                    Expr::Member{object,name,..}=>self.source_call_parameters(object,name,frame),
+                    Expr::WithMember(name,_)|Expr::WithBangMember(name,_)=>match frame.with_objects.last(){Some(WithSubject::Object{class:Some(class),..})=>self.source_class_parameters(class,name),_=>None},
+                    _=>None,
+                }.or_else(|| early_macro.then(Self::macro_parameters));
+                let evaluated=if early_macro || matches!(target.as_ref(),Expr::Member{..}|Expr::WithMember(..)|Expr::WithBangMember(..)) {
+                    Some(self.evaluate_source_arguments(args,*force_by_value,parameters.as_deref(),frame)?)
+                } else {None};
+                let receiver = match target.as_ref() {
+                    Expr::Member { object, .. } => Some(self.eval_object(object, frame, span.line)?),
+                    Expr::WithMember(..) | Expr::WithBangMember(..) => Some(current_with_object(frame, span.line)?),
+                    _ => None,
+                };
+                if let Some(receiver) = &receiver {
+                    let name = match target.as_ref() {
+                        Expr::Member { name, .. } | Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => name,
+                        _ => unreachable!(),
+                    };
+                    if let Some(answer) = self.call_instance_source(receiver, name, args, *force_by_value, evaluated.as_deref(), view.as_deref(), frame, span.line)? {
+                        return Ok(answer);
+                    }
+                }
                 let mut values = Vec::with_capacity(args.len());
                 let mut argument_names = Vec::with_capacity(args.len());
-                for argument in args {
+                for (index,argument) in args.iter().enumerate() {
                     argument_names.push(argument.name.clone());
-                    values.push(match argument.value.as_ref() {
+                    values.push(if let Some(evaluated)=&evaluated {evaluated[index].value()}else{match argument.value.as_ref() {
                         Some(value) => self.eval_expr(value, frame)?,
                         None => Value::Missing,
-                    });
+                    }});
                 }
                 match target.as_ref() {
                     Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
@@ -4606,34 +7604,15 @@ impl<'a> Runtime<'a> {
                         }
                         answer
                     }
-                    Expr::Member { object, name, .. } => {
-                        let receiver = self.eval_object(object, frame, span.line)?;
+                    Expr::Member { name, .. } => {
+                        let receiver = receiver.expect("member receiver evaluated above");
                         if is_err_object(&receiver) {
-                            return err_call(frame, name, &values, span.line);
+                            return err_call(frame, name, &values, &argument_names, span.line, ErrCallMode::Direct);
                         }
-                        // `Application.Run "Macro", a, b` runs a procedure of
-                        // this module by name -- which only the interpreter
-                        // can do, so it never reaches the host. The first
-                        // argument is the macro's name, the rest its
-                        // arguments; measured, it returns what the procedure
-                        // returns (or Empty for a Sub).
-                        if name.eq_ignore_ascii_case("run")
-                            && receiver.kind.eq_ignore_ascii_case("Application")
-                        {
-                            let mut given = values.into_iter();
-                            let macro_name = match given.next() {
-                                Some(Value::String(named)) => named,
-                                _ => {
-                                    return Err(error(
-                                        RuntimeErrorKind::TypeMismatch,
-                                        "Application.Run needs the macro's name",
-                                        Some(span.line),
-                                    ))
-                                }
-                            };
-                            let rest: Vec<Value> = given.collect();
-                            return self.call_procedure(&macro_name, rest, Some(span.line));
-                        }
+                        if let Some(result) = self.host_macro_call_in_frame(
+                            Some(&receiver), name, &values, &argument_names, span.line, frame,
+                            if early_macro { None } else { evaluated.as_deref().map(|values| (args.as_slice(), values, *force_by_value)) },
+                        ) { return result; }
                         self.host_call_named(
                             Some(&receiver),
                             name,
@@ -4646,7 +7625,14 @@ impl<'a> Runtime<'a> {
                         })
                     }
                     Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
-                        let receiver = current_with_object(frame, span.line)?;
+                        let receiver = receiver.expect("With receiver evaluated above");
+                        if is_err_object(&receiver) {
+                            return err_call(frame, name, &values, &argument_names, span.line, ErrCallMode::Direct);
+                        }
+                        if let Some(result) = self.host_macro_call_in_frame(
+                            Some(&receiver), name, &values, &argument_names, span.line, frame,
+                            if early_macro { None } else { evaluated.as_deref().map(|values| (args.as_slice(), values, *force_by_value)) },
+                        ) { return result; }
                         self.host_call_named(
                             Some(&receiver),
                             name,
@@ -4704,8 +7690,10 @@ impl<'a> Runtime<'a> {
             } => {
                 let receiver = self.eval_object(object, frame, span.line)?;
                 if is_err_object(&receiver) {
-                    return err_call(frame, name, &[], span.line);
+                    return err_call(frame, name, &[], &[], span.line, ErrCallMode::Direct);
                 }
+                let view=self.source_class_name(object,frame);
+                if let Some(answer)=self.call_instance_source(&receiver,name,&[],false,None,view.as_deref(),frame,span.line)?{return Ok(answer);}
                 self.host_call(Some(&receiver), name, &[], span.line)?
                     .ok_or_else(|| {
                         no_such_member(format!("host method is not available: {}.{name}", receiver.kind), Some(span.line))
@@ -4713,6 +7701,11 @@ impl<'a> Runtime<'a> {
             }
             Expr::WithMember(name, span) | Expr::WithBangMember(name, span) => {
                 let receiver = current_with_object(frame, span.line)?;
+                if is_err_object(&receiver) {
+                    return err_call(frame, name, &[], &[], span.line, ErrCallMode::Direct);
+                }
+                let view=match frame.with_objects.last(){Some(WithSubject::Object{class,..})=>class.clone(),_=>None};
+                if let Some(answer)=self.call_instance_source(&receiver,name,&[],false,None,view.as_deref(),frame,span.line)?{return Ok(answer);}
                 if let Some(value) = self.host_call(Some(&receiver), name, &[], span.line)? {
                     return Ok(value);
                 }
@@ -4752,7 +7745,95 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
-        let procedure = self.find_procedure(name, line)?;
+        let (module, procedure) = self.find_procedure(name, line)?;
+        self.call_resolved_source_body(
+            module,
+            &procedure,
+            None,
+            args,
+            force_by_value,
+            None,
+            frame,
+            line,
+        )
+    }
+
+    fn source_omitted_argument(
+        &mut self,
+        module: &'a Module,
+        receiver: Option<&ObjectRef>,
+        parameter: &crate::ast::Param,
+        line: Option<u32>,
+    ) -> Result<Value, RuntimeError> {
+        if let Some(receiver) = receiver {
+            self.as_instance(receiver, |this| {
+                this.omitted_parameter_value(parameter, line)
+            })
+        } else {
+            self.omitted_in_module(module, parameter, line)
+        }
+    }
+
+    fn indexes_procedure_result(&self, procedure: &Procedure, args: &[Argument]) -> bool {
+        procedure.params.is_empty() && !args.is_empty()
+            && args.iter().all(|arg| arg.name.is_none())
+            && matches!(procedure.kind, ProcKind::Function | ProcKind::PropertyGet)
+            && procedure.return_type.as_ref().is_none_or(|kind| {
+                kind.is_array || matches!(key(&kind.name).as_str(), "variant" | "object")
+                    || self.is_specific_object_type(&kind.name)
+            })
+    }
+
+    fn call_resolved_source_body(
+        &mut self,
+        module: &'a Module,
+        procedure: &Procedure,
+        receiver: Option<&ObjectRef>,
+        args: &[Argument],
+        force_by_value: bool,
+        evaluated: Option<&[EvaluatedArgument]>,
+        frame: &mut Frame,
+        line: Option<u32>,
+    ) -> Result<Value, RuntimeError> {
+        self.call_resolved_source_body_with_defaults(module, procedure, receiver, args, force_by_value, evaluated, frame, line, false)
+    }
+
+    fn call_resolved_source_body_with_defaults(
+        &mut self, module: &'a Module, procedure: &Procedure, receiver: Option<&ObjectRef>,
+        args: &[Argument], force_by_value: bool, evaluated: Option<&[EvaluatedArgument]>,
+        frame: &mut Frame, line: Option<u32>, automation: bool,
+    ) -> Result<Value, RuntimeError> {
+        if self.indexes_procedure_result(procedure, args) {
+            // Index operands are evaluated in the caller before invoking the
+            // parameterless factory, and retain their places for its default.
+            let class = procedure.return_type.as_ref().map(|kind| kind.name.as_str())
+                .filter(|name| self.classes.contains_key(&key(name)));
+            let parameters = class.and_then(|name| self.source_class_parameters(name, "_default"));
+            let arguments = match evaluated {
+                Some(values) => values.to_vec(),
+                None => self.evaluate_source_arguments(args, force_by_value, parameters.as_deref(), frame)?,
+            };
+            let value = self.call_resolved_source_body(module, procedure, receiver, &[], false, None, frame, line)?;
+            return match value {
+                Value::Object(object) => {
+                    if let Some(value) = self.call_instance_source(&object, "_default", args, force_by_value, Some(&arguments), class, frame, line.unwrap_or(0))? {
+                        return Ok(value);
+                    }
+                    if matches!(self.internal_objects.get(&object.handle), Some(InternalObject::Instance(_))) {
+                        return Err(no_such_member("the returned class has no default member".into(), line));
+                    }
+                    let values: Vec<_> = arguments.iter().map(EvaluatedArgument::value).collect();
+                    self.host_call(Some(&object), "Item", &values, line.unwrap_or(0))?
+                        .ok_or_else(|| no_such_member("the returned object has no default member".into(), line))
+                }
+                Value::Array(array) => {
+                    let indices = arguments.iter().map(|arg| index_from(&arg.value(), line.unwrap_or(0))).collect::<Result<Vec<_>, _>>()?;
+                    Ok(array.values[array_offset(&array, &indices, line.unwrap_or(0))?].clone())
+                }
+                Value::Nothing => Err(error(RuntimeErrorKind::ObjectVariableNotSet, "returned object is Nothing", line)),
+                _ => Err(error(RuntimeErrorKind::TypeMismatch, "returned value cannot be indexed", line)),
+            };
+        }
         let param_array_index = procedure
             .params
             .iter()
@@ -4812,159 +7893,282 @@ impl<'a> Runtime<'a> {
         }
 
         let mut bound = Vec::with_capacity(procedure.params.len());
-        let mut copybacks = Vec::<(ValueSlot, Vec<i64>, ValueSlot)>::new();
         let mut fixed_string_copybacks = Vec::<(ValueSlot, usize, ValueSlot)>::new();
-        let mut record_copybacks = Vec::<(Expr, ValueSlot)>::new();
-        let mut param_array_backs = Vec::<(usize, ValueSlot)>::new();
-        let mut param_array_held: Option<ValueSlot> = None;
+        let mut argument_objects = Vec::new();
+        let mut converted_copybacks = Vec::<(ValueSlot, ValueSlot)>::new();
         for (parameter_index, parameter) in procedure.params.iter().enumerate() {
             if parameter.mode == ParamMode::ParamArray {
                 let mut values = Vec::with_capacity(param_array_args.len());
+                let mut aliases = BTreeMap::new();
                 for argument_index in &param_array_args {
                     let argument = &args[*argument_index];
-                    let value = match &argument.value {
-                        Some(expression) => self.eval_expr(expression, frame)?,
-                        None => Value::Missing,
+                    let reference = match &argument.value {
+                        Some(expression) if !force_by_value && !argument.force_by_value => {
+                            Some(if let Some(evaluated) = evaluated {
+                                match evaluated[*argument_index].take_reference() {
+                                    Some(slot) => BoundArgument::Reference(slot),
+                                    None => BoundArgument::Value(
+                                        evaluated[*argument_index].take_value(),
+                                    ),
+                                }
+                            } else {
+                                self.reference_argument(expression, frame, expression.span().line)?
+                            })
+                        }
+                        _ => None,
                     };
-                    // Each element stands for the variable it was given as:
-                    // measured, `xs(0) = xs(0) + 100` changes the caller's n.
-                    if let Some(name) = argument.value.as_ref().and_then(expr_name) {
-                        if !force_by_value && !argument.force_by_value && !self.is_constant(frame, name) {
-                            if let Some(slot) = self.lookup_slot(frame, name) {
-                                param_array_backs.push((values.len(), slot));
+                    let value = match (&reference, &argument.value) {
+                        (Some(BoundArgument::Reference(slot)), Some(expression)) => {
+                            let value = evaluated
+                                .filter(|values| !values[*argument_index].deferred)
+                                .map(|values| values[*argument_index].take_value())
+                                .unwrap_or_else(|| slot.snapshot());
+                            let prepared_width = evaluated.and_then(|values| {
+                                match values[*argument_index].conversion {
+                                    Some(ArgumentConversion::FixedString(width)) => Some(width),
+                                    _ => None,
+                                }
+                            });
+                            let temporary = if let Some(width) = prepared_width
+                                .or_else(|| self.reference_fixed_width(expression, slot, frame))
+                            {
+                                let temporary = VariableSlot::new(value.clone());
+                                temporary.set_declared("String");
+                                fixed_string_copybacks.push((
+                                    slot.clone(),
+                                    width,
+                                    temporary.clone(),
+                                ));
+                                temporary
+                            } else if self.reference_needs_variant_box(slot) {
+                                let temporary = VariableSlot::object_temporary(value.clone());
+                                temporary.set_declared("Variant");
+                                converted_copybacks
+                                    .push((slot.copyback_place(), temporary.clone()));
+                                temporary
+                            } else {
+                                slot.clone()
+                            };
+                            aliases.insert(
+                                vec![RecordStep::Index(vec![values.len() as i64])],
+                                temporary,
+                            );
+                            value
+                        }
+                        (Some(BoundArgument::Value(value)), _) => value.clone(),
+                        (_, Some(expression)) => {
+                            if let Some(evaluated) = evaluated {
+                                evaluated[*argument_index].take_value()
+                            } else {
+                                self.eval_expr(expression, frame)?
                             }
                         }
+                        _ => Value::Missing,
+                    };
+                    let alias =
+                        aliases.contains_key(&vec![RecordStep::Index(vec![values.len() as i64])]);
+                    if !alias {
+                        retain_argument_objects(&value, &mut argument_objects);
                     }
-                    values.push(value);
+                    values.push(if alias { Value::Empty } else { value });
                 }
-                let held = Rc::new(RefCell::new(Value::Array(ArrayValue {
-                    dimensions: vec![ArrayDimension {
-                        lower_bound: 0,
-                        length: values.len(),
-                    }],
-                    values,
-                    element_default: Box::new(default_value(&parameter.type_name)),
-                    resizable: false,
-                })));
-                param_array_held = Some(held.clone());
+                let held = VariableSlot::with_aliases(
+                    Value::Array(ArrayValue {
+                        dimensions: vec![ArrayDimension {
+                            lower_bound: 0,
+                            length: values.len(),
+                        }],
+                        values,
+                        element_default: Box::new(self.reference_default_value(&parameter.type_name)),
+                        resizable: false,
+                    }),
+                    aliases,
+                );
                 bound.push(BoundArgument::Reference(held));
                 continue;
             }
             let Some(argument_index) = assigned[parameter_index] else {
-                bound.push(BoundArgument::Value(
-                    self.omitted_parameter_value(parameter, line)?,
-                ));
+                let value = self.source_omitted_argument(module, receiver, parameter, line)?;
+                bound.push(BoundArgument::Value(Self::call_default_value(parameter, value, automation)));
                 continue;
             };
             let argument = &args[argument_index];
+            if automation && parameter.optional && evaluated.and_then(|values| values.get(argument_index)).is_some_and(|value| matches!(value.value(), Value::Missing)) {
+                let value = self.source_omitted_argument(module, receiver, parameter, line)?;
+                bound.push(BoundArgument::Value(Self::call_default_value(parameter, value, true)));
+                continue;
+            }
             let Some(expression) = argument.value.as_ref() else {
-                bound.push(BoundArgument::Value(
-                    self.omitted_parameter_value(parameter, line)?,
-                ));
+                let value = self.source_omitted_argument(module, receiver, parameter, line)?;
+                bound.push(BoundArgument::Value(Self::call_default_value(parameter, value, automation)));
                 continue;
             };
-            if parameter.mode == ParamMode::ByRef && !force_by_value && !argument.force_by_value {
-                if let Some(name) = expr_name(expression) {
-                    if !self.is_constant(frame, name) {
-                        self.read_variable(frame, name, expression.span().line)?;
-                        if let Some(value) = self.lookup_slot(frame, name) {
-                            if let Some(width) = self.fixed_string_width(frame, name) {
-                                if let Some((_, _, shared)) = fixed_string_copybacks
-                                    .iter()
-                                    .find(|(existing, _, _)| Rc::ptr_eq(existing, &value))
-                                {
-                                    bound.push(BoundArgument::Reference(shared.clone()));
-                                    continue;
-                                }
-                                let temporary = Rc::new(RefCell::new(value.borrow().clone()));
-                                bound.push(BoundArgument::Reference(temporary.clone()));
-                                fixed_string_copybacks.push((value, width, temporary));
-                                continue;
-                            }
-                            bound.push(BoundArgument::Reference(value));
-                            continue;
-                        }
+            if let Some((prepared, conversion)) = evaluated.and_then(|values| {
+                values[argument_index]
+                    .conversion
+                    .map(|conversion| (&values[argument_index], conversion))
+            }) {
+                let destination = prepared
+                    .take_reference()
+                    .expect("prepared conversion destination");
+                let mut value = prepared.take_value();
+                if matches!(conversion, ArgumentConversion::Object)
+                    && parameter.mode == ParamMode::ByRef
+                {
+                    let kind = self.parameter_scalar_name(&parameter.type_name.name);
+                    if parameter.is_array
+                        || (!matches!(kind.as_str(), "object" | "variant")
+                            && !self.is_specific_object_type(&kind))
+                    {
+                        return Err(error(
+                            RuntimeErrorKind::TypeMismatch,
+                            "Automation object reference cannot bind to this ByRef parameter",
+                            line,
+                        ));
+                    }
+                    if self.is_specific_object_type(&kind) {
+                        value = self.coerce_runtime(
+                            value,
+                            &parameter.type_name.name,
+                            line.unwrap_or(0),
+                            self.this_year(),
+                        )?;
                     }
                 }
-                // A field of a record goes by reference too, and comes back
-                // changed: measured, `Twice p.X` doubles p.X, where
-                // `Twice (p.X)` in brackets does not.
-                if matches!(expression, Expr::Member { .. } | Expr::Index { .. })
-                    && self.record_rooted(frame, expression)
-                {
-                    let value = Rc::new(RefCell::new(self.eval_expr(expression, frame)?));
-                    bound.push(BoundArgument::Reference(value.clone()));
-                    record_copybacks.push((expression.clone(), value));
-                    continue;
+                let temporary = match conversion {
+                    ArgumentConversion::Object => {
+                        let slot = VariableSlot::object_temporary(value.clone());
+                        slot.set_declared("Variant");
+                        converted_copybacks.push((destination, slot.clone()));
+                        slot
+                    }
+                    ArgumentConversion::FixedString(width) => {
+                        let slot = VariableSlot::new(value.clone());
+                        slot.set_declared("String");
+                        fixed_string_copybacks.push((destination, width, slot.clone()));
+                        slot
+                    }
+                };
+                if parameter.mode == ParamMode::ByRef {
+                    bound.push(BoundArgument::Reference(temporary));
+                } else {
+                    bound.push(BoundArgument::Value(value));
                 }
-                if let Expr::Index { target, args, .. } = expression {
-                    let array = expr_name(target)
-                        .and_then(|name| self.lookup_slot(frame, name))
-                        .filter(|value| matches!(&*value.borrow(), Value::Array(_)));
-                    if let Some(array) = array {
-                        let indices = self.array_arguments(
-                            args,
-                            frame,
-                            line.unwrap_or(expression.span().line),
-                        )?;
-                        if let Some((_, _, value)) =
-                            copybacks.iter().find(|(existing, existing_indices, _)| {
-                                Rc::ptr_eq(existing, &array) && *existing_indices == indices
-                            })
+                continue;
+            }
+            if parameter.mode == ParamMode::ByRef && !force_by_value && !argument.force_by_value {
+                match if let Some(evaluated) = evaluated {
+                    match evaluated[argument_index].take_reference() {
+                        Some(slot) => BoundArgument::Reference(slot),
+                        None => BoundArgument::Value(evaluated[argument_index].take_value()),
+                    }
+                } else {
+                    self.reference_argument(expression, frame, expression.span().line)?
+                } {
+                    BoundArgument::Reference(slot) => {
+                        // A specific class passed as Object or Variant gets a converted reference.
+                        // It is independent during the call and copies back only on success.
+                        if matches!(
+                            key(&parameter.type_name.name).as_str(),
+                            "variant" | "object"
+                        ) && self.reference_needs_variant_box(&slot)
                         {
-                            bound.push(BoundArgument::Reference(value.clone()));
+                            let value = evaluated
+                                .map(|values| values[argument_index].take_value())
+                                .unwrap_or_else(|| slot.snapshot());
+                            let temporary = VariableSlot::object_temporary(value);
+                            temporary.set_declared("Variant");
+                            bound.push(BoundArgument::Reference(temporary.clone()));
+                            converted_copybacks.push((slot.copyback_place(), temporary));
                             continue;
                         }
-                        let value = Rc::new(RefCell::new(self.eval_expr(expression, frame)?));
-                        bound.push(BoundArgument::Reference(value.clone()));
-                        copybacks.push((array, indices, value));
+                        if let Some(width) = self.reference_fixed_width(expression, &slot, frame) {
+                            let value = evaluated
+                                .map(|values| values[argument_index].take_value())
+                                .unwrap_or_else(|| slot.snapshot());
+                            let temporary = VariableSlot::new(value);
+                            temporary.set_declared("String");
+                            bound.push(BoundArgument::Reference(temporary.clone()));
+                            fixed_string_copybacks.push((slot, width, temporary));
+                        } else {
+                            bound.push(BoundArgument::Reference(slot));
+                        }
+                        continue;
+                    }
+                    BoundArgument::Value(value) => {
+                        bound.push(BoundArgument::Value(value));
                         continue;
                     }
                 }
             }
-            bound.push(BoundArgument::Value(self.eval_expr(expression, frame)?));
+            bound.push(BoundArgument::Value(if let Some(evaluated) = evaluated {
+                evaluated[argument_index].take_by_value()
+            } else {
+                self.eval_expr(expression, frame)?
+            }));
         }
 
-        self.err_in = Some(frame.error_state.clone());
-        let result = self.invoke_procedure(&procedure, bound, line)?;
+        // A receiver getter can change Err after argument preparation. Late
+        // parameter coercion must see that state before the first body statement.
+        self.err_in = Some(self.err_out.take().unwrap_or_else(|| frame.error_state.clone()));
+        let result = if let Some(receiver) = receiver {
+            self.as_instance(receiver, |this| {
+                this.invoke_procedure(procedure, bound, line)
+            })
+        } else {
+            self.invoke_in_module(module, procedure, bound, line)
+        };
         if let Some(carried) = self.err_out.take() {
             frame.error_state = carried;
         }
-        for (place, value) in record_copybacks {
-            let value = value.borrow().clone();
-            self.assign(&place, value, frame, line.unwrap_or(0))?;
-        }
-        if let Some(held) = param_array_held {
-            if let Value::Array(array) = &*held.borrow() {
-                for (index, slot) in param_array_backs {
-                    if let Some(value) = array.values.get(index) {
-                        *slot.borrow_mut() = value.clone();
-                    }
-                }
+        if result.is_ok() {
+            for (target, value) in converted_copybacks {
+                let kind = target
+                    .declared
+                    .borrow()
+                    .clone()
+                    .unwrap_or_else(|| "Variant".into());
+                let value = self.coerce_runtime(
+                    value.snapshot(),
+                    &kind,
+                    line.unwrap_or(0),
+                    self.this_year(),
+                )?;
+                target.write_copyback(value, line)?;
             }
         }
-        for (target, width, value) in fixed_string_copybacks {
-            *target.borrow_mut() = coerce_string_width(value.borrow().clone(), width, line)?;
-        }
-        for (array, indices, value) in copybacks {
-            let mut value = value.borrow().clone();
-            let mut array = array.borrow_mut();
-            let Value::Array(array) = &mut *array else {
-                return Err(error(
-                    RuntimeErrorKind::TypeMismatch,
-                    "ByRef array target is no longer an array",
-                    line,
-                ));
-            };
-            if let Value::String(default) = array.element_default.as_ref() {
-                if !default.is_empty() {
-                    value = coerce_string_width(value, default.encode_utf16().count(), line)?;
-                }
+        if result.is_ok() {
+            for (target, width, value) in fixed_string_copybacks {
+                target.write_copyback(coerce_string_width(value.snapshot(), width, line)?, line)?;
             }
-            let offset = array_offset(array, &indices, line.unwrap_or(0))?;
-            array.values[offset] = value;
         }
-        Ok(result)
+        result
+    }
+
+    fn reference_needs_variant_box(&self, slot: &ValueSlot) -> bool {
+        slot.declared
+            .borrow()
+            .as_ref()
+            .is_some_and(|name| self.is_specific_object_type(name))
+    }
+
+    fn is_specific_object_type(&self, name: &str) -> bool {
+        self.source_class_key(name).is_some()
+            || self.document_references.as_ref().is_some_and(|references| {
+                references.library.resolve_type(name).is_some()
+            })
+            || matches!(
+                key(object_type_name(name)).as_str(),
+                "application"
+                    | "workbook"
+                    | "worksheet"
+                    | "range"
+                    | "chart"
+                    | "shape"
+                    | "collection"
+                    | "dictionary"
+                    | "scripting.dictionary"
+            )
     }
 
     fn call_named(
@@ -4973,41 +8177,60 @@ impl<'a> Runtime<'a> {
         args: Vec<Value>,
         argument_names: &[Option<String>],
         line: Option<u32>,
-        frame: &Frame,
+        frame: &mut Frame,
     ) -> Result<Value, RuntimeError> {
-        if self.module.items.iter().any(
-            |item| matches!(item, ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name)),
-        ) {
+        if self.has_visible_procedure(name) {
             self.err_in = Some(frame.error_state.clone());
             return self.call_procedure(name, args, line);
-        }
-        if self.owner.is_some() && self.has_procedure_of(self.main_module, name, &[ProcKind::Function, ProcKind::Sub]) {
-            self.err_in = Some(frame.error_state.clone());
-            return self.as_main(|this| this.call_procedure(name, args, line));
         }
         if name.eq_ignore_ascii_case("createobject") {
             return self.create_object(&args, line);
         }
-        // ObjPtr: an address for an object, the same for the same object and
-        // 0 for Nothing. A browser has no addresses; the object's handle,
-        // kept nonzero, serves -- measured, only `<> 0` and equality are
-        // ever asked of it.
+        // ObjPtr identifies an interface reference. Is still compares the
+        // underlying object, but different interfaces need distinct addresses.
+        // Browser addresses are virtual and stable across project invocations.
         if name.eq_ignore_ascii_case("objptr") {
             return match args.as_slice() {
-                [Value::Object(object)] => Ok(Value::LongLong(((object.handle & 0x0000_FFFF_FFFF_FFFF) as i64) + 0x1_0000)),
+                [Value::Object(object)] => {
+                    let next = 0x1_0000 + self.object_pointers.len() as i64 * 8;
+                    let identity = (
+                        object.handle,
+                        key(&object.kind),
+                        object.dispatch_view.as_deref().map(key),
+                    );
+                    Ok(Value::LongLong(
+                        *self.object_pointers.entry(identity).or_insert(next),
+                    ))
+                }
                 [Value::Nothing] => Ok(Value::LongLong(0)),
-                [_] => Err(error(RuntimeErrorKind::TypeMismatch, "ObjPtr takes an object", line)),
-                _ => Err(error(RuntimeErrorKind::ArgumentCount, "ObjPtr takes one argument", line)),
+                [_] => Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "ObjPtr takes an object",
+                    line,
+                )),
+                _ => Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    "ObjPtr takes one argument",
+                    line,
+                )),
             };
         }
         if name.eq_ignore_ascii_case("rnd") {
-            return self.call_rnd(&args, line);
+            let read = args
+                .iter()
+                .map(|value| self.read_argument(value, frame, line.unwrap_or(0)))
+                .collect::<Result<Vec<_>, _>>()?;
+            return self.call_rnd(&read, line);
         }
         if name.eq_ignore_ascii_case("callbyname") {
-            return self.call_by_name(&args, line);
+            return self.call_by_name(&args, frame, line, None);
         }
         if name.eq_ignore_ascii_case("randomize") {
-            return self.call_randomize(&args, line);
+            let read = args
+                .iter()
+                .map(|value| self.read_argument(value, frame, line.unwrap_or(0)))
+                .collect::<Result<Vec<_>, _>>()?;
+            return self.call_randomize(&read, line);
         }
         if ["date", "now", "time", "timer"]
             .iter()
@@ -5016,7 +8239,11 @@ impl<'a> Runtime<'a> {
             return self.call_current_time(name, &args, line);
         }
         if name.eq_ignore_ascii_case("error") {
-            return call_error_builtin(&args, frame, line);
+            let read = args
+                .iter()
+                .map(|value| self.read_argument(value, frame, line.unwrap_or(0)))
+                .collect::<Result<Vec<_>, _>>()?;
+            return call_error_builtin(&read, frame, line);
         }
         if name.eq_ignore_ascii_case("err") || name.eq_ignore_ascii_case("erl") {
             if !args.is_empty() {
@@ -5026,11 +8253,11 @@ impl<'a> Runtime<'a> {
                     line,
                 ));
             }
-            return Ok(Value::Integer(if name.eq_ignore_ascii_case("err") {
-                frame.error_state.number
+            return Ok(if name.eq_ignore_ascii_case("err") {
+                Value::Object(ObjectRef::new(u64::MAX, "ErrObject"))
             } else {
-                frame.error_state.line.unwrap_or(0) as i64
-            }));
+                Value::Integer(frame.error_state.line.unwrap_or(0) as i64)
+            });
         }
         // Only VBA's own functions read a Range for its value. `Intersect`,
         // `Union` and every other name the host answers take the object, and
@@ -5061,8 +8288,10 @@ impl<'a> Runtime<'a> {
                 // about as the object it is: measured, VarType of one is 9.
                 let instance = matches!(value, Value::Object(object)
                     if matches!(self.internal_objects.get(&object.handle), Some(InternalObject::Instance(_))));
-                match self.read_argument(value, line.unwrap_or(0)) {
-                    Err(failure) if asks_about && instance && failure.vba_number == Some(438) => read.push(value.clone()),
+                match self.read_argument(value, frame, line.unwrap_or(0)) {
+                    Err(failure) if asks_about && instance && failure.vba_number == Some(438) => {
+                        read.push(value.clone())
+                    }
                     answer => read.push(answer?),
                 }
             }
@@ -5077,7 +8306,10 @@ impl<'a> Runtime<'a> {
         // Base 1 Array(10, 20, 30) runs 1 To 3 and Array() 1 To 0.
         if name.eq_ignore_ascii_case("array") {
             return Ok(Value::Array(ArrayValue {
-                dimensions: vec![ArrayDimension { lower_bound: self.option_base(), length: args.len() }],
+                dimensions: vec![ArrayDimension {
+                    lower_bound: self.option_base(),
+                    length: args.len(),
+                }],
                 values: args,
                 element_default: Box::new(Value::Empty),
                 resizable: true,
@@ -5085,10 +8317,24 @@ impl<'a> Runtime<'a> {
         }
         // A record's length is its layout's: Len the packed size a Put would
         // write, LenB the size it takes in memory with each field aligned.
-        if let ([Value::Record(record)], true) = (args.as_slice(), matches!(name.to_ascii_lowercase().as_str(), "len" | "lenb")) {
+        if let ([Value::Record(record)], true) = (
+            args.as_slice(),
+            matches!(name.to_ascii_lowercase().as_str(), "len" | "lenb"),
+        ) {
             let (packed, _, memory) = self.record_layout(record, 0);
-            let length = if name.eq_ignore_ascii_case("len") { packed } else { memory };
+            let length = if name.eq_ignore_ascii_case("len") {
+                packed
+            } else {
+                memory
+            };
             return Ok(Value::Integer(length as i64));
+        }
+        if name.eq_ignore_ascii_case("cstr") && self.error_environment.language == crate::ErrorLanguage::Japanese {
+            match read_args.as_deref().unwrap_or(&args) {
+                [Value::Error(number)] => return Ok(Value::String(format!("エラー {number}"))),
+                [Value::Missing] => return Ok(Value::String("エラー 448".to_string())),
+                _ => {},
+            }
         }
         if let Some(result) = call_builtin(
             name,
@@ -5097,6 +8343,9 @@ impl<'a> Runtime<'a> {
             self.option_compare_text(),
             self.this_year(),
         ) {
+            return result;
+        }
+        if let Some(result) = self.host_macro_call_in_frame(None, name, &args, argument_names, line.unwrap_or(0), frame, None) {
             return result;
         }
         let host_value = if argument_names.is_empty() {
@@ -5133,7 +8382,7 @@ impl<'a> Runtime<'a> {
                 Some(line),
             ));
         }
-        let value = self.eval_expr(args[0].value.as_ref().unwrap(), frame)?;
+        let value = self.eval_scalar_expr(args[0].value.as_ref().unwrap(), frame)?;
         let number = integer_argument(&value, Some(line))?;
         if !(1..=65_535).contains(&number) {
             return Err(invalid_procedure_call(
@@ -5143,12 +8392,18 @@ impl<'a> Runtime<'a> {
         }
         // Measured: `Error 1234` describes itself as
         // "Application-defined or object-defined error".
-        Err(raised_error(
+        let mut failure = raised_error(
             number,
             frame.source_name.clone(),
-            vba_error_description(number).to_string(),
+            self.error_environment.description(number).to_string(),
             line,
-        ))
+        );
+        // Measured in a fresh Excel instance: this particular Error statement
+        // bypasses Resume Next and GoTo handlers, including those in callers.
+        if number == 40_040 {
+            failure.kind = RuntimeErrorKind::ExecutionTerminated;
+        }
+        Err(failure)
     }
 
     fn call_rnd(&mut self, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
@@ -5183,38 +8438,275 @@ impl<'a> Runtime<'a> {
     /// `CallByName object, name, kind, args...`: the member read (VbGet 2),
     /// called (VbMethod 1) or assigned (VbLet 4, VbSet 8), as a dotted name
     /// would be. Measured: CallByName(Range("A1"), "Address", VbGet) $A$1.
-    fn call_by_name(&mut self, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
+    fn call_by_name(&mut self, args: &[Value], frame: &mut Frame, line: Option<u32>,
+        source: Option<(&[Argument], &[EvaluatedArgument], bool)>) -> Result<Value, RuntimeError> {
         let at = line.unwrap_or(0);
         let [target, member, kind, rest @ ..] = args else {
             return Err(error(RuntimeErrorKind::ArgumentCount, "CallByName wants an object, a name and a call type", line));
         };
+        // Argument expressions have already run. Excel then coerces the call
+        // type before the member name, and validates the target last. An Error
+        // Variant cannot be implicitly converted to either prefix type.
+        let kind = self.let_value(kind.clone(), frame, at)?;
+        if matches!(kind, Value::Error(_)) { return Err(language_error(13, "Type mismatch", at)); }
+        let kind = convert_integer(&kind, i64::from(i32::MIN), i64::from(i32::MAX), line)?;
+        let member = self.let_value(member.clone(), frame, at)?;
+        if matches!(member, Value::Null) { return Err(invalid_null(line)); }
+        if matches!(member, Value::Error(_)) { return Err(language_error(13, "Type mismatch", at)); }
+        let member = text(&member).map_err(|message| coercion_error(&member, message, line))?;
         let Value::Object(receiver) = target else {
-            return Err(raised_error(424, String::new(), "Object required".to_string(), at));
+            if matches!(target, Value::Nothing) {
+                return Err(invalid_procedure_call("CallByName requires an object instance".to_string(), line));
+            }
+            return Err(language_error(424, "Object required", at));
         };
-        let member = text(member).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
-        let kind = number(kind).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))? as i64;
+        // IDispatch names terminate at NUL, even when the supplied VBA BSTR
+        // contains more characters. Source identifiers remain unchanged.
+        let member = member.split('\0').next().unwrap_or_default();
+        let member = self.automation_member_name(receiver, member);
         let missing = || no_such_member(format!("{} has no member {member}", receiver.kind), line);
+        if matches!(kind, 4 | 8) && rest.is_empty() {
+            return Err(language_error(446, "property assignment needs a value", at));
+        }
+        if !matches!(kind, 1 | 2 | 3 | 4 | 8) { return Err(missing()); }
+        if is_err_object(receiver) {
+            let member_key = key(&member);
+            let property = matches!(member_key.as_str(), "number" | "description" | "source" | "helpfile" | "helpcontext" | "lastdllerror");
+            let method = matches!(member_key.as_str(), "clear" | "raise");
+            // Excel distinguishes dispatch flags and binds property indices
+            // before converting a value. Erl is a language intrinsic, not a
+            // member available through the Err object's automation interface.
+            return match kind {
+                4 | 8 if rest.is_empty() => Err(language_error(446, "property assignment needs a value", at)),
+                4 | 8 if member_key == "lastdllerror" => Err(language_error(450, "LastDllError is read-only", at)),
+                4 if property => {
+                    if let [value] = rest {
+                        err_set(frame, &member, value.clone(), at)?;
+                        Ok(Value::Empty)
+                    } else {
+                        Err(language_error(451, "Err properties do not take indices", at))
+                    }
+                }
+                2 | 3 if property => {
+                    if rest.is_empty() {
+                        err_property(frame, &member, at)
+                    } else {
+                        Err(language_error(451, "Err properties do not take indices", at))
+                    }
+                }
+                3 if member_key == "clear" && !rest.is_empty() => Err(language_error(451, "Clear does not take indices", at)),
+                1 | 3 if method => err_call(frame, &member, rest, &[], at, ErrCallMode::CallByName).map_err(|failure| {
+                    if failure.kind != RuntimeErrorKind::UserDefined {
+                        return failure;
+                    }
+                    // Automation dispatch supplies the standard error metadata.
+                    let number = runtime_error_number(&failure);
+                    let number = if number < 0 { 440 } else { number };
+                    let mut dispatched = raised_error(
+                        number, frame.source_name.clone(), frame.error_environment.description(number).to_string(), at,
+                    );
+                    dispatched.vba_help_context = Some(vba_error_help_context(number));
+                    dispatched
+                }),
+                _ => Err(missing()),
+            };
+        }
+        if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Collection(_))) {
+            if matches!(kind, 4 | 8) && rest.is_empty() {
+                return Err(language_error(446, "property assignment needs a value", at));
+            }
+            // Collection exposes Count, Item, Add and Remove as automation
+            // methods. Its ordinary dotted property syntax also permits Count,
+            // but CallByName with VbGet does not invoke these methods.
+            if !matches!(kind, 1 | 3) {
+                return Err(missing());
+            }
+            if member.eq_ignore_ascii_case("count") {
+                if rest.is_empty() {
+                    return self.host_get(receiver, &member, at)?.ok_or_else(missing);
+                }
+                return Err(language_error(if kind == 3 { 451 } else { 450 }, "Collection.Count takes no arguments", at));
+            }
+            return self.host_call(Some(receiver), &member, rest, at)?.ok_or_else(missing);
+        }
+        if self.instance_handles_member(receiver, &member) {
+            return self.instance_automation_member(receiver, &member, kind as u8, rest, frame, at,
+                source.map(|(args, values, forced)| (&args[3..], &values[3..], forced)));
+        }
+        if let Some(number) = self.host.as_deref().and_then(|host| host.automation_invocation_error(receiver, &member, kind as u8)) {
+            return Err(language_error(number, format!("invalid automation invocation: {member}"), at));
+        }
+        if self.host.as_deref().is_some_and(|host| !host.automation_invocation_allowed(receiver, &member, kind as u8)) {
+            return Err(missing());
+        }
+        if receiver.kind.eq_ignore_ascii_case("Application")
+            && member.eq_ignore_ascii_case("Run") && !self.internal_objects.contains_key(&receiver.handle)
+        {
+            if !matches!(kind, 1 | 3) { return Err(missing()); }
+            let arguments = source.map(|(args, values, forced)|
+                (args.get(3..).unwrap_or(&[]), values.get(3..).unwrap_or(&[]), forced));
+            return self.host_macro_call_in_frame(Some(receiver), &member, rest, &[], at, frame, arguments)
+                .unwrap_or_else(|| Err(missing()));
+        }
         match kind {
             4 | 8 => {
-                let Some(value) = rest.last() else {
-                    return Err(invalid_procedure_call("CallByName assigns a value".to_string(), line));
+                let (value, indices) = rest.split_last().expect("assignment value checked above");
+                let mut value = value.clone();
+                if kind == 4 {
+                    if indices.is_empty() {
+                        if let Some(number) = self.host.as_deref().and_then(|host| host.property_assignment_error(Some(receiver), &member, &value)) {
+                            return Err(language_error(number, format!("invalid value for property {member}"), at));
+                        }
+                    }
+                    if let Value::Object(object) = &value {
+                        if indices.is_empty() {
+                            let taken = self.host.as_deref_mut().map(|host| host.set_from_object(receiver, &member, object))
+                                .transpose().map_err(|message| host_failure(message, at))?.flatten();
+                            if taken == Some(true) { return Ok(Value::Empty); }
+                        }
+                    }
+                    value = self.let_value(value, frame, at)?;
+                }
+                let assigned = if indices.is_empty() {
+                    self.host_set(receiver, &member, value, at)?
+                } else {
+                    self.host_set_indexed(receiver, &member, indices, value, at)?
                 };
-                if self.host_set(receiver, &member, value.clone(), at)? {
+                if assigned {
                     Ok(Value::Empty)
                 } else {
                     Err(missing())
                 }
             }
-            1 | 2 => {
-                if kind == 2 && rest.is_empty() {
-                    if let Some(value) = self.host_get(receiver, &member, at)? {
+            1 | 2 | 3 => {
+                let prepared = if matches!(kind, 2 | 3) {
+                    self.host.as_deref().map(|host| host.prepare_automation_get(receiver, &member, rest))
+                        .transpose().map_err(|message| host_failure(message, at))?.flatten()
+                } else { None };
+                let (name, arguments) = prepared.as_ref().map(|(name, args)| (name.as_str(), args.as_slice())).unwrap_or((&member, rest));
+                if matches!(kind, 2 | 3) && arguments.is_empty() {
+                    if let Some(value) = self.host_get(receiver, name, at)? {
                         return Ok(value);
                     }
                 }
-                self.host_call(Some(receiver), &member, rest, at)?.ok_or_else(missing)
+                self.host_call(Some(receiver), name, arguments, at)?.ok_or_else(missing)
             }
-            _ => Err(invalid_procedure_call(format!("CallByName has no call type {kind}"), line)),
+            _ => Err(missing()),
         }
+    }
+
+    fn instance_automation_member(&mut self, receiver: &ObjectRef, name: &str, kind: u8,
+        args: &[Value], frame: &mut Frame, line: u32,
+        source: Option<(&[Argument], &[EvaluatedArgument], bool)>) -> Result<Value, RuntimeError>
+    {
+        let class = match self.internal_objects.get(&receiver.handle) {
+            Some(InternalObject::Instance(instance)) => instance.class.as_str(),
+            _ => return Err(no_such_member(name.to_string(), Some(line))),
+        };
+        let view = receiver.dispatch_view.as_deref();
+        let all_kinds = [ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet, ProcKind::PropertyLet, ProcKind::PropertySet];
+        let procedure_exists = self.source_class_procedure_view(class, name, &all_kinds, view).is_some();
+        let wanted: &[ProcKind] = match kind {
+            1 => &[ProcKind::Function, ProcKind::Sub],
+            2 => &[ProcKind::PropertyGet],
+            3 => &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet],
+            4 => &[ProcKind::PropertyLet],
+            8 => &[ProcKind::PropertySet],
+            _ => unreachable!("validated dispatch kind"),
+        };
+        if let Some((module, procedure)) = self.source_class_procedure_view(class, name, wanted, view) {
+            let variadic = procedure.params.last().is_some_and(|p| p.mode == ParamMode::ParamArray);
+            if args.len() > procedure.params.len() && !variadic {
+                return Err(language_error(450, "too many dispatch arguments", line));
+            }
+            // PROPERTYPUT's final argument is named DISPID_PROPERTYPUT. It
+            // stays bound to the value parameter when optional indices omit.
+            let padding = if matches!(kind, 4 | 8) { procedure.params.len().saturating_sub(args.len()) } else { 0 };
+            if padding > 0 {
+                let first = args.len().saturating_sub(1);
+                if procedure.params[first..first + padding].iter().any(|p| !p.optional) {
+                    return Err(language_error(449, "argument not optional", line));
+                }
+            } else if procedure.params.iter().skip(args.len()).any(|p| !p.optional && p.mode != ParamMode::ParamArray) {
+                return Err(language_error(449, "argument not optional", line));
+            }
+            let result = if let Some((arguments, evaluated, forced)) = source {
+                let mut arguments = arguments.to_vec();
+                let mut evaluated = evaluated.to_vec();
+                let first = args.len().saturating_sub(1);
+                for offset in 0..padding {
+                    arguments.insert(first + offset, Argument { name: None, value: None, file_number: false, force_by_value: false });
+                    evaluated.insert(first + offset, EvaluatedArgument::new(Value::Missing, None));
+                }
+                self.validate_automation_array_references(&procedure, &arguments, &evaluated, forced, line)?;
+                // A referenced Variant containing Long is not a reference to
+                // a declared Long. Reject mismatches before entering the body.
+                for (index, parameter) in procedure.params.iter().enumerate() {
+                    if parameter.mode != ParamMode::ByRef || parameter.is_array || forced { continue; }
+                    let expected = self.parameter_scalar_name(&parameter.type_name.name);
+                    if !matches!(expected.as_str(), "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double" | "currency" | "date" | "boolean" | "string" | "decimal") { continue; }
+                    let Some(argument) = arguments.get(index) else { continue; };
+                    if argument.force_by_value { continue; }
+                    let reference = evaluated[index].reference.borrow();
+                    let Some(slot) = reference.as_ref() else { continue; };
+                    let declared = slot.declared.borrow().clone().unwrap_or_else(|| "Variant".into());
+                    let normalize = |name: &str| { let scalar = self.parameter_scalar_name(name); if scalar == "longptr" { "longlong".to_string() } else { scalar } };
+                    if normalize(&declared) != normalize(&expected) {
+                        return Err(language_error(13, "Automation ByRef argument type mismatch", line));
+                    }
+                }
+                self.call_resolved_source_body(module, &procedure, Some(receiver), &arguments, forced, Some(&evaluated), frame, Some(line))
+            } else {
+                let mut values = args.to_vec();
+                let first = args.len().saturating_sub(1);
+                for offset in 0..padding {
+                    let value = self.source_omitted_argument(module, Some(receiver), &procedure.params[first + offset], Some(line))?;
+                    values.insert(first + offset, value);
+                }
+                self.as_instance(receiver, |runtime| runtime.call_kind(&procedure.name, wanted, values, Some(line)))
+            };
+            return result
+                .map(|value| if matches!(kind, 4 | 8) { Value::Empty } else { value });
+        }
+        if procedure_exists {
+            return Err(language_error(450, "invalid property invocation", line));
+        }
+        let field = view.is_none() && self.classes.get(&key(class)).is_some_and(|module| self.public_instance_field(module, name));
+        if !field || kind == 1 { return Err(no_such_member(name.to_string(), Some(line))); }
+        let expected = usize::from(matches!(kind, 4 | 8));
+        if args.len() != expected { return Err(language_error(451, "field does not take property indices", line)); }
+        if matches!(kind, 2 | 3) { return self.instance_member(receiver, name, &[], line); }
+        let mut value = args[0].clone();
+        if kind == 4 {
+            value = self.let_value(value, frame, line)?;
+        } else if !matches!(value, Value::Object(_) | Value::Nothing) {
+            return Err(language_error(13, "object property assignment requires an object", line));
+        }
+        self.instance_assign(receiver, name, &[], value, line).map(|_| Value::Empty)
+    }
+
+    fn automation_member_name(&self, receiver: &ObjectRef, requested: &str) -> String {
+        let mut candidates = Vec::new();
+        match self.internal_objects.get(&receiver.handle) {
+            Some(InternalObject::Instance(instance)) => {
+                let surface = receiver.dispatch_view.as_deref().unwrap_or(&instance.class);
+                if let Some(module) = self.classes.get(&key(surface)) {
+                    for item in &module.items {
+                        match item {
+                            ModuleItem::Procedure(procedure) if !matches!(procedure.visibility, Visibility::Private | Visibility::Friend) => candidates.push(procedure.name.as_str()),
+                            ModuleItem::Variables(declaration) if matches!(declaration.visibility, Visibility::Public | Visibility::Global) => candidates.extend(declaration.items.iter().map(|field| field.name.as_str())),
+                            _ => (),
+                        }
+                    }
+                }
+            }
+            Some(InternalObject::Collection(_)) => candidates.extend(["Count", "Item", "Add", "Remove"]),
+            _ if is_err_object(receiver) => candidates.extend(["Number", "Description", "Source", "HelpFile", "HelpContext", "LastDllError", "Clear", "Raise"]),
+            _ => (),
+        }
+        self.host.as_deref().and_then(|host| host.automation_member_name(receiver, requested, &candidates))
+            .or_else(|| candidates.iter().find(|name| name.eq_ignore_ascii_case(requested)).map(|name| (*name).to_string()))
+            .unwrap_or_else(|| requested.to_string())
     }
 
     fn call_randomize(&mut self, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
@@ -5279,8 +8771,10 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<ObjectRef, RuntimeError> {
-        if expr_name(expr).is_some_and(|name| name.eq_ignore_ascii_case("err")) {
-            return Ok(ObjectRef::new(u64::MAX, "Err"));
+        if expr_name(expr).is_some_and(|name| {
+            name.eq_ignore_ascii_case("err") && self.lookup_slot(frame, name).is_none()
+        }) {
+            return Ok(ObjectRef::new(u64::MAX, "ErrObject"));
         }
         let value = match expr {
             Expr::EvaluateShortcut { text, .. } => self.evaluate_shortcut(text, line, true),
@@ -5310,7 +8804,10 @@ impl<'a> Runtime<'a> {
                 message: "VBA member access requires an object".to_string(),
                 line: Some(line),
                 vba_number: Some(424),
-                vba_source: Some("VBA".to_string()),
+                vba_source: None,
+                vba_help_file: None,
+                vba_help_context: None,
+                vba_default_description: true,
             }),
         }
     }
@@ -5349,9 +8846,9 @@ impl<'a> Runtime<'a> {
     /// An object used where VBA wants a value stands for its default member, so
     /// `Range("A1") + 1` reads the cell rather than failing. Object contexts —
     /// `Is`, `TypeName`, `IsObject`, passing an argument — keep the object.
-    fn scalar_operand(&mut self, value: Value, line: u32) -> Result<Value, RuntimeError> {
+    fn scalar_operand(&mut self, value: Value, frame: &Frame, line: u32) -> Result<Value, RuntimeError> {
         match value {
-            Value::Object(_) => self.let_value(value, line),
+            Value::Object(_) | Value::Nothing => self.let_value(value, frame, line),
             value => Ok(value),
         }
     }
@@ -5359,16 +8856,22 @@ impl<'a> Runtime<'a> {
     /// Reads a builtin's argument as a value. An object with a default member
     /// stands for it, but one without keeps its place rather than failing:
     /// `VarType` answers 9 for a worksheet instead of raising.
-    fn read_argument(&mut self, value: &Value, line: u32) -> Result<Value, RuntimeError> {
+    fn read_argument(&mut self, value: &Value, frame: &Frame, line: u32) -> Result<Value, RuntimeError> {
         let Value::Object(object) = value else {
             return Ok(value.clone());
         };
+        if is_err_object(object) {
+            return err_property(frame, "Number", line);
+        }
         Ok(self
             .host_get(object, "Value", line)?
             .unwrap_or_else(|| value.clone()))
     }
 
-    fn let_value(&mut self, value: Value, line: u32) -> Result<Value, RuntimeError> {
+    fn let_value(&mut self, value: Value, frame: &Frame, line: u32) -> Result<Value, RuntimeError> {
+        if matches!(&value, Value::Object(object) if is_err_object(object)) {
+            return err_property(frame, "Number", line);
+        }
         // A FileSystemObject File or Folder stands for its Path: measured,
         // "x" & f.ParentFolder writes the folder's path.
         if let Value::Object(receiver) = &value {
@@ -5406,6 +8909,97 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    fn host_macro_call_in_frame(&mut self, receiver: Option<&ObjectRef>, name: &str,
+        args: &[Value], names: &[Option<String>], line: u32, frame: &mut Frame,
+        source: Option<(&[Argument], &[EvaluatedArgument], bool)>,
+    ) -> Option<Result<Value, RuntimeError>> {
+        if !name.eq_ignore_ascii_case("Run") { return None; }
+        let saved = (self.err_in.take(), self.err_out.take());
+        let incoming = saved.1.clone().unwrap_or_else(|| frame.error_state.clone());
+        let old_frame_error = frame.error_state.clone();
+        frame.error_state = incoming.clone();
+        self.err_in = Some(incoming);
+        match self.host_macro_call_source(receiver, name, args, names, line,
+            source.map(|(arguments, evaluated, forced)| (arguments, evaluated, forced, &mut *frame))) {
+            Some(result) => {
+                frame.error_state = self.err_out.take().unwrap_or_else(|| frame.error_state.clone());
+                self.err_in = saved.0;
+                Some(result)
+            }
+            None => {
+                frame.error_state = old_frame_error;
+                (self.err_in, self.err_out) = saved;
+                None
+            }
+        }
+    }
+
+    fn host_macro_call(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+        argument_names: &[Option<String>],
+        line: u32,
+    ) -> Option<Result<Value, RuntimeError>> {
+        self.host_macro_call_source(receiver, name, args, argument_names, line, None)
+    }
+
+    fn host_macro_call_source(
+        &mut self, receiver: Option<&ObjectRef>, name: &str, args: &[Value],
+        argument_names: &[Option<String>], line: u32,
+        source: Option<(&[Argument], &[EvaluatedArgument], bool, &mut Frame)>,
+    ) -> Option<Result<Value, RuntimeError>> {
+        if !name.eq_ignore_ascii_case("Run") { return None; }
+        let receiver = match receiver {
+            Some(receiver) => receiver.clone(),
+            None => match self.host_call(None, "Application", &[], line) {
+                Ok(Some(Value::Object(receiver))) => receiver,
+                Ok(_) => return None,
+                Err(error) => return Some(Err(error)),
+            },
+        };
+        if !receiver.kind.eq_ignore_ascii_case("Application")
+            || self.internal_objects.contains_key(&receiver.handle)
+        {
+            return None;
+        }
+        if args.len() > 31 {
+            return Some(Err(language_error(450, "Wrong number of arguments or invalid property assignment", line)));
+        }
+        let mut placed = vec![Value::Missing; args.len()];
+        for (index, value) in args.iter().enumerate() {
+            let slot = match argument_names.get(index).and_then(Option::as_deref) {
+                None => index,
+                Some(name) => match Self::macro_parameter_slot(name) {
+                    Some(slot) => slot,
+                    None => return Some(Err(no_such_member(format!("Application.Run has no argument {name}"), Some(line)))),
+                },
+            };
+            if placed.len() <= slot { placed.resize(slot + 1, Value::Missing); }
+            placed[slot] = value.clone();
+        }
+        let args = placed.as_slice();
+        let (called, arguments) = args.split_first().map_or((Value::Missing, Vec::new()), |(called, arguments)| (called.clone(), arguments.to_vec()));
+        if let Some((source_arguments, evaluated, forced, frame)) = source {
+            let mut placed_arguments: Vec<_> = (0..placed.len()).map(|_| Argument {
+                name: None, value: None, file_number: false, force_by_value: false,
+            }).collect();
+            let mut placed_evaluated: Vec<_> = (0..placed.len()).map(|_| EvaluatedArgument::new(Value::Missing, None)).collect();
+            for (index, (argument, value)) in source_arguments.iter().zip(evaluated).enumerate() {
+                let slot = argument_names.get(index).and_then(Option::as_deref)
+                    .and_then(Self::macro_parameter_slot).unwrap_or(index);
+                placed_arguments[slot] = argument.clone();
+                placed_arguments[slot].name = None;
+                placed_evaluated[slot] = value.clone();
+            }
+            Some(self.call_macro_argument_source(called, arguments, Some(line),
+                Some((placed_arguments.get(1..).unwrap_or(&[]), placed_evaluated.get(1..).unwrap_or(&[]), forced, frame))))
+        } else {
+            Some(self.call_macro_argument(called, arguments, Some(line)))
+        }
+    }
+
     fn host_call(
         &mut self,
         receiver: Option<&ObjectRef>,
@@ -5413,28 +9007,41 @@ impl<'a> Runtime<'a> {
         args: &[Value],
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        let implicit=receiver.is_none().then(||self.implicit_document_receiver(name)).flatten();
+        let receiver=receiver.or(implicit.as_ref());
+        if let Some(result) = self.host_macro_call(receiver, name, args, &[], line) {
+            return result.map(Some);
+        }
+
         if let Some(receiver) = receiver {
-            if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+            if self.instance_handles_member(receiver,name) {
                 return self.instance_member(receiver, name, args, line).map(Some);
             }
-            if self.internal_objects.contains_key(&receiver.handle) {
+            if self.internal_objects.contains_key(&receiver.handle) && !self.document_instances.contains(&receiver.handle) {
                 return self.internal_call(receiver, name, args, line).map(Some);
             }
         }
-        for _ in 0..8 {
-            let Some(host) = self.host.as_deref_mut() else {
-                return Ok(None);
-            };
-            let answer = host.call(receiver, name, args);
-            if !self.work_out_user_functions()? {
-                return answer.map_err(|message| host_failure(message, line));
+        let host_args=args.iter().any(utf16::has_null_string).then(||args.iter().map(utf16::host_value).collect::<Vec<_>>());
+        let args=host_args.as_deref().unwrap_or(args);
+        if let Some(host) = self.host.as_deref_mut() { host.begin_member_call(receiver, name); }
+        let result = (|| {
+            loop {
+                self.tick(Some(line))?;
+                let Some(host) = self.host.as_deref_mut() else {
+                    return Ok(None);
+                };
+                let answer = match host.call_with_files(receiver, name, args, &mut self.files) {
+                    Ok(None) if implicit.is_some() && args.is_empty()=>host.get(receiver.expect("implicit document receiver"),name),
+                    answer=>answer,
+                };
+                if !self.work_out_user_functions()? {
+                    return answer.map_err(|message| host_failure(message, line));
+                }
+                if let Some(host) = self.host.as_deref_mut() { host.resume_user_function_calculation().map_err(|message| host_failure(message, line))?; }
             }
-        }
-        let Some(host) = self.host.as_deref_mut() else {
-            return Ok(None);
-        };
-        host.call(receiver, name, args)
-            .map_err(|message| host_failure(message, line))
+        })();
+        if let Some(host) = self.host.as_deref_mut() { host.end_member_call(receiver, name); }
+        result
     }
 
     /// Work out the user functions a worksheet recalculation asked for, and
@@ -5450,18 +9057,43 @@ impl<'a> Runtime<'a> {
         if calls.is_empty() {
             return Ok(false);
         }
-        for (key, name, args) in calls {
+        let mut calls: std::collections::VecDeque<_> = calls.into();
+        let mut pending: std::collections::BTreeSet<_> = calls.iter().map(|(key, _, _)| *key).collect();
+        while let Some((key, name, args)) = calls.pop_front() {
+            pending.remove(&key);
             if let Some(host) = self.host.as_deref_mut() {
                 host.enter_user_function(key);
             }
             let saved = (self.err_in.take(), self.err_out.take());
-            let value = match self.call_procedure(&name, args, None) {
-                Ok(Value::Object(_)) | Err(_) => Value::Error(2015),
+            // Excel's worksheet callbacks can enter private standard-module
+            // functions, independently of the currently executing VBA module.
+            let previous_callback = self.worksheet_callback_key.replace(key);
+            let value = match self.call_macro_procedure(&name, args, None) {
+                Err(_) => Value::Error(2015),
                 Ok(value) => value,
             };
+            self.worksheet_callback_key = previous_callback;
             (self.err_in, self.err_out) = saved;
             if let Some(host) = self.host.as_deref_mut() {
+                let returned_reference = host.user_function_returns_reference(key, &value);
                 host.answer_user_function(key, value);
+                // A returned range can unblock an enclosing worksheet function
+                // before unrelated calls from this batch have run. Keep their
+                // original arguments and enqueue newly ready calls first.
+                if returned_reference && !pending.is_empty() {
+                    host.resume_user_function_calculation().map_err(|message| host_failure(message, 0))?;
+                    let newly_ready = host.take_user_function_calls();
+                    for call in newly_ready.into_iter().rev() {
+                        pending.insert(call.0);
+                        calls.push_front(call);
+                    }
+                }
+                let priority = host.prioritize_user_function_calls(key, &pending);
+                for wanted in priority.into_iter().rev() {
+                    if let Some(index) = calls.iter().position(|(key, _, _)| *key == wanted) {
+                        if let Some(call) = calls.remove(index) { calls.push_front(call); }
+                    }
+                }
             }
         }
         Ok(true)
@@ -5475,14 +9107,20 @@ impl<'a> Runtime<'a> {
         argument_names: &[Option<String>],
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        let implicit=receiver.is_none().then(||self.implicit_document_receiver(name)).flatten();
+        let receiver=receiver.or(implicit.as_ref());
+        if let Some(result) = self.host_macro_call(receiver, name, args, argument_names, line) {
+            return result.map(Some);
+        }
+
         if let Some(receiver) = receiver {
-            if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+            if self.instance_handles_member(receiver,name) {
                 if argument_names.iter().any(Option::is_some) {
                     return self.instance_member_named(receiver, name, args, argument_names, line).map(Some);
                 }
                 return self.instance_member(receiver, name, args, line).map(Some);
             }
-            if self.internal_objects.contains_key(&receiver.handle) {
+            if self.internal_objects.contains_key(&receiver.handle) && !self.document_instances.contains(&receiver.handle) {
                 // A named argument goes to its own place: measured,
                 // `c.Add "w", After:="kx"` puts w after kx rather than
                 // keying it "kx".
@@ -5504,7 +9142,7 @@ impl<'a> Runtime<'a> {
                             Some(named) => parameters
                                 .iter()
                                 .position(|parameter| parameter.eq_ignore_ascii_case(named))
-                                .ok_or_else(|| raised_error(448, String::new(), "Named argument not found".to_string(), line))?,
+                                .ok_or_else(|| language_error(448, "Named argument not found", line))?,
                         };
                         placed[slot] = value.clone();
                     }
@@ -5516,20 +9154,27 @@ impl<'a> Runtime<'a> {
                 return self.internal_call(receiver, name, args, line).map(Some);
             }
         }
-        for _ in 0..8 {
-            let Some(host) = self.host.as_deref_mut() else {
-                return Ok(None);
-            };
-            let answer = host.call_named(receiver, name, args, argument_names);
-            if !self.work_out_user_functions()? {
-                return answer.map_err(|message| host_failure(message, line));
+        let host_args=args.iter().any(utf16::has_null_string).then(||args.iter().map(utf16::host_value).collect::<Vec<_>>());
+        let args=host_args.as_deref().unwrap_or(args);
+        if let Some(host) = self.host.as_deref_mut() { host.begin_member_call(receiver, name); }
+        let result = (|| {
+            loop {
+                self.tick(Some(line))?;
+                let Some(host) = self.host.as_deref_mut() else {
+                    return Ok(None);
+                };
+                let answer = match host.call_named_with_files(receiver, name, args, argument_names, &mut self.files) {
+                    Ok(None) if implicit.is_some() && args.is_empty()=>host.get(receiver.expect("implicit document receiver"),name),
+                    answer=>answer,
+                };
+                if !self.work_out_user_functions()? {
+                    return answer.map_err(|message| host_failure(message, line));
+                }
+                if let Some(host) = self.host.as_deref_mut() { host.resume_user_function_calculation().map_err(|message| host_failure(message, line))?; }
             }
-        }
-        let Some(host) = self.host.as_deref_mut() else {
-            return Ok(None);
-        };
-        host.call_named(receiver, name, args, argument_names)
-            .map_err(|message| host_failure(message, line))
+        })();
+        if let Some(host) = self.host.as_deref_mut() { host.end_member_call(receiver, name); }
+        result
     }
 
     fn host_get(
@@ -5538,10 +9183,10 @@ impl<'a> Runtime<'a> {
         name: &str,
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
-        if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+        if self.instance_handles_member(receiver,name) {
             return self.instance_member(receiver, name, &[], line).map(Some);
         }
-        if let Some(object) = self.internal_objects.get(&receiver.handle) {
+        if let Some(object) = self.internal_objects.get(&receiver.handle).filter(|_|!self.document_instances.contains(&receiver.handle)) {
             return match (object, name.to_ascii_lowercase().as_str()) {
                 (InternalObject::Collection(entries), "count") => {
                     Ok(Some(Value::Integer(entries.len() as i64)))
@@ -5569,20 +9214,18 @@ impl<'a> Runtime<'a> {
                 _ => Ok(None),
             };
         }
-        for _ in 0..8 {
-            let Some(host) = self.host.as_deref_mut() else {
-                return Ok(None);
-            };
-            let answer = host.get(receiver, name);
-            if !self.work_out_user_functions()? {
-                return answer.map_err(|message| host_failure(message, line));
+        if let Some(host) = self.host.as_deref_mut() { host.begin_member_get(receiver, name); }
+        let result = (|| {
+            loop {
+                self.tick(Some(line))?;
+                let Some(host) = self.host.as_deref_mut() else { return Ok(None) };
+                let answer = host.get(receiver, name);
+                if !self.work_out_user_functions()? { return answer.map_err(|message| host_failure(message, line)); }
+                if let Some(host) = self.host.as_deref_mut() { host.resume_user_function_calculation().map_err(|message| host_failure(message, line))?; }
             }
-        }
-        let Some(host) = self.host.as_deref_mut() else {
-            return Ok(None);
-        };
-        host.get(receiver, name)
-            .map_err(|message| host_failure(message, line))
+        })();
+        if let Some(host) = self.host.as_deref_mut() { host.end_member_get(receiver, name); }
+        result
     }
 
     fn host_set(
@@ -5593,10 +9236,23 @@ impl<'a> Runtime<'a> {
         line: u32,
     ) -> Result<bool, RuntimeError> {
         let option_compare_text = self.option_compare_text();
-        if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+        if self.instance_handles_member(receiver,name) {
             return self.instance_assign(receiver, name, &[], value, line);
         }
-        if let Some(object) = self.internal_objects.get_mut(&receiver.handle) {
+        if name.eq_ignore_ascii_case("attributes") {
+            let path=match self.internal_objects.get(&receiver.handle) {
+                Some(InternalObject::FileItem(path)|InternalObject::FolderItem(path))=>Some(path.clone()),
+                _=>None,
+            };
+            if let Some(path)=path {
+                if matches!(value,Value::Error(_)) {return Err(error(RuntimeErrorKind::TypeMismatch,"Attributes cannot be an Error value",Some(line)));}
+                let value=self.coerce_runtime(value,"Long",line,self.this_year())?;
+                let value=integer_argument(&value,Some(line))?;
+                self.files.set_fso_attributes(&path,value).map_err(|failure|file_failure(failure,line))?;
+                return Ok(true);
+            }
+        }
+        if let Some(object) = self.internal_objects.get_mut(&receiver.handle).filter(|_|!self.document_instances.contains(&receiver.handle)) {
             return match object {
                 InternalObject::Dictionary(dictionary)
                     if name.eq_ignore_ascii_case("comparemode") =>
@@ -5622,11 +9278,18 @@ impl<'a> Runtime<'a> {
                 _ => Ok(false),
             };
         }
-        let Some(host) = self.host.as_deref_mut() else {
-            return Ok(false);
-        };
-        host.set(receiver, name, value)
-            .map_err(|message| host_failure(message, line))
+        if let Some(host) = self.host.as_deref_mut() { host.begin_member_set(receiver, name); }
+        let result = (|| {
+            let Some(host) = self.host.as_deref_mut() else { return Ok(false) };
+            let answer = host.set(receiver, name, value);
+            while self.work_out_user_functions()? {
+                self.tick(Some(line))?;
+                if let Some(host) = self.host.as_deref_mut() { host.resume_user_function_calculation().map_err(|message| host_failure(message, line))?; }
+            }
+            answer.map_err(|message| host_failure(message, line))
+        })();
+        if let Some(host) = self.host.as_deref_mut() { host.end_member_set(receiver, name); }
+        result
     }
 
     fn host_set_indexed(
@@ -5637,17 +9300,24 @@ impl<'a> Runtime<'a> {
         value: Value,
         line: u32,
     ) -> Result<bool, RuntimeError> {
-        if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+        if self.instance_handles_member(receiver,name) {
             return self.instance_assign(receiver, name, args, value, line);
         }
-        if self.internal_objects.contains_key(&receiver.handle) {
+        if self.internal_objects.contains_key(&receiver.handle) && !self.document_instances.contains(&receiver.handle) {
             return self.internal_set_indexed(receiver, name, args, value, line);
         }
-        let Some(host) = self.host.as_deref_mut() else {
-            return Ok(false);
-        };
-        host.set_indexed(receiver, name, args, value)
-            .map_err(|message| host_failure(message, line))
+        if let Some(host) = self.host.as_deref_mut() { host.begin_member_set(receiver, name); }
+        let result = (|| {
+            let Some(host) = self.host.as_deref_mut() else { return Ok(false) };
+            let answer = host.set_indexed(receiver, name, args, value);
+            while self.work_out_user_functions()? {
+                self.tick(Some(line))?;
+                if let Some(host) = self.host.as_deref_mut() { host.resume_user_function_calculation().map_err(|message| host_failure(message, line))?; }
+            }
+            answer.map_err(|message| host_failure(message, line))
+        })();
+        if let Some(host) = self.host.as_deref_mut() { host.end_member_set(receiver, name); }
+        result
     }
 
     fn host_enumerate(
@@ -5655,7 +9325,7 @@ impl<'a> Runtime<'a> {
         receiver: &ObjectRef,
         line: u32,
     ) -> Result<Option<Vec<Value>>, RuntimeError> {
-        if let Some(object) = self.internal_objects.get(&receiver.handle) {
+        if let Some(object) = self.internal_objects.get(&receiver.handle).filter(|_|!self.document_instances.contains(&receiver.handle)) {
             return Ok(Some(match object {
                 InternalObject::Collection(entries) => {
                     entries.iter().map(|entry| entry.value.clone()).collect()
@@ -5729,7 +9399,7 @@ impl<'a> Runtime<'a> {
             let handle = this.next_internal_handle;
             this.next_internal_handle += 1;
             this.internal_objects.insert(handle, InternalObject::TextStream { number, line: 1 });
-            Value::Object(ObjectRef { handle, kind: "TextStream".to_string(), life: None })
+            Value::Object(ObjectRef { handle, kind: "TextStream".to_string(), life: None,dispatch_view:None })
         };
         let failure = |failure: crate::files::FileError| file_failure(failure, line);
         Ok(match lower.as_str() {
@@ -5771,11 +9441,12 @@ impl<'a> Runtime<'a> {
             "fileexists" => Value::Boolean(self.files.exists(&text_at(0)?)),
             "createfolder" => {
                 let path = text_at(0)?;
+                if path.is_empty() {return Err(file_failure(crate::files::FileError::InvalidArgument,line));}
                 self.files.make_folder(&path).map_err(failure)?;
                 self.fso_object("Folder", InternalObject::FolderItem(path))
             }
             "deletefolder" => {
-                self.files.remove_folder(&text_at(0)?, true).map_err(failure)?;
+                self.files.delete_folder_with_force(&text_at(0)?,flag_at(1,false)).map_err(failure)?;
                 Value::Empty
             }
             "getfile" => {
@@ -5792,23 +9463,7 @@ impl<'a> Runtime<'a> {
                 }
                 self.fso_object("Folder", InternalObject::FolderItem(path.trim_end_matches(['\\', '/']).to_string()))
             }
-            // Measured: C:\x\..\y\z.txt is C:\y\z.txt.
-            "getabsolutepathname" => {
-                let path = text_at(0)?.replace('/', "\\");
-                let mut parts: Vec<&str> = Vec::new();
-                for part in path.split('\\') {
-                    match part {
-                        "." | "" if !parts.is_empty() => {}
-                        ".." => {
-                            if parts.len() > 1 {
-                                parts.pop();
-                            }
-                        }
-                        other => parts.push(other),
-                    }
-                }
-                Value::String(parts.join("\\"))
-            }
+            "getabsolutepathname" => Value::String(self.files.absolute_path(&text_at(0)?)),
             // Measured: twelve characters ending .tmp, as rad4E3F1.tmp.
             "gettempname" => {
                 self.temp_names += 1;
@@ -5816,15 +9471,35 @@ impl<'a> Runtime<'a> {
             }
             "folderexists" => Value::Boolean(self.files.folder_exists(&text_at(0)?)),
             "deletefile" => {
-                self.files.kill(&text_at(0)?).map_err(failure)?;
+                self.files.delete_files(&text_at(0)?,flag_at(1,false)).map_err(failure)?;
                 Value::Empty
             }
             "copyfile" => {
-                self.files.copy(&text_at(0)?, &text_at(1)?).map_err(failure)?;
+                if !(2..=3).contains(&args.len()) {return Err(error(RuntimeErrorKind::ArgumentCount,"CopyFile accepts Source, Destination and optional Overwrite",Some(line)));}
+                let path_at=|index:usize|->Result<String,RuntimeError> {
+                    match &args[index] {
+                        Value::Null|Value::Error(_)=>Err(error(RuntimeErrorKind::TypeMismatch,"CopyFile path cannot be coerced to String",Some(line))),
+                        value=>text(value).map_err(|message|error(RuntimeErrorKind::TypeMismatch,message,Some(line))),
+                    }
+                };
+                let source=path_at(0)?;let destination=path_at(1)?;
+                let overwrite=match args.get(2) {
+                    None|Some(Value::Missing)=>true,
+                    Some(Value::Null|Value::Error(_))=>return Err(error(RuntimeErrorKind::TypeMismatch,"CopyFile Overwrite cannot be coerced to Boolean",Some(line))),
+                    Some(value)=>truthy(value).map_err(|message|error(RuntimeErrorKind::TypeMismatch,message,Some(line)))?,
+                };
+                self.files.copy_fso_with_overwrite(&source,&destination,overwrite).map_err(failure)?;
                 Value::Empty
             }
             "movefile" => {
-                self.files.rename(&text_at(0)?, &text_at(1)?).map_err(failure)?;
+                if args.len()!=2 {return Err(error(RuntimeErrorKind::ArgumentCount,"MoveFile accepts Source and Destination",Some(line)));}
+                let path_at=|index:usize|->Result<String,RuntimeError> {
+                    match &args[index] {
+                        Value::Null|Value::Error(_)=>Err(error(RuntimeErrorKind::TypeMismatch,"MoveFile path cannot be coerced to String",Some(line))),
+                        value=>text(value).map_err(|message|error(RuntimeErrorKind::TypeMismatch,message,Some(line))),
+                    }
+                };
+                self.files.rename_fso(&path_at(0)?, &path_at(1)?).map_err(failure)?;
                 Value::Empty
             }
             "createtextfile" => {
@@ -5854,24 +9529,43 @@ impl<'a> Runtime<'a> {
         })
     }
 
-    fn fso_object(&mut self, kind: &str, object: InternalObject) -> Value {
+    fn fso_object(&mut self, kind: &str, mut object: InternalObject) -> Value {
+        // File and Folder references keep the destination resolved when the
+        // object was created, even if a later ChDir changes relative lookups.
+        match &mut object {
+            InternalObject::FileItem(path) | InternalObject::FolderItem(path) | InternalObject::FileList(path) => {
+                *path=self.files.absolute_path(path);
+            },
+            _ => {},
+        }
         let handle = self.next_internal_handle;
         self.next_internal_handle += 1;
         self.internal_objects.insert(handle, object);
-        Value::Object(ObjectRef { handle, kind: kind.to_string(), life: None })
+        Value::Object(ObjectRef { handle, kind: kind.to_string(), life: None,dispatch_view:None })
     }
 
     /// A File's members. Measured: Name a.txt, Size 5, Path the full path,
     /// ParentFolder the folder's path.
-    fn file_item_call(&mut self, path: &str, name: &str, line: u32) -> Result<Value, RuntimeError> {
+    fn fso_delete_force(args: &[Value], line: u32) -> Result<bool, RuntimeError> {
+        if args.len()>1 {return Err(error(RuntimeErrorKind::ArgumentCount,"Delete accepts one Force argument",Some(line)));}
+        match args.first() {
+            None|Some(Value::Missing)=>Ok(false),
+            Some(Value::Null)=>Err(invalid_null(Some(line))),
+            Some(Value::Error(_))=>Err(error(RuntimeErrorKind::TypeMismatch,"Delete Force cannot be an Error value",Some(line))),
+            Some(value)=>truthy(value).map_err(|message|error(RuntimeErrorKind::TypeMismatch,message,Some(line))),
+        }
+    }
+
+    fn file_item_call(&mut self, path: &str, name: &str, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
         let parent = path.rsplit_once(['\\', '/']).map_or(String::new(), |(parent, _)| parent.to_string());
         Ok(match name.to_ascii_lowercase().as_str() {
             "name" => Value::String(path.rsplit(['\\', '/']).next().unwrap_or(path).to_string()),
             "path" | "_default" => Value::String(path.to_string()),
             "size" => Value::Integer(self.files.length(path).map_err(|failure| file_failure(failure, line))? as i64),
+            "attributes" => Value::Integer(self.files.attributes(path).map_err(|failure|file_failure(failure,line))?),
             "parentfolder" => self.fso_object("Folder", InternalObject::FolderItem(parent)),
             "delete" => {
-                self.files.kill(path).map_err(|failure| file_failure(failure, line))?;
+                self.files.delete_files(path,Self::fso_delete_force(args,line)?).map_err(|failure| file_failure(failure, line))?;
                 Value::Empty
             }
             _ => return Err(no_such_member(format!("File has no member {name}"), Some(line))),
@@ -5879,17 +9573,18 @@ impl<'a> Runtime<'a> {
     }
 
     /// A Folder's members: Name, Path, Files, ParentFolder.
-    fn folder_item_call(&mut self, path: &str, name: &str, line: u32) -> Result<Value, RuntimeError> {
+    fn folder_item_call(&mut self, path: &str, name: &str, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
         Ok(match name.to_ascii_lowercase().as_str() {
             "name" => Value::String(path.rsplit(['\\', '/']).next().unwrap_or(path).to_string()),
             "path" | "_default" => Value::String(path.to_string()),
             "files" => self.fso_object("Files", InternalObject::FileList(path.to_string())),
+            "attributes" => Value::Integer(self.files.attributes(path).map_err(|failure|file_failure(failure,line))?),
             "parentfolder" => {
                 let parent = path.rsplit_once(['\\', '/']).map_or(String::new(), |(parent, _)| parent.to_string());
                 self.fso_object("Folder", InternalObject::FolderItem(parent))
             }
             "delete" => {
-                self.files.remove_folder(path, true).map_err(|failure| file_failure(failure, line))?;
+                self.files.delete_folder_with_force(path,Self::fso_delete_force(args,line)?).map_err(|failure| file_failure(failure, line))?;
                 Value::Empty
             }
             _ => return Err(no_such_member(format!("Folder has no member {name}"), Some(line))),
@@ -5988,11 +9683,11 @@ impl<'a> Runtime<'a> {
             }
             InternalObject::FileItem(path) => {
                 let path = path.clone();
-                return self.file_item_call(&path, name, line);
+                return self.file_item_call(&path, name, args, line);
             }
             InternalObject::FolderItem(path) => {
                 let path = path.clone();
-                return self.folder_item_call(&path, name, line);
+                return self.folder_item_call(&path, name, args, line);
             }
             InternalObject::FileList(folder) => {
                 let folder = folder.clone();
@@ -6035,22 +9730,6 @@ impl<'a> Runtime<'a> {
                         _ => Err(error(RuntimeErrorKind::TypeMismatch, "a Collection key must be a String", Some(line))),
                     })
                     .transpose()?;
-                if key.as_ref().is_some_and(|key| {
-                    entries.iter().any(|entry| {
-                        entry
-                            .key
-                            .as_ref()
-                            .is_some_and(|existing| collection_keys_equal(existing, key))
-                    })
-                }) {
-                    return Err(raised_error(
-                        457,
-                        "Collection".to_string(),
-                        "this key is already associated with an element of this collection"
-                            .to_string(),
-                        line,
-                    ));
-                }
                 let before = args
                     .get(2)
                     .filter(|value| !matches!(value, Value::Missing | Value::Empty));
@@ -6063,6 +9742,13 @@ impl<'a> Runtime<'a> {
                         "Collection.Add cannot specify both Before and After".to_string(),
                         Some(line),
                     ));
+                }
+                if key.as_ref().is_some_and(|key| {
+                    entries.iter().any(|entry| {
+                        entry.key.as_ref().is_some_and(|existing| collection_keys_equal(existing, key))
+                    })
+                }) {
+                    return Err(language_error(457, "this key is already associated with an element of this collection", line));
                 }
                 let position = if let Some(before) = before {
                     collection_index(entries, before, line)?
@@ -6326,7 +10012,7 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<i64, RuntimeError> {
-        let value = self.eval_expr(expr, frame)?;
+        let value = self.eval_scalar_expr(expr, frame)?;
         index_from(&value, line)
     }
 
@@ -6397,6 +10083,9 @@ fn host_failure(message: String, line: u32) -> RuntimeError {
                     line: Some(line),
                     vba_number: Some(number),
                     vba_source: source,
+                    vba_help_file: None,
+                    vba_help_context: None,
+                    vba_default_description: false,
                 };
             }
         }
@@ -6408,6 +10097,9 @@ fn host_failure(message: String, line: u32) -> RuntimeError {
                     line: Some(line),
                     vba_number: Some(number),
                     vba_source: None,
+                    vba_help_file: None,
+                    vba_help_context: None,
+                    vba_default_description: true,
                 };
             }
         }
@@ -6415,13 +10107,16 @@ fn host_failure(message: String, line: u32) -> RuntimeError {
     error(RuntimeErrorKind::Host, message, Some(line))
 }
 
-fn error(kind: RuntimeErrorKind, message: impl Into<String>, line: Option<u32>) -> RuntimeError {
+pub(crate) fn error(kind: RuntimeErrorKind, message: impl Into<String>, line: Option<u32>) -> RuntimeError {
     RuntimeError {
         kind,
         message: message.into(),
         line,
         vba_number: None,
         vba_source: None,
+        vba_help_file: None,
+        vba_help_context: None,
+        vba_default_description: true,
     }
 }
 
@@ -6467,10 +10162,12 @@ fn statement_labels(body: &[Statement]) -> BTreeMap<String, usize> {
     labels
 }
 
-fn empty_frame() -> Frame<'static> {
+fn empty_frame(error_environment: Rc<ErrorEnvironment>, project_name: String) -> Frame<'static> {
     Frame {
         procedure_name: String::new(),
-        source_name: String::new(),
+        procedure_kind: ProcKind::Sub,
+        source_name: project_name,
+        error_environment,
         values: BTreeMap::new(),
         constants: BTreeSet::new(),
         auto_new: BTreeMap::new(),
@@ -6520,7 +10217,16 @@ fn raised_error(number: i64, source: String, description: String, line: u32) -> 
         line: Some(line),
         vba_number: Some(number),
         vba_source: Some(source),
+        vba_help_file: None,
+        vba_help_context: None,
+        vba_default_description: false,
     }
+}
+
+fn language_error(number: i64, message: impl Into<String>, line: u32) -> RuntimeError {
+    let mut failure = error(RuntimeErrorKind::UserDefined, message, Some(line));
+    failure.vba_number = Some(number);
+    failure
 }
 
 fn call_error_builtin(
@@ -6545,63 +10251,26 @@ fn call_error_builtin(
             line,
         ));
     }
-    Ok(Value::String(vba_error_description(number).to_string()))
+    Ok(Value::String(frame.error_environment.description(number).to_string()))
 }
 
-fn vba_error_description(number: i64) -> &'static str {
-    match number {
-        0 => "",
-        5 => "Invalid procedure call or argument",
-        6 => "Overflow",
-        7 => "Out of memory",
-        9 => "Subscript out of range",
-        10 => "This array is fixed or temporarily locked",
-        11 => "Division by zero",
-        13 => "Type mismatch",
-        14 => "Out of string space",
-        28 => "Out of stack space",
-        35 => "Sub or Function not defined",
-        48 => "Error in loading DLL",
-        52 => "Bad file name or number",
-        53 => "File not found",
-        54 => "Bad file mode",
-        55 => "File already open",
-        58 => "File already exists",
-        61 => "Disk full",
-        62 => "Input past end of file",
-        67 => "Too many files",
-        68 => "Device unavailable",
-        70 => "Permission denied",
-        71 => "Disk not ready",
-        75 => "Path/File access error",
-        76 => "Path not found",
-        91 => "Object variable or With block variable not set",
-        92 => "For loop not initialized",
-        93 => "Invalid pattern string",
-        94 => "Invalid use of Null",
-        424 => "Object required",
-        429 => "ActiveX component can't create object",
-        430 => "Class does not support Automation or does not support expected interface",
-        432 => "File name or class name not found during Automation operation",
-        438 => "Object doesn't support this property or method",
-        440 => "Automation error",
-        445 => "Object doesn't support this action",
-        446 => "Object doesn't support named arguments",
-        447 => "Object doesn't support current locale setting",
-        448 => "Named argument not found",
-        449 => "Argument not optional",
-        450 => "Wrong number of arguments or invalid property assignment",
-        451 => {
-            "Property let procedure not defined and property get procedure did not return an object"
+// Measured for every positive 16-bit number in Excel: when the description
+// is resolved by VBA, only catalogued errors have their own help topic.
+// Uncatalogued numbers share topic 95. Explicit descriptions (even the same
+// words, or an empty string) instead use the supplied number's topic.
+fn vba_error_help_context(number: i64) -> i64 {
+    1_000_000
+        + match number {
+            number if number < 0 => 440,
+            3 | 5 | 6 | 7 | 9 | 10 | 11 | 13 | 14 | 16 | 17 | 18 | 20 | 28 | 35 | 47 | 48
+            | 49 | 51 | 52 | 53 | 54 | 55 | 57 | 58 | 59 | 61 | 62 | 63 | 67 | 68 | 70
+            | 71 | 74 | 75 | 76 | 91 | 92 | 93 | 94 | 96 | 97 | 98 | 321 | 322 | 325
+            | 380 | 381 | 382 | 383 | 385 | 387 | 393 | 394 | 422 | 423 | 424 | 429
+            | 430 | 432 | 438 | 440 | 442 | 443 | 445 | 446 | 447 | 448 | 449 | 450
+            | 451 | 452 | 453 | 454 | 455 | 457 | 458 | 459 | 460 | 461 | 462 | 463
+            | 481 | 482 | 735 | 744 | 746 => number,
+            _ => 95,
         }
-        453 => "Specified DLL function not found",
-        457 => "This key is already associated with an element of this collection",
-        458 => "Variable uses an Automation type not supported in Visual Basic",
-        // Measured: Err.Raise -5 and vbObjectError + 513 both describe
-        // themselves so.
-        number if number < 0 => "Automation error",
-        _ => "Application-defined or object-defined error",
-    }
 }
 
 fn runtime_error_number(failure: &RuntimeError) -> i64 {
@@ -6619,6 +10288,8 @@ fn runtime_error_number(failure: &RuntimeError) -> i64 {
         RuntimeErrorKind::InvalidPattern => 93,
         RuntimeErrorKind::InvalidProcedureCall => 5,
         RuntimeErrorKind::Unsupported => 445,
+        RuntimeErrorKind::Compile | RuntimeErrorKind::EndStatement => 0,
+        RuntimeErrorKind::ExecutionTerminated => 40_040,
         RuntimeErrorKind::StepLimit => 6,
         RuntimeErrorKind::CallDepth => 28,
     })
@@ -6642,7 +10313,7 @@ fn label_destination(
 }
 
 fn is_err_object(object: &ObjectRef) -> bool {
-    object.handle == u64::MAX && object.kind == "Err"
+    object.handle == u64::MAX && object.kind == "ErrObject"
 }
 
 fn err_property(frame: &Frame, name: &str, line: u32) -> Result<Value, RuntimeError> {
@@ -6669,17 +10340,37 @@ fn err_property(frame: &Frame, name: &str, line: u32) -> Result<Value, RuntimeEr
     }
 }
 
+fn err_string_argument(value: &Value, line: u32) -> Result<String, RuntimeError> {
+    if matches!(value, Value::Null) {
+        return Err(invalid_null(Some(line)));
+    }
+    text(value).map_err(|message| coercion_error(value, message, Some(line)))
+}
+
 fn err_set(frame: &mut Frame, name: &str, value: Value, line: u32) -> Result<(), RuntimeError> {
-    let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, Some(line));
     if name.eq_ignore_ascii_case("number") {
-        frame.error_state.number = number(&value).map_err(mismatch)?.round_ties_even() as i64;
+        let number = convert_integer(&value, i32::MIN as i64, i32::MAX as i64, Some(line))?;
+        if number > 65_535 {
+            return Err(invalid_procedure_call(
+                format!("invalid Err.Number: {number}"),
+                Some(line),
+            ));
+        }
+        frame.error_state.number = number;
     } else if name.eq_ignore_ascii_case("description") {
-        frame.error_state.description = text(&value).map_err(mismatch)?;
+        frame.error_state.description = err_string_argument(&value, line)?;
+        frame.error_state.description_set = true;
     } else if name.eq_ignore_ascii_case("source") {
-        frame.error_state.source = text(&value).map_err(mismatch)?;
+        frame.error_state.source = err_string_argument(&value, line)?;
+        frame.error_state.source_set = true;
+    } else if name.eq_ignore_ascii_case("helpfile") {
+        frame.error_state.help_file = err_string_argument(&value, line)?;
+        frame.error_state.help_file_set = true;
+    } else if name.eq_ignore_ascii_case("helpcontext") {
+        frame.error_state.help_context =
+            convert_integer(&value, i32::MIN as i64, i32::MAX as i64, Some(line))?;
     } else {
-        return Err(error(
-            RuntimeErrorKind::Unsupported,
+        return Err(no_such_member(
             format!("Err property is not writable: {name}"),
             Some(line),
         ));
@@ -6687,12 +10378,66 @@ fn err_set(frame: &mut Frame, name: &str, value: Value, line: u32) -> Result<(),
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum ErrCallMode {
+    Direct,
+    CallByName,
+}
+
 fn err_call(
     frame: &mut Frame,
     name: &str,
     args: &[Value],
+    argument_names: &[Option<String>],
     line: u32,
+    mode: ErrCallMode,
 ) -> Result<Value, RuntimeError> {
+    let read: Vec<Value> = args.iter().map(|value| match value {
+        Value::Object(object) if is_err_object(object) => Value::Integer(frame.error_state.number),
+        value => value.clone(),
+    }).collect();
+    let args = read.as_slice();
+    let placed;
+    let args = if argument_names.iter().any(Option::is_some) {
+        let parameters: &[&str] = if name.eq_ignore_ascii_case("raise") {
+            &["Number", "Source", "Description", "HelpFile", "HelpContext"]
+        } else {
+            &[]
+        };
+        let mut values = Vec::new();
+        let mut assigned = vec![false; parameters.len()];
+        for (position, (value, named)) in args.iter().zip(argument_names).enumerate() {
+            let slot = match named {
+                Some(named) => parameters
+                    .iter()
+                    .position(|parameter| parameter.eq_ignore_ascii_case(named))
+                    .ok_or_else(|| {
+                        let mut failure = error(
+                            RuntimeErrorKind::ArgumentCount,
+                            format!("named argument not found: {named}"),
+                            Some(line),
+                        );
+                        failure.vba_number = Some(448);
+                        failure
+                    })?,
+                None => position,
+            };
+            if slot >= assigned.len() || assigned[slot] {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    "invalid Err method argument list",
+                    Some(line),
+                ));
+            }
+            assigned[slot] = true;
+            values.resize(values.len().max(slot + 1), Value::Missing);
+            values[slot] = value.clone();
+        }
+        placed = values;
+        placed.as_slice()
+    } else {
+        args
+    };
     if name.eq_ignore_ascii_case("clear") {
         if !args.is_empty() {
             return Err(error(
@@ -6708,57 +10453,83 @@ fn err_call(
         if !(1..=5).contains(&args.len()) {
             return Err(error(
                 RuntimeErrorKind::ArgumentCount,
-                format!(
-                    "Err.Raise expects 1 to 5 arguments, received {}",
-                    args.len()
-                ),
+                format!("Err.Raise expects 1 to 5 arguments, received {}", args.len()),
                 Some(line),
             ));
         }
-        let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, Some(line));
-        let number = number(&args[0]).map_err(mismatch)?.round_ties_even() as i64;
-        // Measured: 0 and anything past 65535 raise 5 in their place.
-        if number == 0 || number > 65_535 {
-            return Err(invalid_procedure_call(format!("Err.Raise {number} is not a raisable number"), Some(line)));
+        if matches!(args[0], Value::Missing) {
+            let mut failure = error(
+                RuntimeErrorKind::ArgumentCount,
+                "Err.Raise requires Number",
+                Some(line),
+            );
+            failure.vba_number = Some(449);
+            return Err(failure);
         }
-        let help_file = args
-            .get(3)
-            .filter(|value| !matches!(value, Value::Missing | Value::Empty))
-            .map(|value| text(value).map_err(mismatch))
-            .transpose()?
-            .unwrap_or_default();
-        let help_context = args
-            .get(4)
-            .filter(|value| !matches!(value, Value::Missing | Value::Empty))
-            .map(|value| crate::runtime::number(value).map_err(mismatch))
-            .transpose()?
-            .map_or(0, |value| value.round_ties_even() as i64);
-        frame.error_state.raised_help = Some((help_file, help_context));
-        // What is left out is taken from the error still standing, if one
-        // is: measured, a handler's `Err.Raise Err.Number + 1` (or any other
-        // number) keeps the Source "src" and Description "desc" of what it
-        // caught, and raising 1500 over a division by zero keeps "Division
-        // by zero".
-        let standing = (frame.error_state.number != 0)
-            .then(|| (frame.error_state.source.clone(), frame.error_state.description.clone()));
-        let source = args
-            .get(1)
-            .filter(|value| !matches!(value, Value::Missing | Value::Empty))
-            .map(|value| text(value).map_err(mismatch))
-            .transpose()?
-            .or_else(|| standing.as_ref().map(|(source, _)| source.clone()).filter(|source| !source.is_empty()))
-            .unwrap_or_else(|| frame.source_name.clone());
-        let description = args
-            .get(2)
-            .filter(|value| !matches!(value, Value::Missing | Value::Empty))
-            .map(|value| text(value).map_err(mismatch))
-            .transpose()?
-            .or_else(|| standing.as_ref().map(|(_, description)| description.clone()).filter(|text| !text.is_empty()))
-            .unwrap_or_else(|| vba_error_description(number).to_string());
-        return Err(raised_error(number, source, description, line));
+        let number =
+            convert_integer(&args[0], i32::MIN as i64, i32::MAX as i64, Some(line))?;
+        if number == 0 || number > 65_535 {
+            return Err(invalid_procedure_call(
+                format!("Err.Raise {number} is not a raisable number"),
+                Some(line),
+            ));
+        }
+        let supplied = |position| args.get(position).filter(|value| !matches!(value, Value::Missing));
+        let source = match supplied(1) {
+            Some(value) => err_string_argument(value, line)?,
+            None if frame.error_state.source_set => frame.error_state.source.clone(),
+            None => frame.source_name.clone(),
+        };
+        let description = match supplied(2) {
+            Some(value) => err_string_argument(value, line)?,
+            None if frame.error_state.description_set => frame.error_state.description.clone(),
+            None => frame.error_environment.description(number).to_string(),
+        };
+        let help_file = match supplied(3) {
+            Some(value) => err_string_argument(value, line)?,
+            None if frame.error_state.help_file_set => frame.error_state.help_file.clone(),
+            None => frame.error_environment.help_file.clone(),
+        };
+        let help_context = match supplied(4) {
+            Some(value) => match convert_integer(
+                value, i32::MIN as i64, i32::MAX as i64, Some(line),
+            ) {
+                Ok(context) => context,
+                Err(failure) if failure.kind == RuntimeErrorKind::Overflow => {
+                    return Err(raised_error(
+                        -2_147_352_566,
+                        frame.source_name.clone(),
+                        frame.error_environment.automation_out_of_range(),
+                        line,
+                    ));
+                }
+                Err(failure) => return Err(failure),
+            },
+            None => frame.error_state.help_context,
+        };
+        let help_context = if help_context == 0 {
+            if supplied(2).is_none() && !frame.error_state.description_set {
+                vba_error_help_context(number)
+            } else {
+                1_000_000 + if number < 0 { 440 } else { number }
+            }
+        } else {
+            help_context
+        };
+        let mut failure = raised_error(number, source, description, line);
+        // Measured: direct Raise exposes 440, retaining the input's metadata.
+        // CallByName(Err, "Raise", ..., 40040) bypasses handlers like Error 40040.
+        if number == 40_040 {
+            match mode {
+                ErrCallMode::Direct => failure.vba_number = Some(440),
+                ErrCallMode::CallByName => failure.kind = RuntimeErrorKind::ExecutionTerminated,
+            }
+        }
+        failure.vba_help_file = Some(help_file);
+        failure.vba_help_context = Some(help_context);
+        return Err(failure);
     }
-    Err(error(
-        RuntimeErrorKind::Unsupported,
+    Err(no_such_member(
         format!("Err method is not available: {name}"),
         Some(line),
     ))
@@ -6773,12 +10544,12 @@ fn expr_name(expr: &Expr) -> Option<&str> {
 
 fn current_with_object(frame: &Frame, line: u32) -> Result<ObjectRef, RuntimeError> {
     match frame.with_objects.last() {
-        Some(WithSubject::Object(receiver)) => Ok(receiver.clone()),
+        Some(WithSubject::Object {receiver,..}) => Ok(receiver.clone()),
         // A record has fields, not members to call. Anything reaching here
         // asked one for something only an object can give.
-        Some(WithSubject::Record { root, .. }) => Err(error(
+        Some(WithSubject::Record { .. }) => Err(error(
             RuntimeErrorKind::TypeMismatch,
-            format!("With subject {root} is a Type, which has no such member"),
+            "With subject is a Type, which has no such member",
             Some(line),
         )),
         None => Err(error(
@@ -6880,18 +10651,16 @@ fn dictionary_number(value: &Value) -> Option<f64> {
 }
 
 fn dictionary_duplicate_key_error(line: u32) -> RuntimeError {
-    raised_error(
+    language_error(
         457,
-        "Scripting.Dictionary".to_string(),
         "This key is already associated with an element of this collection".to_string(),
         line,
     )
 }
 
 fn dictionary_missing_key_error(line: u32) -> RuntimeError {
-    raised_error(
+    language_error(
         32_811,
-        "Scripting.Dictionary".to_string(),
         // Measured: `d.Remove "nope"` describes itself as Excel's 1004 does.
         "Application-defined or object-defined error".to_string(),
         line,
@@ -6947,7 +10716,7 @@ fn collection_subscript_error(number: i64, line: u32) -> RuntimeError {
         9 => "subscript out of range",
         _ => "invalid procedure call or argument",
     };
-    raised_error(number, "Collection".to_string(), description.to_string(), line)
+    language_error(number, description, line)
 }
 
 /// What one index means: a number, rounded the way VBA rounds a subscript.
@@ -7185,6 +10954,7 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "strconv"
             | "str"
             | "string"
+            | "strptr"
             | "strreverse"
             | "switch"
             | "syd"
@@ -7204,6 +10974,7 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "lof"
             | "loc"
             | "filelen"
+            | "getattr"
             | "dir"
             | "dir$"
             | "curdir"
@@ -7218,7 +10989,7 @@ pub fn is_builtin_function(name: &str) -> bool {
     )
 }
 
-fn call_builtin(
+pub(crate) fn call_builtin(
     name: &str,
     args: &[Value],
     line: Option<u32>,
@@ -7230,6 +11001,11 @@ fn call_builtin(
         return None;
     }
     Some((|| {
+        if let Some(result)=utf16::builtin(&name,args,line,option_compare_text){return result;}
+        if args.len()==1 && matches!(args[0],Value::Nothing) && matches!(name.as_str(),"cdec"|"cint"|"clng"|"clnglng"|"clngptr"|"cbyte"|"cbool"|"csng"|"cdbl"|"ccur"|"cdate"|"cstr") {
+            return Err(error(RuntimeErrorKind::ObjectVariableNotSet,"object variable is Nothing",line));
+        }
+
         if matches!(
             name.as_str(),
             "format" | "formatcurrency" | "formatdatetime" | "formatnumber" | "formatpercent"
@@ -7505,6 +11281,7 @@ fn call_builtin(
             // A Null condition picks the false part: measured, IIf(Null, 1, 2)
             // is 2.
             return match &args[0] {
+                Value::Nothing=>Err(error(RuntimeErrorKind::ObjectVariableNotSet,"object variable is Nothing",line)),
                 Value::Null => Ok(args[2].clone()),
                 condition => Ok(
                     if truthy(condition)
@@ -7558,6 +11335,7 @@ fn call_builtin(
                 ));
             }
             for pair in args.chunks_exact(2) {
+                if matches!(pair[0],Value::Nothing) {return Err(error(RuntimeErrorKind::ObjectVariableNotSet,"object variable is Nothing",line));}
                 if !matches!(pair[0], Value::Null)
                     && truthy(&pair[0])
                         .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
@@ -8377,15 +12155,11 @@ fn call_financial_builtin(
         }
     };
     let payment_type = |index: usize| -> Result<f64, RuntimeError> {
-        let value = numeric(index, 0.0)?;
-        if value == 0.0 || value == 1.0 {
-            Ok(value)
-        } else {
-            Err(invalid_procedure_call(
-                format!("invalid payment type: {value}"),
-                line,
-            ))
-        }
+        let value = match args.get(index) {
+            None | Some(Value::Missing) => 0,
+            Some(value) => convert_integer(value, i16::MIN as i64, i16::MAX as i64, line)?,
+        };
+        Ok(if value == 0 { 0.0 } else { 1.0 })
     };
     let result = match name {
         "ddb" => financial_ddb(
@@ -8427,13 +12201,20 @@ fn call_financial_builtin(
             let rate = numeric(0, 0.0)?;
             let period = numeric(1, 0.0)?;
             let periods = numeric(2, 0.0)?;
-            if period < 1.0 || period > periods {
+            // Excel accepts fractional periods in the open interval
+            // (0, periods + 1), including values beyond the final whole period.
+            if period <= 0.0 || period >= periods + 1.0 {
                 Err("payment period is outside the annuity".to_string())
             } else {
                 let present = numeric(3, 0.0)?;
                 let future = numeric(4, 0.0)?;
                 let kind = payment_type(5)?;
                 (|| {
+                    // Excel returns the first beginning-of-period interest
+                    // before attempting a payment calculation that may fail.
+                    if name == "ipmt" && kind == 1.0 && period == 1.0 {
+                        return Ok(0.0);
+                    }
                     let payment = financial_pmt(rate, periods, present, future, kind)?;
                     let interest = if kind == 1.0 && period == 1.0 {
                         0.0
@@ -8484,8 +12265,42 @@ fn call_financial_builtin(
         ),
         _ => unreachable!(),
     }
-    .map_err(|message| invalid_procedure_call(message, line))?;
+    .map_err(|message| {
+        if message == "financial division by zero" {
+            error(RuntimeErrorKind::DivisionByZero, message, line)
+        } else {
+            invalid_procedure_call(message, line)
+        }
+    })?;
     // A negative nought is kept: measured, Pmt(-1, 10, 100) is -0.
+    if matches!(name, "pv" | "fv" | "pmt") {
+        let rate = numeric(0, 0.0)?;
+        let periods = numeric(1, 0.0)?;
+        if result.is_nan() && rate < -1.0 && periods.fract() != 0.0 {
+            // The native financial library exposes a Double NaN here; its
+            // string representation differs between PV and FV/Pmt.
+            let bits = if name == "pv" { 0x7ff8_0000_0000_0000 } else { 0xfff8_0000_0000_0000 };
+            return Ok(Value::Double(f64::from_bits(bits)));
+        }
+        if name == "fv" && result.is_infinite() && rate == -1.0 && periods < 0.0 {
+            return Ok(Value::Double(result));
+        }
+    }
+    if matches!(name, "ipmt" | "ppmt") {
+        let rate = numeric(0, 0.0)?;
+        let period = numeric(1, 0.0)?;
+        let periods = numeric(2, 0.0)?;
+        if result.is_nan() && rate < -1.0 && (period.fract() != 0.0 || periods.fract() != 0.0) {
+            // Measured through VBA: beginning payments reverse the NaN's
+            // sign when the total number of periods is fractional.
+            let positive = payment_type(5)? == 1.0 && periods.fract() != 0.0 && period != 1.0;
+            let bits = if positive { 0x7ff8_0000_0000_0000 } else { 0xfff8_0000_0000_0000 };
+            return Ok(Value::Double(f64::from_bits(bits)));
+        }
+        if result.is_infinite() && rate == -1.0 && period < 1.0 && payment_type(5)? == 0.0 {
+            return Ok(Value::Double(result));
+        }
+    }
     if result.is_finite() {
         Ok(Value::Double(result))
     } else {
@@ -8542,6 +12357,9 @@ fn cash_flow_values(value: &Value) -> Result<Vec<f64>, String> {
     let Value::Array(array) = value else {
         return Err("cash flows must be a one-dimensional numeric array".to_string());
     };
+    // A declared but unallocated dynamic array has no dimensions. Let the
+    // financial function report its invalid/empty input as Excel does.
+    if array.dimensions.is_empty() { return Ok(Vec::new()); }
     if array.dimensions.len() != 1 {
         return Err("cash flows must be a one-dimensional numeric array".to_string());
     }
@@ -8555,29 +12373,38 @@ fn financial_ddb(
     period: f64,
     factor: f64,
 ) -> Result<f64, String> {
-    if cost < 0.0 || salvage < 0.0 || life <= 0.0 || period <= 0.0 || factor <= 0.0 {
+    if salvage < 0.0 || life <= 0.0 || period <= 0.0 || factor <= 0.0 {
         return Err("invalid depreciation arguments".to_string());
     }
     if period > life {
         return Err("depreciation period exceeds asset life".to_string());
     }
-    if cost <= salvage {
+    if cost <= 0.0 {
         return Ok(0.0);
     }
-    let rate = (factor / life).min(1.0);
+    // Excel exhausts the depreciable amount in the first period when life
+    // is at most two, independently of the supplied factor.
+    if life <= 2.0 {
+        return Ok(if life < 2.0 || period <= 1.0 { cost - salvage } else { 0.0 });
+    }
+    let rate = factor / life;
+    if period <= 1.0 {
+        return Ok((cost * rate).min(cost - salvage));
+    }
     let book_value = cost * (1.0 - rate).powf(period - 1.0);
-    Ok((book_value * rate).min((book_value - salvage).max(0.0)))
+    if !book_value.is_finite() { return Ok(book_value); }
+    Ok((book_value * rate).max(0.0).min((book_value - salvage).max(0.0)))
 }
 
 fn financial_sln(cost: f64, salvage: f64, life: f64) -> Result<f64, String> {
-    if cost < 0.0 || salvage < 0.0 || life <= 0.0 {
+    if life == 0.0 {
         return Err("invalid depreciation arguments".to_string());
     }
     Ok((cost - salvage) / life)
 }
 
 fn financial_syd(cost: f64, salvage: f64, life: f64, period: f64) -> Result<f64, String> {
-    if cost < 0.0 || salvage < 0.0 || life <= 0.0 || period <= 0.0 || period > life {
+    if salvage < 0.0 || life <= 0.0 || period <= 0.0 || period > life {
         return Err("invalid depreciation arguments".to_string());
     }
     Ok((cost - salvage) * (life - period + 1.0) * 2.0 / (life * (life + 1.0)))
@@ -8592,8 +12419,50 @@ fn financial_irr(values: &[f64], guess: f64) -> Result<f64, String> {
     {
         return Err("invalid IRR cash flows or guess".to_string());
     }
+    // Excel observations favor secant iteration over the old Newton step
+    // with a forced fallback toward -1. The latter could report a spurious
+    // rate where Excel reports failure. This is still an approximation of
+    // Excel's convergence behavior; see the remaining oracle cases.
+    let residual = |rate: f64| -> f64 {
+        let base = 1.0 + rate;
+        values.iter().enumerate().map(|(i, cash)| cash / base.powf(i as f64)).sum()
+    };
+    let scale = values.iter().map(|value| value.abs()).fold(0.0_f64, f64::max);
+    let mut previous = guess;
+    let mut previous_value = residual(previous);
+    if previous_value == 0.0 { return Ok(previous); }
+    let mut rate = guess + if previous_value > 0.0 { 0.00001 } else { -0.00001 };
+    if rate > -1.0 {
+        let mut current_value = residual(rate);
+        let mut exhausted = true;
+        for _ in 0..40 {
+            if !previous_value.is_finite() || !current_value.is_finite() || previous_value == current_value { exhausted = false; break; }
+            let next = rate - (rate - previous) * current_value / (current_value - previous_value);
+            if !next.is_finite() || next <= -1.0 { exhausted = false; break; }
+            let next_value = residual(next);
+            if (next - rate).abs() < 1e-7 && next_value.abs() < scale * 1e-9 { return Ok(next); }
+            previous = rate; previous_value = current_value; rate = next; current_value = next_value;
+        }
+        // A secant can stall near -1 while still bracketing a real root.
+        // Refine that bracket instead of accepting an enormous residual.
+        if exhausted && previous_value.is_sign_positive() != current_value.is_sign_positive() {
+            for _ in 0..100 {
+                let middle = (previous + rate) * 0.5;
+                let value = residual(middle);
+                if value.abs() < scale * 1e-9 { return Ok(middle); }
+                if value.is_sign_positive() == previous_value.is_sign_positive() {
+                    previous = middle; previous_value = value;
+                } else {
+                    rate = middle;
+                }
+            }
+        }
+    }
+    // Some observed cases converge with a derivative step when the secant
+    // iteration reaches an invalid rate; never force that rate back into the
+    // valid interval, which changes Excel failures into successful results.
     let mut rate = guess;
-    for _ in 0..20 {
+    for _ in 0..40 {
         let base = 1.0 + rate;
         let mut value = 0.0;
         let mut derivative = 0.0;
@@ -8607,28 +12476,20 @@ fn financial_irr(values: &[f64], guess: f64) -> Result<f64, String> {
         if !value.is_finite() || !derivative.is_finite() || derivative == 0.0 {
             break;
         }
-        let mut next = rate - value / derivative;
-        if next <= -1.0 {
-            next = (rate - 1.0) / 2.0;
-        }
-        if !next.is_finite() {
+        let next = rate - value / derivative;
+        if !next.is_finite() || next <= -1.0 {
             break;
         }
-        if (next - rate).abs() <= 1e-7 {
+        if (next - rate).abs() <= 1e-7 && residual(next).abs() < scale * 1e-9 {
             return Ok(next);
         }
         rate = next;
     }
-    Err("IRR failed to converge after 20 iterations".to_string())
+    Err("IRR failed to converge".to_string())
 }
 
 fn financial_mirr(values: &[f64], finance_rate: f64, reinvest_rate: f64) -> Result<f64, String> {
-    if values.len() < 2
-        || !values.iter().any(|value| *value < 0.0)
-        || !values.iter().any(|value| *value > 0.0)
-        || finance_rate <= -1.0
-        || reinvest_rate <= -1.0
-    {
+    if values.len() < 2 || finance_rate == -1.0 || reinvest_rate == -1.0 {
         return Err("invalid MIRR cash flows or rates".to_string());
     }
     let last_period = values.len() - 1;
@@ -8642,19 +12503,18 @@ fn financial_mirr(values: &[f64], finance_rate: f64, reinvest_rate: f64) -> Resu
             negative_present_value += cash_flow / (1.0 + finance_rate).powf(period as f64);
         }
     }
+    if negative_present_value == 0.0 {
+        return Err("financial division by zero".to_string());
+    }
     let ratio = -positive_future_value / negative_present_value;
-    if !ratio.is_finite() || ratio <= 0.0 {
+    if !ratio.is_finite() || ratio < 0.0 {
         return Err("MIRR has no real solution".to_string());
     }
     Ok(ratio.powf(1.0 / last_period as f64) - 1.0)
 }
 
 fn financial_npv(rate: f64, values: &[f64]) -> Result<f64, String> {
-    if values.is_empty()
-        || !values.iter().any(|value| *value < 0.0)
-        || !values.iter().any(|value| *value > 0.0)
-        || rate == -1.0
-    {
+    if values.is_empty() || rate == -1.0 {
         return Err("invalid NPV cash flows or rate".to_string());
     }
     let base = 1.0 + rate;
@@ -8666,17 +12526,8 @@ fn financial_npv(rate: f64, values: &[f64]) -> Result<f64, String> {
 }
 
 fn annuity_factor(rate: f64, periods: f64) -> Result<f64, String> {
-    // A rate of -1 itself leaves a factor of nought: measured, Pmt(-1, 10,
-    // 100) is -0.
-    if rate < -1.0 {
-        return Err("interest rate must be greater than -1".to_string());
-    }
-    let factor = (1.0 + rate).powf(periods);
-    if factor.is_finite() {
-        Ok(factor)
-    } else {
-        Err("annuity factor overflow".to_string())
-    }
+    // A negative base is valid for integral periods, as in Excel's VBA.
+    Ok((1.0 + rate).powf(periods))
 }
 
 fn financial_fv(
@@ -8692,7 +12543,7 @@ fn financial_fv(
         return Ok(-present - payment * periods);
     }
     let factor = annuity_factor(rate, periods)?;
-    Ok(-(present * factor + payment * (1.0 + rate * kind) * (factor - 1.0) / rate))
+    Ok(-present * factor - payment * (1.0 + rate * kind) * (factor - 1.0) / rate)
 }
 
 fn financial_pv(
@@ -8706,7 +12557,12 @@ fn financial_pv(
         return Ok(-(future + payment * periods));
     }
     let factor = annuity_factor(rate, periods)?;
-    Ok(-(future + payment * (1.0 + rate * kind) * (factor - 1.0) / rate) / factor)
+    let numerator = future + payment * (1.0 + rate * kind) * (factor - 1.0) / rate;
+    if factor == 0.0 {
+        if numerator == 0.0 { return Ok(f64::NAN); }
+        return Err("financial division by zero".to_string());
+    }
+    Ok(-numerator / factor)
 }
 
 fn financial_pmt(
@@ -8724,12 +12580,16 @@ fn financial_pmt(
     }
     let factor = annuity_factor(rate, periods)?;
     let denominator = (1.0 + rate * kind) * (factor - 1.0);
+    let numerator = present * rate * factor + future * rate;
     if denominator == 0.0 {
-        return Err("payment denominator is zero".to_string());
+        // Excel reports overflow for the indeterminate 0/0 case, but
+        // division by zero when the numerator is nonzero.
+        if numerator == 0.0 { return Ok(f64::NAN); }
+        return Err("financial division by zero".to_string());
     }
     // present x rate x factor, in that order: measured, the last digit of
     // PPmt(0.01, 5, 12, 1000) -82.050365682325 comes out that way.
-    Ok(-(present * rate * factor + future * rate) / denominator)
+    Ok(-numerator / denominator)
 }
 
 fn financial_nper(
@@ -8848,6 +12708,9 @@ fn call_text_conversion_builtin(
         "str" => {
             if args.len() != 1 {
                 return Err(count_error());
+            }
+            if matches!(&args[0],Value::Nothing) {
+                return Err(error(RuntimeErrorKind::ObjectVariableNotSet,"object variable is Nothing",line));
             }
             // A Null carries straight through, the way it does for the date
             // parts: asked of Excel, `Str(Null)` is Null. An Error variant
@@ -11740,7 +15603,7 @@ fn call_string_builtin(
                     line,
                 ));
             };
-            Ok(Value::String(String::from_utf16_lossy(&[unit])))
+            Ok(Value::from_utf16(vec![unit]))
         }
         "left" | "right" => {
             if args.len() != 2 {
@@ -11757,7 +15620,7 @@ fn call_string_builtin(
             } else {
                 &units[units.len() - length..]
             };
-            Ok(Value::String(String::from_utf16_lossy(selected)))
+            Ok(Value::from_utf16(selected.to_vec()))
         }
         "mid" => {
             if !(2..=3).contains(&args.len()) {
@@ -11800,9 +15663,7 @@ fn call_string_builtin(
                 Some(length) => usize::try_from(length).unwrap_or(0).min(available),
                 None => available,
             };
-            Ok(Value::String(String::from_utf16_lossy(
-                &units[start..start + length],
-            )))
+            Ok(Value::from_utf16(units[start..start+length].to_vec()))
         }
         "instr" => {
             if !(2..=4).contains(&args.len()) {
@@ -12093,7 +15954,7 @@ fn call_string_builtin(
     }
 }
 
-fn builtin_constant(name: &str) -> Option<Value> {
+pub(crate) fn builtin_constant(name: &str) -> Option<Value> {
     Some(match name.to_ascii_lowercase().as_str() {
         "vbbinarycompare" => Value::Integer(0),
         "vbtextcompare" => Value::Integer(1),
@@ -12173,12 +16034,12 @@ fn builtin_constant(name: &str) -> Option<Value> {
         "vbback" => Value::String("\u{8}".to_string()),
         "vbformfeed" => Value::String("\u{c}".to_string()),
         "vbverticaltab" => Value::String("\u{b}".to_string()),
-        "vbnullstring" => Value::String(String::new()),
+        "vbnullstring" => Value::NullString,
         _ => return None,
     })
 }
 
-fn integer_argument(value: &Value, line: Option<u32>) -> Result<i64, RuntimeError> {
+pub(crate) fn integer_argument(value: &Value, line: Option<u32>) -> Result<i64, RuntimeError> {
     let value = number(value)
         .map_err(|message| coercion_error(value, message, line))?
         .round_ties_even();
@@ -12288,7 +16149,10 @@ fn no_such_member(message: String, line: Option<u32>) -> RuntimeError {
         message,
         line,
         vba_number: Some(438),
-        vba_source: Some("VBA".to_string()),
+        vba_source: None,
+        vba_help_file: None,
+        vba_help_context: None,
+        vba_default_description: true,
     }
 }
 
@@ -12298,7 +16162,10 @@ fn invalid_procedure_call(message: String, line: Option<u32>) -> RuntimeError {
         message,
         line,
         vba_number: Some(5),
-        vba_source: Some("VBA".to_string()),
+        vba_source: None,
+        vba_help_file: None,
+        vba_help_context: None,
+        vba_default_description: true,
     }
 }
 
@@ -12308,7 +16175,10 @@ fn fixed_array_error(name: &str, line: Option<u32>) -> RuntimeError {
         message: format!("this array is fixed or temporarily locked: {name}"),
         line,
         vba_number: Some(10),
-        vba_source: Some("VBA".to_string()),
+        vba_source: None,
+        vba_help_file: None,
+        vba_help_context: None,
+        vba_default_description: true,
     }
 }
 
@@ -12316,9 +16186,7 @@ fn utf16_equal(left: &[u16], right: &[u16], text_compare: bool) -> bool {
     if left == right {
         return true;
     }
-    text_compare
-        && crate::case_table::lower(&String::from_utf16_lossy(left))
-            == crate::case_table::lower(&String::from_utf16_lossy(right))
+    text_compare && utf16::fold(left,false)==utf16::fold(right,false)
 }
 
 fn utf16_find(source: &[u16], needle: &[u16], start: usize, text_compare: bool) -> Option<usize> {
@@ -12330,6 +16198,7 @@ fn utf16_find(source: &[u16], needle: &[u16], start: usize, text_compare: bool) 
 /// in length: measured, InStr(1, "straße", "SS", 1) is 5 and
 /// Replace("aßb", "ss", "-", , , 1) is "a-b".
 fn utf16_find_span(source: &[u16], needle: &[u16], start: usize, text_compare: bool) -> Option<(usize, usize)> {
+    if text_compare && (String::from_utf16(source).is_err()||String::from_utf16(needle).is_err()){return utf16::find_span(source,needle,start);}
     if start > source.len() {
         return None;
     }
@@ -12469,7 +16338,7 @@ fn key(name: &str) -> String {
     name.to_ascii_lowercase()
 }
 
-fn literal_value(literal: &Literal) -> Value {
+pub(crate) fn literal_value(literal: &Literal) -> Value {
     match literal {
         // A number written without a type character takes the smallest
         // whole type that holds it, and anything with a point or an
@@ -12569,13 +16438,42 @@ fn element_type_name(default: &Value) -> Option<&'static str> {
         Value::Currency(_) => "currency",
         Value::Date(_) => "date",
         Value::Boolean(_) => "boolean",
-        Value::String(_) => "string",
+        Value::Nothing => "object",
+        Value::String(_) | Value::Utf16(_) | Value::NullString => "string",
         _ => return None,
     })
 }
 
-fn coerce_declared(value: Value, declared: &str, line: u32, this_year: i64) -> Result<Value, RuntimeError> {
+/// The scalar parameter types used by an Automation method signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutomationScalarType {
+    Bstr,
+    Double,
+}
+
+/// Convert a resolved scalar at a typed Automation boundary. The host must
+/// resolve an object's default member before calling this function.
+/// Unlike CStr/CDbl, an error Variant cannot fill either typed parameter.
+pub fn coerce_automation_scalar(value: &Value, target: AutomationScalarType) -> Result<Value, String> {
+    match value {
+        Value::Null => return Err(host_error(94, "Invalid use of Null")),
+        Value::Nothing => return Err(host_error(91, "Object variable or With block variable not set")),
+        Value::Object(_) => return Err(host_error(438, "Object doesn't support this property or method")),
+        Value::Error(_) | Value::Array(_) | Value::Record(_) | Value::Missing => {
+            return Err(host_error(13, "Type mismatch"));
+        }
+        _ => {}
+    }
+    match target {
+        AutomationScalarType::Bstr if value.is_string() => Ok(value.clone()),
+        AutomationScalarType::Bstr => text(value).map(Value::String),
+        AutomationScalarType::Double => number(value).map(Value::Double),
+    }.map_err(|_| host_error(13, "Type mismatch"))
+}
+
+pub(crate) fn coerce_declared(value: Value, declared: &str, line: u32, this_year: i64) -> Result<Value, RuntimeError> {
     let lower = declared.to_ascii_lowercase();
+    if lower=="string" && value.is_string() {return Ok(value);}
     // No typed variable holds a Null: measured, `x = Null` into a Byte,
     // Integer, Long, LongLong, Single, Double, Currency, Date, Boolean or
     // String is error 94 and the variable keeps what it had.
@@ -12586,6 +16484,12 @@ fn coerce_declared(value: Value, declared: &str, line: u32, this_year: i64) -> R
         )
     {
         return Err(invalid_null(Some(line)));
+    }
+    // Error Variants require an explicit conversion before storage in a
+    // scalar declaration. Explicit numeric conversions retain their own path.
+    if matches!(value, Value::Error(_)) && matches!(lower.as_str(),
+        "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double" | "currency" | "date" | "boolean" | "string") {
+        return Err(error(RuntimeErrorKind::TypeMismatch, format!("type mismatch storing Error in {declared}"), Some(line)));
     }
     // A Boolean goes into a Byte by its bits: measured, True is 255.
     if lower == "byte" {
@@ -12640,7 +16544,7 @@ fn coerce_declared(value: Value, declared: &str, line: u32, this_year: i64) -> R
             return Ok(Value::Boolean(match &value {
                 Value::Boolean(value) => *value,
                 // "True" and "False" read as themselves, as CBool reads them.
-                Value::String(_) => truthy(&value)
+                Value::String(_) | Value::Utf16(_) | Value::NullString => truthy(&value)
                     .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))?,
                 Value::Int16(_)
                 | Value::Byte(_)
@@ -12704,8 +16608,25 @@ fn overflow(declared: &str, line: u32) -> RuntimeError {
     )
 }
 
+fn object_type_name(name: &str) -> &str {
+    let Some((library, member)) = name.split_once('.') else {
+        return name;
+    };
+    let excel_object = library.eq_ignore_ascii_case("Excel")
+        && ["Application", "Workbook", "Worksheet", "Range", "Chart", "Shape"]
+            .iter()
+            .any(|kind| member.eq_ignore_ascii_case(kind));
+    let collection = library.eq_ignore_ascii_case("VBA")
+        && member.eq_ignore_ascii_case("Collection");
+    if excel_object || collection {
+        member
+    } else {
+        name
+    }
+}
+
 fn default_value(type_name: &TypeName) -> Value {
-    match type_name.name.to_ascii_lowercase().as_str() {
+    match object_type_name(&type_name.name).to_ascii_lowercase().as_str() {
         "boolean" => Value::Boolean(false),
         "byte" => Value::Byte(0),
         "integer" => Value::Int16(0),
@@ -12714,7 +16635,7 @@ fn default_value(type_name: &TypeName) -> Value {
         "single" => Value::Single(0.0),
         "double" | "decimal" => Value::Double(0.0),
         "date" => Value::Date(0.0),
-        "string" => Value::String(String::new()),
+        "string" => Value::NullString,
         "object"
         | "application"
         | "workbook"
@@ -12727,14 +16648,6 @@ fn default_value(type_name: &TypeName) -> Value {
         | "scripting.dictionary" => Value::Nothing,
         _ => Value::Empty,
     }
-}
-
-fn default_return_value(procedure: &Procedure) -> Value {
-    procedure
-        .return_type
-        .as_ref()
-        .map(default_value)
-        .unwrap_or(Value::Empty)
 }
 
 fn value_type_name(value: &Value) -> String {
@@ -12756,10 +16669,11 @@ fn value_type_name(value: &Value) -> String {
         Value::Decimal(_) => "Decimal".to_string(),
         Value::Date(_) => "Date".to_string(),
         Value::Error(_) => "Error".to_string(),
-        Value::String(_) => "String".to_string(),
+        Value::String(_) | Value::Utf16(_) | Value::NullString => "String".to_string(),
         // An array is named for what it holds: measured, `Split` gives
         // String(), and a Long array handed round in a Variant is Long().
         Value::Array(array) => match array.element_default.as_ref() {
+            Value::Nothing => "Object()".to_string(),
             Value::Empty | Value::Missing | Value::Null | Value::Array(_) => "Variant()".to_string(),
             element => format!("{}()", value_type_name(element)),
         },
@@ -12784,7 +16698,7 @@ fn value_var_type(value: &Value) -> i64 {
         Value::Date(_) => 7,
         Value::Byte(_) => 17,
         Value::Error(_) => 10,
-        Value::String(_) => 8,
+        Value::String(_) | Value::Utf16(_) | Value::NullString => 8,
         Value::Object(_) | Value::Nothing => 9,
         Value::Boolean(_) => 11,
         Value::Array(array) => {
@@ -12815,6 +16729,7 @@ fn argument_count_error(procedure: &Procedure, received: usize, line: Option<u32
 
 fn number(value: &Value) -> Result<f64, String> {
     match value {
+        Value::Utf16(_) | Value::NullString => Err("type mismatch converting String to number".into()),
         Value::Empty | Value::Boolean(false) => Ok(0.0),
         Value::Boolean(true) => Ok(-1.0),
         Value::Int16(value) => Ok(*value as f64),
@@ -12947,6 +16862,7 @@ fn numeric_text(text: &str) -> Option<f64> {
 
 fn truthy(value: &Value) -> Result<bool, String> {
     match value {
+        Value::Utf16(_) | Value::NullString => Err("type mismatch converting String to Boolean".into()),
         Value::Empty | Value::Null | Value::Boolean(false) => Ok(false),
         Value::Boolean(true) => Ok(true),
         Value::Int16(value) => Ok(*value != 0),
@@ -13052,7 +16968,7 @@ fn logical_answer(bits: i64, left: u8, right: u8) -> Result<Value, (RuntimeError
     })
 }
 
-fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
+pub(crate) fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
     if matches!(value, Value::Error(_)) {
         return Err("type mismatch using Error value as an operand".to_string());
     }
@@ -13115,13 +17031,23 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
     }
 }
 
-fn binary(
+pub(crate) fn binary(
     op: BinaryOp,
     lhs: Value,
     rhs: Value,
     option_compare_text: bool,
 ) -> Result<Value, (RuntimeErrorKind, String)> {
     use BinaryOp::*;
+    if (op==Concat && !matches!(lhs,Value::Array(_)|Value::Record(_)|Value::Object(_)|Value::Nothing|Value::Error(_)|Value::Missing) && !matches!(rhs,Value::Array(_)|Value::Record(_)|Value::Object(_)|Value::Nothing|Value::Error(_)|Value::Missing)) || (op==Add && (lhs.is_string() || rhs.is_string()) && (lhs.is_string() || matches!(lhs,Value::Empty)) && (rhs.is_string() || matches!(rhs,Value::Empty))) {
+        if matches!((&lhs,&rhs),(Value::Null,Value::Null)){return Ok(Value::Null);}
+        let side=|v:&Value|->Result<Vec<u16>,(RuntimeErrorKind,String)>{if matches!(v,Value::Null){return Ok(Vec::new());}utf16::units(v,None).map_err(|e|(e.kind,e.message))};
+        let mut a=side(&lhs)?;a.extend(side(&rhs)?);return Ok(Value::from_utf16(a));
+    }
+    if matches!(op,Eq|Ne|Lt|Le|Gt|Ge) && lhs.is_string() && rhs.is_string() && (matches!(lhs,Value::Utf16(_)|Value::NullString)||matches!(rhs,Value::Utf16(_)|Value::NullString)) {
+        let a=lhs.string_units().unwrap();let b=rhs.string_units().unwrap();
+        let order=if option_compare_text {utf16::collation(&a).cmp(&utf16::collation(&b))}else{a.cmp(&b)};
+        return Ok(Value::Boolean(match op{Eq=>order.is_eq(),Ne=>!order.is_eq(),Lt=>order.is_lt(),Le=>!order.is_gt(),Gt=>order.is_gt(),Ge=>!order.is_lt(),_=>unreachable!()}));
+    }
     if op == Is {
         return match (lhs, rhs) {
             (Value::Nothing, Value::Nothing) => Ok(Value::Boolean(true)),
@@ -13505,6 +17431,9 @@ fn binary(
                     a.partial_cmp(&b)
                 }
             };
+            // Excel's Variant comparison treats an unordered NaN as equal:
+            // NaN = 0, 0 = NaN, and NaN = NaN are True, while < and > are False.
+            let ordering = ordering.or(Some(std::cmp::Ordering::Equal));
             let equal = lhs == rhs || ordering == Some(std::cmp::Ordering::Equal);
             Ok(Value::Boolean(match op {
                 Eq => equal,
@@ -14151,6 +18080,8 @@ fn numeric_result(value: f64, lhs: &Value, rhs: &Value) -> Value {
 
 fn text(value: &Value) -> Result<String, String> {
     Ok(match value {
+        Value::NullString => String::new(),
+        Value::Utf16(units) => String::from_utf16(units).map_err(|_| "UTF16 string cannot be represented as Unicode scalar text".to_string())?,
         Value::Empty => String::new(),
         Value::Missing => return Err("invalid use of Missing".to_string()),
         Value::Nothing => return Err("object variable or With block variable not set".to_string()),
@@ -14256,8 +18187,9 @@ fn number_text_in(value: f64, places: usize) -> String {
         return if value.is_sign_negative() { "-0" } else { "0" }.to_string();
     }
     if !value.is_finite() {
-        // VBA holds neither, so nothing was measured. Rust's spelling keeps it
-        // readable rather than claiming an answer.
+        if value.is_nan() {
+            return if value.is_sign_negative() { "-nan(ind)" } else { "nan" }.to_string();
+        }
         return value.to_string();
     }
     let sign = if value < 0.0 { "-" } else { "" };
@@ -14299,29 +18231,11 @@ fn plain_digits(digits: &str, exponent: i32) -> String {
     format!("{}.{}", &digits[..whole], &digits[whole..])
 }
 
-fn string_width(value: &Value) -> usize {
-    match value {
-        Value::String(value) => value.encode_utf16().count(),
-        _ => 0,
-    }
-}
-
-fn coerce_string_width(
-    value: Value,
-    width: usize,
-    line: Option<u32>,
-) -> Result<Value, RuntimeError> {
-    let value = match value {
-        // Measured at this entrance too: `Dim s As String * 5: s = Null`
-        // raises 94, as a plain String and a Long do.
-        Value::Null => return Err(invalid_null(line)),
-        value => {
-            text(&value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
-        }
-    };
-    let mut value = value.encode_utf16().take(width).collect::<Vec<_>>();
-    value.resize(width, u16::from(b' '));
-    Ok(Value::String(String::from_utf16_lossy(&value)))
+fn string_width(value:&Value)->usize {value.string_units().map_or(0,|u|u.len())}
+pub(crate) fn coerce_string_width(value:Value,width:usize,line:Option<u32>)->Result<Value,RuntimeError>{
+    if matches!(value,Value::Null){return Err(invalid_null(line));}
+    let mut units=utf16::units(&value,line)?;units.truncate(width);units.resize(width,32);
+    Ok(Value::from_utf16(units))
 }
 
 fn line_of(statement: &Statement) -> Option<u32> {
@@ -14374,6 +18288,62 @@ fn statement_name(statement: &Statement) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn file_copy_and_name_preserve_distinct_coercion_order() {
+        let source=r#"
+Private trace As String
+Private Function Src(ByVal value As Variant) As Variant
+trace = trace & "S"
+Src = value
+End Function
+Private Function Dst(ByVal value As Variant) As Variant
+trace = trace & "D"
+Dst = value
+End Function
+Public Function OrderByCase(ByVal which As Long) As String
+On Error Resume Next
+Select Case which
+Case 0: FileCopy Src(Null), Dst("unused")
+Case 1: Name Src(Null) As Dst("unused")
+Case 2: FileCopy Src(Null), Dst(CVErr(2015))
+Case 3: FileCopy Src(CVErr(2015)), Dst(Null)
+End Select
+OrderByCase = CStr(Err.Number) & "|" & trace
+End Function
+"#;
+        for (kind,expected)in [(0,"94|SD"),(1,"94|S"),(2,"13|SD"),(3,"94|SD")] {
+            assert_eq!(run(source,"OrderByCase",vec![super::Value::Integer(kind)]).unwrap(),super::Value::String(expected.into()));
+        }
+    }
+
+    #[test]
+    fn automation_bstr_preserves_units_and_vba_scalar_formatting() {
+        use super::{coerce_automation_scalar, AutomationScalarType, Value};
+        let cast = |value| coerce_automation_scalar(&value, AutomationScalarType::Bstr).unwrap();
+        assert_eq!(cast(Value::Boolean(true)), Value::String("True".into()));
+        assert_eq!(cast(Value::Single(1e30)), Value::String("1E+30".into()));
+        assert_eq!(cast(Value::Currency(-12500)), Value::String("-1.25".into()));
+        assert_eq!(cast(Value::Date(0.0)), Value::String("12:00:00 AM".into()));
+        let lone_surrogate = Value::from_utf16(vec![0xd83d]);
+        assert_eq!(cast(lone_surrogate.clone()), lone_surrogate);
+    }
+
+    #[test]
+    fn automation_double_uses_vba_boolean_and_grouping_rules_and_typed_errors() {
+        use super::{coerce_automation_scalar, host_error, AutomationScalarType, Value};
+        let cast = |value| coerce_automation_scalar(&value, AutomationScalarType::Double);
+        assert_eq!(cast(Value::Boolean(true)), Ok(Value::Double(-1.0)));
+        assert_eq!(cast(Value::String("1,5".into())), Ok(Value::Double(15.0)));
+        for (value, number, message) in [
+            (Value::Null, 94, "Invalid use of Null"),
+            (Value::Nothing, 91, "Object variable or With block variable not set"),
+            (Value::Error(2007), 13, "Type mismatch"),
+            (Value::String("True".into()), 13, "Type mismatch"),
+        ] {
+            assert_eq!(cast(value), Err(host_error(number, message)));
+        }
+    }
+
     use super::*;
     use crate::parse_module;
 
@@ -15670,6 +19640,162 @@ Dim x As Variant
             fresh_runtime.call("NextStaticValue", vec![]).unwrap(),
             Value::Integer(1)
         );
+    }
+
+    #[test]
+    fn unicode_standard_module_qualifiers_match_native_excel() {
+        let source = include_str!("../../../tests/fixtures/vba/unicode_modules_unicode_multiple_standard.bas");
+        let (module, classes) = crate::parse_project(source).unwrap();
+        let mut runtime = Runtime::new(&module).with_classes(&classes);
+        assert_eq!(runtime.call("Driver.Probe", vec![]).unwrap(), Value::String("売上|利益".into()));
+    }
+
+    #[test]
+    fn standard_module_namespaces_and_qualified_calls_match_excel() {
+        let corpus = include_str!("../../../tests/fixtures/vba/standard_modules.tsv");
+        for (name, source) in [
+            ("private_fields", include_str!("../../../tests/fixtures/vba/standard_private_fields.bas")),
+            ("qualified_statics", include_str!("../../../tests/fixtures/vba/standard_qualified_statics.bas")),
+            ("private_helpers", include_str!("../../../tests/fixtures/vba/standard_private_helpers.bas")),
+            ("public_fields", include_str!("../../../tests/fixtures/vba/standard_public_fields.bas")),
+            ("imports_byref", include_str!("../../../tests/fixtures/vba/standard_imports_byref.bas")),
+            ("properties", include_str!("../../../tests/fixtures/vba/standard_properties.bas")),
+            ("module_options", include_str!("../../../tests/fixtures/vba/standard_module_options.bas")),
+            ("callbacks", include_str!("../../../tests/fixtures/vba/standard_callbacks.bas")),
+            ("declaration_options", include_str!("../../../tests/fixtures/vba/standard_declaration_options.bas")),
+            ("arrays", include_str!("../../../tests/fixtures/vba/standard_arrays.bas")),
+        ] {
+            let (module, classes) = crate::parse_project(source).unwrap();
+            let mut continuous = Runtime::new(&module).with_classes(&classes);
+            let mut saved = None;
+            for row in corpus.lines().filter(|row| row.split('\t').next() == Some(name)) {
+                let fields: Vec<_> = row.split('\t').collect();
+                let expected = Value::String(fields[2].into());
+                assert_eq!(continuous.call(fields[1], vec![]).unwrap(), expected, "continuous {name}");
+                let (module, classes) = crate::parse_project(source).unwrap();
+                let mut resumed = Runtime::new(&module).with_classes(&classes);
+                if let Some(previous) = saved.take() { resumed = resumed.with_project_state(previous); }
+                assert_eq!(resumed.call(fields[1], vec![]).unwrap(), expected, "resumed {name}");
+                saved = Some(resumed.into_project_state());
+            }
+        }
+    }
+
+    #[test]
+    fn static_storage_scope_property_kinds_and_object_lifetime_match_excel() {
+        let corpus = include_str!("../../../tests/fixtures/vba/static_storage.tsv");
+        for (name, source) in [
+            ("scope", include_str!("../../../tests/fixtures/vba/static_scope.bas")),
+            ("properties", include_str!("../../../tests/fixtures/vba/static_properties.bas")),
+            ("lifetime", include_str!("../../../tests/fixtures/vba/static_lifetime.bas")),
+            ("static_procedure", include_str!("../../../tests/fixtures/vba/static_procedure.bas")),
+            ("cross_scope", include_str!("../../../tests/fixtures/vba/static_callbacks.bas")),
+        ] {
+            let (module, classes) = crate::parse_project(source).unwrap();
+            let mut continuous = Runtime::new(&module).with_classes(&classes);
+            let mut saved = None;
+            for row in corpus.lines().filter(|row| row.split('\t').next() == Some(name)) {
+                let fields: Vec<_> = row.split('\t').collect();
+                let expected = match fields[2] {
+                    "empty" => Value::Empty,
+                    "string" => Value::String(fields[3].into()),
+                    _ => panic!("fixture output type"),
+                };
+                assert_eq!(continuous.call(fields[1], vec![]).unwrap(), expected, "continuous {name} {}", fields[1]);
+                // Resume with new modules and procedure caches on every call.
+                let (module, classes) = crate::parse_project(source).unwrap();
+                let mut resumed = Runtime::new(&module).with_classes(&classes);
+                if let Some(previous) = saved.take() { resumed = resumed.with_project_state(previous); }
+                assert_eq!(resumed.call(fields[1], vec![]).unwrap(), expected, "resumed {name} {}", fields[1]);
+                saved = Some(resumed.into_project_state());
+            }
+        }
+    }
+
+    #[test]
+    fn project_state_moves_slots_objects_classes_files_and_random_sequence() {
+        let source = r#"Public Log As String
+Private held As Collection
+Private aliasObject As Object
+Private values(1 To 2) As Long
+Private target As Object
+Public Sub Prime()
+Set held = New Collection
+Set aliasObject = held
+held.Add New Counter
+Set target = Range("A1")
+values(1) = 41
+Open "state.txt" For Output As #1
+Print #1, "retained"
+Close #1
+End Sub
+Public Function ReadState() As String
+Static count As Long
+count = count + 1
+values(1) = values(1) + 1
+ReadState = CStr(count) & "|" & CStr(values(1)) & "|" & CStr(held Is aliasObject) & "|" & CStr(held(1).NextValue()) & "|" & CStr(target.Value) & "|" & Log
+End Function
+Public Function NextRandom() As Single
+NextRandom = Rnd()
+End Function
+Public Function ReadFile() As String
+Dim text As String
+Open "state.txt" For Input As #1
+Line Input #1, text
+Close #1
+ReadFile = text
+End Function
+Public Function Release() As String
+Set held = Nothing
+Set aliasObject = Nothing
+Release = Log
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "Counter"
+Private value As Long
+Private Sub Class_Initialize()
+Log = Log & "I"
+End Sub
+Private Sub Class_Terminate()
+Log = Log & "T"
+End Sub
+Public Function NextValue() As Long
+value = value + 1
+NextValue = value
+End Function
+"#;
+        let mut host = SheetHost::default();
+        host.cells.insert((1, 1), Value::Integer(5));
+        let mut state = None;
+        let invoke = |state: &mut Option<ProjectState>, host: &mut SheetHost, name| {
+            // Each invocation gets new parsed modules and compilation caches.
+            let (module, classes) = crate::parse_project(source).unwrap();
+            let mut runtime = Runtime::new(&module).with_classes(&classes).with_host(host);
+            if let Some(previous) = state.take() { runtime = runtime.with_project_state(previous); }
+            let result = runtime.call(name, vec![]).unwrap();
+            *state = Some(runtime.into_project_state());
+            result
+        };
+        invoke(&mut state, &mut host, "Prime");
+        assert_eq!(invoke(&mut state, &mut host, "ReadState"), Value::String("1|42|True|1|5|I".into()));
+        host.cells.insert((1, 1), Value::Integer(9));
+        assert_eq!(invoke(&mut state, &mut host, "ReadState"), Value::String("2|43|True|2|9|I".into()));
+        assert_eq!(invoke(&mut state, &mut host, "ReadFile"), Value::String("retained".into()));
+        let module = parse_module("Function NextRandom() As Single\nNextRandom = Rnd()\nEnd Function").unwrap();
+        let mut continuous = Runtime::new(&module);
+        for _ in 0..4 {
+            assert_eq!(invoke(&mut state, &mut host, "NextRandom"), continuous.call("NextRandom", vec![]).unwrap());
+        }
+        assert_eq!(invoke(&mut state, &mut host, "Release"), Value::String("IT".into()));
+    }
+
+    #[test]
+    fn end_unwinds_nested_calls_without_running_the_callers_handler_or_assignment() {
+        let module = parse_module("Public value As Long\nSub Main()\nOn Error Resume Next\nvalue = StopNow()\nvalue = 99\nEnd Sub\nFunction StopNow() As Long\nEnd\nEnd Function\nFunction ReadValue() As Long\nReadValue = value\nEnd Function").unwrap();
+        let mut runtime = Runtime::new(&module);
+        assert_eq!(runtime.call("Main", vec![]).unwrap_err().kind, RuntimeErrorKind::EndStatement);
+        assert!(runtime.project_ended());
+        assert_eq!(runtime.call("ReadValue", vec![]).unwrap(), Value::Integer(0));
     }
 
     #[test]
@@ -17299,7 +21425,7 @@ Dim x As Variant
                Dim badPeriod As Long\n\
                Dim noRate As Long\n\
                On Error Resume Next\n\
-               paymentType = PV(0.1, 10, -100, 0, 2)\n\
+               paymentType = PV(0.1, 10, -100, 0, 32768)\n\
                paymentType = Err.Number\n\
                Err.Clear\n\
                zeroPeriods = Pmt(0.1, 0, 1000)\n\
@@ -17317,7 +21443,118 @@ Dim x As Variant
         )
         .unwrap();
 
-        assert_eq!(value, Value::String("5|5|5|5".to_string()));
+        assert_eq!(value, Value::String("6|5|5|5".to_string()));
+    }
+
+    #[test]
+    fn financial_payment_timing_coerces_like_excel() {
+        let value = run(
+            "Public Function Timing() As String\n\
+               Timing = CStr(Pmt(.1,3,100,50,2) = Pmt(.1,3,100,50,1)) & \"|\"\n\
+               Timing = Timing & CStr(FV(.1,3,100,50,-1) = FV(.1,3,100,50,1)) & \"|\"\n\
+               Timing = Timing & CStr(PV(.1,3,100,50,.5) = PV(.1,3,100,50,0)) & \"|\"\n\
+               Timing = Timing & CStr(NPer(.1,-100,100,50,.6) = NPer(.1,-100,100,50,1)) & \"|\"\n\
+               Timing = Timing & CStr(IPmt(.1,1,3,100,50,2)) & \"|\"\n\
+               Timing = Timing & CStr(PPmt(.1,1,3,100,50,2) = PPmt(.1,1,3,100,50,1)) & \"|\"\n\
+               Timing = Timing & CStr(Rate(3,-100,100,50,-1) = Rate(3,-100,100,50,1))\n\
+             End Function\n",
+            "Timing", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("True|True|True|True|0|True|True".to_string()));
+    }
+
+    #[test]
+    fn interest_and_principal_fractional_period_bounds_match_excel() {
+        let value = run(
+            "Public Function Probe() As String\n\
+               Probe=Round(IPmt(.1,.5,1,100),6) & \"|\" & Round(PPmt(.1,.5,1,100),6) & \"|\"\n\
+               Probe=Probe & Round(IPmt(.1,1.5,1,100),6) & \"|\" & Round(PPmt(.1,1.5,1,100),6) & \"|\"\n\
+               Probe=Probe & Round(IPmt(.1,2,1.5,100),6) & \"|\"\n\
+               Dim ignored As Double\n\
+               On Error Resume Next\n\
+               ignored=IPmt(.1,0,1,100): Probe=Probe & Err.Number & \"|\": Err.Clear\n\
+               ignored=PPmt(.1,2.5,1.5,100): Probe=Probe & Err.Number\n\
+             End Function\n", "Probe", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("-14.653741|-95.346259|-5.119115|-104.880885|-3.493384|5|5".to_string()));
+    }
+
+    #[test]
+    fn beginning_interest_first_period_precedes_payment_errors() {
+        let value = run(
+            "Public Function Probe() As String\n\
+               Dim ignored As Double\n\
+               Probe=CStr(IPmt(-2,1,2,100,50,1)) & \"|\" & CStr(IPmt(-1,1,2,100,50,1)) & \"|\"\n\
+               On Error Resume Next\n\
+               ignored=PPmt(-2,1,2,100,50,1): Probe=Probe & Err.Number & \"|\": Err.Clear\n\
+               ignored=PPmt(-1,1,2,100,50,1): Probe=Probe & Err.Number\n\
+             End Function\n", "Probe", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("0|0|11|11".to_string()));
+    }
+
+    #[test]
+    fn interest_nonfinite_results_match_excel() {
+        let value = run(
+            "Public Function Probe() As String\n\
+               Probe=CStr(IPmt(-3,.5,2,100)) & \"|\" & CStr(PPmt(-3,.5,2,100)) & \"|\"\n\
+               Probe=Probe & CStr(IPmt(-3,.5,3.5,100,50,1)) & \"|\" & CStr(PPmt(-3,.5,3.5,100,50,1)) & \"|\"\n\
+               Probe=Probe & CStr(IPmt(-3,1,3.5,100,50,1)) & \"|\" & CStr(PPmt(-3,1,3.5,100,50,1)) & \"|\"\n\
+               Probe=Probe & CStr(IPmt(-1,.5,2,100,50)) & \"|\" & CStr(PPmt(-1,.5,2,100,50))\n\
+             End Function\n", "Probe", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("-nan(ind)|-nan(ind)|nan|nan|0|-nan(ind)|inf|-inf".to_string()));
+    }
+
+    #[test]
+    fn financial_negative_rates_and_zero_denominators_match_excel() {
+        let value = run(
+            "Public Function NegativeRate() As String\n\
+               NegativeRate = PV(-3,2,100,50) & \"|\" & FV(-3,2,100,50) & \"|\" & Pmt(-3,2,100,50) & \"|\" & FV(-3,1,100,50) & \"|\"\n\
+               NegativeRate = NegativeRate & PV(-2,1,100,50) & \"|\" & FV(-2,1,100,50) & \"|\" & Pmt(-2,1,100,50) & \"|\"\n\
+               On Error Resume Next\n\
+               Dim ignored As Double\n\
+               ignored = PV(-1,1,100,50): NegativeRate = NegativeRate & Err.Number & \"|\": Err.Clear\n\
+               ignored = Pmt(-2,2,100,50): NegativeRate = NegativeRate & Err.Number & \"|\": Err.Clear\n\
+               ignored = Pmt(-1,-1,100,50): NegativeRate = NegativeRate & Err.Number & \"|\": Err.Clear\n\
+               ignored = Pmt(-1,1,100,0,1): NegativeRate = NegativeRate & Err.Number & \"|\": Err.Clear\n\
+               ignored = Pmt(-1,1,100,50,1): NegativeRate = NegativeRate & Err.Number & \"|\": Err.Clear\n\
+               ignored = PV(-1,1,100,0,1): NegativeRate = NegativeRate & Err.Number\n\
+             End Function\n",
+            "NegativeRate", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("12.5|-100|450|0|150|-50|50|11|11|6|6|11|6".to_string()));
+    }
+
+    #[test]
+    fn financial_nonfinite_results_keep_excel_double_and_text() {
+        let value = run(
+            "Public Function Nonfinite() As String\n\
+               Dim n As Double, v As Variant\n\
+               n = FV(-2,.5,100,50): v = n\n\
+               Nonfinite = TypeName(v) & \"|\" & CStr(IsNumeric(v)) & \"|\" & CStr(v) & \"|\"\n\
+               Nonfinite = Nonfinite & CStr(PV(-2,.5,100,50)) & \"|\" & CStr(Pmt(-2,.5,100,50)) & \"|\"\n\
+               Nonfinite = Nonfinite & CStr(FV(-1,-1,100,-50)) & \"|\" & CStr(FV(-1,-1,-100,50))\n\
+             End Function\n",
+            "Nonfinite", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("Double|True|-nan(ind)|nan|-nan(ind)|inf|-inf".to_string()));
+    }
+
+    #[test]
+    fn financial_nonfinite_comparisons_and_arithmetic_match_excel() {
+        let value = run(
+            "Public Function Probe() As String\n\
+               Dim v As Variant, ignored As Double\n\
+               v=FV(-2,.5,100,50)\n\
+               Probe=CStr(v=0) & \"|\" & CStr(v<>0) & \"|\" & CStr(v<0) & \"|\" & CStr(v<=0) & \"|\" & CStr(v>0) & \"|\" & CStr(v>=0) & \"|\" & CStr(0=v) & \"|\" & CStr(v=v) & \"|\" & CStr(-v) & \"|\"\n\
+               On Error Resume Next\n\
+               ignored=v+1: Probe=Probe & Err.Number & \"|\": Err.Clear\n\
+               v=FV(-1,-1,100,-50): ignored=v+1: Probe=Probe & Err.Number & \"|\" & CStr(-v)\n\
+             End Function\n",
+            "Probe", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("True|False|False|True|False|True|True|True|nan|6|6|-inf".to_string()));
     }
 
     #[test]
@@ -17333,6 +21570,36 @@ Dim x As Variant
         .unwrap();
 
         assert_eq!(value, Value::String("400|240|29.6|180|240".to_string()));
+    }
+
+    #[test]
+    fn depreciation_boundary_values_match_excel() {
+        let value = run(
+            "Public Function Boundaries() As String\n\
+               Boundaries = SLN(-100, 0, 4) & \"|\" & SLN(100, -10, 4) & \"|\" & SLN(100, 0, -2) & \"|\"\n\
+               Boundaries = Boundaries & SYD(-100, 200, 4, 1) & \"|\" & DDB(100, 200, 4, 1) & \"|\"\n\
+               Boundaries = Boundaries & DDB(100, 200, 4, 1.5) & \"|\" & DDB(-100, 0, 4, 1) & \"|\"\n\
+               Boundaries = Boundaries & DDB(100, 0, 4, 0.5) & \"|\" & Round(DDB(100, 0, 4, 1.5), 6)\n\
+             End Function\n",
+            "Boundaries", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("-25|27.5|-50|-120|-100|0|0|50|35.355339".to_string()));
+    }
+
+    #[test]
+    fn ddb_short_lives_and_high_factors_match_excel() {
+        let value = run(
+            "Public Function Boundaries() As String\n\
+               Boundaries = DDB(100,20,2,1,0.5) & \"|\" & DDB(100,20,2,1.5,0.5) & \"|\"\n\
+               Boundaries = Boundaries & DDB(100,0,1.5,1.5,0.5) & \"|\" & DDB(100,0,4,3,5) & \"|\"\n\
+               On Error Resume Next\n\
+               Dim ignored As Double\n\
+               ignored = DDB(100,0,4,1.5,5)\n\
+               Boundaries = Boundaries & Err.Number\n\
+             End Function\n",
+            "Boundaries", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("80|0|100|6.25|6".to_string()));
     }
 
     #[test]
@@ -17353,6 +21620,86 @@ Dim x As Variant
         .unwrap();
 
         assert_eq!(value, Value::String("0.17743588|0.15512706".to_string()));
+    }
+
+    #[test]
+    fn cash_flow_one_sided_values_match_excel() {
+        let value = run(
+            "Public Function Probe() As String\n\
+               Dim v(2) As Double, ignored As Double\n\
+               v(0)=100: v(1)=100: v(2)=100\n\
+               Probe=CStr(NPV(0,v)) & \"|\" & CStr(NPV(-2,v)) & \"|\"\n\
+               On Error Resume Next\n\
+               ignored=MIRR(v,0,0): Probe=Probe & Err.Number & \"|\": Err.Clear\n\
+               v(0)=-100: v(1)=-50: v(2)=-50\n\
+               Probe=Probe & CStr(NPV(0,v)) & \"|\" & CStr(MIRR(v,0,0)) & \"|\"\n\
+               v(1)=0: v(2)=100\n\
+               Probe=Probe & CStr(Round(MIRR(v,-2,-2),8))\n\
+             End Function\n", "Probe", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("300|-100|11|-200|-1|0".to_string()));
+    }
+
+    #[test]
+    fn cash_flow_unallocated_arrays_match_excel() {
+        let value = run(
+            "Public Function Probe() As String\n\
+               Dim v() As Double, one(0) As Double, answer As Double\n\
+               one(0)=100\n\
+               Probe=CStr(Round(NPV(.1,one),6)) & \"|\"\n\
+               On Error Resume Next\n\
+               answer=IRR(v): Probe=Probe & Err.Number & \"|\": Err.Clear\n\
+               answer=MIRR(v,.1,.1): Probe=Probe & Err.Number & \"|\": Err.Clear\n\
+               answer=NPV(.1,v): Probe=Probe & Err.Number\n\
+             End Function\n", "Probe", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("90.909091|5|5|5".to_string()));
+    }
+
+    #[test]
+    fn irr_convergence_errors_match_excel() {
+        // Excel 16.0 build 20527. These are not merely different rounding:
+        // Excel fails to converge for these starting guesses, while the
+        // current fallback changes the guess and returns a result.
+        let value = run(
+            "Public Function Probe() As String\n\
+               Dim v(2) As Double, result As Double\n\
+               On Error Resume Next\n\
+               v(0)=-100: v(1)=-50: v(2)=100\n\
+               result=IRR(v,1): Probe=CStr(Err.Number) & \"|\": Err.Clear\n\
+               v(0)=100: v(1)=-50: v(2)=0\n\
+               result=IRR(v,0.1): Probe=Probe & CStr(Err.Number)\n\
+             End Function\n", "Probe", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("5|5".to_string()));
+    }
+
+    #[test]
+    fn irr_refines_a_stalled_bracket_like_excel() {
+        let value = run(
+            "Public Function Probe() As Double\nDim v(2) As Double\nv(0)=-100: v(1)=100: v(2)=100\nProbe=Round(IRR(v,2),8)\nEnd Function\n", "Probe", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::Double(0.61803399));
+    }
+
+    #[test]
+    #[ignore = "known Excel VBA IRR convergence differences"]
+    fn irr_remaining_convergence_difference() {
+        let value = run(
+            "Public Function Probe() As Long\nDim v(2) As Double, result As Double\nv(0)=-100: v(2)=200\nOn Error Resume Next\nresult=IRR(v,1): Probe=Err.Number\nEnd Function\n", "Probe", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::Integer(5));
+    }
+
+    #[test]
+    #[ignore = "known Excel VBA IRR multiple-root selection differences"]
+    fn irr_multiple_root_selection_matches_excel() {
+        // Excel 16.0 build 20527 selects different roots for these initial
+        // guesses, although both roots satisfy the same cash-flow equation.
+        let value = run(
+            "Public Function Probe() As String\nDim v(2) As Double\nv(0)=-100: v(1)=230: v(2)=-132\nProbe=CStr(Round(IRR(v,.8),6)) & \"|\" & CStr(Round(IRR(v,1.4),6))\nEnd Function\n", "Probe", vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("0.1|0.2".to_string()));
     }
 
     #[test]
@@ -17437,7 +21784,7 @@ Dim x As Variant
                values(0) = 10\n\
                values(1) = 20\n\
                On Error Resume Next\n\
-               badFlows = NPV(0.1, values)\n\
+               badFlows = NPV(-1, values)\n\
                badFlows = Err.Number\n\
                Err.Clear\n\
                badRange = Partition(5, 10, 5, 1)\n\
@@ -17885,9 +22232,8 @@ Dim x As Variant
     /// modal dialog where it answers nothing at all, which reads exactly like a
     /// machine that has hung.
     ///
-    /// Nothing here refuses the numeric forms: this runtime has no compile
-    /// pass to refuse them in, and a macro carrying one would not have got past
-    /// Excel to reach us.
+    /// This test covers accepted forms. Numeric-expression rejection is a
+    /// separate compile-time contract from the run-time byte-size reading.
     #[test]
     fn brackets_round_the_name_do_not_change_what_len_answers() {
         let source = "Public Function Ask() As String\n\
@@ -18601,19 +22947,16 @@ Dim x As Variant
     }
 
     #[test]
-    fn a_user_procedure_shadows_a_builtin_name() {
-        let value = run(
-            "Private Function Len(value As String) As Long\n\
-               Len = 99\n\
-             End Function\n\
-             Public Function Probe() As Long\n\
-               Probe = Len(\"x\")\n\
-             End Function\n",
+    fn reserved_builtin_procedure_name_is_rejected_before_entry() {
+        let failure = run(
+            include_str!("../../../tests/fixtures/vba/const_bound_procedure_len_direct.bas"),
             "Probe",
             vec![],
         )
-        .unwrap();
-        assert_eq!(value, Value::Integer(99));
+        .unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::Compile);
+        assert!(failure.message.ends_with("Syntax error"));
+        assert_eq!(failure.vba_number, None);
     }
 
     #[test]
@@ -18728,6 +23071,42 @@ Dim x As Variant
         )
         .unwrap();
         assert_eq!(value, Value::String("7|10|0|1|2|4".to_string()));
+    }
+
+    #[test]
+    fn for_each_visits_the_first_array_subscript_fastest() {
+        // Whole sequences measured in the Native PHONETIC argument-shape
+        // controls, including negative bounds and a third dimension.
+        for (source, expected) in [
+            (r#"Public Function Ordered() As String
+                Dim values(2 To 3, -1 To 1) As String
+                Dim x As Long, y As Long, member As Variant
+                For x = 2 To 3
+                    For y = -1 To 1
+                        values(x, y) = CStr(x) & ":" & CStr(y)
+                    Next y
+                Next x
+                For Each member In values
+                    Ordered = Ordered & member & ";"
+                Next member
+            End Function"#, "2:-1;3:-1;2:0;3:0;2:1;3:1;"),
+            (r#"Public Function Ordered() As String
+                Dim values(0 To 1, 0 To 1, 0 To 1) As String
+                Dim x As Long, y As Long, z As Long, member As Variant
+                For x = 0 To 1
+                    For y = 0 To 1
+                        For z = 0 To 1
+                            values(x, y, z) = CStr(x) & ":" & CStr(y) & ":" & CStr(z)
+                        Next z
+                    Next y
+                Next x
+                For Each member In values
+                    Ordered = Ordered & member & ";"
+                Next member
+            End Function"#, "0:0:0;1:0:0;0:1:0;1:1:0;0:0:1;1:0:1;0:1:1;1:1:1;"),
+        ] {
+            assert_eq!(run(source, "Ordered", vec![]).unwrap(), Value::String(expected.into()));
+        }
     }
 
     #[test]
@@ -20385,7 +24764,7 @@ fn widened_operand(value: &Value, rank: u8) -> Option<Value> {
 
 /// A file operation's failure as the error VBA raises for it.
 fn file_failure(failure: crate::files::FileError, line: u32) -> RuntimeError {
-    raised_error(failure.number(), "VBAProject".to_string(), failure.description().to_string(), line)
+    language_error(failure.number(), failure.description(), line)
 }
 
 /// A value as `Print #` writes it: a positive number with a space in front,

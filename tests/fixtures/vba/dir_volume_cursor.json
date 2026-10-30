@@ -1,0 +1,44 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "source": "dir_arguments.bas",
+  "package": "dir_arguments.xlsm",
+  "package_sha256": "8127b6792cef17b3d3fa7eeeec3327f4ec0c95498712b72b9f8dcb6011c5a3aa",
+  "volumes": [
+    {
+      "root": "C:\\",
+      "label": ""
+    },
+    {
+      "root": "D:\\",
+      "label": "OXI-EXT"
+    }
+  ],
+  "native_evidence": {
+    "status": "QUALIFIED_AUXILIARY_NATIVE",
+    "raw_report": "D:\\oxi-vba-validation\\vba_dir_volume_cursor_native_20261020\\created.json",
+    "raw_sha256": "becb23661dc883b18281844115d8f2773766ba6b7af9d9cd7f76696adc229d69",
+    "owned_pid": 12992,
+    "owned_exit_code": 0,
+    "controller_exit_code": 0,
+    "private_helper_calls_work": true,
+    "packet_unchanged": true
+  },
+  "cases": [
+    {
+      "procedure": "SaveProbe.CollectDir",
+      "arguments": [
+        "D:\\held.txt",
+        8
+      ],
+      "expected": "0:OXI-EXT:0;1::0;2::5;3::5;4::5;5::5;6::5;7::5;8::5;9::5;10::5;11::5;"
+    },
+    {
+      "procedure": "SaveProbe.CollectDir",
+      "arguments": [
+        "C:\\held.txt",
+        8
+      ],
+      "expected": "0::0;1::0;2::5;3::5;4::5;5::5;6::5;7::5;8::5;9::5;10::5;11::5;"
+    }
+  ]
+}

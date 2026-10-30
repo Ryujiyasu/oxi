@@ -525,6 +525,8 @@ version = "0.8.9"
 name = "oxidocs-wasm"
 version = "0.8.9"
 dependencies = [
+ "cfb",
+ "codepage",
  "console_error_panic_hook",
  "js-sys",
  "ovba",
@@ -537,11 +539,14 @@ dependencies = [
  "oxipdf-core",
  "oxislides-core",
  "oxivba-core",
+ "quick-xml",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
  "ttf-parser",
+ "uuid",
  "wasm-bindgen",
+ "zip",
 ]
 
 [[package]]

@@ -1,0 +1,1991 @@
+[
+  {
+    "name": "statement_for_unknown_intrinsic",
+    "source": "logical_line_statement_for_unknown_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "statement_for_intrinsic_unknown",
+    "source": "logical_line_statement_for_intrinsic_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "statement_for_unknown_required",
+    "source": "logical_line_statement_for_unknown_required.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "statement_for_required_unknown",
+    "source": "logical_line_statement_for_required_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "statement_for_object_unknown",
+    "source": "logical_line_statement_for_object_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "オブジェクトの使い方が不正です。",
+    "steps": []
+  },
+  {
+    "name": "statement_for_unknown_object",
+    "source": "logical_line_statement_for_unknown_object.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "statement_for_required_intrinsic_step",
+    "source": "logical_line_statement_for_required_intrinsic_step.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "statement_if_condition_intrinsic",
+    "source": "logical_line_statement_if_condition_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "statement_if_inline_unknown_intrinsic",
+    "source": "logical_line_statement_if_inline_unknown_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "statement_if_block_unknown_intrinsic",
+    "source": "logical_line_statement_if_block_unknown_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "statement_select_unknown_case_intrinsic",
+    "source": "logical_line_statement_select_unknown_case_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "statement_select_required_case_intrinsic",
+    "source": "logical_line_statement_select_required_case_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。",
+    "steps": []
+  },
+  {
+    "name": "statement_case_unknown_intrinsic",
+    "source": "logical_line_statement_case_unknown_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "statement_case_unknown_to_intrinsic",
+    "source": "logical_line_statement_case_unknown_to_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "statement_redim_unknown_intrinsic",
+    "source": "logical_line_statement_redim_unknown_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "statement_redim_intrinsic_unknown",
+    "source": "logical_line_statement_redim_intrinsic_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "statement_print_unknown_intrinsic",
+    "source": "logical_line_statement_print_unknown_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "statement_for_valid",
+    "source": "logical_line_statement_for_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "statement_case_valid",
+    "source": "logical_line_statement_case_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "statement_redim_valid",
+    "source": "logical_line_statement_redim_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "statement_if_inline_valid",
+    "source": "logical_line_statement_if_inline_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "line_colon_unknown_intrinsic",
+    "source": "logical_line_line_colon_unknown_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_colon_required_intrinsic",
+    "source": "logical_line_line_colon_required_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_colon_object_intrinsic",
+    "source": "logical_line_line_colon_object_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_colon_if_unknown_intrinsic",
+    "source": "logical_line_line_colon_if_unknown_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_inline_else_intrinsic",
+    "source": "logical_line_line_inline_else_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_inline_continuation_intrinsic",
+    "source": "logical_line_line_inline_continuation_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_for_continuation_intrinsic",
+    "source": "logical_line_line_for_continuation_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_for_colon_body_intrinsic",
+    "source": "logical_line_line_for_colon_body_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_redim_multiple_intrinsic",
+    "source": "logical_line_line_redim_multiple_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_redim_preserve_intrinsic",
+    "source": "logical_line_line_redim_preserve_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_case_is_intrinsic",
+    "source": "logical_line_line_case_is_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_foreach_body_intrinsic",
+    "source": "logical_line_line_foreach_body_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "line_do_body_intrinsic",
+    "source": "logical_line_line_do_body_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "line_with_body_intrinsic",
+    "source": "logical_line_line_with_body_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "line_file_print_intrinsic",
+    "source": "logical_line_line_file_print_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_file_open_intrinsic",
+    "source": "logical_line_line_file_open_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "line_colon_valid",
+    "source": "logical_line_line_colon_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "line_inline_continuation_valid",
+    "source": "logical_line_line_inline_continuation_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "control_continued_colon_unknown_intrinsic",
+    "source": "logical_line_control_continued_colon_unknown_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_continued_colon_required_intrinsic",
+    "source": "logical_line_control_continued_colon_required_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_separate_unknown_intrinsic",
+    "source": "logical_line_control_separate_unknown_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "control_string_underscore_unknown",
+    "source": "logical_line_control_string_underscore_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "control_comment_underscore_unknown",
+    "source": "logical_line_control_comment_underscore_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "control_comment_only_continuation",
+    "source": "logical_line_control_comment_only_continuation.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "control_colon_shadow_array",
+    "source": "logical_line_control_colon_shadow_array.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_colon_shadow_before_unknown",
+    "source": "logical_line_control_colon_shadow_before_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_colon_unknown_before_shadow",
+    "source": "logical_line_control_colon_unknown_before_shadow.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_later_shadow_array",
+    "source": "logical_line_control_later_shadow_array.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_colon_unknown_type_intrinsic",
+    "source": "logical_line_control_colon_unknown_type_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_earlier_unknown_type_intrinsic",
+    "source": "logical_line_control_earlier_unknown_type_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "ユーザ定義型は定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "control_line_number_intrinsic",
+    "source": "logical_line_control_line_number_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_label_intrinsic",
+    "source": "logical_line_control_label_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_block_if_then_colon_intrinsic",
+    "source": "logical_line_control_block_if_then_colon_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_select_inline_case_intrinsic",
+    "source": "logical_line_control_select_inline_case_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_if_else_block_order",
+    "source": "logical_line_control_if_else_block_order.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "control_for_earlier_body_unknown",
+    "source": "logical_line_control_for_earlier_body_unknown.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "control_for_colon_next_intrinsic",
+    "source": "logical_line_control_for_colon_next_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_redim_unknown_next_line",
+    "source": "logical_line_control_redim_unknown_next_line.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "control_if_continued_condition_intrinsic",
+    "source": "logical_line_control_if_continued_condition_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_if_nested_inline_intrinsic",
+    "source": "logical_line_control_if_nested_inline_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_decl_colon_invalid_const",
+    "source": "logical_line_control_decl_colon_invalid_const.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_decl_colon_invalid_array",
+    "source": "logical_line_control_decl_colon_invalid_array.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_run_continued_then",
+    "source": "logical_line_control_run_continued_then.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "control_run_continued_else",
+    "source": "logical_line_control_run_continued_else.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "else"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "else"
+      }
+    ]
+  },
+  {
+    "name": "control_run_continued_colon",
+    "source": "logical_line_control_run_continued_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "control_run_continued_nested",
+    "source": "logical_line_control_run_continued_nested.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "control_run_colon",
+    "source": "logical_line_control_run_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "control_run_continued_then_call",
+    "source": "logical_line_control_run_continued_then_call.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "control_run_shadow_array",
+    "source": "logical_line_control_run_shadow_array.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "control_run_shadow_function",
+    "source": "logical_line_control_run_shadow_function.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_Abs",
+    "source": "logical_line_names_local_Abs.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_Abs",
+    "source": "logical_line_names_parameter_Abs.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_Int",
+    "source": "logical_line_names_local_Int.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_Int",
+    "source": "logical_line_names_parameter_Int.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_Fix",
+    "source": "logical_line_names_local_Fix.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_Fix",
+    "source": "logical_line_names_parameter_Fix.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_Sgn",
+    "source": "logical_line_names_local_Sgn.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_Sgn",
+    "source": "logical_line_names_parameter_Sgn.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_Len",
+    "source": "logical_line_names_local_Len.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_Len",
+    "source": "logical_line_names_parameter_Len.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_LenB",
+    "source": "logical_line_names_local_LenB.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_LenB",
+    "source": "logical_line_names_parameter_LenB.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CBool",
+    "source": "logical_line_names_local_CBool.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CBool",
+    "source": "logical_line_names_parameter_CBool.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CByte",
+    "source": "logical_line_names_local_CByte.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CByte",
+    "source": "logical_line_names_parameter_CByte.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CCur",
+    "source": "logical_line_names_local_CCur.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CCur",
+    "source": "logical_line_names_parameter_CCur.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CDate",
+    "source": "logical_line_names_local_CDate.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CDate",
+    "source": "logical_line_names_parameter_CDate.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CDbl",
+    "source": "logical_line_names_local_CDbl.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CDbl",
+    "source": "logical_line_names_parameter_CDbl.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CInt",
+    "source": "logical_line_names_local_CInt.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CInt",
+    "source": "logical_line_names_parameter_CInt.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CLng",
+    "source": "logical_line_names_local_CLng.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CLng",
+    "source": "logical_line_names_parameter_CLng.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CLngLng",
+    "source": "logical_line_names_local_CLngLng.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CLngLng",
+    "source": "logical_line_names_parameter_CLngLng.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CLngPtr",
+    "source": "logical_line_names_local_CLngPtr.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CLngPtr",
+    "source": "logical_line_names_parameter_CLngPtr.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CSng",
+    "source": "logical_line_names_local_CSng.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CSng",
+    "source": "logical_line_names_parameter_CSng.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CStr",
+    "source": "logical_line_names_local_CStr.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CStr",
+    "source": "logical_line_names_parameter_CStr.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CVar",
+    "source": "logical_line_names_local_CVar.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CVar",
+    "source": "logical_line_names_parameter_CVar.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_CDec",
+    "source": "logical_line_names_local_CDec.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_parameter_CDec",
+    "source": "logical_line_names_parameter_CDec.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "names_local_Str",
+    "source": "logical_line_names_local_Str.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "names_parameter_Str",
+    "source": "logical_line_names_parameter_Str.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "names_local_Chr",
+    "source": "logical_line_names_local_Chr.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "names_parameter_Chr",
+    "source": "logical_line_names_parameter_Chr.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "scopes_global_Abs",
+    "source": "logical_line_scopes_global_Abs.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 識別子",
+    "steps": []
+  },
+  {
+    "name": "scopes_constant_Abs",
+    "source": "logical_line_scopes_constant_Abs.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 識別子",
+    "steps": []
+  },
+  {
+    "name": "scopes_field_Abs",
+    "source": "logical_line_scopes_field_Abs.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 識別子",
+    "steps": []
+  },
+  {
+    "name": "scopes_member_Abs",
+    "source": "logical_line_scopes_member_Abs.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "scopes_global_CInt",
+    "source": "logical_line_scopes_global_CInt.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 識別子",
+    "steps": []
+  },
+  {
+    "name": "scopes_constant_CInt",
+    "source": "logical_line_scopes_constant_CInt.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 識別子",
+    "steps": []
+  },
+  {
+    "name": "scopes_field_CInt",
+    "source": "logical_line_scopes_field_CInt.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 識別子",
+    "steps": []
+  },
+  {
+    "name": "scopes_member_CInt",
+    "source": "logical_line_scopes_member_CInt.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "scopes_global_CDec",
+    "source": "logical_line_scopes_global_CDec.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 識別子",
+    "steps": []
+  },
+  {
+    "name": "scopes_constant_CDec",
+    "source": "logical_line_scopes_constant_CDec.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 識別子",
+    "steps": []
+  },
+  {
+    "name": "scopes_field_CDec",
+    "source": "logical_line_scopes_field_CDec.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 識別子",
+    "steps": []
+  },
+  {
+    "name": "scopes_member_CDec",
+    "source": "logical_line_scopes_member_CDec.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "scopes_global_Str",
+    "source": "logical_line_scopes_global_Str.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "scopes_constant_Str",
+    "source": "logical_line_scopes_constant_Str.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "scopes_field_Str",
+    "source": "logical_line_scopes_field_Str.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "scopes_member_Str",
+    "source": "logical_line_scopes_member_Str.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_global_const_same",
+    "source": "logical_line_boundary_global_const_same.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 式",
+    "steps": []
+  },
+  {
+    "name": "boundary_global_const_separate",
+    "source": "logical_line_boundary_global_const_separate.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 式",
+    "steps": []
+  },
+  {
+    "name": "boundary_global_type_same",
+    "source": "logical_line_boundary_global_type_same.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 式",
+    "steps": []
+  },
+  {
+    "name": "boundary_global_type_separate",
+    "source": "logical_line_boundary_global_type_separate.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 式",
+    "steps": []
+  },
+  {
+    "name": "boundary_global_array_same",
+    "source": "logical_line_boundary_global_array_same.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 式",
+    "steps": []
+  },
+  {
+    "name": "boundary_enum_colon_intrinsic",
+    "source": "logical_line_boundary_enum_colon_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "修正候補: 式",
+    "steps": []
+  },
+  {
+    "name": "boundary_enum_colon_valid",
+    "source": "logical_line_boundary_enum_colon_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_header_parameter_type_same",
+    "source": "logical_line_boundary_header_parameter_type_same.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_header_return_type_same",
+    "source": "logical_line_boundary_header_return_type_same.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_header_parameter_type_separate",
+    "source": "logical_line_boundary_header_parameter_type_separate.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "ユーザ定義型は定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "boundary_header_body_before_global",
+    "source": "logical_line_boundary_header_body_before_global.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_header_valid",
+    "source": "logical_line_boundary_header_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_underscore_no_space",
+    "source": "logical_line_boundary_underscore_no_space.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_underscore_comment_after",
+    "source": "logical_line_boundary_underscore_comment_after.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_underscore_valid",
+    "source": "logical_line_boundary_underscore_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_underscore_blank_next",
+    "source": "logical_line_boundary_underscore_blank_next.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_underscore_colon_next",
+    "source": "logical_line_boundary_underscore_colon_next.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "boundary_continuation_comment_then_syntax",
+    "source": "logical_line_boundary_continuation_comment_then_syntax.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "boundary_colon_expression_continued_syntax",
+    "source": "logical_line_boundary_colon_expression_continued_syntax.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "colon_run_if_colon_end",
+    "source": "logical_line_colon_run_if_colon_end.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "End If に対応する If ブロックがありません。",
+    "steps": []
+  },
+  {
+    "name": "colon_run_if_colon",
+    "source": "logical_line_colon_run_if_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "colon_run_if_double_colon",
+    "source": "logical_line_colon_run_if_double_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "colon_run_if_else_colon",
+    "source": "logical_line_colon_run_if_else_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "colon_run_nested_colon",
+    "source": "logical_line_colon_run_nested_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "colon_unknown_if_colon",
+    "source": "logical_line_colon_unknown_if_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "colon_unknown_if_colon_end",
+    "source": "logical_line_colon_unknown_if_colon_end.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "colon_run_empty_colons",
+    "source": "logical_line_colon_run_empty_colons.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "recovery_unknown_before_bad_underscore",
+    "source": "logical_line_recovery_unknown_before_bad_underscore.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "recovery_unknown_before_bad_else_colon",
+    "source": "logical_line_recovery_unknown_before_bad_else_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "recovery_unknown_before_unmatched_end",
+    "source": "logical_line_recovery_unknown_before_unmatched_end.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "recovery_unknown_before_cint_declaration",
+    "source": "logical_line_recovery_unknown_before_cint_declaration.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "recovery_unknown_then_colon_end",
+    "source": "logical_line_recovery_unknown_then_colon_end.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。",
+    "steps": []
+  },
+  {
+    "name": "recovery_intrinsic_then_colon_end",
+    "source": "logical_line_recovery_intrinsic_then_colon_end.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "recovery_run_end_if_colon",
+    "source": "logical_line_recovery_run_end_if_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "recovery_run_next_colon",
+    "source": "logical_line_recovery_run_next_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "recovery_run_end_select_colon",
+    "source": "logical_line_recovery_run_end_select_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "recovery_run_wend_colon",
+    "source": "logical_line_recovery_run_wend_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "recovery_run_loop_colon",
+    "source": "logical_line_recovery_run_loop_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "recovery_run_end_with_colon",
+    "source": "logical_line_recovery_run_end_with_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "recovery_run_then_colon_else",
+    "source": "logical_line_recovery_run_then_colon_else.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "recovery_run_then_colon_nextline",
+    "source": "logical_line_recovery_run_then_colon_nextline.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "context_local_const_intrinsic",
+    "source": "logical_line_context_local_const_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "context_local_bounds_intrinsic",
+    "source": "logical_line_context_local_bounds_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "context_local_redim_intrinsic",
+    "source": "logical_line_context_local_redim_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "context_local_const_valid",
+    "source": "logical_line_context_local_const_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_run_false_then_colon",
+    "source": "logical_line_context_run_false_then_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0"
+      }
+    ]
+  },
+  {
+    "name": "context_run_true_then_colon",
+    "source": "logical_line_context_run_true_then_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "context_parameter_default_intrinsic",
+    "source": "logical_line_context_parameter_default_intrinsic.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "compile",
+    "message": "構文エラー",
+    "steps": []
+  },
+  {
+    "name": "context_parameter_default_valid",
+    "source": "logical_line_context_parameter_default_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "context_run_enum_colon",
+    "source": "logical_line_context_run_enum_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "name": "context_run_false_then_multi_colon",
+    "source": "logical_line_context_run_false_then_multi_colon.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "outcome": "values",
+    "message": null,
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "0"
+      }
+    ]
+  }
+]

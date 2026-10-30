@@ -1,0 +1,477 @@
+[
+  {
+    "name": "bracket_false_branch",
+    "source": "decl_syntax_bracket_false_branch.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "bracket_after_exit",
+    "source": "decl_syntax_bracket_after_exit.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "bracket_uncalled",
+    "source": "decl_syntax_bracket_uncalled.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "reserved_false_branch",
+    "source": "decl_syntax_reserved_false_branch.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "reserved_after_exit",
+    "source": "decl_syntax_reserved_after_exit.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "reserved_uncalled",
+    "source": "decl_syntax_reserved_uncalled.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "reserved_variant",
+    "source": "decl_syntax_reserved_variant.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "reserved_variant_bracket",
+    "source": "decl_syntax_reserved_variant_bracket.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "reserved_integer",
+    "source": "decl_syntax_reserved_integer.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "reserved_integer_bracket",
+    "source": "decl_syntax_reserved_integer_bracket.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "reserved_date",
+    "source": "decl_syntax_reserved_date.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "reserved_date_bracket",
+    "source": "decl_syntax_reserved_date_bracket.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "reserved_name",
+    "source": "decl_syntax_reserved_name.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "reserved_name_bracket",
+    "source": "decl_syntax_reserved_name_bracket.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "reserved_property",
+    "source": "decl_syntax_reserved_property.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "reserved_property_bracket",
+    "source": "decl_syntax_reserved_property_bracket.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "reserved_value",
+    "source": "decl_syntax_reserved_value.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "reserved_value_bracket",
+    "source": "decl_syntax_reserved_value_bracket.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_boolean",
+    "source": "decl_syntax_local_boolean.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_byte",
+    "source": "decl_syntax_local_byte.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_long",
+    "source": "decl_syntax_local_long.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_longlong",
+    "source": "decl_syntax_local_longlong.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_longptr",
+    "source": "decl_syntax_local_longptr.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_single",
+    "source": "decl_syntax_local_single.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_double",
+    "source": "decl_syntax_local_double.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_currency",
+    "source": "decl_syntax_local_currency.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_string",
+    "source": "decl_syntax_local_string.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_decimal",
+    "source": "decl_syntax_local_decimal.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_object",
+    "source": "decl_syntax_local_object.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "local_me",
+    "source": "decl_syntax_local_me.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_true",
+    "source": "decl_syntax_local_true.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_nothing",
+    "source": "decl_syntax_local_nothing.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_if",
+    "source": "decl_syntax_local_if.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_new",
+    "source": "decl_syntax_local_new.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_as",
+    "source": "decl_syntax_local_as.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_type",
+    "source": "decl_syntax_local_type.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_next",
+    "source": "decl_syntax_local_next.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_debug",
+    "source": "decl_syntax_local_debug.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "local_range",
+    "source": "decl_syntax_local_range.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "local_text",
+    "source": "decl_syntax_local_text.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "empty",
+    "source": "decl_syntax_empty.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "missing_type",
+    "source": "decl_syntax_missing_type.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "trailing_comma",
+    "source": "decl_syntax_trailing_comma.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "missing_comma",
+    "source": "decl_syntax_missing_comma.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "initializer",
+    "source": "decl_syntax_initializer.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "static_bracket",
+    "source": "decl_syntax_static_bracket.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "const_bracket",
+    "source": "decl_syntax_const_bracket.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "array_missing_close",
+    "source": "decl_syntax_array_missing_close.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  },
+  {
+    "name": "parameter_variant",
+    "source": "decl_syntax_parameter_variant.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Sub または Function が定義されていません。"
+  },
+  {
+    "name": "parameter_integer",
+    "source": "decl_syntax_parameter_integer.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Sub または Function が定義されていません。"
+  },
+  {
+    "name": "parameter_date",
+    "source": "decl_syntax_parameter_date.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Sub または Function が定義されていません。"
+  },
+  {
+    "name": "parameter_name",
+    "source": "decl_syntax_parameter_name.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "parameter_bracket",
+    "source": "decl_syntax_parameter_bracket.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "Sub または Function が定義されていません。"
+  },
+  {
+    "name": "unknown_valid",
+    "source": "decl_syntax_unknown_valid.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ab "
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ab "
+      }
+    ]
+  },
+  {
+    "name": "original_pointer_reserved",
+    "source": "decl_syntax_original_pointer_reserved.bas",
+    "procedure": "DriverModule.Probe",
+    "outcome": "compile",
+    "message": "構文エラー"
+  }
+]

@@ -799,6 +799,11 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
 
 fn render_expr(expr: &Expr, locals: &mut LocalNames, out: &mut String) {
     match expr {
+        Expr::Group { expression, .. } => {
+            out.push('(');
+            render_expr(expression, locals, out);
+            out.push(')');
+        }
         Expr::Literal(lit, _) => render_literal(lit, locals.norm, out),
         Expr::EvaluateShortcut { text, .. } => {
             out.push('[');

@@ -1,0 +1,4 @@
+# Self-authored native Excel BSTR/UTF16 outcomes. CC BY-SA 4.0.
+procedure	value
+PointerCases	True|False|True|True|False|False|True|True|False|False|True|True|True|False
+UnicodeCases	1:2:-10179|1:2:-8704|2:4:-10179:-8704|1:2:-10179|1:2:-8704|1:2:-10179|2:4:-8704:-10179|2:4:120:-8704|2:-1|2:4:-10179:-8704|2:4:-10179:65|1:2:-10179|2:4:120:-8704

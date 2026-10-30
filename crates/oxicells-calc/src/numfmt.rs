@@ -108,23 +108,27 @@ pub fn format_number(value: f64, format: &str) -> String {
 /// with the text where the `@` is. Measured: under `0;0;0;"txt:"@` "abc" is
 /// `txt:abc`; a format with no text section shows text as it is.
 pub fn format_text(text: &str, format: &str) -> String {
+    String::from_utf16(&format_text_utf16(&text.encode_utf16().collect::<Vec<_>>(),format)).expect("scalar text and a scalar format produce scalar text")
+}
+
+pub fn format_text_utf16(text: &[u16], format: &str) -> Vec<u16> {
     let sections = split_sections(format);
     let section = match sections.len() {
         4.. => sections[3],
         1 if sections[0].contains('@') => sections[0],
-        _ => return text.to_string(),
+        _ => return text.to_vec(),
     };
-    let mut out = String::new();
+    let mut out = Vec::new();
     let mut quoted = false;
     let mut characters = section.chars();
     while let Some(character) = characters.next() {
         match character {
             '"' => quoted = !quoted,
-            _ if quoted => out.push(character),
-            '\\' => out.extend(characters.next()),
+            _ if quoted => out.extend_from_slice(character.encode_utf16(&mut [0;2])),
+            '\\' => {if let Some(character)=characters.next(){out.extend_from_slice(character.encode_utf16(&mut [0;2]));}},
             '_' => {
                 characters.next();
-                out.push(' ');
+                out.push(32);
             }
             '*' => {
                 characters.next();
@@ -136,8 +140,8 @@ pub fn format_text(text: &str, format: &str) -> String {
                     }
                 }
             }
-            '@' => out.push_str(text),
-            other => out.push(other),
+            '@' => out.extend_from_slice(text),
+            other => out.extend_from_slice(other.encode_utf16(&mut [0;2])),
         }
     }
     out

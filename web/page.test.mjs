@@ -73,6 +73,7 @@ function element(name, id) {
       }
     },
     appendChild(child) { this.children.push(child); return child; },
+    replaceChildren(...children) { this.children = [...children]; },
     removeChild() {},
     remove() {},
     insertRow() {
@@ -158,9 +159,9 @@ globalThis.document = {
   querySelector: () => null,
   querySelectorAll: () => [],
 };
-globalThis.window = { addEventListener: (kind) => hung.push(kind), devicePixelRatio: 1 };
+globalThis.window = { addEventListener: (kind) => hung.push(kind), dispatchEvent: () => true, devicePixelRatio: 1 };
 globalThis.performance = { now: () => 0 };
-globalThis.Blob = class { constructor(parts) { this.parts = parts; } };
+globalThis.Blob = class { constructor(parts, options = {}) { this.parts = parts; this.type = options.type || ''; } };
 // The real URL class stays: the wasm glue builds one to find its own binary
 // beside itself. Only the two blob helpers are stood in for.
 // What was handed over is kept: a save writes by making a blob and clicking a
@@ -369,6 +370,191 @@ if (bold && saveButton && bold.listeners.has('click')) {
 } else {
   is('the page has a bold button and a save button', false, true);
 }
+
+// Drive the actual macro and Save buttons. The DOM has no browser Worker, so
+// its transport shim calls the same real WASM used by the worker integration
+// suite; no workbook result or failure state is fabricated here.
+const realWasm = await import('file://' + join(here, 'oxidocs_wasm.js').replaceAll('\\', '/'));
+globalThis.Worker = class {
+  session = new realWasm.SpreadsheetVbaSession();
+  handlers = new Map();
+  addEventListener(type, handler) { this.handlers.set(type, handler); }
+  terminate() { this.session.free(); }
+  postMessage(data) {
+    queueMicrotask(() => {
+      try {
+        const execution = data.action === 'save'
+          ? this.session.prepare_save(data.workbook, data.source || (data.packageBytes ? realWasm.spreadsheet_vba_source(data.packageBytes) || '' : ''), data.activeSheet, data.fileName, data.options)
+          : this.session.run(data.workbook, data.source, data.procedure, data.args, data.activeSheet, data.fileName, data.options);
+        this.handlers.get('message')({ data: { ok: !execution.error, execution, error: execution.error?.message } });
+      } catch (error) {
+        this.handlers.get('message')({ data: { ok: false, error: error.message } });
+      }
+    });
+  }
+};
+
+if (picker && picker.onchange && bold && saveButton) {
+  const bytes = await readFile(join(here, '..', 'tests', 'fixtures', 'vba', 'named_project_ascii.xlsm'));
+  await picker.onchange({ target: { files: [{
+    name: 'named_project_ascii.xlsm',
+    arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+  }] } });
+  is('a macro workbook opens through the picker', nodes.get('sheetInk').pen.strokes > 0, true);
+  written.length = 0;
+  made.length = 0;
+  bold.fire('click', {});
+  saveButton.fire('click', {});
+  await new Promise(go => setTimeout(go, 0));
+  is('the macro workbook is saved', written.length, 1);
+  is('the saved macro workbook keeps its extension', made.find(node => node.tagName === 'A')?.download, 'named_project_ascii-edited.xlsm');
+  is('and its macro workbook MIME type', written[0]?.type, 'application/vnd.ms-excel.sheet.macroEnabled.12');
+  const wasm = await import('file://' + join(here, 'oxidocs_wasm.js').replaceAll('\\', '/'));
+  is('the saved macro project remains readable', wasm.spreadsheet_vba_project_name(written[0].parts[0]), 'OxiNamedProject');
+}
+
+const macroFixture = await readFile(join(here, '..', 'tests/fixtures/vba/failure_state.bas'), 'utf8');
+const macroPackage = await readFile(join(here, '..', 'tests/fixtures/vba/named_project_ascii.xlsm'));
+async function openMacroFixture() {
+  await picker.onchange({ target: { files: [{ name: 'Failure.xlsm', arrayBuffer: async () => macroPackage.buffer.slice(macroPackage.byteOffset, macroPackage.byteOffset + macroPackage.byteLength) }] } });
+  nodes.get('macroSource').value = 'Sub ResetCalculation()\nApplication.Calculation = xlCalculationAutomatic\nApplication.CalculateBeforeSave = True\nEnd Sub';
+  nodes.get('macroArgs').value = '';
+  nodes.get('macroProc').value = 'ResetCalculation';
+  await nodes.get('macroRun').onclick();
+  nodes.get('macroSource').value = macroFixture;
+  nodes.get('macroArgs').value = '';
+  nodes.get('macroProc').value = 'Seed';
+  await nodes.get('macroRun').onclick();
+  saveButton.fire('click', {});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  written.length = 0;
+}
+function savedCell(book, col) {
+  return book.sheets[0].rows.find(row => row.index === 1)?.cells.find(cell => cell.col === col);
+}
+for (const [procedure, b1] of [['DivideFailure', 14], ['ManualFailure', 14], ['FormatFailure', 2], ['CompileCalleeFailure', 14]]) {
+  await openMacroFixture();
+  is(`${procedure}: seeded workbook is saved first`, saveButton.disabled, true);
+  nodes.get('macroProc').value = procedure;
+  await nodes.get('macroRun').onclick();
+  is(`${procedure}: error enables saving preceding edits`, saveButton.disabled, false);
+  is(`${procedure}: error output has no success message`, nodes.get('macroResult').textContent.includes('Completed.'), false);
+  saveButton.fire('click', {});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  is(`${procedure}: Save writes a file`, written.length, 1);
+  if (written[0]) {
+    const saved = realWasm.parse_spreadsheet(written[0].parts[0]);
+    is(`${procedure}: saved formula cache survives`, savedCell(saved, 1)?.value, { Number: b1 });
+    is(`${procedure}: saved formatting survives`, savedCell(saved, 0)?.style.bold, true);
+  }
+}
+await openMacroFixture();
+nodes.get('macroProc').value = 'CompileEntryFailure';
+await nodes.get('macroRun').onclick();
+is('compilation before entry leaves a saved workbook clean', saveButton.disabled, true);
+is('compilation before entry has no preceding output', nodes.get('macroResult').textContent.includes('Debug.Print:'), false);
+
+await openMacroFixture();
+bold.fire('click', {});
+nodes.get('macroProc').value = 'StatusFailure';
+await nodes.get('macroRun').onclick();
+is('an error without workbook writes preserves existing dirty edits', saveButton.disabled, false);
+is('the output before an error is displayed', nodes.get('macroResult').textContent.includes('status-only'), true);
+saveButton.fire('click', {});
+await new Promise(resolve => setTimeout(resolve, 0));
+is('existing edits remain saveable after the error', written.length, 1);
+if (written[0]) is('existing formatting reaches the saved file', savedCell(realWasm.parse_spreadsheet(written[0].parts[0]), 0)?.style.bold, true);
+
+// Independent macro clicks share Excel's Application settings, including when
+// the earlier macro failed. The transport shim still uses the real WASM.
+nodes.get('macroSource').value = await readFile(join(here, '..', 'tests/fixtures/vba/application_state.bas'), 'utf8');
+nodes.get('macroProc').value = 'ResetState';
+nodes.get('macroArgs').value = '';
+await nodes.get('macroRun').onclick();
+nodes.get('macroProc').value = 'Configure';
+nodes.get('macroArgs').value = '[1]';
+await nodes.get('macroRun').onclick();
+const stateFixture = JSON.parse(await readFile(join(here, '..', 'tests/fixtures/vba/application_state.json'), 'utf8'));
+const stateExpected = stateFixture.cases.find(row => row.mode === 1);
+for (const [procedure, expected] of [['ReadState', stateExpected.after], ['WriteMore', stateExpected.after_write], ['Automatic', stateExpected.automatic]]) {
+  nodes.get('macroProc').value = procedure;
+  nodes.get('macroArgs').value = '';
+  await nodes.get('macroRun').onclick();
+  is(`${procedure}: Application settings persist between actual macro clicks`, nodes.get('macroResult').textContent.includes(expected), true);
+}
+
+const saveMacroSource = await readFile(join(here, '..', 'tests/fixtures/vba/save_calculation.bas'), 'utf8');
+const saveMacroPackage = await readFile(join(here, '..', 'tests/fixtures/vba/save_calculation.xlsm'));
+async function openSaveFixture(udf) {
+  await picker.onchange({ target: { files: [{ name: 'Save.xlsm', arrayBuffer: async () => saveMacroPackage.buffer.slice(saveMacroPackage.byteOffset, saveMacroPackage.byteOffset + saveMacroPackage.byteLength) }] } });
+  nodes.get('macroSource').value = saveMacroSource;
+  nodes.get('macroProc').value = 'Reset'; nodes.get('macroArgs').value = JSON.stringify([udf]);
+  await nodes.get('macroRun').onclick();
+  saveButton.fire('click', {});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  written.length = 0;
+}
+for (const udf of [false, true]) {
+  for (const onSave of [true, false]) {
+    await openSaveFixture(udf);
+    nodes.get('macroProc').value = 'Configure';
+    nodes.get('macroArgs').value = JSON.stringify([-4135, onSave]);
+    await nodes.get('macroRun').onclick();
+    saveButton.fire('click', {});
+    await new Promise(resolve => setTimeout(resolve, 0));
+    is(`Save UDF=${udf} onSave=${onSave}: writes a file`, written.length, 1);
+    if (written[0]) {
+      const saved = realWasm.parse_spreadsheet(written[0].parts[0]);
+      is(`Save UDF=${udf} onSave=${onSave}: matches Excel's calculation`, savedCell(saved, 1)?.value, { Number: onSave ? 14 : 2 });
+      is('the manual calculation mode reaches the file', saved.calculation.mode, 'manual');
+      is('the on-save flag reaches the file', saved.calculation.on_save, onSave);
+      is('successful Save clears pending changes', saveButton.disabled, true);
+    }
+  }
+}
+await openSaveFixture(false);
+nodes.get('macroProc').value = 'ModeOnly'; nodes.get('macroArgs').value = '[-4105]';
+await nodes.get('macroRun').onclick();
+is('assigning the same calculation mode enables Save', saveButton.disabled, false);
+await openSaveFixture(false);
+nodes.get('macroProc').value = 'OnSaveOnly'; nodes.get('macroArgs').value = '[false]';
+await nodes.get('macroRun').onclick();
+is('metadata-only on-save changes remain saveable', saveButton.disabled, false);
+saveButton.fire('click', {});
+await new Promise(resolve => setTimeout(resolve, 0));
+is('metadata-only Save writes a file', written.length, 1);
+if (written[0]) is('metadata-only Save persists calcOnSave', realWasm.parse_spreadsheet(written[0].parts[0]).calculation.on_save, false);
+
+const editSource = await readFile(join(here, '..', 'tests/fixtures/vba/source_edit_standard.bas'), 'utf8');
+const editControls = JSON.parse(await readFile(join(here, '..', 'tests/fixtures/vba/source_edit_controls.json'), 'utf8'));
+for (const name of ['same_static', 'same_body', 'insert_dynamic', 'insert_static']) {
+  await openSaveFixture(false);
+  const input = nodes.get('macroSource');
+  input.value = editSource;
+  nodes.get('macroProc').value = 'Prime'; nodes.get('macroArgs').value = '[0]';
+  await nodes.get('macroRun').onclick();
+  nodes.get('macroProc').value = 'ReadGlobals'; nodes.get('macroArgs').value = '';
+  await nodes.get('macroRun').onclick();
+  const testCase = editControls.find(row => row.name === name);
+  input.selectionStart = testCase.old ? editSource.indexOf(testCase.old) : editSource.indexOf(testCase.insert_after) + testCase.insert_after.length + 1;
+  input.selectionEnd = testCase.old ? input.selectionStart + testCase.old.length : input.selectionStart;
+  input.fire('beforeinput', {}); input.value = testCase.source; input.fire('input', {});
+  await nodes.get('macroRun').onclick();
+  is(`${name}: actual source editing and Run buttons retain/reset Excel storage`, nodes.get('macroResult').textContent.includes(testCase.after.replace('A1:9', 'A1:5')), true);
+}
+
+await openSaveFixture(true);
+nodes.get('macroProc').value = 'Configure'; nodes.get('macroArgs').value = '[-4135,true]';
+await nodes.get('macroRun').onclick();
+const sourceInput = nodes.get('macroSource');
+sourceInput.selectionStart = saveMacroSource.indexOf('Twice = amount * 2');
+sourceInput.selectionEnd = sourceInput.selectionStart + 'Twice = amount * 2'.length;
+sourceInput.fire('beforeinput', {});
+sourceInput.value = saveMacroSource.replace('Twice = amount * 2', 'Twice = amount * 3');
+sourceInput.fire('input', {});
+saveButton.fire('click', {});
+await new Promise(resolve => setTimeout(resolve, 0));
+is('Save calculates pending editor UDF code without rerunning Configure', written[0] ? savedCell(realWasm.parse_spreadsheet(written[0].parts[0]), 1)?.value : undefined, { Number: 21 });
 
 console.log(failures === 0 ? '\nthe page loads' : `\n${failures} did not`);
 process.exit(failures === 0 ? 0 : 1);

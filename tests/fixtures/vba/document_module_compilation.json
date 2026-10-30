@@ -1,0 +1,1627 @@
+[
+  {
+    "name": "sheet_missing",
+    "source": "document_module_sheet_missing.bas",
+    "measurement_source": "document_module_sheet_missing_driver.bas",
+    "document_source": "document_module_sheet_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "sheet_range_missing",
+    "source": "document_module_sheet_range_missing.bas",
+    "measurement_source": "document_module_sheet_range_missing_driver.bas",
+    "document_source": "document_module_sheet_range_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "sheet_range_valid",
+    "source": "document_module_sheet_range_valid.bas",
+    "measurement_source": "document_module_sheet_range_valid_driver.bas",
+    "document_source": "document_module_sheet_range_valid_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "sheet_helper_missing",
+    "source": "document_module_sheet_helper_missing.bas",
+    "measurement_source": "document_module_sheet_helper_missing_driver.bas",
+    "document_source": "document_module_sheet_helper_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "sheet_helper_valid",
+    "source": "document_module_sheet_helper_valid.bas",
+    "measurement_source": "document_module_sheet_helper_valid_driver.bas",
+    "document_source": "document_module_sheet_helper_valid_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "sheet_private_member",
+    "source": "document_module_sheet_private_member.bas",
+    "measurement_source": "document_module_sheet_private_member_driver.bas",
+    "document_source": "document_module_sheet_private_member_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "sheet_me_base",
+    "source": "document_module_sheet_me_base.bas",
+    "measurement_source": "document_module_sheet_me_base_driver.bas",
+    "document_source": "document_module_sheet_me_base_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "sheet_me_missing",
+    "source": "document_module_sheet_me_missing.bas",
+    "measurement_source": "document_module_sheet_me_missing_driver.bas",
+    "document_source": "document_module_sheet_me_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "sheet_override_name",
+    "source": "document_module_sheet_override_name.bas",
+    "measurement_source": "document_module_sheet_override_name_driver.bas",
+    "document_source": "document_module_sheet_override_name_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。"
+  },
+  {
+    "name": "sheet_override_range",
+    "source": "document_module_sheet_override_range.bas",
+    "measurement_source": "document_module_sheet_override_range_driver.bas",
+    "document_source": "document_module_sheet_override_range_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。"
+  },
+  {
+    "name": "book_helper_missing",
+    "source": "document_module_book_helper_missing.bas",
+    "measurement_source": "document_module_book_helper_missing_driver.bas",
+    "document_source": "document_module_book_helper_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "book_helper_valid",
+    "source": "document_module_book_helper_valid.bas",
+    "measurement_source": "document_module_book_helper_valid_driver.bas",
+    "document_source": "document_module_book_helper_valid_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "book_typed_helper",
+    "source": "document_module_book_typed_helper.bas",
+    "measurement_source": "document_module_book_typed_helper_driver.bas",
+    "document_source": "document_module_book_typed_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "book_chained_helper",
+    "source": "document_module_book_chained_helper.bas",
+    "measurement_source": "document_module_book_chained_helper_driver.bas",
+    "document_source": "document_module_book_chained_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "run_sheet_helper",
+    "source": "document_module_run_sheet_helper.bas",
+    "measurement_source": "document_module_run_sheet_helper_driver.bas",
+    "document_source": "document_module_run_sheet_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "run_book_helper",
+    "source": "document_module_run_book_helper.bas",
+    "measurement_source": "document_module_run_book_helper_driver.bas",
+    "document_source": "document_module_run_book_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "7"
+      }
+    ]
+  },
+  {
+    "name": "sheet_with_missing",
+    "source": "document_module_sheet_with_missing.bas",
+    "measurement_source": "document_module_sheet_with_missing_driver.bas",
+    "document_source": "document_module_sheet_with_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "sheet_with_range_missing",
+    "source": "document_module_sheet_with_range_missing.bas",
+    "measurement_source": "document_module_sheet_with_range_missing_driver.bas",
+    "document_source": "document_module_sheet_with_range_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "sheet_with_helper_missing",
+    "source": "document_module_sheet_with_helper_missing.bas",
+    "measurement_source": "document_module_sheet_with_helper_missing_driver.bas",
+    "document_source": "document_module_sheet_with_helper_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "sheet_with_helper_valid",
+    "source": "document_module_sheet_with_helper_valid.bas",
+    "measurement_source": "document_module_sheet_with_helper_valid_driver.bas",
+    "document_source": "document_module_sheet_with_helper_valid_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "sheet_with_private",
+    "source": "document_module_sheet_with_private.bas",
+    "measurement_source": "document_module_sheet_with_private_driver.bas",
+    "document_source": "document_module_sheet_with_private_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "sheet_typed_helper",
+    "source": "document_module_sheet_typed_helper.bas",
+    "measurement_source": "document_module_sheet_typed_helper_driver.bas",
+    "document_source": "document_module_sheet_typed_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "sheet_document_type",
+    "source": "document_module_sheet_document_type.bas",
+    "measurement_source": "document_module_sheet_document_type_driver.bas",
+    "document_source": "document_module_sheet_document_type_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "sheet_document_type_missing",
+    "source": "document_module_sheet_document_type_missing.bas",
+    "measurement_source": "document_module_sheet_document_type_missing_driver.bas",
+    "document_source": "document_module_sheet_document_type_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "sheet_local_shadow",
+    "source": "document_module_sheet_local_shadow.bas",
+    "measurement_source": "document_module_sheet_local_shadow_driver.bas",
+    "document_source": "document_module_sheet_local_shadow_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "sheet_named_valid",
+    "source": "document_module_sheet_named_valid.bas",
+    "measurement_source": "document_module_sheet_named_valid_driver.bas",
+    "document_source": "document_module_sheet_named_valid_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "sheet_named_invalid",
+    "source": "document_module_sheet_named_invalid.bas",
+    "measurement_source": "document_module_sheet_named_invalid_driver.bas",
+    "document_source": "document_module_sheet_named_invalid_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "名前付き引数が見つかりません。"
+  },
+  {
+    "name": "sheet_too_many",
+    "source": "document_module_sheet_too_many.bas",
+    "measurement_source": "document_module_sheet_too_many_driver.bas",
+    "document_source": "document_module_sheet_too_many_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数の数が一致していません。または不正なプロパティを指定しています。"
+  },
+  {
+    "name": "sheet_me_range_missing",
+    "source": "document_module_sheet_me_range_missing.bas",
+    "measurement_source": "document_module_sheet_me_range_missing_driver.bas",
+    "document_source": "document_module_sheet_me_range_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "sheet_me_helper_missing",
+    "source": "document_module_sheet_me_helper_missing.bas",
+    "measurement_source": "document_module_sheet_me_helper_missing_driver.bas",
+    "document_source": "document_module_sheet_me_helper_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "sheet_me_private",
+    "source": "document_module_sheet_me_private.bas",
+    "measurement_source": "document_module_sheet_me_private_driver.bas",
+    "document_source": "document_module_sheet_me_private_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "sheet_bare_name",
+    "source": "document_module_sheet_bare_name.bas",
+    "measurement_source": "document_module_sheet_bare_name_driver.bas",
+    "document_source": "document_module_sheet_bare_name_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "sheet_bare_missing",
+    "source": "document_module_sheet_bare_missing.bas",
+    "measurement_source": "document_module_sheet_bare_missing_driver.bas",
+    "document_source": "document_module_sheet_bare_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "変数が定義されていません。"
+  },
+  {
+    "name": "sheet_private_name_collision",
+    "source": "document_module_sheet_private_name_collision.bas",
+    "measurement_source": "document_module_sheet_private_name_collision_driver.bas",
+    "document_source": "document_module_sheet_private_name_collision_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。"
+  },
+  {
+    "name": "sheet_field_name_collision",
+    "source": "document_module_sheet_field_name_collision.bas",
+    "measurement_source": "document_module_sheet_field_name_collision_driver.bas",
+    "document_source": "document_module_sheet_field_name_collision_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。"
+  },
+  {
+    "name": "renamed_sheet_helper",
+    "source": "document_module_renamed_sheet_helper.bas",
+    "measurement_source": "document_module_renamed_sheet_helper_driver.bas",
+    "document_source": "document_module_renamed_sheet_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "ReportHost",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ReportHost",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ],
+    "package_fixture": "document_context_sheet.xlsm"
+  },
+  {
+    "name": "renamed_sheet_base",
+    "source": "document_module_renamed_sheet_base.bas",
+    "measurement_source": "document_module_renamed_sheet_base_driver.bas",
+    "document_source": "document_module_renamed_sheet_base_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "ReportHost",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ReportHost",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "renamed_sheet_missing",
+    "source": "document_module_renamed_sheet_missing.bas",
+    "measurement_source": "document_module_renamed_sheet_missing_driver.bas",
+    "document_source": "document_module_renamed_sheet_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "ReportHost",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ReportHost",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "book_missing",
+    "source": "document_module_book_missing.bas",
+    "measurement_source": "document_module_book_missing_driver.bas",
+    "document_source": "document_module_book_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "book_with_helper_missing",
+    "source": "document_module_book_with_helper_missing.bas",
+    "measurement_source": "document_module_book_with_helper_missing_driver.bas",
+    "document_source": "document_module_book_with_helper_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "book_me_name",
+    "source": "document_module_book_me_name.bas",
+    "measurement_source": "document_module_book_me_name_driver.bas",
+    "document_source": "document_module_book_me_name_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "book_me_missing",
+    "source": "document_module_book_me_missing.bas",
+    "measurement_source": "document_module_book_me_missing_driver.bas",
+    "document_source": "document_module_book_me_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "book_name_collision",
+    "source": "document_module_book_name_collision.bas",
+    "measurement_source": "document_module_book_name_collision_driver.bas",
+    "document_source": "document_module_book_name_collision_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "このメンバー識別子は既にオブジェクト モジュールの中に存在しています。"
+  },
+  {
+    "name": "renamed_book_helper",
+    "source": "document_module_renamed_book_helper.bas",
+    "measurement_source": "document_module_renamed_book_helper_driver.bas",
+    "document_source": "document_module_renamed_book_helper_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ArchiveHost",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ],
+    "package_fixture": "document_context_book.xlsm"
+  },
+  {
+    "name": "renamed_book_missing",
+    "source": "document_module_renamed_book_missing.bas",
+    "measurement_source": "document_module_renamed_book_missing_driver.bas",
+    "document_source": "document_module_renamed_book_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ArchiveHost",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "renamed_book_base",
+    "source": "document_module_renamed_book_base.bas",
+    "measurement_source": "document_module_renamed_book_base_driver.bas",
+    "document_source": "document_module_renamed_book_base_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ArchiveHost",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "book_document_type",
+    "source": "document_module_book_document_type.bas",
+    "measurement_source": "document_module_book_document_type_driver.bas",
+    "document_source": "document_module_book_document_type_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "sheet_range_result_missing",
+    "source": "document_module_sheet_range_result_missing.bas",
+    "measurement_source": "document_module_sheet_range_result_missing_driver.bas",
+    "document_source": "document_module_sheet_range_result_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "explicit_sheet_name",
+    "source": "document_module_explicit_sheet_name.bas",
+    "measurement_source": "document_module_explicit_sheet_name_driver.bas",
+    "document_source": "document_module_explicit_sheet_name_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "explicit_sheet_code_name",
+    "source": "document_module_explicit_sheet_code_name.bas",
+    "measurement_source": "document_module_explicit_sheet_code_name_driver.bas",
+    "document_source": "document_module_explicit_sheet_code_name_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "explicit_sheet_me_name",
+    "source": "document_module_explicit_sheet_me_name.bas",
+    "measurement_source": "document_module_explicit_sheet_me_name_driver.bas",
+    "document_source": "document_module_explicit_sheet_me_name_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "explicit_sheet_me_missing",
+    "source": "document_module_explicit_sheet_me_missing.bas",
+    "measurement_source": "document_module_explicit_sheet_me_missing_driver.bas",
+    "document_source": "document_module_explicit_sheet_me_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "explicit_sheet_helper_missing",
+    "source": "document_module_explicit_sheet_helper_missing.bas",
+    "measurement_source": "document_module_explicit_sheet_helper_missing_driver.bas",
+    "document_source": "document_module_explicit_sheet_helper_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "explicit_sheet_helper_valid",
+    "source": "document_module_explicit_sheet_helper_valid.bas",
+    "measurement_source": "document_module_explicit_sheet_helper_valid_driver.bas",
+    "document_source": "document_module_explicit_sheet_helper_valid_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "explicit_sheet_private_valid",
+    "source": "document_module_explicit_sheet_private_valid.bas",
+    "measurement_source": "document_module_explicit_sheet_private_valid_driver.bas",
+    "document_source": "document_module_explicit_sheet_private_valid_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "explicit_sheet_base_missing",
+    "source": "document_module_explicit_sheet_base_missing.bas",
+    "measurement_source": "document_module_explicit_sheet_base_missing_driver.bas",
+    "document_source": "document_module_explicit_sheet_base_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "sheet",
+    "document_name": "Ledger",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "explicit_book_name",
+    "source": "document_module_explicit_book_name.bas",
+    "measurement_source": "document_module_explicit_book_name_driver.bas",
+    "document_source": "document_module_explicit_book_name_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "explicit_book_code_name",
+    "source": "document_module_explicit_book_code_name.bas",
+    "measurement_source": "document_module_explicit_book_code_name_driver.bas",
+    "document_source": "document_module_explicit_book_code_name_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "explicit_book_me_name",
+    "source": "document_module_explicit_book_me_name.bas",
+    "measurement_source": "document_module_explicit_book_me_name_driver.bas",
+    "document_source": "document_module_explicit_book_me_name_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "explicit_book_me_missing",
+    "source": "document_module_explicit_book_me_missing.bas",
+    "measurement_source": "document_module_explicit_book_me_missing_driver.bas",
+    "document_source": "document_module_explicit_book_me_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "メソッドまたはデータ メンバーが見つかりません。"
+  },
+  {
+    "name": "explicit_book_helper_missing",
+    "source": "document_module_explicit_book_helper_missing.bas",
+    "measurement_source": "document_module_explicit_book_helper_missing_driver.bas",
+    "document_source": "document_module_explicit_book_helper_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "compile",
+    "message": "引数は省略できません。"
+  },
+  {
+    "name": "explicit_book_helper_valid",
+    "source": "document_module_explicit_book_helper_valid.bas",
+    "measurement_source": "document_module_explicit_book_helper_valid_driver.bas",
+    "document_source": "document_module_explicit_book_helper_valid_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "explicit_book_private_valid",
+    "source": "document_module_explicit_book_private_valid.bas",
+    "measurement_source": "document_module_explicit_book_private_valid_driver.bas",
+    "document_source": "document_module_explicit_book_private_valid_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  },
+  {
+    "name": "explicit_book_base_missing",
+    "source": "document_module_explicit_book_base_missing.bas",
+    "measurement_source": "document_module_explicit_book_base_missing_driver.bas",
+    "document_source": "document_module_explicit_book_base_missing_document.bas",
+    "procedure": "DriverModule.Probe",
+    "compile_project": true,
+    "document_kind": "book",
+    "document_name": "ThisWorkbook",
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "ThisWorkbook",
+          "baseType": "Excel.Workbook"
+        }
+      ]
+    },
+    "compilation_only": true,
+    "outcome": "values",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "ran"
+      }
+    ]
+  }
+]

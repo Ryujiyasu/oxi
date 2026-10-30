@@ -19,6 +19,7 @@ use crate::reference::{
     letters_to_col, parse_a1, CellRef, RangeRef, Reference, MAX_COL, MAX_ROW,
 };
 use crate::value::Value;
+use std::collections::{HashMap, HashSet};
 
 /// Parse a formula, with or without its leading `=`.
 pub fn parse(input: &str) -> Result<Expr, ParseError> {
@@ -40,12 +41,94 @@ pub fn parse(input: &str) -> Result<Expr, ParseError> {
     Ok(expr)
 }
 
+fn protected_utf16_source(input: &[u16]) -> Result<(String, HashMap<char, u16>), ParseError> {
+    let decoded: Vec<_> = std::char::decode_utf16(input.iter().copied()).collect();
+    let occupied: HashSet<char> = decoded.iter().filter_map(|item| item.as_ref().ok().copied()).collect();
+    let mut available = (0xF0000..=0x10FFFD).filter_map(char::from_u32)
+        .filter(|character| !occupied.contains(character));
+    let mut placeholders = HashMap::<char, u16>::new();
+    let mut by_unit = HashMap::<u16, char>::new();
+    let mut text = String::new();
+    for item in decoded {
+        match item {
+            Ok(character) => text.push(character),
+            Err(error) => {
+                let unit = error.unpaired_surrogate();
+                let marker = if let Some(marker) = by_unit.get(&unit) { *marker } else {
+                    let marker = available.next().ok_or(ParseError::UnexpectedChar('\u{fffd}', 0))?;
+                    placeholders.insert(marker, unit);
+                    by_unit.insert(unit, marker);
+                    marker
+                };
+                text.push(marker);
+            }
+        }
+    }
+    Ok((text, placeholders))
+}
+
+fn restore_utf16_source(text: &str, markers: &HashMap<char, u16>) -> Vec<u16> {
+    let mut units = Vec::new();
+    for character in text.chars() {
+        if let Some(unit) = markers.get(&character) { units.push(*unit); }
+        else { let mut encoded = [0; 2]; units.extend_from_slice(character.encode_utf16(&mut encoded)); }
+    }
+    units
+}
+
+/// Apply an existing formula rewrite while preserving every UTF-16 source unit.
+pub fn transform_utf16_formula(input: &[u16], transform: impl FnOnce(&str) -> Result<String, String>) -> Result<Vec<u16>, String> {
+    if let Ok(text) = String::from_utf16(input) {
+        return transform(&text).map(|text| text.encode_utf16().collect());
+    }
+    let (text, markers) = protected_utf16_source(input).map_err(|error| error.to_string())?;
+    let transformed = transform(&text)?;
+    Ok(restore_utf16_source(&transformed, &markers))
+}
+
+/// Parse UTF-16 formula text without replacing unpaired surrogates in string
+/// literals. Non-string formula syntax is still parsed by the regular lexer.
+pub fn parse_utf16(input: &[u16]) -> Result<Expr, ParseError> {
+    if let Ok(text) = String::from_utf16(input) {
+        return parse(&text);
+    }
+    let (text, placeholders) = protected_utf16_source(input)?;
+    // Surrogates in names and references cannot be represented by those
+    // structures yet. Reject them instead of silently changing their identity.
+    for token in tokenize(&text)? {
+        let invalid = match token {
+            Token::Name { sheet, name } => name.chars().chain(sheet.iter().flat_map(|s| s.chars())).find(|ch| placeholders.contains_key(ch)),
+            Token::Table { name, asked } => name.chars().chain(asked.chars()).find(|ch| placeholders.contains_key(ch)),
+            _ => None,
+        };
+        if let Some(marker) = invalid { return Err(ParseError::UnexpectedChar(marker, 0)); }
+    }
+    fn restore(value: &mut Value, markers: &HashMap<char, u16>) {
+        let Value::Text(text) = value else { return };
+        if !text.chars().any(|ch| markers.contains_key(&ch)) { return; }
+        *value = Value::from_utf16(restore_utf16_source(text, markers));
+    }
+    fn visit(expr: &mut Expr, markers: &HashMap<char, u16>) {
+        match expr {
+            Expr::Literal(value) => restore(value, markers),
+            Expr::Array(rows) => for row in rows { for value in row { restore(value, markers); } },
+            Expr::Unary { operand, .. } => visit(operand, markers),
+            Expr::Binary { lhs, rhs, .. } => { visit(lhs, markers); visit(rhs, markers); },
+            Expr::Function { args, .. } => for arg in args { visit(arg, markers); },
+            Expr::Ref(_) | Expr::Name(_) | Expr::Table { .. } => {}
+        }
+    }
+    let mut expr = parse(&text)?;
+    visit(&mut expr, &placeholders);
+    Ok(expr)
+}
+
 /// One side of a whole-line range: a column named by its letters, or a row
-/// named by its number. A `$` means nothing here — a whole column is the whole
-/// column however it was written down.
+/// named by its number. Absolute halves matter when a defined name is
+/// instantiated at a different caller.
 enum Line {
-    Column(u32),
-    Row(u32),
+    Column(u32, bool),
+    Row(u32, bool),
 }
 
 impl Line {
@@ -55,14 +138,17 @@ impl Line {
         // sheet — `Data!1:1` lexes as a name of "1" — and as a number when it
         // does not. Both are the same row.
         if let Some(col) = letters_to_col(bare) {
-            return Some(Line::Column(col));
+            return Some(Line::Column(col, name.starts_with('$')));
         }
-        bare.parse::<f64>().ok().and_then(Line::of_row)
+        bare.parse::<f64>().ok().and_then(Line::of_row).map(|line| match line {
+            Line::Row(row, _) => Line::Row(row, name.starts_with('$')),
+            other => other,
+        })
     }
 
     fn of_row(one: f64) -> Option<Line> {
         (one >= 1.0 && one.fract() == 0.0 && one <= MAX_ROW as f64 + 1.0)
-            .then(|| Line::Row(one as u32 - 1))
+            .then(|| Line::Row(one as u32 - 1, false))
     }
 }
 
@@ -257,13 +343,13 @@ impl Parser {
         }
         self.pos += 3;
         let range = match (first, last) {
-            (Line::Column(a), Line::Column(b)) => RangeRef::normalised(
-                CellRef::new(a, 0),
-                CellRef::new(b, MAX_ROW),
+            (Line::Column(a, a_abs), Line::Column(b, b_abs)) => RangeRef::normalised(
+                CellRef { col: a, row: 0, col_absolute: a_abs, row_absolute: true },
+                CellRef { col: b, row: MAX_ROW, col_absolute: b_abs, row_absolute: true },
             ),
-            (Line::Row(a), Line::Row(b)) => RangeRef::normalised(
-                CellRef::new(0, a),
-                CellRef::new(MAX_COL, b),
+            (Line::Row(a, a_abs), Line::Row(b, b_abs)) => RangeRef::normalised(
+                CellRef { col: 0, row: a, col_absolute: true, row_absolute: a_abs },
+                CellRef { col: MAX_COL, row: b, col_absolute: true, row_absolute: b_abs },
             ),
             _ => return None,
         };
@@ -458,15 +544,20 @@ impl Parser {
             let args = self.parse_args()?;
             // A LET wants name-value pairs and then what it works out:
             // measured, `=LET(x,1)` is refused as a formula (1004).
-            if name.eq_ignore_ascii_case("LET") && (args.len() < 3 || args.len() % 2 == 0) {
+            if sheet.is_none() && crate::lexer::normalized_builtin_call(&name).as_deref() == Some("LET") && (args.len() < 3 || args.len() % 2 == 0) {
                 return Err(ParseError::UnexpectedToken("LET needs name, value pairs and a calculation".to_string()));
             }
+            let called = crate::lexer::normalized_builtin_call(&name).unwrap_or_else(|| name.to_uppercase());
+            let called = match sheet.as_deref() {
+                Some(owner) => format!("'{}'!{called}", owner.replace('\'', "''")),
+                None => called,
+            };
             let mut call = Expr::Function {
-                name: name.to_uppercase(),
+                name: called,
                 args,
             };
             // `LAMBDA(x,x+1)(5)`: a LAMBDA called where it is written.
-            while name.eq_ignore_ascii_case("LAMBDA") && self.peek() == Some(&Token::LParen) {
+            while sheet.is_none() && crate::lexer::normalized_builtin_call(&name).as_deref() == Some("LAMBDA") && self.peek() == Some(&Token::LParen) {
                 self.pos += 1;
                 let mut handed = vec![call];
                 handed.extend(self.parse_args()?);
@@ -493,9 +584,14 @@ impl Parser {
             }));
         }
 
-        // Not a reference and not a call: a defined name. A sheet-qualified
-        // defined name keeps only its local part; scoping is resolved later.
-        Ok(Expr::Name(name.to_uppercase()))
+        // Keep an explicit owner: Sheet1!rate and Sheet2!rate may be different
+        // names even when the formula containing them belongs to Sheet3.
+        let name = name.to_uppercase();
+        let name = match sheet {
+            Some(owner) => format!("'{}'!{name}", owner.replace('\'', "''")),
+            None => name,
+        };
+        Ok(Expr::Name(name))
     }
 
     fn parse_args(&mut self) -> Result<Vec<Expr>, ParseError> {
@@ -545,6 +641,34 @@ mod tests {
     }
 
     #[test]
+    fn utf16_formula_literals_preserve_unpaired_surrogates() {
+        let mut formula: Vec<u16> = "=IF(TRUE,\"a".encode_utf16().collect();
+        formula.push(0xD83D);
+        formula.extend("b\",{\"".encode_utf16());
+        formula.push(0xDE00);
+        formula.extend("\",\"😀\"})".encode_utf16());
+        let parsed = parse_utf16(&formula).unwrap();
+        let Expr::Function { args, .. } = parsed else { panic!("expected IF") };
+        assert_eq!(args[1], Expr::Literal(Value::Utf16(vec![97, 0xD83D, 98])));
+        assert_eq!(args[2], Expr::Array(vec![vec![Value::Utf16(vec![0xDE00]), Value::Text("😀".into())]]));
+
+        // A real private-use character must never be mistaken for a marker.
+        let mut input: Vec<u16> = "=\"\u{f0000}".encode_utf16().collect();
+        input.push(0xD83D);
+        input.push('"' as u16);
+        assert_eq!(parse_utf16(&input).unwrap(), Expr::Literal(Value::Utf16(vec![0xDB80, 0xDC00, 0xD83D])));
+        assert!(parse_utf16(&[b'=' as u16, 0xD83D]).is_err());
+    }
+
+    #[test]
+    fn utf16_formula_reference_translation_preserves_private_use_text() {
+        let input: Vec<u16> = "=A1&\"\u{f0000}".encode_utf16().chain([0xD83D, 34]).collect();
+        let translated = transform_utf16_formula(&input, |formula| crate::lexer::translate_formula_references(formula, 2, 3)).unwrap();
+        let expected: Vec<u16> = "=D3&\"\u{f0000}".encode_utf16().chain([0xD83D, 34]).collect();
+        assert_eq!(translated, expected);
+    }
+
+    #[test]
     fn comparison_operators_parse() {
         // The prototype this replaces could not parse these at all, so
         // `IF(A1>10,...)` evaluated to #VALUE!.
@@ -579,10 +703,8 @@ mod tests {
     ///
     /// `ROWS(A1:A9)` asks how tall that block is and never looks inside it, so
     /// counting the block as a dependency is what turns a self-numbering
-    /// series into a cycle. The line is drawn at "a plain reference", because
-    /// that is the only shape the evaluator answers without evaluating — and
-    /// the graph has to draw it in exactly the same place, or a formula waits
-    /// for something that is never computed, or is computed too early.
+    /// series into a cycle. A computed reference also contributes its shape
+    /// without reading its source values. Selectors still consume values.
     #[test]
     fn a_range_that_is_only_measured_is_not_a_dependency() {
         let waits_for = |s: &str| {
@@ -602,9 +724,9 @@ mod tests {
         // same range that IS reading it.
         assert_eq!(waits_for("=SUM(A1:A9)+ROWS(A1:A9)"), ["A1:A9"]);
         assert_eq!(waits_for("=INDEX(B1:B9,ROWS(A1:A9))"), ["B1:B9"]);
-        // An argument that has to be worked out first is a dependency like any
-        // other: what it reads, the count reads.
-        assert_eq!(waits_for("=ROWS(INDEX(A1:C5,,B1))"), ["A1:C5", "B1"]);
+        // Native reference-scope controls2500/2512 distinguish a reference
+        // source from a selector whose value must first be calculated.
+        assert_eq!(waits_for("=ROWS(INDEX(A1:C5,,B1))"), ["B1"]);
     }
 
     /// A sheet in another workbook is read, and says which workbook.

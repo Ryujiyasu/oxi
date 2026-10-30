@@ -1,0 +1,573 @@
+{
+  "scope": "Complete typed Native returns: only real imported constants have Long values; unsupported names remain implicit Empty variables without Option Explicit.",
+  "groups": [
+    {
+      "source": "constant_aliases.bas",
+      "package": "constant_aliases.xlsm",
+      "source_identity": 2026102122,
+      "source_packet_sha256": "79d7dc9956c78c611118981a2478e4f57ea30e00e6282855b8dcb47779a55033",
+      "cases": [
+        {
+          "id": 3250,
+          "steps": [
+            {
+              "procedure": "AliasCase",
+              "arguments": [
+                0
+              ],
+              "expected": "0:Empty:"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    0
+                  ],
+                  "expected": "0:Empty:"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    0
+                  ],
+                  "expected": "0:Empty:"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    0
+                  ],
+                  "expected": "0:Empty:"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3251,
+          "steps": [
+            {
+              "procedure": "AliasCase",
+              "arguments": [
+                1
+              ],
+              "expected": "3:Long:92"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    1
+                  ],
+                  "expected": "3:Long:92"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    1
+                  ],
+                  "expected": "3:Long:92"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    1
+                  ],
+                  "expected": "3:Long:92"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3252,
+          "steps": [
+            {
+              "procedure": "AliasCase",
+              "arguments": [
+                2
+              ],
+              "expected": "0:Empty:"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    2
+                  ],
+                  "expected": "0:Empty:"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    2
+                  ],
+                  "expected": "0:Empty:"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    2
+                  ],
+                  "expected": "0:Empty:"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3253,
+          "steps": [
+            {
+              "procedure": "AliasCase",
+              "arguments": [
+                3
+              ],
+              "expected": "3:Long:-4108"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    3
+                  ],
+                  "expected": "3:Long:-4108"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    3
+                  ],
+                  "expected": "3:Long:-4108"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    3
+                  ],
+                  "expected": "3:Long:-4108"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3254,
+          "steps": [
+            {
+              "procedure": "AliasCase",
+              "arguments": [
+                4
+              ],
+              "expected": "0:Empty:"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    4
+                  ],
+                  "expected": "0:Empty:"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    4
+                  ],
+                  "expected": "0:Empty:"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    4
+                  ],
+                  "expected": "0:Empty:"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3255,
+          "steps": [
+            {
+              "procedure": "AliasCase",
+              "arguments": [
+                5
+              ],
+              "expected": "3:Long:2"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    5
+                  ],
+                  "expected": "3:Long:2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    5
+                  ],
+                  "expected": "3:Long:2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    5
+                  ],
+                  "expected": "3:Long:2"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3256,
+          "steps": [
+            {
+              "procedure": "AliasCase",
+              "arguments": [
+                6
+              ],
+              "expected": "3:Long:255"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    6
+                  ],
+                  "expected": "3:Long:255"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    6
+                  ],
+                  "expected": "3:Long:255"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    6
+                  ],
+                  "expected": "3:Long:255"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3257,
+          "steps": [
+            {
+              "procedure": "AliasCase",
+              "arguments": [
+                7
+              ],
+              "expected": "3:Long:16777215"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    7
+                  ],
+                  "expected": "3:Long:16777215"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    7
+                  ],
+                  "expected": "3:Long:16777215"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    7
+                  ],
+                  "expected": "3:Long:16777215"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3258,
+          "steps": [
+            {
+              "procedure": "AliasCase",
+              "arguments": [
+                8
+              ],
+              "expected": "3:Long:6"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    8
+                  ],
+                  "expected": "3:Long:6"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    8
+                  ],
+                  "expected": "3:Long:6"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    8
+                  ],
+                  "expected": "3:Long:6"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3259,
+          "steps": [
+            {
+              "procedure": "AliasCase",
+              "arguments": [
+                9
+              ],
+              "expected": "0:Empty:"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    9
+                  ],
+                  "expected": "0:Empty:"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    9
+                  ],
+                  "expected": "0:Empty:"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "AliasCase",
+                  "arguments": [
+                    9
+                  ],
+                  "expected": "0:Empty:"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

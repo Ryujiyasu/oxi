@@ -1,0 +1,142 @@
+[
+  {
+    "name": "private_fields",
+    "source": "standard_private_fields.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.ReadBoth",
+        "value": "1|1"
+      },
+      {
+        "procedure": "DriverModule.ReadBoth",
+        "value": "2|2"
+      }
+    ]
+  },
+  {
+    "name": "qualified_statics",
+    "source": "standard_qualified_statics.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.ReadBoth",
+        "value": "1|1"
+      },
+      {
+        "procedure": "DriverModule.ReadBoth",
+        "value": "2|2"
+      }
+    ]
+  },
+  {
+    "name": "private_helpers",
+    "source": "standard_private_helpers.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1:1|1:1"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2:2|2:2"
+      }
+    ]
+  },
+  {
+    "name": "public_fields",
+    "source": "standard_public_fields.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1|10"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2|20"
+      }
+    ]
+  },
+  {
+    "name": "imports_byref",
+    "source": "standard_imports_byref.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2|2|4"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "4|4|4"
+      }
+    ]
+  },
+  {
+    "name": "properties",
+    "source": "standard_properties.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "9|11"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "11|13"
+      }
+    ]
+  },
+  {
+    "name": "module_options",
+    "source": "standard_module_options.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True:1|False:0"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "True:1|False:0"
+      }
+    ]
+  },
+  {
+    "name": "callbacks",
+    "source": "standard_callbacks.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1|1:2:1|2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "3|2:4:3|4"
+      }
+    ]
+  },
+  {
+    "name": "declaration_options",
+    "source": "standard_declaration_options.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:11:1|Empty:22:2"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "Long:11:1|Empty:22:2"
+      }
+    ]
+  },
+  {
+    "name": "arrays",
+    "source": "standard_arrays.bas",
+    "steps": [
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "1|10"
+      },
+      {
+        "procedure": "DriverModule.Probe",
+        "value": "2|20"
+      }
+    ]
+  }
+]

@@ -1,0 +1,29 @@
+Attribute VB_Name = "DriverModule"
+Option Explicit
+Public Function Probe() As String
+ Probe = "ran"
+End Function
+
+
+VERSION 1.0 CLASS
+BEGIN
+  MultiUse = -1  'True
+END
+Attribute VB_Name = "Ledger"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = True
+Attribute VB_Exposed = True
+Option Explicit
+Public Function Helper(ByVal required As Long) As Long
+ Helper = required
+End Function
+Private Function Secret(ByVal required As Long) As Long
+ Secret = required
+End Function
+Public Sub Inside()
+ Dim s As Variant
+ Dim target As Object
+ s = Secret(7)
+End Sub
+

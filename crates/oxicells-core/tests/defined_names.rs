@@ -52,12 +52,9 @@ fn a_name_is_read_from_the_workbook_part() {
             r#"<definedNames>"#,
             r#"<definedName name="cats">Sheet1!$A$1:$A$3</definedName>"#,
             r#"<definedName name="one">Sheet1!$B$2</definedName>"#,
-            // Excel's own, which is not what a formula means by a name.
+            // Built-in and sheet-local names retain their sheet prefix.
             r#"<definedName name="_xlnm.Print_Area" localSheetId="0">Sheet1!$A$1:$D$9</definedName>"#,
-            // Scoped to a single sheet: two sheets may each mean something
-            // different by the same word, so it cannot go in a list held for
-            // the whole workbook.
-            r#"<definedName name="local" localSheetId="1">Sheet2!$C$1</definedName>"#,
+            r#"<definedName name="local" localSheetId="0">Sheet1!$C$1</definedName>"#,
             r#"</definedNames>"#,
         ),
     );
@@ -67,8 +64,10 @@ fn a_name_is_read_from_the_workbook_part() {
         vec![
             ("cats".to_string(), "Sheet1!$A$1:$A$3".to_string()),
             ("one".to_string(), "Sheet1!$B$2".to_string()),
+            ("Sheet1!Print_Area".to_string(), "Sheet1!$A$1:$D$9".to_string()),
+            ("Sheet1!local".to_string(), "Sheet1!$C$1".to_string()),
         ],
-        "the built-in and the sheet-scoped ones are left out",
+        "sheet-local and built-in names retain their owners",
     );
 }
 
@@ -99,6 +98,88 @@ fn a_formula_that_names_a_range_is_worked_out() {
         "a named range adds up like any other, but held {:?}",
         cell.value,
     );
+}
+
+#[test]
+fn scoped_names_keep_global_fallback_explicit_owners_and_attributes() {
+    let source = add_names(FIXTURE, concat!(
+        r#"<definedNames><definedName name="Rate">10</definedName>"#,
+        r#"<definedName name="Rate" localSheetId="0">20</definedName>"#,
+        r#"<definedName name="Rate" localSheetId="1">30</definedName>"#,
+        r#"<definedName name="LocalRange" localSheetId="1">Sheet2!$A$1</definedName>"#,
+        r#"<definedName name="Secret" localSheetId="1" hidden="1" comment="a &amp; b">40</definedName>"#,
+        r#"<definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">Sheet1!$A$1:$A$3</definedName></definedNames>"#,
+    ));
+    let mut book = parse_xlsx(&source).unwrap();
+    assert_eq!(book.defined_name_attributes["Sheet2!Secret"]["comment"], "a & b");
+    assert_eq!(book.defined_name_attributes["Sheet1!_FilterDatabase"]["hidden"], "1");
+    let mut edit = XlsxEditor::new(&source).unwrap();
+    use oxicells_core::editor::CellEditValue;
+    for sheet in 0..3 { edit.set_cell_value(sheet, 1, 4, CellEditValue::Formula("=Rate".into())); }
+    edit.set_cell_value(0, 2, 4, CellEditValue::Formula("=Sheet2!Rate".into()));
+    edit.set_cell_value(1, 1, 0, CellEditValue::Number(7.0));
+    edit.set_cell_value(0, 3, 4, CellEditValue::Formula("=SUM(Sheet2!LocalRange)".into()));
+    let source = edit.save().unwrap();
+    book = parse_xlsx(&source).unwrap();
+    oxicells_core::formula::evaluate_workbook_formulas(&mut book);
+    let value = |sheet: usize, row| &book.sheets[sheet].rows.iter().find(|r| r.index == row).unwrap().cells.iter().find(|c| c.col == 4).unwrap().value;
+    for (sheet, row, expected) in [(0, 1, 20.0), (1, 1, 30.0), (2, 1, 10.0), (0, 2, 30.0), (0, 3, 7.0)] {
+        assert!(matches!(value(sheet, row), oxicells_core::ir::CellValue::Number(n) if *n == expected), "sheet={sheet} row={row}: {:?}", value(sheet, row));
+    }
+    book.defined_name_attributes.get_mut("Sheet2!Secret").unwrap().insert("comment".into(), "changed <&>".into());
+    let mut edit = XlsxEditor::new(&source).unwrap(); edit.apply_workbook(&book).unwrap();
+    let saved = edit.save().unwrap();
+    let reopened = parse_xlsx(&saved).unwrap();
+    assert_eq!(reopened.defined_names, book.defined_names);
+    assert_eq!(reopened.defined_name_attributes["Sheet2!Secret"]["hidden"], "1");
+    assert_eq!(reopened.defined_name_attributes["Sheet2!Secret"]["comment"], "changed <&>");
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+    let mut xml = String::new(); std::io::Read::read_to_string(&mut archive.by_name("xl/workbook.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"name="_xlnm._FilterDatabase" localSheetId="0" hidden="1""#));
+    assert!(!xml.contains(r#"name="Sheet1!_FilterDatabase""#));
+}
+
+#[test]
+fn local_names_follow_sheet_rename_reorder_and_deletion() {
+    let source = add_names(FIXTURE, concat!(
+        r#"<definedNames><definedName name="Global">10</definedName>"#,
+        r#"<definedName name="Rate" localSheetId="0">20</definedName>"#,
+        r#"<definedName name="Rate" localSheetId="1" hidden="1" comment="kept">30</definedName>"#,
+        r#"<definedName name="Ref" localSheetId="1">Sheet2!$A$1</definedName></definedNames>"#,
+    ));
+    let mut book = parse_xlsx(&source).unwrap();
+    let renamed = "O'Brien ! \u{65e5}\u{672c}";
+    book.sheets[1].name = renamed.into();
+    book.sheets.swap(0, 1);
+    let mut edit = XlsxEditor::new(&source).unwrap(); edit.apply_workbook(&book).unwrap();
+    let saved = edit.save().unwrap();
+    let mut reopened = parse_xlsx(&saved).unwrap();
+    let held = oxicells_core::ir::scoped_defined_name(renamed, "Rate");
+    assert!(reopened.defined_names.contains(&(held.clone(), "30".into())));
+    assert!(reopened.defined_names.contains(&("Sheet1!Rate".into(), "20".into())));
+    assert_eq!(reopened.defined_name_attributes[&held]["hidden"], "1");
+    let ref_name = oxicells_core::ir::scoped_defined_name(renamed, "Ref");
+    assert!(reopened.defined_names.iter().find(|(n, _)| n == &ref_name).unwrap().1.contains("O''Brien !"));
+    reopened.sheets.remove(1);
+    let mut edit = XlsxEditor::new(&saved).unwrap(); edit.apply_workbook(&reopened).unwrap();
+    let saved = edit.save().unwrap(); let reopened = parse_xlsx(&saved).unwrap();
+    assert!(reopened.defined_names.iter().all(|(n, _)| n != "Sheet1!Rate"));
+    assert_eq!(reopened.defined_name_attributes[&held]["localSheetId"], "0");
+    assert_eq!(reopened.defined_name_attributes[&held]["comment"], "kept");
+}
+
+#[test]
+fn explicit_name_owners_keep_distinct_unicode_sheet_names() {
+    let mut book = parse_xlsx(FIXTURE).unwrap();
+    book.sheets[0].name = "\u{131}Sheet".into();
+    book.sheets[1].name = "ISheet".into();
+    book.defined_names = vec![("\u{131}Sheet!Rate".into(), "20".into()), ("ISheet!Rate".into(), "30".into())];
+    let mut edit = XlsxEditor::new(FIXTURE).unwrap(); edit.apply_workbook(&book).unwrap();
+    edit.set_cell_value(1, 1, 4, oxicells_core::editor::CellEditValue::Formula("='\u{131}Sheet'!Rate".into()));
+    let mut reopened = parse_xlsx(&edit.save().unwrap()).unwrap();
+    oxicells_core::formula::evaluate_workbook_formulas(&mut reopened);
+    let cell = reopened.sheets[1].rows.iter().find(|r| r.index == 1).unwrap().cells.iter().find(|c| c.col == 4).unwrap();
+    assert!(matches!(cell.value, oxicells_core::ir::CellValue::Number(20.0)), "{:?}", cell.value);
 }
 
 /// Put a `<definedNames>` block into a workbook part, where the schema wants

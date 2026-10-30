@@ -1,0 +1,36 @@
+OxiNamedProject	Cleared	0				0
+OxiNamedProject	NumberOnly	6				0
+OxiNamedProject	DivideZero	11	OxiNamedProject	0 で除算しました。	{VBA_HELP}	1000011
+OxiNamedProject	RaiseBuiltin	6	OxiNamedProject	オーバーフローしました。	{VBA_HELP}	1000006
+OxiNamedProject	RaiseUnknown	513	OxiNamedProject	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+OxiNamedProject	SourceVba	513	VBA	custom	{VBA_HELP}	1000513
+OxiNamedProject	SourceCollection	513	Collection	custom	{VBA_HELP}	1000513
+OxiNamedProject	CallByNameUnknown	513	OxiNamedProject	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+OxiNamedProject	NestedRaise	513	OxiNamedProject	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+OxiNamedProject	DictionaryDuplicate	457	OxiNamedProject	このキーは既にこのコレクションの要素に割り当てられています。	{VBA_HELP}	1000457
+OxiNamedProject	FileMissing	53	OxiNamedProject	ファイルが見つかりません。	{VBA_HELP}	1000053
+OxiNamedProject	HostWorksheetFunction	1004	Microsoft Excel	WorksheetFunction クラスの Match プロパティを取得できません。	xlmain11.chm	1001004
+Another_Project42	Cleared	0				0
+Another_Project42	NumberOnly	6				0
+Another_Project42	DivideZero	11	Another_Project42	0 で除算しました。	{VBA_HELP}	1000011
+Another_Project42	RaiseBuiltin	6	Another_Project42	オーバーフローしました。	{VBA_HELP}	1000006
+Another_Project42	RaiseUnknown	513	Another_Project42	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+Another_Project42	SourceVba	513	VBA	custom	{VBA_HELP}	1000513
+Another_Project42	SourceCollection	513	Collection	custom	{VBA_HELP}	1000513
+Another_Project42	CallByNameUnknown	513	Another_Project42	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+Another_Project42	NestedRaise	513	Another_Project42	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+Another_Project42	DictionaryDuplicate	457	Another_Project42	このキーは既にこのコレクションの要素に割り当てられています。	{VBA_HELP}	1000457
+Another_Project42	FileMissing	53	Another_Project42	ファイルが見つかりません。	{VBA_HELP}	1000053
+Another_Project42	HostWorksheetFunction	1004	Microsoft Excel	WorksheetFunction クラスの Match プロパティを取得できません。	xlmain11.chm	1001004
+日本語検証	Cleared	0				0
+日本語検証	NumberOnly	6				0
+日本語検証	DivideZero	11	日本語検証	0 で除算しました。	{VBA_HELP}	1000011
+日本語検証	RaiseBuiltin	6	日本語検証	オーバーフローしました。	{VBA_HELP}	1000006
+日本語検証	RaiseUnknown	513	日本語検証	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+日本語検証	SourceVba	513	VBA	custom	{VBA_HELP}	1000513
+日本語検証	SourceCollection	513	Collection	custom	{VBA_HELP}	1000513
+日本語検証	CallByNameUnknown	513	日本語検証	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+日本語検証	NestedRaise	513	日本語検証	アプリケーション定義またはオブジェクト定義のエラーです。	{VBA_HELP}	1000095
+日本語検証	DictionaryDuplicate	457	日本語検証	このキーは既にこのコレクションの要素に割り当てられています。	{VBA_HELP}	1000457
+日本語検証	FileMissing	53	日本語検証	ファイルが見つかりません。	{VBA_HELP}	1000053
+日本語検証	HostWorksheetFunction	1004	Microsoft Excel	WorksheetFunction クラスの Match プロパティを取得できません。	xlmain11.chm	1001004

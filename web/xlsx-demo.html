@@ -339,6 +339,12 @@ header #on { margin-right: 4px; }
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.vba-compatibility { margin: 8px 0; }
+.vba-compatibility details { margin-top: 8px; }
+.vba-compatibility summary { cursor: pointer; margin-bottom: 8px; }
+.vba-compatibility label { display: block; margin-top: 8px; }
+.vba-compatibility select, .vba-compatibility input { width: 100%; box-sizing: border-box; font: inherit; }
+.vba-compatibility p { font-size: 12px; margin: 8px 0; }
 </style>
 </head>
 <body>
@@ -418,7 +424,7 @@ header #on { margin-right: 4px; }
   <button id="save" disabled>Save</button>
   <button id="reset" data-i18n="sample">Sample workbook</button>
   <button id="fresh" hidden data-i18n="fresh">New</button>
-  <label class="file"><span data-i18n="openFile">Open a .xlsx</span><input type="file" id="pick" accept=".xlsx"></label>
+  <label class="file"><span data-i18n="openFile">Open a .xlsx or .xlsm</span><input type="file" id="pick" accept=".xlsx,.xlsm"></label>
   <span class="langs"><button id="langEn">EN</button><button id="langJa">JA</button></span>
 </header>
 
@@ -455,6 +461,27 @@ header #on { margin-right: 4px; }
   <div class="pad">
     <h2 data-i18n="macroTitle">Macros</h2>
     <div>
+<div class="vba-compatibility">
+  <button type="button" id="macroLoadSource" data-i18n="vbaLoadSource">Load workbook source</button>
+  <details>
+    <summary data-i18n="vbaCompatibility">Excel compatibility</summary>
+    <label for="macroHostCodePage" data-i18n="vbaHostCodePage">Windows character set</label>
+    <select id="macroHostCodePage">
+      <option value="" data-i18n="vbaDefault">Default</option>
+      <option value="932" data-i18n="vbaJapaneseWindows">Japanese (Shift JIS)</option>
+      <option value="1252" data-i18n="vbaWesternWindows">Western (Windows 1252)</option>
+    </select>
+    <label for="macroErrorLanguage" data-i18n="vbaErrorLanguage">VBA error language</label>
+    <select id="macroErrorLanguage">
+      <option value="" data-i18n="vbaDefaultError">Default (English)</option>
+      <option value="en-US">English</option>
+      <option value="ja-JP">日本語</option>
+    </select>
+    <label for="macroHelpFile" data-i18n="vbaHelpFile">VBA help file (optional)</label>
+    <input id="macroHelpFile" type="text" spellcheck="false" autocomplete="off">
+    <p data-i18n="vbaProfileReset">Changing these settings resets macro execution state. Source edits stay in the editor.</p>
+  </details>
+</div>
       <label for="macroSource" data-i18n="macroSource">VBA source</label>
       <textarea id="macroSource" spellcheck="false">Public Sub Main()
     Range("A1").Value = "Hello from VBA"
@@ -472,23 +499,28 @@ End Sub</textarea>
       </div>
     </div>
     <div id="macroResult"></div>
+    <div id="macroFiles"></div>
     <div class="ends">
       <span class="spacer"></span>
       <button type="button" id="macroClose" data-i18n="close">Close</button>
+      <button type="button" id="macroCompile" data-i18n="compile">Compile</button>
       <button type="button" id="macroRun" data-i18n="run">Run</button>
     </div>
   </div>
 </dialog>
 
 <script type="module">
+import { bindVbaFileDownloads } from './vba-file-downloads.js';
 import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
-               edit_xlsx_from_workbook, recalculate_spreadsheet,
+               edit_xlsx_from_workbook, save_spreadsheet_vba_source, recalculate_spreadsheet,
                translate_formula, shift_band, rename_sheet,
                list_spreadsheet_vba_procedures, conditional_formats,
-               row_height_px } from './oxidocs_wasm.js';
+               row_height_px, spreadsheet_vba_source } from './oxidocs_wasm.js';
 // A macro runs in a worker: the interpreter is free to take as long as the
 // macro asks for without the grid stopping being drawable meanwhile.
-import { cancelActiveVbaExecution, parseVbaArguments, runVbaInWorker } from './vba-runner.js';
+import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker } from './vba-runner.js';
+import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-settings.js';
+import * as vbaProjectApi from './oxidocs_wasm.js';
 // The row model is the renderer's own, written out once in JS: what the grid
 // draws and what the row heights are measured with cannot drift apart.
 import { explainRow, mayBreak } from './row-model.js';
@@ -497,6 +529,19 @@ import { explainRow, mayBreak } from './row-model.js';
 // this one spoke neither, which is the sort of gap a suite is judged on.
 const I18N = {
   en: {
+    vbaLoadSource: "Load workbook source",
+    vbaCompatibility: "Excel compatibility",
+    vbaHostCodePage: "Windows character set",
+    vbaDefault: "Default",
+    vbaJapaneseWindows: "Japanese (Shift JIS)",
+    vbaWesternWindows: "Western (Windows 1252)",
+    vbaErrorLanguage: "VBA error language",
+    vbaDefaultError: "Default (English)",
+    vbaHelpFile: "VBA help file (optional)",
+    vbaProfileReset: "Changing these settings resets macro execution state. Source edits stay in the editor.",
+    vbaNoSource: "No VBA source found in this workbook.",
+    vbaSourceLoaded: "Workbook source loaded. Choose a procedure to run.",
+
     lede: 'Spreadsheets drawn and edited in the browser, with no server',
     freeze: 'Freeze', freezeWhy: 'Hold everything above and left of the cursor in view',
     bold: 'Bold (Ctrl+B)', italic: 'Italic (Ctrl+I)', under: 'Underline (Ctrl+U)',
@@ -515,7 +560,7 @@ const I18N = {
     undo: 'Undo (Ctrl+Z)', redo: 'Redo (Ctrl+Y)',
     macros: 'Macros', macrosWhy: 'Run a VBA macro',
     sample: 'Sample workbook', fresh: 'New',
-    openFile: 'Open a .xlsx', drop: 'Drop a .xlsx here',
+    openFile: 'Open a .xlsx or .xlsm', drop: 'Drop a .xlsx or .xlsm here',
     read: 'What Oxi read', colWidth: 'Column width',
     theCell: 'Selected cell', notDrawn: 'Not yet drawn',
     rules: 'Rules', rAll: 'All', rOutline: 'Outline', rTop: 'Top',
@@ -531,6 +576,7 @@ const I18N = {
     macroArgs: 'Arguments (JSON array)', close: 'Close', run: 'Run',
     macroNeeds: 'A procedure name and some VBA are both needed.',
     macroRunning: 'Running…',
+    compile: 'Compile', macroCompiling: 'Compiling…', macroCompiled: 'Compilation succeeded.',
     save: 'Save', saveSome: (n) => `Save (${n} cell${n === 1 ? '' : 's'})`,
     saving: 'Saving…', engine: 'Loading the engine…',
     opening: 'Opening a new workbook…', reading: 'Reading the sample…',
@@ -538,6 +584,19 @@ const I18N = {
     refused: 'The value is not allowed here',
   },
   ja: {
+    vbaLoadSource: "ブック内のソースを読み込む",
+    vbaCompatibility: "Excel 互換設定",
+    vbaHostCodePage: "Windows の文字セット",
+    vbaDefault: "標準",
+    vbaJapaneseWindows: "日本語（Shift JIS）",
+    vbaWesternWindows: "西欧（Windows 1252）",
+    vbaErrorLanguage: "VBA エラーの言語",
+    vbaDefaultError: "標準（英語）",
+    vbaHelpFile: "VBA ヘルプファイル（任意）",
+    vbaProfileReset: "設定を変更するとマクロの実行状態をリセットします。編集中のソースは保持します。",
+    vbaNoSource: "このブックに VBA ソースが見つかりません。",
+    vbaSourceLoaded: "ブック内のソースを読み込みました。実行するプロシージャを選択してください。",
+
     lede: 'サーバーを使わず、ブラウザの中だけで表計算を描いて編集します',
     freeze: 'ウィンドウ枠の固定', freezeWhy: 'カーソルより上と左を動かないようにします',
     bold: '太字 (Ctrl+B)', italic: '斜体 (Ctrl+I)', under: '下線 (Ctrl+U)',
@@ -556,7 +615,7 @@ const I18N = {
     undo: '元に戻す (Ctrl+Z)', redo: 'やり直し (Ctrl+Y)',
     macros: 'マクロ', macrosWhy: 'VBA マクロを実行します',
     sample: 'サンプルを開く', fresh: '新規',
-    openFile: '.xlsx を開く', drop: 'ここに .xlsx をドロップ',
+    openFile: '.xlsx / .xlsm を開く', drop: 'ここに .xlsx / .xlsm をドロップ',
     read: 'Oxi が読んだもの', colWidth: '列の幅',
     theCell: '選択中のセル', notDrawn: 'まだ描けていないもの',
     rules: '罫線', rAll: 'すべて', rOutline: '外枠', rTop: '上',
@@ -572,6 +631,7 @@ const I18N = {
     macroArgs: '引数（JSON 配列）', close: '閉じる', run: '実行',
     macroNeeds: 'プロシージャ名と VBA の両方が必要です。',
     macroRunning: '実行しています…',
+    compile: 'コンパイル', macroCompiling: 'コンパイルしています…', macroCompiled: 'コンパイルに成功しました。',
     save: '保存', saveSome: (n) => `保存（${n} セル）`,
     saving: '保存しています…', engine: 'エンジンを読み込んでいます…',
     opening: '新しいブックを開いています…', reading: 'サンプルを読み込んでいます…',
@@ -665,6 +725,12 @@ let conditional = new Map();
 // what the screen knows is how an editor quietly throws that away.
 let source = null;
 let fileName = 'workbook.xlsx';
+let macroProjectSource = '';
+let macroSourceBound = false;
+let macroSourceBaseline = '';
+let macroSourceDirty = false;
+let macroSourceRevision = 0;
+let savedCalculation = { mode: 'auto', on_save: true };
 // One entry per cell that has been changed, keyed by sheet/row/column so
 // typing into the same cell twice sends one edit, not two.
 const changes = new Map();
@@ -1713,6 +1779,27 @@ function paintCells(ink, sheet, band, view) {
     }
   }
 
+  // The workbook stores row/column formats separately from sparse cells.
+  // Paint the visible blank cells too, without materializing a million rows.
+  const bands = sheet.band_styles;
+  if (bands) {
+    const rows = new Map(bands.rows || []);
+    const columns = new Map(bands.columns || []);
+    const occupied = new Set(drawn.map(held => `${held.row},${held.cell.col}`));
+    for (let row = 1; row <= geom.lastRow; row += 1) {
+      if (geom.tops[row + 1] <= geom.tops[row] || geom.tops[row + 1] < seen.top || geom.tops[row] > seen.bottom) continue;
+      for (let col = 0; col <= geom.lastCol; col += 1) {
+        if (geom.cols[col + 1] <= geom.cols[col] || geom.cols[col + 1] < seen.left || geom.cols[col] > seen.right) continue;
+        const key = `${row},${col}`;
+        if (occupied.has(key) || (geom.covered.get(key) && !geom.covered.get(key).anchor)) continue;
+        const style = rows.get(row) || columns.get(col) || bands.sheet;
+        if (!style) continue;
+        const box = boxOf(row, col);
+        if (inside(box)) drawn.push({row, cell: {col, value: 'Empty', style: dressed(row, col, style)}, box});
+      }
+    }
+  }
+
   for (const held of drawn) {
     const shade = held.cell.style && held.cell.style.bg_color;
     if (!shade) continue;
@@ -2639,7 +2726,7 @@ function sayFill() {
   let agree = true;
   eachInRegion((row, col) => {
     const held = heldAt(row, col);
-    const held_colour = (held && held.style && held.style.bg_color) || '';
+    const held_colour = ((held ? held.style : bandStyleAt(sheetNow(), row, col))?.bg_color) || '';
     if (seen === null) seen = held_colour;
     else if (seen !== held_colour) agree = false;
   });
@@ -2718,7 +2805,7 @@ function wearMerge(kind) {
       }
       if (kind !== 'centre') continue;
       const held = heldAt(one.start_row, one.start_col);
-      const was = held ? held.style : {};
+      const was = held ? held.style : bandStyleAt(sheetNow(), row, col) || {};
       put(one.start_row, one.start_col, contentOf(held),
         { ...was, horizontal_align: 'center' });
     }
@@ -2799,7 +2886,7 @@ function agreedOn(part) {
   let agree = true;
   eachInRegion((row, col) => {
     const held = heldAt(row, col);
-    const worn = (held && held.style && held.style[part]) ?? null;
+    const worn = (held ? held.style : bandStyleAt(sheetNow(), row, col))?.[part] ?? null;
     if (seen === null) seen = worn;
     else if (seen !== worn) agree = false;
   });
@@ -2873,7 +2960,7 @@ function sayFormat() {
   let agree = true;
   eachInRegion((row, col) => {
     const held = heldAt(row, col);
-    const held_format = (held && held.style && held.style.number_format) || '';
+    const held_format = ((held ? held.style : bandStyleAt(sheetNow(), row, col))?.number_format) || '';
     if (seen === null) seen = held_format;
     else if (seen !== held_format) agree = false;
   });
@@ -4047,13 +4134,18 @@ function remember(row, col, text, before) {
   markSaved();
 }
 
+function calculationPendingSave() {
+  return (book?.calculation?.mode ?? 'auto') !== savedCalculation.mode
+    || (book?.calculation?.on_save ?? true) !== savedCalculation.on_save;
+}
+
 function markSaved() {
   if (!saveButton) return;
   const count = changes.size;
   // A column's width and a cell's formatting are changes with no cell value
   // behind them, so counting values alone would leave the button dark with
   // work outstanding.
-  saveButton.disabled = count === 0 && !beyondValues;
+  saveButton.disabled = count === 0 && !beyondValues && !macroSourceDirty && !calculationPendingSave();
   saveButton.textContent = count === 0 ? t('save') : t('saveSome')(count);
 }
 
@@ -4061,29 +4153,55 @@ async function save() {
   // A style, a merge, a column's width: each is a change with no cell value
   // behind it. The button already knows to light up for those, so the save
   // has to agree, or it goes dark again having written nothing.
-  if (!source || (changes.size === 0 && !beyondValues)) return;
-  const was = saveButton.textContent;
+  if (!source || (changes.size === 0 && !beyondValues && !macroSourceDirty && !calculationPendingSave())) return;
   saveButton.disabled = true;
   saveButton.textContent = t('saving');
+  const originalSource = source;
+  const sourceRevision = macroSourceRevision;
+  let sourceData = source;
+  let submittedSource;
   try {
+    if (macroProjectSource || /\.xlsm$/i.test(fileName) || book.calculation?.mode === 'manual' || book.calculation?.mode === 'autoNoTable'
+        || book.calculation?.on_save === false) {
+      const endVbaOperation = macroEditorSettings.beginOperation();
+      try {
+        const saveSource = macroSourceBound ? macroSource.value : getVbaSourceForSave(macroProjectSource);
+        submittedSource = saveSource;
+        if (macroSourceBound) sourceData = save_spreadsheet_vba_source(source, saveSource, macroEditorSettings.options().hostAnsiCodePage);
+        const prepared = await prepareVbaSaveInWorker(book, saveSource, shown, fileName, macroEditorSettings.options(), source);
+        if (source !== originalSource) return;
+        applyMacroExecution(prepared);
+        if (macroSourceRevision === sourceRevision) macroProjectSource = saveSource;
+      } catch (error) {
+        if (error?.execution) applyMacroExecution(error.execution);
+        throw error;
+      } finally { endVbaOperation(); }
+      beyondValues = true;
+    }
     // Values alone go by the narrow path, which patches only the cells named.
     // Once formatting has moved, the whole workbook has to cross, because a
     // list of values has nowhere to say what a cell should look like.
     const written = beyondValues
-      ? edit_xlsx_from_workbook(source, book)
-      : edit_xlsx(source, [...changes.values()]);
+      ? edit_xlsx_from_workbook(sourceData, book)
+      : edit_xlsx(sourceData, [...changes.values()]);
+    const extension = /\.xlsm$/i.test(fileName) ? 'xlsm' : 'xlsx';
     const blob = new Blob([written], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      type: extension === 'xlsm' ? 'application/vnd.ms-excel.sheet.macroEnabled.12' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = fileName.replace(/\.xlsx$/i, '') + '-edited.xlsx';
+    link.download = fileName.replace(/\.xls[xm]$/i, '') + '-edited.' + extension;
     link.click();
     URL.revokeObjectURL(link.href);
     // What was saved is now what the file holds: the next save starts from
     // the bytes just written, so two saves in a row do not send the first
     // batch of edits twice.
     source = written;
+    if (macroSourceBound && submittedSource !== undefined) {
+      macroSourceBaseline = submittedSource;
+      macroSourceDirty = macroSource.value !== macroSourceBaseline;
+    }
+    savedCalculation = { mode: book.calculation?.mode ?? 'auto', on_save: book.calculation?.on_save ?? true };
   // Saving is the sign that someone is using this for real work, which is
   // what the rating card waits for. It is counted in one place for all three
   // editors; nothing is sent by saying so.
@@ -4093,8 +4211,7 @@ async function save() {
     beyondValues = false;
     markSaved();
   } catch (error) {
-    saveButton.textContent = was;
-    saveButton.disabled = false;
+    markSaved();
     stateBox.style.display = 'block';
     stateBox.textContent = `Oxi could not save: ${error}`;
   }
@@ -4143,6 +4260,12 @@ function heldAt(row, col) {
   if (!sheet) return undefined;
   const line = sheet.rows.find((one) => one.index === row);
   return line && line.cells.find((one) => one.col === col);
+}
+
+function bandStyleAt(sheet, row, col) {
+  const bands = sheet?.band_styles;
+  if (!bands) return undefined;
+  return new Map(bands.rows || []).get(row) || new Map(bands.columns || []).get(col) || bands.sheet;
 }
 
 /**
@@ -4352,7 +4475,7 @@ function edit(seed) {
   const input = document.getElementById('entry');
   if (!rect || !input) return;
   const held = heldAt(at.row, at.col);
-  const style = (held && held.style) || {};
+  const style = (held && held.style) || bandStyleAt(sheetNow(), at.row, at.col) || {};
   input.style.display = 'block';
   // The box sits exactly where the cell is, in the cell's own face, so what
   // is typed is where it will land rather than somewhere near it.
@@ -4393,7 +4516,8 @@ function put(row, col, text, style) {
   // A cell that was not there wore the empty style, not "no style": undo has
   // to be able to put a cell back to bare, and `undefined` here would mean
   // leave whatever it is wearing alone.
-  const wasStyle = holding ? holding.style : {};
+  const inherited = holding ? undefined : bandStyleAt(sheet, row, col);
+  const wasStyle = holding ? holding.style : inherited || {};
   // A fill hands over the style of the cell it copied from; everything else
   // leaves whatever the cell already wore.
   const nowStyle = style === undefined ? wasStyle : style;
@@ -4407,7 +4531,8 @@ function put(row, col, text, style) {
   }
   let cell = line.cells.find((one) => one.col === col);
   if (!cell) {
-    cell = { col: col, value: 'Empty', style: {}, formula: null, runs: [] };
+    cell = { col: col, value: 'Empty', style: { ...wasStyle }, formula: null, runs: [] };
+    if (inherited) beyondValues = true;
     line.cells.push(cell);
     line.cells.sort((a, b) => a.col - b.col);
   }
@@ -4450,7 +4575,7 @@ function put(row, col, text, style) {
 function restyle(alter) {
   change(() => eachInRegion((row, col) => {
     const held = heldAt(row, col);
-    const was = held ? held.style : {};
+    const was = held ? held.style : bandStyleAt(sheetNow(), row, col) || {};
     const now = alter(was, row, col);
     if (sameStyle(was, now)) return;
     // Writing the text back unchanged is how the style rides in; put() knows
@@ -4468,7 +4593,7 @@ function allWear(has) {
   eachInRegion((row, col) => {
     const held = heldAt(row, col);
     seen = true;
-    if (!has(held ? held.style : {})) all = false;
+    if (!has(held ? held.style : bandStyleAt(sheetNow(), row, col) || {})) all = false;
   });
   return seen && all;
 }
@@ -4907,7 +5032,14 @@ async function open(data, name) {
   try {
     source = new Uint8Array(data).slice();
     fileName = name || 'workbook.xlsx';
+    macroProjectSource = '';
+    macroSourceBound = false;
+    macroSourceBaseline = '';
+    macroSourceDirty = false;
+    macroSourceRevision++;
+    closeVbaProject();
     changes.clear();
+    clearMacroFiles();
     pristine.clear();
     beyondValues = false;
     undone.length = 0;
@@ -4915,6 +5047,8 @@ async function open(data, name) {
     markSaved();
     markSteps();
     book = parse_spreadsheet(new Uint8Array(data));
+    savedCalculation = { mode: book.calculation?.mode ?? 'auto', on_save: book.calculation?.on_save ?? true };
+    markSaved();
   } catch (error) {
     stateBox.style.display = 'block';
     stateBox.textContent = `Oxi could not read ${name}: ${error}`;
@@ -4991,19 +5125,51 @@ const macroSource = document.getElementById('macroSource');
 const macroProc = document.getElementById('macroProc');
 const macroArgs = document.getElementById('macroArgs');
 const macroResult = document.getElementById('macroResult');
+const macroFiles = document.getElementById('macroFiles');
+const macroFileDownloads = bindVbaFileDownloads(macroFiles);
 const macroRun = document.getElementById('macroRun');
+const macroCompile = document.getElementById('macroCompile');
 const macroProcList = document.getElementById('macroProcList');
+const macroEditorSettings = bindVbaEditorSettings({
+  hostCodePage: document.getElementById('macroHostCodePage'),
+  errorLanguage: document.getElementById('macroErrorLanguage'),
+  helpFile: document.getElementById('macroHelpFile'),
+  sourceInput: macroSource,
+  loadSourceButton: document.getElementById('macroLoadSource'),
+  readProjectSource: codePage => spreadsheet_vba_source(source, codePage),
+  onSourceLoaded: (before, loaded) => {
+    recordVbaSourceChange(before, loaded);
+    macroProjectSource = loaded;
+    macroSourceBound = true;
+    macroSourceBaseline = loaded;
+    macroSourceDirty = false;
+    macroSourceRevision++;
+    markSaved();
+    listMacroProcedures();
+  },
+  onProfileChange: () => {
+    if (macroProjectSource) macroProjectSource = macroSource.value;
+    closeVbaProject();
+  },
+  report: sayMacro,
+  messages: { noSource: () => t('vbaNoSource'), loaded: () => t('vbaSourceLoaded') },
+});
 
 function sayMacro(text, bad) {
   macroResult.textContent = text;
   macroResult.classList.toggle('bad', Boolean(bad));
 }
 
+function clearMacroFiles() { macroFileDownloads.clear(); }
+function showMacroFiles(execution) { macroFileDownloads.show(execution); }
+
 /// Offers the procedures the source declares, so a name is picked from what is
 /// there rather than typed from memory.
 function listMacroProcedures() {
   try {
-    const found = list_spreadsheet_vba_procedures(macroSource.value);
+    const found = vbaProjectApi.list_spreadsheet_vba_project_procedures
+      ? vbaProjectApi.list_spreadsheet_vba_project_procedures(macroSource.value, source || new Uint8Array())
+      : list_spreadsheet_vba_procedures(macroSource.value);
     macroProcList.replaceChildren(...found.map((procedure) => {
       const option = document.createElement('option');
       option.value = procedure.name;
@@ -5013,7 +5179,7 @@ function listMacroProcedures() {
     }));
     const wanted = macroProc.value.trim().toLowerCase();
     if (found.length && !found.some((procedure) => procedure.name.toLowerCase() === wanted)) {
-      macroProc.value = found[0].name;
+      macroProc.value = preferredVbaProcedure(found).name;
     }
   } catch {
     macroProcList.replaceChildren();
@@ -5035,7 +5201,9 @@ function reportMacro(execution) {
     parts.push(`StatusBar:\n${execution.status_bar}`);
   }
   const result = execution.result;
-  if (!result || result.type === 'empty' || result.type === 'null') {
+  if (execution.error) {
+    parts.push(execution.error.message);
+  } else if (!result || result.type === 'empty' || result.type === 'null') {
     parts.push('Completed.');
   } else if (result.type === 'array' || result.type === 'object') {
     parts.push(`${result.type}: ${JSON.stringify(result.value)}`);
@@ -5043,6 +5211,36 @@ function reportMacro(execution) {
     parts.push(`${result.type}: ${String(result.value)}`);
   }
   return parts.join('\n\n');
+}
+
+function applyMacroExecution(execution) {
+  showMacroFiles(execution);
+  const changed = execution.workbook_changed !== false;
+  const previousSheet = shown;
+  if (changed) {
+    book = execution.workbook;
+    // A macro can change formatting and structure before it fails.
+    beyondValues = true;
+    changes.clear();
+    pristine.clear();
+    undone.length = 0;
+    redone.length = 0;
+  }
+  book.calculation = execution.workbook.calculation;
+  markSaved();
+  if (Number.isInteger(execution.active_sheet)
+      && execution.active_sheet >= 0 && execution.active_sheet < book.sheets.length) {
+    shown = execution.active_sheet;
+  }
+  if (changed || previousSheet !== shown) {
+    weighCalc();
+    markFrozen();
+    markSaved();
+    markSteps();
+    draw();
+    describe();
+    sayFaces();
+  }
 }
 
 document.getElementById('macros').onclick = () => {
@@ -5056,6 +5254,18 @@ document.getElementById('macroClose').onclick = () => {
   macroBox.close();
 };
 macroSource.addEventListener('input', listMacroProcedures);
+let macroSourceBeforeInput;
+macroSource.addEventListener('beforeinput', () => {
+  macroSourceBeforeInput = { source: macroSource.value, start: macroSource.selectionStart, end: macroSource.selectionEnd };
+});
+macroSource.addEventListener('input', () => {
+  if (macroSourceBeforeInput) recordVbaSourceChange(macroSourceBeforeInput.source, macroSource.value, macroSourceBeforeInput);
+  macroSourceBeforeInput = undefined;
+  macroProjectSource = macroSource.value;
+  macroSourceRevision++;
+  macroSourceDirty = macroSourceBound && macroProjectSource !== macroSourceBaseline;
+  markSaved();
+});
 
 macroRun.onclick = async () => {
   const procedure = macroProc.value.trim();
@@ -5064,38 +5274,46 @@ macroRun.onclick = async () => {
     return;
   }
   macroRun.disabled = true;
+  macroCompile.disabled = true;
+  const endVbaOperation = macroEditorSettings.beginOperation();
   sayMacro(t('macroRunning'));
+  const submittedSource = macroSource.value;
   try {
     const execution = await runVbaInWorker(
       book,
-      macroSource.value,
+      submittedSource,
       procedure,
       parseVbaArguments(macroArgs.value),
       shown,
       fileName,
+      macroEditorSettings.options(),
+      source,
     );
-    book = execution.workbook;
-    // The narrow save path patches only the cells it was handed; a macro's
-    // reach is wider than any such list, so the whole workbook has to cross.
-    beyondValues = true;
-    changes.clear();
-    pristine.clear();
-    undone.length = 0;
-    redone.length = 0;
-    weighCalc();
-    markFrozen();
-    markSaved();
-    markSteps();
-    draw();
-    describe();
-    sayFaces();
+    macroProjectSource = submittedSource;
+    applyMacroExecution(execution);
     sayMacro(reportMacro(execution));
   } catch (error) {
+    if (error?.execution) macroProjectSource = submittedSource;
+    if (error?.execution) applyMacroExecution(error.execution);
     // Cancelling is something the person did, not something that went wrong.
-    sayMacro(error?.message || String(error), error?.name !== 'AbortError');
+    sayMacro(error?.execution ? reportMacro(error.execution) : error?.message || String(error), error?.name !== 'AbortError');
   } finally {
     macroRun.disabled = false;
+    macroCompile.disabled = false;
+    endVbaOperation();
   }
+};
+
+macroCompile.onclick = async () => {
+  if (macroCompile.disabled || macroRun.disabled) return;
+  macroCompile.disabled = macroRun.disabled = true;
+  const endVbaOperation = macroEditorSettings.beginOperation();
+  sayMacro(t('macroCompiling'));
+  try {
+    await compileVbaInWorker(macroSource.value, macroEditorSettings.options(), book, source);
+    sayMacro(t('macroCompiled'));
+  } catch (error) { sayMacro(error?.message || String(error), error?.name !== 'AbortError'); }
+  finally { macroCompile.disabled = macroRun.disabled = false; endVbaOperation(); }
 };
 
 applyLang();

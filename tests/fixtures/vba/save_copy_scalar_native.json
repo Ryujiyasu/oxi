@@ -1,0 +1,1795 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "groups": [
+    {
+      "name": "save_copy_scalar_paths",
+      "source": "save_copy_scalar_paths.bas",
+      "source_sha256": "f51d2ea35ecee7ab0828f83de1ae1389d0090c51c782017f9029e11186f97847",
+      "package": "save_copy_scalar_paths.xlsm",
+      "package_sha256": "fc2b9eeb179e2a3e4c024f121a2e74fde8f7c3a0be07f828c61e738304edf002",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\input.xlsm",
+      "read_only": true,
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-0",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-0\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-0\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-1",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-1\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-1\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-2",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-2\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-2\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-3",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-3\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-3\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-4",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-4\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-4\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-5",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-5\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-5\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-6",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-6\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-6\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-7",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-7\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-7\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-8",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-8\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-8\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-9",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-9\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-9\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-10",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-10\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-10\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-11",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-11\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-11\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-12",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-12\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-12\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-13",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-13\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-13\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-14",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-14\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-14\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-15",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-15\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-15\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-16",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-16\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-16\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-17",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-17\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-17\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-18",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-18\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-18\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-19",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-19\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-19\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-20",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-20\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-20\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-21",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-21\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-21\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-22",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-22\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-22\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-0",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-0\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-0\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-1",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-1\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-1\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-2",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-2\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-2\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-3",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-3\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-3\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-4",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-4\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-4\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-5",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-5\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-5\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-6",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-6\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-6\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-7",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-7\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-7\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-8",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-8\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-8\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-9",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-9\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-9\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-10",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-10\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-10\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-11",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-11\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-11\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-12",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-12\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-12\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-13",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-13\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-13\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-14",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-14\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-14\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-15",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-15\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-15\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-16",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-16\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-16\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-17",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-17\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-17\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-18",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-18\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-18\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-19",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-19\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-19\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-20",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-20\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-20\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-21",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-21\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-21\\work\\sub"
+      ],
+      "initial_files": [],
+      "vba_help_file": "C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm",
+      "cases": [
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            0,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-0\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Byte|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-0\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-0\\work\\7",
+              "sha256": "271759ef6b997c24414a7b75b4c3e69534a671f7ef131e4b9cafe53869e9ca01",
+              "length": 19974,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            1,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-1\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Integer|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-1\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-1\\work\\-8",
+              "sha256": "f4ddc8cd3ab62bcc8bf9a5984d17f11e0b7356cd1daca896d271cd57ef98370d",
+              "length": 19968,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            2,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-2\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Long|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-2\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-2\\work\\9",
+              "sha256": "04ee0d4a3d4c7f2fa2c6163e44f93c954ce9d439b5d8825e6af8ccea66550d3d",
+              "length": 19967,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            3,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-3\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Single|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-3\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-3\\work\\1.25",
+              "sha256": "2149d18d98dca3ccf7f24de2fc05286ca372e5251933b88dced4c4786e24e8ca",
+              "length": 19971,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            4,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-4\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Double|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-4\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-4\\work\\2.5",
+              "sha256": "bc211e26d1af0cf8aea032ae4b6cc56767d99bd6d172c7832d151acbfb28c41a",
+              "length": 19968,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            5,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-5\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Currency|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-5\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-5\\work\\$3.75",
+              "sha256": "5327444b96ab2a34380ee23095d50fac8268ed9bc966c268affb411866917260",
+              "length": 19969,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            6,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-6\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Decimal|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-6\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-6\\work\\4.125",
+              "sha256": "424e09c3e7850aae81b200fbcf41ed4c6391f630c77e6750feea8cd2b81057ae",
+              "length": 19968,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            7,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-7\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Boolean|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-7\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-7\\work\\TRUE",
+              "sha256": "612cfddc081b16a3048b0de81473beb61d272a6b6701cc97eb0d7b7cbcbfc86a",
+              "length": 19967,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            8,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-8\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Boolean|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-8\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-8\\work\\FALSE",
+              "sha256": "7c532ff8f6cd72c23223fa763019c36e010141223ac5581267d81dafdfaa736c",
+              "length": 19966,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            9,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-9\\work"
+          ],
+          "expected": "1004|Microsoft Excel|ファイル '10/20/2026' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。|xlmain11.chm|1001004|saved:True|kind:Date|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-9\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            10,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-10\\work"
+          ],
+          "expected": "1004|Microsoft Excel|申し訳ございません。12:34:56 PMが見つかりません。名前が変更されたか、移動や削除が行われた可能性があります。|xlmain11.chm|1001004|saved:True|kind:Date|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-10\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            11,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-11\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:String|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-11\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-11\\work\\relative.xlsm",
+              "sha256": "82c386043f1e33456a822588019b6c74862c63748167a73343e6a54beb77b4f5",
+              "length": 19965,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            12,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-12\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:String|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-12\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-12\\work\\dot.xlsm",
+              "sha256": "51c5661f8feb797fd024ce96053f1ba797e0f8925ddf503b435a41f1284dbdf0",
+              "length": 19968,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            13,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-13\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:String|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-13\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-13\\work\\sub\\child.xlsm",
+              "sha256": "2b34160dd254c92e83bf2bee3307a9fa22763d6800bd0d9405faf27a9293c0c7",
+              "length": 19960,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            14,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-14\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:String|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-14\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-14\\parent.xlsm",
+              "sha256": "d056b79a378275e6712cf23c670c64bfba142e97318da9e60733cc9fa831c8c6",
+              "length": 19967,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            15,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-15\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:String|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-15\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-15\\work\\drive.xlsm",
+              "sha256": "9fa3966f55c466c7eee7020d95dde81b3f84486e4893b0a623e96e80406e4863",
+              "length": 19972,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            16,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-16\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:String|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-16\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-16\\work\\rooted.xlsm",
+              "sha256": "ae7942bfa6491b997060b041c6e5b344bb259cb7a8c9c966b5f4bcceed95ffc8",
+              "length": 19972,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            17,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-17\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Empty|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-17\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            18,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-18\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:String|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-18\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-18\\work\\space name.xlsm",
+              "sha256": "e45ffaaf15d93b09e7a6aa1f4f6d888977f27b4216117327adfaca67559e459a",
+              "length": 19971,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            19,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-19\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:String|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-19\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-19\\work\\ends-with-space.xlsm",
+              "sha256": "6ce82f9393f586e2ac9976c7069134ffb5f39ec91660b098e0ea449dcfbf5fee",
+              "length": 19967,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            20,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-20\\work"
+          ],
+          "expected": "1004|Microsoft Excel|申し訳ございません。12:00:00 AMが見つかりません。名前が変更されたか、移動や削除が行われた可能性があります。|xlmain11.chm|1001004|saved:True|kind:Date|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-20\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            21,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-21\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:LongLong|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-21\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-21\\work\\10000000001",
+              "sha256": "c7587cba027b0d2b7d426366432673542825f5f4fced34cec5144447eec396fe",
+              "length": 19960,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            22,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-22\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:String|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\ScalarCopy-22\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            0,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-0\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-0\\work\\sub|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            1,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-1\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-1\\work\\sub|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            2,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-2\\work"
+          ],
+          "expected": "76|VBAProject|パスが見つかりません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000076|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-2\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            3,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-3\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-3|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            4,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-4\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-4\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            5,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-5\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-5\\work\\sub|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            6,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-6\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-6\\work\\sub|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            7,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-7\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-7\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            8,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-8\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-8\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            9,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-9\\work"
+          ],
+          "expected": "5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-9\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            10,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-10\\work"
+          ],
+          "expected": "76|VBAProject|パスが見つかりません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000076|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-10\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            11,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-11\\work"
+          ],
+          "expected": "94|VBAProject|Null の使い方が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000094|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-11\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            12,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-12\\work"
+          ],
+          "expected": "76|VBAProject|パスが見つかりません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000076|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-12\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            13,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-13\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-13\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            14,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-14\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-14\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            15,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-15\\work"
+          ],
+          "expected": "94|VBAProject|Null の使い方が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000094|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-15\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            16,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-16\\work"
+          ],
+          "expected": "5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-16\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            17,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-17\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-17\\work|query:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-17\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            18,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-18\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-18\\work|query:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-18\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            19,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-19\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-19\\work|query:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-19\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            20,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-20\\work"
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-20\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            21,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-21\\work"
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_paths_20261020\\typed\\DirectoryProbe-21\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        }
+      ]
+    },
+    {
+      "name": "save_copy_scalar_more",
+      "source": "save_copy_scalar_more.bas",
+      "source_sha256": "3eb7d5a13e7f863c7d5a1985a8ac259044a37c15a27a37ae7eec5273840589f9",
+      "package": "save_copy_scalar_more.xlsm",
+      "package_sha256": "048e36167c4f62673f50869d54b021acb80b1d1a8fb0f7bfef520c2bc882e387",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\input.xlsm",
+      "read_only": true,
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-23",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-23\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-23\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-24",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-24\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-24\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-25",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-25\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-25\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-26",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-26\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-26\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-27",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-27\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-27\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-28",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-28\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-28\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-29",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-29\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-29\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-22",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-22\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-22\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-23",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-23\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-23\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-24",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-24\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-24\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-25",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-25\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-25\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-26",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-26\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-26\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-27",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-27\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-27\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-28",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-28\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-28\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-29",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-29\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-29\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-30",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-30\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-30\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryMemory",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryMemory\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryMemory\\work\\sub",
+        "D:\\"
+      ],
+      "initial_files": [],
+      "vba_help_file": "C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm",
+      "cases": [
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            23,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-23\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Currency|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-23\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-23\\work\\$3.00",
+              "sha256": "c3685f1641aa22cb00842f32b7bb708766e7c0651f010c5e6d355e917f2dba40",
+              "length": 21042,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            24,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-24\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Currency|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-24\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-24\\work\\($3.75)",
+              "sha256": "f15de608c730cb68268f982a8bbe84127e74ce7212eb34cdf4bec9171a0ea21d",
+              "length": 21044,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            25,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-25\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Currency|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-25\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-25\\work\\$1,234.57",
+              "sha256": "d0a008a6f64bf762cc5e17e4d9d6fd84b9d8155ac5be65a08dd93854e2deae46",
+              "length": 21050,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            26,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-26\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Currency|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-26\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-26\\work\\$0.00",
+              "sha256": "4a0de440fb8f8b98b864ff89cf32325c35a0e0edca9b36b66d944923531ee63c",
+              "length": 21034,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            27,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-27\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Currency|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-27\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-27\\work\\$0.13",
+              "sha256": "13ad031b58f1da171945b44454527e0eafe2a90d55ae03534b3931049daddcb2",
+              "length": 21038,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            28,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-28\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Currency|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-28\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-28\\work\\($0.01)",
+              "sha256": "ecfe18db6d90ace3eb86747d69acf6f1c0ab0971dca4e19719f4d081f28ce17c",
+              "length": 21036,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "ScalarCopy",
+          "arguments": [
+            29,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-29\\work"
+          ],
+          "expected": "0||||0|saved:True|kind:Currency|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-29\\work",
+          "files": [
+            {
+              "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\ScalarCopy-29\\work\\$100,000,000,000.13",
+              "sha256": "170ee260933ffb1db0fbe5850445075d0da7133c127d4079db6a76b635637556",
+              "length": 21038,
+              "cells": {
+                "A1": {
+                  "String": "a😀b"
+                },
+                "A2": {
+                  "Utf16": [
+                    55357
+                  ]
+                },
+                "A3": {
+                  "Utf16": [
+                    56832
+                  ]
+                },
+                "B1": {
+                  "Number": -1.0
+                }
+              }
+            }
+          ],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            22,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-22\\work"
+          ],
+          "expected": "68|VBAProject|デバイスが準備されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000068|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-22\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            23,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-23\\work"
+          ],
+          "expected": "68|VBAProject|デバイスが準備されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000068|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-23\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            24,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-24\\work"
+          ],
+          "expected": "76|VBAProject|パスが見つかりません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000076|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-24\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            25,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-25\\work"
+          ],
+          "expected": "76|VBAProject|パスが見つかりません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000076|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-25\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            26,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-26\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-26\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            27,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-27\\work"
+          ],
+          "expected": "13|VBAProject|型が一致しません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000013|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-27\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            28,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-28\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-28\\work|query:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-28\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            29,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-29\\work"
+          ],
+          "expected": "0||||0|cwd:C:\\USERS\\RYUJI\\OXI\\PIPELINE_DATA\\VBA_SAVE_COPY_SCALAR_MORE_20261020\\TYPED\\DIRECTORYPROBE-29\\WORK\\SUB|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryProbe",
+          "arguments": [
+            30,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-30\\work"
+          ],
+          "expected": "5|VBAProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryProbe-30\\work|query:",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryMemory",
+          "arguments": [
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryMemory\\work"
+          ],
+          "expected": "D:\\|D:\\|D:\\|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryMemory\\work\\sub|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_save_copy_scalar_more_20261020\\typed\\DirectoryMemory\\work\\sub",
+          "files": [],
+          "result_includes_file_length": false
+        }
+      ]
+    },
+    {
+      "name": "save_copy_directory_fso",
+      "source": "save_copy_directory_fso.bas",
+      "source_sha256": "1b7f085664e0b5fa41039021cd3b115323db7d70d7958eab8a8d11f8726b9fa5",
+      "package": "save_copy_directory_fso.xlsm",
+      "package_sha256": "b4b2d93ddcc785fb0ec63defa5edffe825cd8b159c349efd55453d5b5bfb4d7d",
+      "full_name": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\input.xlsm",
+      "read_only": true,
+      "folders": [
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-0",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-0\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-0\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-1",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-1\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-1\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-2",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-2\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-2\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-3",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-3\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-3\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-4",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-4\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-4\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-5",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-5\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-5\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-6",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-6\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-6\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-7",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-7\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-7\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-8",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-8\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-8\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-9",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-9\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-9\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-10",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-10\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-10\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-11",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-11\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-11\\work\\sub",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-12",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-12\\work",
+        "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-12\\work\\sub"
+      ],
+      "initial_files": [
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-0\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-0\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-1\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-1\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-2\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-2\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-3\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-3\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-4\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-4\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-5\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-5\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-6\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-6\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-7\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-7\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-8\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-8\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-9\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-9\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-10\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-10\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-11\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-11\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-12\\work\\held.txt",
+          "bytes": [
+            65
+          ]
+        },
+        {
+          "path": "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-12\\work\\sub\\held.txt",
+          "bytes": [
+            66,
+            66
+          ]
+        }
+      ],
+      "vba_help_file": "C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm",
+      "cases": [
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            0,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-0\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-0\\work\\held.txt|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-0\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            1,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-1\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-1\\work\\held.txt|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-1\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            2,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-2\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-2\\parent.txt|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-2\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            3,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-3\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-3\\work\\rooted.txt|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-3\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            4,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-4\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-4\\work\\held.txt|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-4\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            5,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-5\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-5\\work|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-5\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            6,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-6\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-6\\work\\held.txt|C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-6\\work|1|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-6\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            7,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-7\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-7\\work|work|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-7\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            8,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-8\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-8\\work\\held.txt|1|2|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-8\\work\\sub",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            9,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-9\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-9\\work|work|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-9\\work\\sub",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            10,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-10\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-10\\work\\held.txt|1|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-10\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            11,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-11\\work"
+          ],
+          "expected": "0|||result:relative\\leaf.txt|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-11\\work",
+          "files": [],
+          "result_includes_file_length": false
+        },
+        {
+          "procedure": "DirectoryObjectProbe",
+          "arguments": [
+            12,
+            "C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-12\\work"
+          ],
+          "expected": "0|||result:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-12\\work|cwd:C:\\Users\\ryuji\\oxi\\pipeline_data\\vba_directory_fso_20261020\\typed\\DirectoryObjectProbe-12\\work",
+          "files": [],
+          "result_includes_file_length": false
+        }
+      ]
+    }
+  ]
+}

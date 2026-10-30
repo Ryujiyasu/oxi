@@ -84,6 +84,7 @@ fn parse(arg: &Arg) -> Result<(Complex, Option<char>), ExcelError> {
         Value::Error(e) => return Err(e),
         Value::Blank => return Ok((Complex::new(0.0, 0.0), None)),
         Value::Text(t) => t,
+        Value::Utf16(_) => return Err(ExcelError::Num),
     };
     let text = text.trim_start();
     if text.is_empty() {

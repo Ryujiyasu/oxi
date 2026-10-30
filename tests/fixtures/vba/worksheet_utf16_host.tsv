@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: CC-BY-SA-4.0
+1	AfterEdit	1:3:1:3|True
+1	SupportedFunctions	0:5:2|0:5:2|0:11:True
+2	AfterEdit	0:2:0:2|True
+2	SupportedFunctions	1004:0:|1004:0:|0:11:True

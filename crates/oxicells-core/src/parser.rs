@@ -9,7 +9,7 @@ use quick_xml::reader::Reader;
 use thiserror::Error;
 
 use oxidocs_common::archive::OoxmlArchive;
-use oxidocs_common::relationships::parse_relationships;
+use oxidocs_common::relationships::{parse_relationships, Relationship};
 
 /// Turns an OOXML custom-filter operator into the prefix VBA states it with.
 fn filter_operator(operator: &str) -> &'static str {
@@ -25,7 +25,7 @@ fn filter_operator(operator: &str) -> &'static str {
 
 /// Records a worksheet feature this parser walks past, so a caller can say
 /// what it could not show. The part itself is left alone when the workbook is
-/// saved, so nothing is lost — it simply does not reach the IR.
+/// saved, so nothing is lost 遯ｶ繝ｻit simply does not reach the IR.
 fn note_unsupported(name: &str, noted: &mut Vec<String>) {
     let feature = match name {
         "conditionalFormatting" => "Conditional formatting",
@@ -53,7 +53,7 @@ fn is_true(value: Option<&str>) -> bool {
 ///
 /// Absent is not the same as `0` here. Excel leaves the flag off when the
 /// format's own value is the one to use, and writes `applyFont="0"` when it
-/// is not — a cell that draws its blue underline from the Hyperlink style
+/// is not 遯ｶ繝ｻa cell that draws its blue underline from the Hyperlink style
 /// says so explicitly. Writers that are not Excel commonly leave every flag
 /// off while still naming a font on each cell, and reading absent as "do not
 /// apply" throws that font away and draws the whole sheet in the workbook's
@@ -125,22 +125,24 @@ fn parse_range_ref(s: &str) -> Option<(u32, u32, u32, u32)> {
 #[derive(Debug, Clone, Default)]
 struct SharedString {
     text: String,
+    units: Option<Vec<u16>>,
     runs: Vec<crate::ir::TextRun>,
 }
 
 /// Text as the reader sees it, with the `_xHHHH_` escapes spelled out.
 ///
-/// A character a writer cannot put in XML — a carriage return, a control code —
+/// A character a writer cannot put in XML 遯ｶ繝ｻa carriage return, a control code 遯ｶ繝ｻ
 /// is written as its code point between `_x` and `_`, and a literal `_x` that
 /// would otherwise begin one of those is itself written `_x005F_`
-/// (ECMA-376 §22.9.2.19). Left to stand, the escape is drawn:
-/// `procurement_contractor_list_02` shows 株式会社ＮＳＤ_x000D_ where Excel shows the
+/// (ECMA-376 ・ゑｽｧ22.9.2.19). Left to stand, the escape is drawn:
+/// `procurement_contractor_list_02` shows 隴ｬ・ｪ陟台ｸ茨ｽｼ螟ゑｽ､・ｾ繝ｻ・ｮ繝ｻ・ｳ繝ｻ・､_x000D_ where Excel shows the
 /// name alone, and the seven strings it carries make the widest black band in
 /// that book's picture.
 ///
 /// One pass, left to right, is what keeps `_x005F_` honest: it becomes an
 /// underscore, and the `x000D_` behind it is then ordinary text rather than an
 /// escape read a second time.
+#[cfg(test)]
 fn unescape_wide(text: &str) -> String {
     if !text.contains("_x") {
         return text.to_string();
@@ -174,8 +176,8 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
     let mut in_si = false;
     let mut in_t = false;
     // A phonetic guide (furigana) is stored as an <rPh> element containing its
-    // own <t>. It is not part of the cell's text: Excel shows "区分", not
-    // "区分クブン". Japanese workbooks carry these on names and addresses
+    // own <t>. It is not part of the cell's text: Excel shows "陋ｹ・ｺ陋ｻ繝ｻ, not
+    // "陋ｹ・ｺ陋ｻ繝ｻ縺醍ｹ晄じﾎｦ". Japanese workbooks carry these on names and addresses
     // constantly, so failing to skip them corrupts a large share of real files.
     let mut in_phonetic = false;
     // A string can be built from <r> runs, each optionally carrying its own
@@ -185,6 +187,7 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
     let mut in_run = false;
     let mut in_run_props = false;
     let mut current_run = crate::ir::TextRun::default();
+    let mut text_part = String::new();
 
     loop {
         match reader.read_event()? {
@@ -196,6 +199,7 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
                         in_phonetic = false;
                         in_run = false;
                         current = SharedString::default();
+                        current.units = Some(Vec::new());
                     }
                     "rPh" => in_phonetic = true,
                     "r" if in_si && !in_phonetic => {
@@ -227,7 +231,13 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
                     "vertAlign" if in_run_props => {
                         current_run.vert_align = get_attr(&e, "val");
                     }
-                    "t" if in_si => in_t = true,
+                    "color" if in_run_props => {
+                        current_run.color = get_attr(&e, "rgb").filter(|rgb| matches!(rgb.len(),6|8)&&rgb.bytes().all(|byte|byte.is_ascii_hexdigit())).map(|rgb| {
+                            let rgb = rgb.trim_start_matches('#');
+                            if rgb.len()==8 { rgb[2..].to_ascii_uppercase() } else { rgb.to_ascii_uppercase() }
+                        });
+                    }
+                    "t" if in_si => { in_t = true; text_part.clear(); },
                     _ => {}
                 }
             }
@@ -260,7 +270,17 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
                             current.runs.push(std::mem::take(&mut current_run));
                         }
                     }
-                    "t" => in_t = false,
+                    "t" => {
+                        if in_t && in_si && !in_phonetic {
+                            let units = crate::string_value::decode(&text_part);
+                            current.text.push_str(&text_part);
+                            current.units.as_mut().unwrap().extend_from_slice(&units);
+                            if in_run {
+                                current_run.text.push_str(&String::from_utf16_lossy(&units).replace("\r\n", "\n"));
+                            }
+                        }
+                        in_t = false;
+                    },
                     _ => {}
                 }
             }
@@ -273,11 +293,7 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
                     // out 85 characters in its five pieces against 62 in the
                     // cell, and every one of the 23 was the other half of a
                     // break.
-                    let text = unescape_wide(&e.unescape()?).replace("\r\n", "\n");
-                    current.text.push_str(&text);
-                    if in_run {
-                        current_run.text.push_str(&text);
-                    }
+                    text_part.push_str(&e.unescape()?);
                 }
             }
             Event::Eof => break,
@@ -295,53 +311,79 @@ struct SheetInfo {
     r_id: String,
 }
 
-/// The names a workbook gives to things, from `xl/workbook.xml`.
-///
-/// `<definedName name="cats">Sheet3!$A$3:$A$15</definedName>` is what a formula
-/// means when it says `cats`. Skipped: the built-in names Excel keeps for
-/// itself (a print area, a filter range), which start `_xlnm.` and are not
-/// what a formula is naming; and the ones scoped to a single sheet, which
-/// carry a `localSheetId` and cannot be held in a workbook-wide list without
-/// letting one sheet answer for another.
-fn parse_defined_names(xml: &str) -> Vec<(String, String)> {
+fn parse_calculation(xml: &str) -> crate::ir::CalculationSettings {
+    use crate::ir::{CalculationMode, CalculationSettings};
+    let compatibility_version = crate::compatibility::read_version(xml);
+    let mut reader = Reader::from_str(xml);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e)) if local_name(e.name().as_ref()) == "calcPr" => {
+                let mode = match get_attr(&e, "calcMode").as_deref() {
+                    Some("manual") => CalculationMode::Manual,
+                    Some("autoNoTable") => CalculationMode::AutomaticExceptTables,
+                    _ => CalculationMode::Automatic,
+                };
+                let boolean = |name| match get_attr(&e, name).as_deref() {
+                    Some("0" | "false") => Some(false),
+                    Some("1" | "true") => Some(true),
+                    _ => None,
+                };
+                return CalculationSettings { mode, on_save: boolean("calcOnSave").unwrap_or(true), completed: boolean("calcCompleted"), compatibility_version, dbcs_language: None };
+            }
+            Ok(Event::Eof) | Err(_) => return CalculationSettings { compatibility_version, ..Default::default() },
+            _ => {}
+        }
+    }
+}
+
+/// Workbook and sheet-local names, with their original per-name attributes.
+fn parse_defined_names(xml: &str) -> (Vec<(String, String)>, crate::ir::DefinedNameAttributes) {
+    let sheets = parse_workbook_sheets(xml).unwrap_or_default();
     let mut reader = Reader::from_str(xml);
     let mut names = Vec::new();
+    let mut attributes = std::collections::BTreeMap::new();
     let mut wanted: Option<String> = None;
     let mut refers = String::new();
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) if local_name(e.name().as_ref()) == "definedName" => {
-                let name = get_attr(&e, "name").unwrap_or_default();
-                let own_sheet = get_attr(&e, "localSheetId").is_some();
-                wanted = if name.starts_with("_xlnm") || name.is_empty() || own_sheet {
-                    None
-                } else {
-                    Some(name)
-                };
+            Ok(event @ (Event::Start(_) | Event::Empty(_))) if matches!(&event, Event::Start(e) | Event::Empty(e) if local_name(e.name().as_ref()) == "definedName") => {
+                let empty = matches!(&event, Event::Empty(_));
+                let (Event::Start(e) | Event::Empty(e)) = event else { unreachable!() };
+                let held = e.attributes().flatten().filter_map(|a| {
+                    let key = std::str::from_utf8(a.key.as_ref()).ok()?.to_string();
+                    let value = a.unescape_value().ok()?.into_owned();
+                    Some((key, value))
+                }).collect::<std::collections::BTreeMap<_, _>>();
+                let name = held.get("name").cloned().unwrap_or_default();
+                let leaf = name.strip_prefix("_xlnm.").unwrap_or(&name);
+                wanted = if leaf.is_empty() { None } else if let Some(scope) = held.get("localSheetId") {
+                    scope.parse::<usize>().ok().and_then(|index| sheets.get(index))
+                        .map(|sheet| crate::ir::scoped_defined_name(&sheet.name, leaf))
+                } else { Some(leaf.to_string()) };
+                if let Some(name) = &wanted { attributes.insert(name.clone(), held); }
                 refers.clear();
+                if empty {
+                    if let Some(name) = wanted.take() { names.push((name, String::new())); }
+                }
             }
             Ok(Event::Text(e)) if wanted.is_some() => {
-                if let Ok(text) = e.unescape() {
-                    refers.push_str(&text);
-                }
+                if let Ok(text) = e.unescape() { refers.push_str(&text); }
+            }
+            Ok(Event::CData(e)) if wanted.is_some() => {
+                refers.push_str(&String::from_utf8_lossy(e.as_ref()));
             }
             Ok(Event::End(e)) if local_name(e.name().as_ref()) == "definedName" => {
-                if let Some(name) = wanted.take() {
-                    let refers = refers.trim();
-                    if !refers.is_empty() {
-                        names.push((name, refers.to_string()));
-                    }
-                }
+                if let Some(name) = wanted.take() { names.push((name, refers.trim().to_string())); }
             }
             Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
     }
-    names
+    (names, attributes)
 }
 
 /// The relationship ids of the workbooks this one links to, in the order
-/// `[1]`, `[2]` … name them.
+/// `[1]`, `[2]` 遯ｶ・ｦ name them.
 fn parse_external_references(xml: &str) -> Vec<String> {
     let mut reader = Reader::from_str(xml);
     let mut ids = Vec::new();
@@ -367,7 +409,7 @@ fn parse_external_references(xml: &str) -> Vec<String> {
 /// has, and whatever this file remembers of their cells.
 ///
 /// A cached cell says nothing about its type when it held a number, `t="str"`
-/// when it held text and `t="b"` for a Boolean — the same shorthand a
+/// when it held text and `t="b"` for a Boolean 遯ｶ繝ｻthe same shorthand a
 /// worksheet uses, minus the shared-string table, since the text is written
 /// out here rather than pooled.
 fn parse_external_link(xml: &str) -> ExternalBook {
@@ -444,7 +486,7 @@ fn parse_workbook_sheets(xml: &str) -> Result<Vec<SheetInfo>, XlsxError> {
                 let name = local_name(e.name().as_ref());
                 if name == "sheet" {
                     let sheet_name = get_attr(&e, "name").unwrap_or_default();
-                    // r:id attribute — try both namespaced and raw forms
+                    // r:id attribute 遯ｶ繝ｻtry both namespaced and raw forms
                     let r_id = get_attr(&e, "id")
                         .or_else(|| {
                             // Try raw attribute key "r:id"
@@ -491,6 +533,7 @@ struct FontInfo {
     size: Option<f32>,
     color: Option<String>,
     name: Option<String>,
+    latin_name: Option<String>,
     charset: Option<i32>,
     family: Option<i32>,
 }
@@ -519,7 +562,7 @@ struct XfRecord {
     border_id: usize,
     /// The named style this format is built on, and whether it overrides each
     /// part of it. A cell format that does not apply its own font wears the
-    /// font of the style it names — that is how Excel dresses a hyperlink.
+    /// font of the style it names 遯ｶ繝ｻthat is how Excel dresses a hyperlink.
     style_id: Option<usize>,
     applies_font: bool,
     applies_fill: bool,
@@ -550,7 +593,7 @@ struct StyleSheet {
     /// written. A table names the rule it draws round itself by an index into
     /// these.
     dxf_borders: Vec<BorderInfo>,
-    /// The whole of each differential format — colour, weight, fill — in the
+    /// The whole of each differential format 遯ｶ繝ｻcolour, weight, fill 遯ｶ繝ｻin the
     /// order a `dxfId` counts them. A conditional rule names one of these.
     dxfs: Vec<crate::ir::DiffStyle>,
     cell_xfs: Vec<XfRecord>,
@@ -559,7 +602,7 @@ struct StyleSheet {
 
 /// Built-in number format strings for well-known IDs.
 /// The formats OOXML gives a number rather than spelling them out, from
-/// ECMA-376 §18.8.30. A workbook that uses one of these writes only its id:
+/// ECMA-376 ・ゑｽｧ18.8.30. A workbook that uses one of these writes only its id:
 /// the accounting formats 37 to 40 are how a Japanese statistical table asks
 /// for thousands separators, and reading them as "General" prints 24493 where
 /// Excel shows 24,493.
@@ -590,26 +633,26 @@ fn builtin_number_format(id: u32) -> Option<&'static str> {
         22 => Some("m/d/yy h:mm"),
         // Excel's own `NumberFormat` for these four, asked of a cell that
         // wears one: the room after the number is the width of a bracket,
-        // not of a space, which is two pixels in ＭＳ 11 and shows up as a
+        // not of a space, which is two pixels in 繝ｻ・ｭ繝ｻ・ｳ 11 and shows up as a
         // right-aligned number sitting two pixels off.
         37 => Some("#,##0_);(#,##0)"),
         38 => Some("#,##0_);[Red](#,##0)"),
         39 => Some("#,##0.00_);(#,##0.00)"),
         40 => Some("#,##0.00_);[Red](#,##0.00)"),
         // The Japanese locale fills in 27 to 36 and 50 to 58, which is what a
-        // government workbook's dates are written with. The era forms — ggge,
-        // 令和 — are given their Gregorian equivalent here, because the
+        // government workbook's dates are written with. The era forms 遯ｶ繝ｻggge,
+        // 闔会ｽ､陷･繝ｻ遯ｶ繝ｻare given their Gregorian equivalent here, because the
         // formatter has no calendar to name an era from; a date in the right
         // shape is nearer Excel's ink than the serial number that reading
         // none of them at all leaves behind.
         27 | 36 | 50 | 57 => Some("yyyy\".\"m\".\"d"),
-        28 | 29 | 51 | 54 | 58 => Some("yyyy\"年\"m\"月\"d\"日\""),
+        28 | 29 | 51 | 54 | 58 => Some("yyyy\"\u{5e74}\"m\"\u{6708}\"d\"\u{65e5}\""),
         30 => Some("m/d/yy"),
-        31 => Some("yyyy\"年\"m\"月\"d\"日\""),
-        32 => Some("h\"時\"mm\"分\""),
-        33 => Some("h\"時\"mm\"分\"ss\"秒\""),
-        34 | 52 | 55 => Some("yyyy\"年\"m\"月\""),
-        35 | 53 | 56 => Some("m\"月\"d\"日\""),
+        31 => Some("yyyy\"\u{5e74}\"m\"\u{6708}\"d\"\u{65e5}\""),
+        32 => Some("h\"\u{6642}\"mm\"\u{5206}\""),
+        33 => Some("h\"\u{6642}\"mm\"\u{5206}\"ss\"\u{79d2}\""),
+        34 | 52 | 55 => Some("yyyy\"\u{5e74}\"m\"\u{6708}\""),
+        35 | 53 | 56 => Some("m\"\u{6708}\"d\"\u{65e5}\""),
         45 => Some("mm:ss"),
         46 => Some("[h]:mm:ss"),
         47 => Some("mmss.0"),
@@ -621,7 +664,7 @@ fn builtin_number_format(id: u32) -> Option<&'static str> {
 
 /// The colours a workbook's theme names, in the order the theme states them:
 /// dk1, lt1, dk2, lt2, accent1-6, hlink, folHlink.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct Theme {
     colours: Vec<String>,
     /// The palette the workbook states in place of Excel's own, if it does.
@@ -633,10 +676,32 @@ pub(crate) struct Theme {
     /// own `<name>` counts for nothing.
     major_face: Option<String>,
     minor_face: Option<String>,
+    major_latin_face: Option<String>,
+    minor_latin_face: Option<String>,
     /// The widths the theme's own line styles are drawn at, in EMU. A shape
     /// that names one through `lnRef` and states no width of its own is ruled
     /// at the width the theme gives that slot.
     rules: Vec<i64>,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        // Excel uses its built-in Office theme when an otherwise valid
+        // workbook has no theme part. Keep the DrawingML slots available so
+        // theme-based shape text still resolves on load and after SaveCopyAs.
+        Self {
+            colours: [
+                "000000", "FFFFFF", "0E2841", "E8E8E8", "156082", "E97132",
+                "196B24", "0F9ED5", "A02B93", "4EA72E", "467886", "96607D",
+            ].into_iter().map(str::to_string).collect(),
+            indexed: Vec::new(),
+            major_face: None,
+            minor_face: None,
+            major_latin_face: None,
+            minor_latin_face: None,
+            rules: Vec::new(),
+        }
+    }
 }
 
 impl Theme {
@@ -657,13 +722,13 @@ const THEME_SCRIPT: &str = "Jpan";
 
 /// The face a shape's run means when it names the theme's scheme instead of a
 /// face of its own. `+mn-ea` is "whatever the minor scheme says for East
-/// Asian text", `+mj-lt` the major scheme's, and so on — the same resolution
+/// Asian text", `+mj-lt` the major scheme's, and so on 遯ｶ繝ｻthe same resolution
 /// a cell's font gets from `scheme="minor"`.
 ///
 /// Left as it stands, `+mn-ea` reaches the device as a face name nothing has,
-/// and the missing-face rule answers ＭＳ ゴシック for it. `tb_r8_youshiki`'s
+/// and the missing-face rule answers 繝ｻ・ｭ繝ｻ・ｳ 郢ｧ・ｴ郢ｧ・ｷ郢昴・縺・for it. `tb_r8_youshiki`'s
 /// banner then steps its lines 21 pixels where Excel, in the theme's
-/// 游ゴシック, steps 27. 38 shapes across five workbooks name a theme font.
+/// 雋ゑｽｸ郢ｧ・ｴ郢ｧ・ｷ郢昴・縺・ steps 27. 38 shapes across five workbooks name a theme font.
 fn scheme_face(face: &str, theme: &Theme) -> Option<String> {
     match face.strip_prefix('+')?.get(..2)? {
         "mj" => theme.major_face.clone(),
@@ -676,6 +741,7 @@ fn parse_theme_xml(xml: &str) -> Theme {
     let mut reader = Reader::from_str(xml);
     let mut theme = Theme::default();
     let mut in_scheme = false;
+    let mut colour_slot: Option<usize> = None;
     // Which of the two font schemes is being read, and how good the face
     // held for each is: the entry for this script beats the East Asian
     // fallback, which beats the Latin one.
@@ -687,6 +753,25 @@ fn parse_theme_xml(xml: &str) -> Theme {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match local_name(e.name().as_ref()).as_str() {
                 "clrScheme" => in_scheme = true,
+                name if in_scheme => {
+                    colour_slot = match name {
+                        "dk1" => Some(0), "lt1" => Some(1),
+                        "dk2" => Some(2), "lt2" => Some(3),
+                        "accent1" => Some(4), "accent2" => Some(5),
+                        "accent3" => Some(6), "accent4" => Some(7),
+                        "accent5" => Some(8), "accent6" => Some(9),
+                        "hlink" => Some(10), "folHlink" => Some(11),
+                        _ => colour_slot,
+                    };
+                    let colour = match name {
+                        "srgbClr" => get_attr(&e, "val"),
+                        "sysClr" => get_attr(&e, "lastClr"),
+                        _ => None,
+                    };
+                    if let (Some(slot), Some(colour)) = (colour_slot, colour) {
+                        theme.colours[slot] = colour;
+                    }
+                }
                 "majorFont" => in_font_scheme = Some(true),
                 "minorFont" => in_font_scheme = Some(false),
                 "lnStyleLst" => in_rules = true,
@@ -700,7 +785,10 @@ fn parse_theme_xml(xml: &str) -> Theme {
             Ok(Event::End(e)) => match local_name(e.name().as_ref()).as_str() {
                 // The colour scheme comes first; reading on gathers the
                 // fonts that follow it.
-                "clrScheme" => in_scheme = false,
+                "clrScheme" => { in_scheme = false; colour_slot = None; },
+                "dk1" | "lt1" | "dk2" | "lt2" | "accent1" | "accent2" |
+                "accent3" | "accent4" | "accent5" | "accent6" | "hlink" | "folHlink"
+                    if in_scheme => colour_slot = None,
                 "lnStyleLst" => in_rules = false,
                 "majorFont" | "minorFont" => in_font_scheme = None,
                 "theme" | "themeElements" => break,
@@ -717,6 +805,10 @@ fn parse_theme_xml(xml: &str) -> Theme {
                     _ => 0,
                 };
                 let face = get_attr(&e, "typeface").filter(|face| !face.is_empty());
+                if name == "latin" {
+                    if major { theme.major_latin_face = face.clone(); }
+                    else { theme.minor_latin_face = face.clone(); }
+                }
                 let held = &mut face_rank[usize::from(major)];
                 if let (Some(face), true) = (face, rank > *held) {
                     *held = rank;
@@ -735,8 +827,8 @@ fn parse_theme_xml(xml: &str) -> Theme {
                     "sysClr" => get_attr(&e, "lastClr"),
                     _ => None,
                 };
-                if let Some(colour) = colour {
-                    theme.colours.push(colour);
+                if let (Some(slot), Some(colour)) = (colour_slot, colour) {
+                    theme.colours[slot] = colour;
                 }
             }
             Ok(Event::Eof) | Err(_) => break,
@@ -898,14 +990,26 @@ fn parse_dxfs(xml: &str, theme: &Theme) -> Vec<crate::ir::DiffStyle> {
     let mut held = Vec::new();
     let mut reader = Reader::from_str(block);
     let mut current: Option<crate::ir::DiffStyle> = None;
+    let mut dxf_start = None;
     let (mut in_font, mut in_fill) = (false, false);
     loop {
-        match reader.read_event() {
+        let offset = reader.buffer_position() as usize;
+        let event = reader.read_event();
+        let event_end = reader.buffer_position() as usize;
+        let empty = matches!(&event, Ok(Event::Empty(_)));
+        match event {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
                     "dxf" => {
-                        current = Some(crate::ir::DiffStyle::default());
+                        let mut style = crate::ir::DiffStyle::default();
+                        if empty {
+                            style.source_xml = Some(block[offset..event_end].to_string());
+                            held.push(style);
+                        } else {
+                            current = Some(style);
+                            dxf_start = Some(offset);
+                        }
                         continue;
                     }
                     "font" => {
@@ -925,6 +1029,7 @@ fn parse_dxfs(xml: &str, theme: &Theme) -> Vec<crate::ir::DiffStyle> {
                     "b" if in_font => style.bold = Some(on),
                     "i" if in_font => style.italic = Some(on),
                     "u" if in_font => style.underline = Some(on),
+                    "strike" if in_font => style.strikethrough = Some(on),
                     "color" if in_font => style.font_color = parse_color_attr(e, theme),
                     "bgColor" if in_fill => style.bg_color = parse_color_attr(e, theme),
                     "fgColor" if in_fill && style.bg_color.is_none() => {
@@ -938,7 +1043,8 @@ fn parse_dxfs(xml: &str, theme: &Theme) -> Vec<crate::ir::DiffStyle> {
                 "font" => in_font = false,
                 "fill" => in_fill = false,
                 "dxf" => {
-                    if let Some(style) = current.take() {
+                    if let Some(mut style) = current.take() {
+                        if let Some(start) = dxf_start.take() { style.source_xml = Some(block[start..event_end].to_string()); }
                         held.push(style);
                     }
                 }
@@ -1068,7 +1174,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         current_xf.shrink_to_fit =
                             is_true(get_attr(&e, "shrinkToFit").as_deref());
                     }
-                    // <protection locked="0"/> — the cells a protected sheet
+                    // <protection locked="0"/> 遯ｶ繝ｻthe cells a protected sheet
                     // still lets a person type into.
                     "protection" if in_xf => {
                         current_xf.unlocked =
@@ -1106,7 +1212,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
 
                     // The colour of the edge that is open. `indexed="64"` is
                     // Excel's "automatic" and is past the end of the palette,
-                    // so it reads back as no colour — which is what it means.
+                    // so it reads back as no colour 遯ｶ繝ｻwhich is what it means.
                     "color" if border_edge.is_some() => {
                         let held = parse_color_attr(&e, theme);
                         if let Some(line) = match border_edge {
@@ -1128,7 +1234,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         }
                     }
 
-                    // Fill color — look for fgColor inside patternFill
+                    // Fill color 遯ｶ繝ｻlook for fgColor inside patternFill
                     "fgColor" if in_fill => {
                         if let Some(c) = parse_color_attr(&e, theme) {
                             current_fill.bg_color = Some(c);
@@ -1193,7 +1299,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         current_font_scheme = get_attr(&e, "val");
                     }
                     // A rule's colour is written self-closing, so it lands
-                    // here rather than among the Start events — which is why
+                    // here rather than among the Start events 遯ｶ繝ｻwhich is why
                     // it read back black for as long as it did.
                     "color" if border_edge.is_some() => {
                         let held = parse_color_attr(&e, theme);
@@ -1256,7 +1362,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         current_xf.shrink_to_fit =
                             is_true(get_attr(&e, "shrinkToFit").as_deref());
                     }
-                    // <protection locked="0"/> — the cells a protected sheet
+                    // <protection locked="0"/> 遯ｶ繝ｻthe cells a protected sheet
                     // still lets a person type into.
                     "protection" if in_xf => {
                         current_xf.unlocked =
@@ -1323,8 +1429,14 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         // that scheme states, and its own <name> counts for
                         // nothing: openpyxl writes Calibri with
                         // `scheme="minor"` and Excel opens the workbook in
-                        // the theme's ＭＳ Ｐゴシック, rows and all.
-                        let face = match current_font_scheme.take().as_deref() {
+                        // the theme's 繝ｻ・ｭ繝ｻ・ｳ 繝ｻ・ｰ郢ｧ・ｴ郢ｧ・ｷ郢昴・縺・ rows and all.
+                        let scheme = current_font_scheme.take();
+                        current_font.latin_name = match scheme.as_deref() {
+                            Some("major") => theme.major_latin_face.clone(),
+                            Some("minor") => theme.minor_latin_face.clone(),
+                            _ => None,
+                        }.or_else(|| current_font.name.clone());
+                        let face = match scheme.as_deref() {
                             Some("major") => theme.major_face.clone(),
                             Some("minor") => theme.minor_face.clone(),
                             _ => None,
@@ -1340,8 +1452,8 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         in_fill = false;
                     }
                     // Each side closes before the next opens. Forgetting to
-                    // let go of it would hand the next `<color>` in the file —
-                    // a font's, most likely — to a rule that had finished.
+                    // let go of it would hand the next `<color>` in the file 遯ｶ繝ｻ
+                    // a font's, most likely 遯ｶ繝ｻto a rule that had finished.
                     "left" | "right" | "top" | "bottom" | "diagonal" if in_border => {
                         border_edge = None;
                     }
@@ -1356,7 +1468,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         in_border = false;
                     }
                     // Every differential format takes a place in the list,
-                    // whether or not it states a border — a table's index
+                    // whether or not it states a border 遯ｶ繝ｻa table's index
                     // counts them all, so one that only changes a font must
                     // still hold its place.
                     "dxf" if section == Section::Dxfs => {
@@ -1438,7 +1550,7 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
 
     let mut font = stylesheet.fonts.get(font_id).cloned().unwrap_or_default();
     // A font record that names no face, or no size, is not asking for the
-    // reader's own default: it is saying "the workbook's font, in bold" —
+    // reader's own default: it is saying "the workbook's font, in bold" 遯ｶ繝ｻ
     // which is how a generated header row is written. The parts it leaves out
     // come from the Normal style's font.
     if font.name.is_none() || font.size.is_none() {
@@ -1465,7 +1577,7 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         _ => xf.num_fmt_id,
     };
     let number_format = if num_fmt_id == 0 {
-        None // General — no explicit format needed
+        None // General 遯ｶ繝ｻno explicit format needed
     } else if let Some(custom) = stylesheet.num_fmts.get(&num_fmt_id) {
         Some(custom.clone())
     } else {
@@ -1557,8 +1669,8 @@ fn parse_sqref(sqref: &str) -> Vec<(u32, u32, u32, u32)> {
         .collect()
 }
 
-/// A validation rule as its own element states it, before its formulas — which
-/// are child elements — have been read.
+/// A validation rule as its own element states it, before its formulas 遯ｶ繝ｻwhich
+/// are child elements 遯ｶ繝ｻhave been read.
 fn validation_from(e: &quick_xml::events::BytesStart) -> crate::ir::DataValidation {
     crate::ir::DataValidation {
         // No `type` at all is Excel's `any`, which allows everything.
@@ -1573,13 +1685,18 @@ fn validation_from(e: &quick_xml::events::BytesStart) -> crate::ir::DataValidati
         // `showDropDown` is written when the in-cell arrow was turned OFF, so
         // the flag is turned the right way round on the way in.
         in_cell_dropdown: !is_true(get_attr(e, "showDropDown").as_deref()),
+        error_style: get_attr(e, "errorStyle"),
+        show_input: is_true(get_attr(e, "showInputMessage").as_deref()),
+        show_error: is_true(get_attr(e, "showErrorMessage").as_deref()),
+        prompt_title: get_attr(e, "promptTitle"),
+        error_title: get_attr(e, "errorTitle"),
         error: get_attr(e, "error"),
         prompt: get_attr(e, "prompt"),
     }
 }
 
-/// A conditional rule as its own element states it, before its formulas —
-/// which are child elements — have been read. The look it puts on is resolved
+/// A conditional rule as its own element states it, before its formulas 遯ｶ繝ｻ
+/// which are child elements 遯ｶ繝ｻhave been read. The look it puts on is resolved
 /// here, because a `dxfId` means nothing once the stylesheet is out of reach.
 fn conditional_from(
     e: &quick_xml::events::BytesStart,
@@ -1593,10 +1710,19 @@ fn conditional_from(
         rank: get_attr(e, "rank").and_then(|held| held.parse().ok()),
         bottom: is_true(get_attr(e, "bottom").as_deref()),
         percent: is_true(get_attr(e, "percent").as_deref()),
+        above_average: get_attr(e, "aboveAverage").as_deref().map(|value| is_true(Some(value))).unwrap_or(true),
+        equal_average: is_true(get_attr(e, "equalAverage").as_deref()),
+        standard_deviations: get_attr(e, "stdDev").and_then(|held| held.parse().ok()),
         formulas: Vec::new(),
+        color_scale_points: None,
+        visual_xml: None,
+        visual_extension_id: None,
+        visual_extension_xml: None,
+        visual_extension_only: false,
         priority: get_attr(e, "priority")
             .and_then(|held| held.parse().ok())
             .unwrap_or(0),
+        origin_priority: get_attr(e, "priority").and_then(|held| held.parse().ok()),
         stop_if_true: is_true(get_attr(e, "stopIfTrue").as_deref()),
         ranges: ranges.to_vec(),
         style: get_attr(e, "dxfId")
@@ -1700,25 +1826,31 @@ fn parse_hyperlinks(
                     continue;
                 }
                 let Some(at) = get_attr(e, "ref") else { continue };
-                // A link can be stated over a whole range. Excel puts it on
-                // every cell of the range; the top-left is the one kept here.
+                // Excel may put one hyperlink on a whole cell block. Keep both
+                // corners so the VBA host can return the original Range.
                 let first = at.split(':').next().unwrap_or(&at);
                 let (col, row) = parse_cell_ref(first);
-                let inside = get_attr(e, "location");
-                let target = match &inside {
-                    Some(place) => place.clone(),
-                    None => {
-                        let Some(id) = get_attr(e, "r:id").or_else(|| get_attr(e, "id")) else {
-                            continue;
-                        };
-                        let Some(rel) = rels.get(&id) else { continue };
-                        rel.target.clone()
-                    }
+                let end_cell = at.split_once(':').map(|(_, last)| {
+                    let (end_col, end_row) = parse_cell_ref(last);
+                    (end_row, end_col)
+                }).filter(|end| *end != (row, col));
+                let location = get_attr(e, "location");
+                let relationship = get_attr(e, "r:id")
+                    .or_else(|| get_attr(e, "id"))
+                    .and_then(|id| rels.get(&id));
+                let internal = relationship.is_none();
+                let target = if internal {
+                    let Some(place) = location.as_ref() else { continue };
+                    place.clone()
+                } else {
+                    relationship.unwrap().target.clone()
                 };
                 held.push(crate::ir::Hyperlink {
                     cell: (row, col),
+                    end_cell,
                     target,
-                    internal: inside.is_some(),
+                    internal,
+                    sub_address: (!internal).then_some(location).flatten(),
                     tooltip: get_attr(e, "tooltip"),
                 });
             }
@@ -1736,7 +1868,263 @@ fn parse_hyperlinks(
 /// size of its own, or placed at a fixed spot on the sheet. Only the first two
 /// are common in the corpus, and an absolute one is read as a one-cell anchor
 /// at the top-left, which is where its offsets are measured from anyway.
-fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Option<String>)> {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DrawingImageRelationships {
+    raster: Option<String>,
+    vector: Option<String>,
+    shape_id: Option<u32>,
+}
+
+fn svg_intrinsic_size_points(svg: &[u8]) -> Option<(f64, f64)> {
+    fn svg_length_points(value: &str) -> Option<f64> {
+        let value = value.trim();
+        let numeric_end = value
+            .find(|ch: char| !(ch.is_ascii_digit() || matches!(ch, '+' | '-' | '.' | 'e' | 'E')))
+            .unwrap_or(value.len());
+        let number = value.get(..numeric_end)?.parse::<f64>().ok()?;
+        let unit = value.get(numeric_end..)?.trim();
+        let points = match unit {
+            "" | "px" => number * 72.0 / 96.0,
+            "pt" => number,
+            "pc" => number * 12.0,
+            "in" => number * 72.0,
+            "cm" => number * 72.0 / 2.54,
+            "mm" => number * 72.0 / 25.4,
+            _ => return None,
+        };
+        (points.is_finite() && points > 0.0).then_some(points)
+    }
+
+    let mut reader = Reader::from_reader(svg);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf).ok()? {
+            Event::Start(element) | Event::Empty(element)
+                if local_name(element.name().as_ref()) == "svg" =>
+            {
+                let mut width = None;
+                let mut height = None;
+                let mut view_box = None;
+                for attribute in element.attributes().flatten() {
+                    match local_name(attribute.key.as_ref()).as_str() {
+                        "width" => width = std::str::from_utf8(&attribute.value).ok().and_then(svg_length_points),
+                        "height" => height = std::str::from_utf8(&attribute.value).ok().and_then(svg_length_points),
+                        "viewBox" => {
+                            let values = std::str::from_utf8(&attribute.value).ok()?.split([',', ' ', '\t', '\r', '\n'])
+                                .filter(|item| !item.is_empty()).map(str::parse::<f64>).collect::<Result<Vec<_>, _>>().ok()?;
+                            if values.len() == 4 && values[2].is_finite() && values[3].is_finite() && values[2] > 0.0 && values[3] > 0.0 {
+                                view_box = Some((values[2], values[3]));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some((view_width, view_height)) = view_box {
+                    match (width, height) {
+                        (Some(width), Some(height)) => return Some((width, height)),
+                        (Some(width), None) => return Some((width, width * view_height / view_width)),
+                        (None, Some(height)) => return Some((height * view_width / view_height, height)),
+                        (None, None) => return Some((view_width * 72.0 / 96.0, view_height * 72.0 / 96.0)),
+                    }
+                }
+                return Some((width?, height?));
+            }
+            Event::Eof => return None,
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+#[derive(Clone)]
+struct OleObjectMetadata {
+    prog_id: String,
+    display_as_icon: bool,
+    placement: i64,
+    ole_type: i64,
+    auto_load: Option<bool>,
+    enabled: Option<bool>,
+    locked: Option<bool>,
+    print_object: Option<bool>,
+    on_action: Option<String>,
+}
+
+struct PendingOleObject {
+    id: u32,
+    prog_id: String,
+    relationship_id: Option<String>,
+    display_as_icon: bool,
+    auto_load: Option<bool>,
+    move_with_cells: bool,
+    size_with_cells: bool,
+    enabled: Option<bool>,
+    locked: Option<bool>,
+    print_object: Option<bool>,
+    on_action: Option<String>,
+}
+
+fn xml_bool(value: Option<String>) -> Option<bool> {
+    match value.as_deref() {
+        Some("1" | "true" | "True") => Some(true),
+        Some("0" | "false" | "False") => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_ole_object_metadata(xml: &str, relationships: &HashMap<String, Relationship>) -> HashMap<u32, OleObjectMetadata> {
+    let mut result = HashMap::new();
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut current: Option<PendingOleObject> = None;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(element)) if local_name(element.name().as_ref()) == "oleObject" => {
+                if let (Some(id), Some(prog_id)) = (
+                    get_attr(&element, "shapeId").and_then(|value| value.parse::<u32>().ok()),
+                    get_attr(&element, "progId"),
+                ) {
+                    current = Some(PendingOleObject {
+                        id,
+                        prog_id,
+                        relationship_id: get_attr(&element, "id"),
+                        display_as_icon: get_attr(&element, "dvAspect").as_deref() == Some("DVASPECT_ICON"),
+                        auto_load: xml_bool(get_attr(&element, "autoLoad")),
+                        move_with_cells: false,
+                        size_with_cells: false,
+                        enabled: None,
+                        locked: None,
+                        print_object: None,
+                        on_action: None,
+                    });
+                }
+            }
+            Ok(Event::Empty(element)) if local_name(element.name().as_ref()) == "oleObject" => {
+                if let (Some(id), Some(prog_id)) = (
+                    get_attr(&element, "shapeId").and_then(|value| value.parse::<u32>().ok()),
+                    get_attr(&element, "progId"),
+                ) {
+                    let metadata = OleObjectMetadata {
+                        prog_id,
+                        display_as_icon: get_attr(&element, "dvAspect").as_deref() == Some("DVASPECT_ICON"),
+                        placement: 3,
+                        ole_type: get_attr(&element, "id").and_then(|rid| relationships.get(&rid))
+                            .is_some_and(|relationship| relationship.target_mode.as_deref() == Some("External")) as i64 + 1,
+                        auto_load: xml_bool(get_attr(&element, "autoLoad")),
+                        enabled: None,
+                        locked: None,
+                        print_object: None,
+                        on_action: None,
+                    };
+                    result.entry(id).or_insert(metadata);
+                }
+            }
+            Ok(Event::Start(element) | Event::Empty(element)) if local_name(element.name().as_ref()) == "anchor" => {
+                if let Some(pending) = current.as_mut() {
+                    pending.move_with_cells = xml_bool(get_attr(&element, "moveWithCells")).unwrap_or(false);
+                    pending.size_with_cells = xml_bool(get_attr(&element, "sizeWithCells")).unwrap_or(false);
+                }
+            }
+            Ok(Event::Start(element) | Event::Empty(element)) if local_name(element.name().as_ref()) == "objectPr" => {
+                if let Some(pending) = current.as_mut() {
+                    pending.enabled = xml_bool(get_attr(&element, "disabled")).map(|disabled| !disabled);
+                    pending.locked = xml_bool(get_attr(&element, "locked"));
+                    pending.print_object = xml_bool(get_attr(&element, "print"));
+                    pending.on_action = get_attr(&element, "macro");
+                }
+            }
+            Ok(Event::End(element)) if local_name(element.name().as_ref()) == "oleObject" => {
+                if let Some(pending) = current.take() {
+                    let placement = if pending.size_with_cells { 1 } else if pending.move_with_cells { 2 } else { 3 };
+                    let ole_type = pending.relationship_id.as_ref().and_then(|rid| relationships.get(rid))
+                        .is_some_and(|relationship| relationship.target_mode.as_deref() == Some("External")) as i64 + 1;
+                    result.insert(pending.id, OleObjectMetadata {
+                        prog_id: pending.prog_id,
+                        display_as_icon: pending.display_as_icon,
+                        placement,
+                        ole_type,
+                        auto_load: pending.auto_load,
+                        enabled: pending.enabled,
+                        locked: pending.locked,
+                        print_object: pending.print_object,
+                        on_action: pending.on_action,
+                    });
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    result
+}
+
+#[derive(Default, Clone)]
+struct VmlOleMetadata {
+    shadow: Option<bool>,
+    border_color: Option<String>,
+    border_weight: Option<i64>,
+    interior_color: Option<String>,
+}
+
+fn vml_rgb(value: &str) -> Option<String> {
+    let value = value.trim();
+    if let Some(hex) = value.strip_prefix('#').filter(|hex| hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit())) {
+        return Some(hex.to_ascii_uppercase());
+    }
+    let name = value.split_whitespace().next()?.to_ascii_lowercase();
+    Some(match name.as_str() {
+        "black" => "000000", "white" => "FFFFFF", "red" => "FF0000", "green" => "008000",
+        "lime" => "00FF00", "blue" => "0000FF", "yellow" => "FFFF00", "cyan" => "00FFFF",
+        "magenta" => "FF00FF", "gray" | "grey" => "808080", "maroon" => "800000",
+        "navy" => "000080", "olive" => "808000", "purple" => "800080", "teal" => "008080",
+        _ => return None,
+    }.to_string())
+}
+
+fn parse_vml_ole_shadows(xml: &str) -> HashMap<u32, VmlOleMetadata> {
+    let mut result = HashMap::new();
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut current_shape = None;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(element)) if local_name(element.name().as_ref()) == "shape" => {
+                current_shape = get_attr(&element, "id").and_then(|name| name.rsplit_once("_s")?.1.parse::<u32>().ok());
+                if let Some(id) = current_shape {
+                    let border_weight = get_attr(&element, "strokeweight").and_then(|weight| {
+                        let number = weight.trim().trim_end_matches("pt").parse::<f64>().ok()?;
+                        Some(if number >= 1.75 { 4 } else if number >= 1.1 { -4138 } else if number >= 0.5 { 2 } else { 1 })
+                    });
+                    result.insert(id, VmlOleMetadata {
+                        shadow: Some(false),
+                        border_color: get_attr(&element, "strokecolor").as_deref().and_then(vml_rgb),
+                        border_weight,
+                        interior_color: get_attr(&element, "fillcolor").as_deref().and_then(vml_rgb),
+                    });
+                }
+            }
+            Ok(Event::Empty(element)) if local_name(element.name().as_ref()) == "shape" => {
+                if let Some(id) = get_attr(&element, "id").and_then(|name| name.rsplit_once("_s")?.1.parse::<u32>().ok()) {
+                    result.insert(id, VmlOleMetadata { shadow: Some(false), ..VmlOleMetadata::default() });
+                }
+            }
+            Ok(Event::Start(element) | Event::Empty(element)) if local_name(element.name().as_ref()) == "shadow" => {
+                if let Some(id) = current_shape {
+                    let enabled = xml_bool(get_attr(&element, "on")).unwrap_or(true);
+                    result.entry(id).or_insert_with(VmlOleMetadata::default).shadow = Some(enabled);
+                }
+            }
+            Ok(Event::End(element)) if local_name(element.name().as_ref()) == "shape" => current_shape = None,
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    result
+}
+
+fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, DrawingImageRelationships)> {
     use crate::ir::{
         Anchor, Drawing, DrawingKind, Frame, PathStep, Shape, ShapeLine, ShapeParagraph,
         ShapePath, ShapeRun, ShapeText,
@@ -1747,12 +2135,17 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     enum Paints {
         Fill,
         Line,
+        LinePatternForeground,
+        LinePatternBackground,
         Text,
     }
 
+    let mut drawing_name=None;
+    let mut drawing_id: Option<u32> = None;
+    let mut group_name: Option<String> = None;
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
-    let mut found: Vec<(Drawing, Option<String>)> = Vec::new();
+    let mut found: Vec<(Drawing, DrawingImageRelationships)> = Vec::new();
     // Where a chart's own shape sits, as fractions of the chart's box.
     let mut frame: Option<(f64, f64)> = None;
     let mut frame_to: Option<(f64, f64)> = None;
@@ -1768,12 +2161,17 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let mut step: Option<String> = None;
     let mut points: Vec<(i64, i64)> = Vec::new();
 
-    // What the run being read is worn in. A paragraph is laid out in its
-    // first run's face and size, but drawn in each run's own weight,
-    // underline and colour.
+    // Explicit properties on the run being read. Missing values inherit the
+    // paragraph style, while explicit false values remain distinct.
     let mut run_bold = false;
+    let mut run_italic: Option<bool> = None;
     let mut run_underline = false;
     let mut run_color: Option<String> = None;
+    let mut run_color_theme: Option<usize> = None;
+    let mut run_color_brightness: Option<f32> = None;
+    let mut run_legacy_color_index: Option<u8> = None;
+    let mut run_face: Option<String> = None;
+    let mut run_size: Option<f32> = None;
 
     let blank = Anchor { col: 0, col_off: 0, row: 0, row_off: 0 };
     let mut from = blank;
@@ -1782,9 +2180,13 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let mut kind: Option<DrawingKind> = None;
     let blank_shape = Shape {
         geometry: String::new(),
+        text_box: false,
         adjusts: Vec::new(),
         path: None,
         fill: None,
+        fill_theme: None,
+        fill_legacy_color_index: None,
+        fill_brightness: None,
         line: None,
         flip_h: false,
         flip_v: false,
@@ -1797,9 +2199,17 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let mut line_cap: Option<String> = None;
     let mut dash: Option<String> = None;
     let (mut head_end, mut tail_end): (Option<String>, Option<String>) = (None, None);
+    let (
+        mut head_end_length,
+        mut head_end_width,
+        mut tail_end_length,
+        mut tail_end_width,
+    ): (Option<String>, Option<String>, Option<String>, Option<String>) = (None, None, None, None);
     let mut embed: Option<String> = None;
+    let mut vector_embed: Option<String> = None;
+    let (mut in_picture_clr_change, mut in_picture_clr_from) = (false, false);
     // Which corner the col/row elements belong to, and whether we are inside
-    // a shape — where `<ext>` is the shape's own size, not the anchor's.
+    // a shape 遯ｶ繝ｻwhere `<ext>` is the shape's own size, not the anchor's.
     let mut corner: Option<bool> = None;
     let mut depth_in_shape = 0usize;
     let mut number = String::new();
@@ -1814,7 +2224,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     // which case its style's references are not consulted.
     let (mut fill_stated, mut line_stated) = (false, false);
     let mut paints: Option<Paints> = None;
-    let mut colour: Option<(String, Vec<(String, f32)>)> = None;
+    let mut colour: Option<(String, Vec<(String, f32)>, Option<usize>, Option<u8>)> = None;
     // What the shape says: the body's own settings, the paragraph being read,
     // and whether a run's text is what the reader is collecting.
     let mut said = ShapeText {
@@ -1832,6 +2242,12 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     // A group states where it sits and what its children's coordinates mean;
     // a child inside one is placed by mapping its own box through that.
     let mut group: Option<((i64, i64), (i64, i64), (i64, i64), (i64, i64))> = None;
+    // Nested DrawingML groups each add another child-to-parent coordinate
+    // transform. Excel exposes the leaves as one flat GroupItems collection.
+    let mut parent_groups: Vec<((i64, i64), (i64, i64), (i64, i64), (i64, i64))> = Vec::new();
+    let mut parent_group_rotations: Vec<i32> = Vec::new();
+    let mut current_group_rotation = 0i32;
+    let mut group_rotation = 0i32;
     let mut in_group_props = false;
     let mut own_off: Option<(i64, i64)> = None;
     let mut own_ext: Option<(i64, i64)> = None;
@@ -1846,17 +2262,71 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
         if let Some(e) = start {
             let name = local_name(e.name().as_ref());
             match name.as_str() {
+                "srcRect" => {
+                    if let Some(DrawingKind::Picture { format, .. }) = kind.as_mut() {
+                        let read = |attribute: &str| get_attr(e, attribute).and_then(|value| value.parse::<i32>().ok()).unwrap_or(0);
+                        format.crop = (read("l"), read("t"), read("r"), read("b"));
+                    }
+                }
+                "lum" => {
+                    if let Some(DrawingKind::Picture { format, .. }) = kind.as_mut() {
+                        format.brightness = get_attr(e, "bright").and_then(|value| value.parse().ok()).unwrap_or(0);
+                        format.contrast = get_attr(e, "contrast").and_then(|value| value.parse().ok()).unwrap_or(0);
+                        if format.brightness == 70_000 && format.contrast == -70_000 {
+                            format.color_type = 4;
+                        }
+                    }
+                }
+                "grayscl" => {
+                    if let Some(DrawingKind::Picture { format, .. }) = kind.as_mut() { format.color_type = 2; }
+                }
+                "biLevel" => {
+                    if let Some(DrawingKind::Picture { format, .. }) = kind.as_mut() { format.color_type = 3; }
+                }
+                "clrChange" => {
+                    if let Some(DrawingKind::Picture { .. }) = kind.as_mut() {
+                        in_picture_clr_change = true;
+                    }
+                }
+                "clrFrom" if in_picture_clr_change => in_picture_clr_from = true,
+                "srgbClr" if in_picture_clr_from => {
+                    if let Some(DrawingKind::Picture { format, .. }) = kind.as_mut() {
+                        format.transparency_color = get_attr(e, "val");
+                    }
+                }
+                "alpha" if in_sp_pr && get_attr(e, "val").as_deref() == Some("0") => {
+                    if let Some(DrawingKind::Picture { format, .. }) = kind.as_mut() { format.transparent_background = true; }
+                }
+                "cNvPr"=> {
+                    let name = get_attr(e, "name");
+                    drawing_id = get_attr(e, "id").and_then(|value| value.parse().ok());
+                    if depth_in_shape == 1 && group.is_none() && parent_groups.is_empty() {
+                        // Excel exposes nested group leaves through the outer
+                        // group's flat GroupItems collection and ParentGroup.
+                        group_name = name.clone();
+                    }
+                    drawing_name = name;
+                }
+                "cNvSpPr" if get_attr(e, "txBox").as_deref() == Some("1") => shape.text_box = true,
                 "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor"
                 // A shape that hangs on a chart rather than on the grid
                 // is anchored by fractions of the chart's own box.
                 | "relSizeAnchor" | "absSizeAnchor" => {
                     frame = None;
                     frame_to = None;
+                    group_name = None;
+                    group_rotation = 0;
+                    parent_groups.clear();
+                    parent_group_rotations.clear();
+                    current_group_rotation = 0;
                     from = blank;
                     to = None;
                     extent = None;
                     kind = None;
                     embed = None;
+                    vector_embed = None;
+                    in_picture_clr_change = false;
+                    in_picture_clr_from = false;
                     depth_in_shape = 0;
                     shape = blank_shape.clone();
                     line_width = 9525;
@@ -1864,6 +2334,10 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     dash = None;
                     head_end = None;
                     tail_end = None;
+                    head_end_length = None;
+                    head_end_width = None;
+                    tail_end_length = None;
+                    tail_end_width = None;
                     fill_stated = false;
                     line_stated = false;
                     said = ShapeText {
@@ -1908,12 +2382,17 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         line_stated = false;
                         head_end = None;
                         tail_end = None;
+                        head_end_length = None;
+                        head_end_width = None;
+                        tail_end_length = None;
+                        tail_end_width = None;
                         own_off = None;
                         own_ext = None;
                         embed = None;
+                        vector_embed = None;
                     }
                     if name == "pic" {
-                        kind = Some(DrawingKind::Picture { bytes: Vec::new() });
+                        kind = Some(DrawingKind::Picture { bytes: Vec::new(), format: Default::default() });
                     } else if kind.is_none() || group.is_some() {
                         kind = Some(DrawingKind::Shape(shape.clone()));
                     }
@@ -1929,11 +2408,29 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 }
                 "grpSp" => {
                     depth_in_shape += 1;
+                    if let Some(parent) = group.take() {
+                        parent_groups.push(parent);
+                        parent_group_rotations.push(current_group_rotation);
+                    } else {
+                        current_group_rotation = 0;
+                    }
                     if kind.is_none() {
                         kind = Some(DrawingKind::Other);
                     }
                 }
                 "grpSpPr" => in_group_props = true,
+                "xfrm" if in_group_props => {
+                    let stated_rotation = get_attr(e, "rot")
+                        .and_then(|held| held.parse().ok())
+                        .unwrap_or(0);
+                    // Shape.Rotation and child geometry follow the outermost
+                    // group that Excel exposes as the parent. Nested groups
+                    // are flattened by Excel's GroupItems collection.
+                    if depth_in_shape == 1 {
+                        group_rotation = stated_rotation;
+                    }
+                    current_group_rotation = stated_rotation;
+                }
                 "chOff" | "chExt" | "off" if in_group_props || in_sp_pr => {
                     let x = get_attr(e, "x").or_else(|| get_attr(e, "cx"));
                     let y = get_attr(e, "y").or_else(|| get_attr(e, "cy"));
@@ -2014,14 +2511,46 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     }
                 }
                 "prstDash" if in_ln => dash = get_attr(e, "val"),
+                "pattFill" if in_ln => {
+                    if let Some(line) = shape.line.as_mut() {
+                        line.pattern = get_attr(e, "prst");
+                    } else {
+                        shape.line = Some(ShapeLine {
+                            color: "000000".into(),
+                            color_theme: None,
+                            legacy_color_index: None,
+                            color_brightness: None, color_shade: None,
+                            width: line_width,
+                            dash: dash.clone(),
+                            cap: line_cap.clone(),
+                            head_end: None,
+                            tail_end: None,
+                            head_end_length: None,
+                            head_end_width: None,
+                            tail_end_length: None,
+                            tail_end_width: None,
+                            pattern: get_attr(e, "prst"),
+                            back_color: None,
+                            back_color_theme: None,
+                            back_legacy_color_index: None,
+                            back_color_brightness: None, back_color_shade: None,
+                        });
+                    }
+                }
+                "fgClr" if in_ln => paints = Some(Paints::LinePatternForeground),
+                "bgClr" if in_ln => paints = Some(Paints::LinePatternBackground),
                 // What the rule wears at its ends. `type="none"` is most of
                 // them and means bare.
                 "headEnd" | "tailEnd" if in_ln => {
                     let worn = get_attr(e, "type").filter(|kind| kind != "none");
                     if name == "headEnd" {
                         head_end = worn;
+                        head_end_length = get_attr(e, "len");
+                        head_end_width = get_attr(e, "w");
                     } else {
                         tail_end = worn;
+                        tail_end_length = get_attr(e, "len");
+                        tail_end_width = get_attr(e, "w");
                     }
                 }
                 "noFill" if in_sp_pr && in_ext_lst == 0 => {
@@ -2036,6 +2565,9 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 // A shape that states no fill or line of its own wears the
                 // one its style names, which is a theme colour.
                 "solidFill" if in_sp_pr && in_ext_lst == 0 => {
+                    if let Some(DrawingKind::Picture { format, .. }) = kind.as_mut() {
+                        format.transparent_background = false;
+                    }
                     if in_ln {
                         line_stated = true;
                         paints = Some(Paints::Line);
@@ -2050,7 +2582,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 // corpus carries 559 `fillRef idx="0"` and 49 `lnRef idx="0"`.
                 // A freeform built through Excel's own BuildFreeform with its
                 // fill turned off states no fill at all in `spPr` and says so
-                // only this way — drawn from the reference regardless, it came
+                // only this way 遯ｶ繝ｻdrawn from the reference regardless, it came
                 // out filled in the theme's accent blue where Excel draws bare
                 // strokes (`_xlsx_custgeom_repro.py`).
                 "fillRef" if in_style && !fill_stated => {
@@ -2077,19 +2609,40 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 }
                 "solidFill" if in_run_props => paints = Some(Paints::Text),
                 "srgbClr" | "schemeClr" | "sysClr" if paints.is_some() => {
+                    if in_run_props && name == "schemeClr" && paints == Some(Paints::Text) {
+                        run_color_theme = get_attr(e, "val").and_then(|val| drawing_theme_index(&val));
+                    }
+                    if in_run_props && name == "srgbClr" && paints == Some(Paints::Text) {
+                        run_legacy_color_index = get_attr(e, "legacySpreadsheetColorIndex")
+                            .and_then(|value| value.parse::<u8>().ok());
+                    }
                     let named = match name.as_str() {
                         "sysClr" => get_attr(e, "lastClr"),
                         "srgbClr" => get_attr(e, "val"),
                         _ => get_attr(e, "val").and_then(|val| scheme_colour(&val, theme)),
                     };
-                    colour = named.map(|hex| (hex, Vec::new()));
+                    let color_theme = if name == "schemeClr" {
+                        get_attr(e, "val").and_then(|value| drawing_theme_index(&value))
+                    } else { None };
+                    let legacy_color_index = if name == "srgbClr" {
+                        get_attr(e, "legacySpreadsheetColorIndex").and_then(|value| value.parse::<u8>().ok())
+                    } else { None };
+                    colour = named.map(|hex| (hex, Vec::new(), color_theme, legacy_color_index));
                 }
-                "lumMod" | "lumOff" | "shade" | "tint" if colour.is_some() => {
-                    if let (Some((_, mods)), Some(value)) = (
-                        colour.as_mut(),
-                        get_attr(e, "val").and_then(|v| v.parse::<f32>().ok()),
-                    ) {
-                        mods.push((name.clone(), value / 100_000.0));
+                "lumMod" | "lumOff" | "shade" | "tint" => {
+                    if let Some(value) = get_attr(e, "val").and_then(|v| v.parse::<f32>().ok()) {
+                        if let Some((_, mods, _, _)) = colour.as_mut() {
+                            mods.push((name.clone(), value / 100_000.0));
+                        }
+                        if in_run_props && paints == Some(Paints::Text) {
+                            run_color_brightness = match name.as_str() {
+                                "tint" => Some(value / 100_000.0),
+                                "shade" => Some(-value / 100_000.0),
+                                "lumMod" => Some(value / 100_000.0 - 1.0),
+                                "lumOff" => Some(value / 100_000.0),
+                                _ => run_color_brightness,
+                            };
+                        }
                     }
                 }
                 // What the shape says, and how it is laid in its box.
@@ -2109,8 +2662,14 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 }
                 "p" => {
                     run_bold = false;
+                    run_italic = None;
                     run_underline = false;
                     run_color = None;
+                    run_color_theme = None;
+                    run_color_brightness = None;
+                    run_legacy_color_index = None;
+                    run_face = None;
+                    run_size = None;
                     paragraph = Some(ShapeParagraph {
                         text: String::new(),
                         runs: Vec::new(),
@@ -2142,8 +2701,14 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                             None => held.runs.push(ShapeRun {
                                 text: "\n".to_string(),
                                 bold: run_bold,
+                                italic: run_italic,
                                 underline: run_underline,
+                                face: run_face.clone(),
+                                size: run_size,
                                 color: run_color.clone(),
+                                color_theme: run_color_theme,
+                                color_brightness: run_color_brightness,
+                                legacy_color_index: run_legacy_color_index,
                             }),
                         }
                     }
@@ -2176,7 +2741,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 // Only the first run of a paragraph dresses it: the corpus
                 // dresses every run of a shape's paragraph alike.
                 // An empty paragraph states its own size in `endParaRPr`
-                // rather than `rPr` — it has no run to dress — and Excel gives
+                // rather than `rPr` 遯ｶ繝ｻit has no run to dress 遯ｶ繝ｻand Excel gives
                 // it a line of that size. Read as one and the same thing:
                 // measured on `_xlsx_shape_block.py`, where an empty paragraph
                 // between two blocks is worth exactly one line of the size it
@@ -2184,11 +2749,17 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 "rPr" | "endParaRPr" => {
                     in_run_props = true;
                     run_bold = is_true(get_attr(e, "b").as_deref());
+                    run_italic = get_attr(e, "i").map(|value| is_true(Some(&value)));
                     // A shape names the underline it wants rather than
                     // flagging it, so anything but "none" is one.
                     run_underline = get_attr(e, "u")
                         .is_some_and(|kind| !kind.is_empty() && kind != "none");
                     run_color = None;
+                    run_color_theme = None;
+                    run_color_brightness = None;
+                    run_legacy_color_index = None;
+                    run_face = None;
+                    run_size = get_attr(e, "sz").and_then(|size| size.parse::<f32>().ok()).map(|size| size / 100.0);
                     if let Some(held) = paragraph.as_mut() {
                         if held.text.is_empty() {
                             if let Some(size) = get_attr(e, "sz").and_then(|v| v.parse::<f32>().ok())
@@ -2203,11 +2774,14 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 // The East Asian face wins over the Latin one for the sheets
                 // this is measured against.
                 "latin" | "ea" if in_run_props => {
+                    let face = get_attr(e, "typeface")
+                        .filter(|face| !face.is_empty())
+                        .map(|face| scheme_face(&face, theme).unwrap_or(face));
+                    if face.is_some() && (name == "ea" || run_face.is_none()) {
+                        run_face = face.clone();
+                    }
                     if let Some(held) = paragraph.as_mut() {
                         if held.text.is_empty() {
-                            let face = get_attr(e, "typeface")
-                                .filter(|face| !face.is_empty())
-                                .map(|face| scheme_face(&face, theme).unwrap_or(face));
                             if face.is_some() && (name == "ea" || held.face.is_none()) {
                                 held.face = face;
                                 // The charset travels with the face it is
@@ -2233,33 +2807,88 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         .find(|attr| local_name(attr.key.as_ref()) == "embed")
                         .and_then(|attr| String::from_utf8(attr.value.to_vec()).ok());
                 }
+                "svgBlip" => {
+                    vector_embed = e
+                        .attributes()
+                        .flatten()
+                        .find(|attr| local_name(attr.key.as_ref()) == "embed")
+                        .and_then(|attr| String::from_utf8(attr.value.to_vec()).ok());
+                }
                 _ => {}
             }
             // An element with no children ends where it starts.
             if empty && matches!(name.as_str(), "srgbClr" | "schemeClr" | "sysClr") {
-                if let (Some((hex, mods)), Some(part)) = (colour.take(), paints) {
+                if let (Some((hex, mods, color_theme, legacy_color_index)), Some(part)) = (colour.take(), paints) {
                     let painted = shaded(&hex, &mods);
                     match part {
-                        Paints::Fill => shape.fill = Some(painted),
+                        Paints::Fill => {
+                            shape.fill = Some(painted);
+                            shape.fill_theme = color_theme;
+                            shape.fill_legacy_color_index = legacy_color_index;
+                            shape.fill_brightness = drawing_color_brightness(&mods);
+                        }
                         Paints::Line => {
                             shape.line = Some(ShapeLine {
                                 color: painted,
+                                color_theme,
+                                legacy_color_index,
+                                color_brightness: drawing_color_brightness(&mods),
+                                color_shade: drawing_color_shade(&mods),
                                 width: line_width,
                                 dash: dash.clone(),
                                 cap: line_cap.clone(),
                                 head_end: head_end.clone(),
                                 tail_end: tail_end.clone(),
+                                head_end_length: head_end_length.clone(),
+                                head_end_width: head_end_width.clone(),
+                                tail_end_length: tail_end_length.clone(),
+                                tail_end_width: tail_end_width.clone(),
+                                pattern: None,
+                                back_color: None,
+                                back_color_theme: None,
+                                back_legacy_color_index: None,
+                                back_color_brightness: None, back_color_shade: None,
                             })
+                        }
+                        Paints::LinePatternForeground => {
+                            let line = shape.line.get_or_insert_with(|| ShapeLine {
+                                color: "000000".into(), color_theme: None, legacy_color_index: None, color_brightness: None, color_shade: None, back_color_brightness: None, back_color_shade: None,
+                                width: line_width, dash: dash.clone(), cap: line_cap.clone(),
+                                head_end: None, tail_end: None, head_end_length: None, head_end_width: None,
+                                tail_end_length: None, tail_end_width: None, pattern: None, back_color: None, back_color_theme: None, back_legacy_color_index: None,
+                            });
+                            line.color = painted;
+                            line.color_theme = color_theme;
+                            line.legacy_color_index = legacy_color_index;
+                            line.color_brightness = drawing_color_brightness(&mods);
+                            line.color_shade = drawing_color_shade(&mods);
+                        }
+                        Paints::LinePatternBackground => {
+                            let line = shape.line.get_or_insert_with(|| ShapeLine {
+                                color: "000000".into(), color_theme: None, legacy_color_index: None, color_brightness: None, color_shade: None, back_color_brightness: None, back_color_shade: None,
+                                width: line_width, dash: dash.clone(), cap: line_cap.clone(),
+                                head_end: None, tail_end: None, head_end_length: None, head_end_width: None,
+                                tail_end_length: None, tail_end_width: None, pattern: None, back_color: None, back_color_theme: None, back_legacy_color_index: None,
+                            });
+                            line.back_color = Some(painted);
+                            line.back_color_theme = color_theme;
+                            line.back_legacy_color_index = legacy_color_index;
+                            line.back_color_brightness = drawing_color_brightness(&mods);
+                            line.back_color_shade = drawing_color_shade(&mods);
                         }
                         Paints::Text => {
                             if let Some(held) = paragraph.as_mut() {
                                 if held.text.is_empty() {
-                                    held.color = Some(painted);
+                                    held.color = Some(painted.clone());
                                 }
                             }
+                            run_color = Some(painted);
                         }
                     }
                 }
+            }
+            if empty && matches!(name.as_str(), "srgbClr" | "schemeClr" | "sysClr") {
+                paints = None;
             }
         }
         match &event {
@@ -2276,6 +2905,11 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 let name = local_name(e.name().as_ref());
                 let value = || number.trim().parse::<i64>().unwrap_or(0);
                 match name.as_str() {
+                    "clrFrom" => in_picture_clr_from = false,
+                    "clrChange" => {
+                        in_picture_clr_change = false;
+                        in_picture_clr_from = false;
+                    }
                     "col" | "colOff" | "row" | "rowOff" => {
                         if let Some(which) = corner {
                             let corner = if which { &mut from } else { to.get_or_insert(blank) };
@@ -2302,19 +2936,63 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     }
                     "from" | "to" => corner = None,
                     "srgbClr" | "schemeClr" | "sysClr" => {
-                        if let (Some((hex, mods)), Some(part)) = (colour.take(), paints) {
+                        if let (Some((hex, mods, color_theme, legacy_color_index)), Some(part)) = (colour.take(), paints) {
                             let painted = shaded(&hex, &mods);
                             match part {
-                                Paints::Fill => shape.fill = Some(painted),
+                                Paints::Fill => {
+                                    shape.fill = Some(painted);
+                                    shape.fill_theme = color_theme;
+                                    shape.fill_legacy_color_index = legacy_color_index;
+                                    shape.fill_brightness = drawing_color_brightness(&mods);
+                                }
                                 Paints::Line => {
                                     shape.line = Some(ShapeLine {
                                         color: painted,
+                                        color_theme,
+                                        legacy_color_index,
+                                        color_brightness: drawing_color_brightness(&mods),
+                                        color_shade: drawing_color_shade(&mods),
                                         width: line_width,
                                         dash: dash.clone(),
                                         cap: line_cap.clone(),
                                         head_end: head_end.clone(),
                                         tail_end: tail_end.clone(),
+                                        head_end_length: head_end_length.clone(),
+                                        head_end_width: head_end_width.clone(),
+                                        tail_end_length: tail_end_length.clone(),
+                                        tail_end_width: tail_end_width.clone(),
+                                        pattern: None,
+                                        back_color: None,
+                                        back_color_theme: None,
+                                        back_legacy_color_index: None,
+                                        back_color_brightness: None, back_color_shade: None,
                                     })
+                                }
+                                Paints::LinePatternForeground => {
+                                    let line = shape.line.get_or_insert_with(|| ShapeLine {
+                                        color: "000000".into(), color_theme: None, legacy_color_index: None, color_brightness: None, color_shade: None, back_color_brightness: None, back_color_shade: None,
+                                        width: line_width, dash: dash.clone(), cap: line_cap.clone(),
+                                        head_end: None, tail_end: None, head_end_length: None, head_end_width: None,
+                                        tail_end_length: None, tail_end_width: None, pattern: None, back_color: None, back_color_theme: None, back_legacy_color_index: None,
+                                    });
+                                    line.color = painted;
+                                    line.color_theme = color_theme;
+                                    line.legacy_color_index = legacy_color_index;
+                                    line.color_brightness = drawing_color_brightness(&mods);
+                                    line.color_shade = drawing_color_shade(&mods);
+                                }
+                                Paints::LinePatternBackground => {
+                                    let line = shape.line.get_or_insert_with(|| ShapeLine {
+                                        color: "000000".into(), color_theme: None, legacy_color_index: None, color_brightness: None, color_shade: None, back_color_brightness: None, back_color_shade: None,
+                                        width: line_width, dash: dash.clone(), cap: line_cap.clone(),
+                                        head_end: None, tail_end: None, head_end_length: None, head_end_width: None,
+                                        tail_end_length: None, tail_end_width: None, pattern: None, back_color: None, back_color_theme: None, back_legacy_color_index: None,
+                                    });
+                                    line.back_color = Some(painted);
+                                    line.back_color_theme = color_theme;
+                                    line.back_legacy_color_index = legacy_color_index;
+                                    line.back_color_brightness = drawing_color_brightness(&mods);
+                                    line.back_color_shade = drawing_color_shade(&mods);
                                 }
                                 Paints::Text => {
                                     if let Some(held) = paragraph.as_mut() {
@@ -2326,6 +3004,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                 }
                             }
                         }
+                        paints = None;
                     }
                     "t" => {
                         in_text = false;
@@ -2334,8 +3013,14 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                             held.runs.push(ShapeRun {
                                 text: text.clone(),
                                 bold: run_bold,
+                                italic: run_italic,
                                 underline: run_underline,
+                                face: run_face.clone(),
+                                size: run_size,
                                 color: run_color.clone(),
+                                color_theme: run_color_theme,
+                                color_brightness: run_color_brightness,
+                                legacy_color_index: run_legacy_color_index,
                             });
                         }
                         text.clear();
@@ -2365,7 +3050,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     "ln" => {
                         in_ln = false;
                         // The ends are stated AFTER the fill inside `<a:ln>`,
-                        // and the fill is what builds the rule — so they are
+                        // and the fill is what builds the rule 遯ｶ繝ｻso they are
                         // hung on it here rather than when it is made.
                         // `glossary_05` states every one of its twelve arrows
                         // this way, and reading them at build time found none.
@@ -2416,7 +3101,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                             (group, own_off, own_ext, name != "grpSp")
                         {
                             // A child sits at a FRACTION of the group's box,
-                            // and the box is the one the group is DRAWN in —
+                            // and the box is the one the group is DRAWN in 遯ｶ繝ｻ
                             // the rectangle its two cell anchors give, not the
                             // `<a:ext>` it states. The two are the same number
                             // in a file Excel has just written and part company
@@ -2438,9 +3123,72 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                             // hung on one cell has no second anchor to differ
                             // from, so its stated extent stands and the two
                             // readings agree again.
-                            let fraction = |part: i64, whole: i64| {
-                                if whole != 0 { part as f64 / whole as f64 } else { 0.0 }
+                            let fraction = |part: f64, whole: i64| {
+                                if whole != 0 { part / whole as f64 } else { 0.0 }
                             };
+                            // Bring the leaf's rectangle back through every
+                            // nested group, then express it in the root group's
+                            // child-coordinate system. The root's off/ext are
+                            // deliberately not used: its two-cell anchor is
+                            // the live geometry, as for a single-level group.
+                            let map = |position: f64, size: f64, transform: ((i64, i64), (i64, i64), (i64, i64), (i64, i64)), axis: usize| {
+                                let (off, ext, ch_off, ch_ext) = transform;
+                                let (off, ext, ch_off, ch_ext) = if axis == 0 {
+                                    (off.0, ext.0, ch_off.0, ch_ext.0)
+                                } else {
+                                    (off.1, ext.1, ch_off.1, ch_ext.1)
+                                };
+                                if ch_ext == 0 {
+                                    (position, size)
+                                } else {
+                                    (
+                                        off as f64 + (position - ch_off as f64) * ext as f64 / ch_ext as f64,
+                                        size * ext as f64 / ch_ext as f64,
+                                    )
+                                }
+                            };
+                            let root = parent_groups.first().copied().unwrap_or((off, ext, ch_off, ch_ext));
+                            let mut x = own.0 as f64;
+                            let mut y = own.1 as f64;
+                            let mut w = size.0 as f64;
+                            let mut h = size.1 as f64;
+                            if !parent_groups.is_empty() {
+                                let transforms = std::iter::once((
+                                    (off, ext, ch_off, ch_ext),
+                                    current_group_rotation,
+                                ))
+                                .chain(
+                                    parent_groups
+                                        .iter()
+                                        .copied()
+                                        .zip(parent_group_rotations.iter().copied())
+                                        .skip(1)
+                                        .rev(),
+                                );
+                                let mut nested_rotation = 0i32;
+                                for (transform, rotation) in transforms {
+                                    (x, w) = map(x, w, transform, 0);
+                                    (y, h) = map(y, h, transform, 1);
+                                    if rotation != 0 {
+                                        let angle = rotation as f64 / 60_000.0
+                                            * std::f64::consts::PI
+                                            / 180.0;
+                                        let (sin, cos) = angle.sin_cos();
+                                        let center_x = transform.0.0 as f64 + transform.1.0 as f64 / 2.0;
+                                        let center_y = transform.0.1 as f64 + transform.1.1 as f64 / 2.0;
+                                        let dx = x + w / 2.0 - center_x;
+                                        let dy = y + h / 2.0 - center_y;
+                                        let rotated_x = center_x + dx * cos - dy * sin;
+                                        let rotated_y = center_y + dx * sin + dy * cos;
+                                        x = rotated_x - w / 2.0;
+                                        y = rotated_y - h / 2.0;
+                                    }
+                                    nested_rotation = nested_rotation.saturating_add(rotation);
+                                }
+                                shape.rotation = shape.rotation.saturating_add(nested_rotation);
+                            }
+                            let root_ch_off = root.2;
+                            let root_ch_ext = root.3;
                             let mut kind = kind.take().unwrap_or(DrawingKind::Other);
                             if let DrawingKind::Shape(held) = &mut kind {
                                 *held = shape.clone();
@@ -2448,21 +3196,60 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                             let picture = matches!(kind, DrawingKind::Picture { .. });
                             found.push((
                                 Drawing {
+                                    name: drawing_name.take(),
+                                    ole_prog_id: None,
+                                    ole_source_name: None,
+                                    ole_clone_position: None,
+            ole_embedded_package: None,
+            ole_package_is_empty: None,
+                                    ole_clone_visible: None,
+                                    ole_placement: None,
+                                    ole_type: None,
+                                    ole_display_as_icon: None,
+                                    ole_auto_load: None,
+                                    ole_enabled: None,
+                                    ole_locked: None,
+                                    ole_print_object: None,
+                                    ole_shadow: None,
+                                    ole_on_action: None,
+                                    ole_border_color: None,
+                                    ole_border_weight: None,
+                                    ole_interior_color: None,
                                     from,
                                     to,
                                     extent,
                                     kind,
                                     frame: Some(Frame {
-                                        x: fraction(own.0 - ch_off.0, ch_ext.0),
-                                        y: fraction(own.1 - ch_off.1, ch_ext.1),
-                                        w: fraction(size.0, ch_ext.0),
-                                        h: fraction(size.1, ch_ext.1),
+                                        x: fraction(x - root_ch_off.0 as f64, root_ch_ext.0),
+                                        y: fraction(y - root_ch_off.1 as f64, root_ch_ext.1),
+                                        w: fraction(w, root_ch_ext.0),
+                                        h: fraction(h, root_ch_ext.1),
                                     }),
                                     grouped: true,
+                                    group_name: group_name.clone(),
+                                    group_rotation,
+                                    group_transform: Some(crate::ir::GroupTransform {
+                                        offset: root.0,
+                                        extent: root.1,
+                                        child_offset: root.2,
+                                        child_extent: root.3,
+                                    }),
+                                    group_child_transform: None,
+                                    group_nested: !parent_groups.is_empty(),
                                 },
-                                if picture { embed.take() } else { None },
+                                DrawingImageRelationships {
+                                    raster: if picture { embed.take() } else { None },
+                                    vector: if picture { vector_embed.take() } else { None },
+                                    shape_id: drawing_id.take(),
+                                },
                             ));
                             let _ = (off, ext);
+                        }
+                        if name == "grpSp" {
+                            if let Some(parent) = parent_groups.pop() {
+                                group = Some(parent);
+                                current_group_rotation = parent_group_rotations.pop().unwrap_or(0);
+                            }
                         }
                     }
                     "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor"
@@ -2478,6 +3265,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                 kind,
                                 DrawingKind::Picture { .. } | DrawingKind::Chart(_)
                             );
+                            let picture = matches!(kind, DrawingKind::Picture { .. });
                             let held = frame.take().map(|(x, y)| {
                                 let (to_x, to_y) = frame_to.take().unwrap_or((x, y));
                                 crate::ir::Frame {
@@ -2489,17 +3277,46 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                             });
                             found.push((
                                 Drawing {
+                                    name: drawing_name.take(),
+                                    ole_prog_id: None,
+                                    ole_source_name: None,
+                                    ole_clone_position: None,
+            ole_embedded_package: None,
+            ole_package_is_empty: None,
+                                    ole_clone_visible: None,
+                                    ole_placement: None,
+                                    ole_type: None,
+                                    ole_display_as_icon: None,
+                                    ole_auto_load: None,
+                                    ole_enabled: None,
+                                    ole_locked: None,
+                                    ole_print_object: None,
+                                    ole_shadow: None,
+                                    ole_on_action: None,
+                                    ole_border_color: None,
+                                    ole_border_weight: None,
+                                    ole_interior_color: None,
                                     from,
                                     to: to.take(),
                                     extent: extent.take(),
                                     kind,
                                     frame: held,
                                     grouped: false,
+                                    group_name: None,
+                                    group_rotation: 0,
+                                    group_transform: None,
+                                    group_child_transform: None,
+                                    group_nested: false,
                                 },
-                                if named { embed.take() } else { None },
+                                DrawingImageRelationships {
+                                    raster: if named { embed.take() } else { None },
+                                    vector: if picture { vector_embed.take() } else { None },
+                                    shape_id: drawing_id.take(),
+                                },
                             ));
                         }
                         embed = None;
+                        vector_embed = None;
                     }
                     _ => {}
                 }
@@ -2518,7 +3335,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
 /// whether Excel shows it.
 /// A VML length, in points, taken from the start of `said`.
 ///
-/// VML writes a size in whatever unit suits it — `175.5pt`, `2.5mm`, `8in` —
+/// VML writes a size in whatever unit suits it 遯ｶ繝ｻ`175.5pt`, `2.5mm`, `8in` 遯ｶ繝ｻ
 /// and a bare number is points. Anything after the number that is not a unit
 /// it knows is ignored, so the same reader takes `width:175.5pt;` and the
 /// `2.3mm` of an inset list.
@@ -2537,11 +3354,19 @@ fn vml_length(said: &str) -> Option<f32> {
     })
 }
 
+#[cfg(test)]
 fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
-    use crate::ir::{Anchor, Comment, ShapeParagraph, ShapeText};
+    parse_comments_with_theme(comments_xml, vml, &Theme::default())
+}
+
+fn parse_comments_with_theme(comments_xml: &str, vml: &str, theme: &Theme) -> Vec<crate::ir::Comment> {
+    use crate::ir::{Anchor, Comment, ShapeParagraph, ShapeRun, ShapeText};
 
     // The text of each note, by the cell it belongs to.
     let mut said: HashMap<(u32, u32), Vec<ShapeParagraph>> = HashMap::new();
+    let mut utf16_by_cell: HashMap<(u32, u32), Vec<u16>> = HashMap::new();
+    let mut author_names = Vec::new();
+    let mut authors_by_cell: HashMap<(u32, u32), String> = HashMap::new();
     let mut reader = Reader::from_str(comments_xml);
     let mut buf = Vec::new();
     let mut at: Option<(u32, u32)> = None;
@@ -2560,8 +3385,16 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
         line_scale: None,
     };
     let blank_run = run.clone();
+    let mut part = blank_run.clone();
+    let mut pieces = Vec::<ShapeRun>::new();
+    let mut in_rich_run = false;
+    let mut underline = false;
     let (mut in_run_props, mut in_text, mut first) = (false, false, true);
+    let mut in_author = false;
+    let mut author_text = String::new();
+    let mut comment_author_id = None;
     let mut text = String::new();
+    let mut text_units = Vec::<u16>::new();
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
@@ -2569,23 +3402,40 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
                     "comment" => {
                         let cell = get_attr(e, "ref").map(|held| parse_cell_ref(&held));
                         at = cell.map(|(column, row)| (row, column));
+                        comment_author_id = get_attr(e, "authorId").and_then(|id| id.parse::<usize>().ok());
                         run = blank_run.clone();
+                        part = blank_run.clone();
+                        pieces.clear();
+                        text_units.clear();
                         first = true;
                     }
+                    "author" => {
+                        in_author = true;
+                        author_text.clear();
+                    }
+                    "r" => { in_rich_run = true; part = blank_run.clone(); underline = false; }
                     "rPr" => in_run_props = true,
-                    "sz" if in_run_props && first => {
+                    "sz" if in_run_props => {
                         if let Some(points) = get_attr(e, "val").and_then(|v| v.parse().ok()) {
-                            run.size = points;
+                            part.size = points;
                         }
                     }
-                    "b" if in_run_props && first => run.bold = true,
-                    "i" if in_run_props && first => run.italic = true,
-                    "rFont" if in_run_props && first => run.face = get_attr(e, "val"),
+                    "b" if in_run_props => part.bold = !matches!(get_attr(e, "val").as_deref(), Some("0" | "false")),
+                    "i" if in_run_props => part.italic = !matches!(get_attr(e, "val").as_deref(), Some("0" | "false")),
+                    "u" if in_run_props => underline = !matches!(get_attr(e, "val").as_deref(), Some("0" | "false" | "none")),
+                    "rFont" if in_run_props => part.face = get_attr(e, "val"),
+                    "charset" if in_run_props => part.charset = get_attr(e, "val").and_then(|value| value.parse().ok()),
+                    "color" if in_run_props => part.color = parse_color_attr(e, theme),
                     "t" => {
                         in_text = true;
                         text.clear();
                     }
                     _ => {}
+                }
+            }
+            Ok(Event::Text(ref e)) if in_author => {
+                if let Ok(held) = e.unescape() {
+                    author_text.push_str(&held);
                 }
             }
             Ok(Event::Text(ref e)) if in_text => {
@@ -2594,17 +3444,40 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
                 }
             }
             Ok(Event::End(ref e)) => match local_name(e.name().as_ref()).as_str() {
+                "author" => {
+                    author_names.push(std::mem::take(&mut author_text));
+                    in_author = false;
+                }
                 "rPr" => in_run_props = false,
                 "t" => {
                     in_text = false;
-                    run.text.push_str(&text);
+                    if first && in_rich_run {
+                        run.size = part.size; run.bold = part.bold; run.italic = part.italic;
+                        run.face = part.face.clone(); run.charset = part.charset; run.color = part.color.clone();
+                    }
+                    let units = crate::string_value::decode(&text);
+                    if in_rich_run {
+                        pieces.push(ShapeRun { text: String::from_utf16_lossy(&units),
+                            bold: part.bold, italic: Some(part.italic), underline, face: part.face.clone(),
+                            size: Some(part.size), color: part.color.clone(), color_theme: None, color_brightness: None, legacy_color_index: None });
+                    }
+                    text_units.extend(units);
                     first = false;
                 }
+                "r" => in_rich_run = false,
                 "comment" => {
                     if let Some(key) = at.take() {
+                        let units = std::mem::take(&mut text_units);
+                        run.text = match String::from_utf16(&units) {
+                            Ok(text) => text,
+                            Err(_) => {
+                                utf16_by_cell.insert(key, units.clone());
+                                String::from_utf16_lossy(&units)
+                            }
+                        };
                         // A note is one run of text with newlines in it; the
                         // paragraphs are what the drawing splits it into.
-                        let paragraphs = run
+                        let mut paragraphs: Vec<ShapeParagraph> = run
                             .text
                             .split('\n')
                             .map(|line| ShapeParagraph {
@@ -2612,8 +3485,27 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
                                 ..run.clone()
                             })
                             .collect();
+                        if pieces.len() > 1 || pieces.first().is_some_and(|piece| piece.underline) {
+                            let mut paragraph = 0usize;
+                            for piece in &pieces {
+                                let mut segments = piece.text.split('\n').peekable();
+                                while let Some(segment) = segments.next() {
+                                    if let Some(target) = paragraphs.get_mut(paragraph) {
+                                        if !segment.is_empty() { let mut current = piece.clone(); current.text = segment.to_string(); target.runs.push(current); }
+                                    }
+                                    if segments.peek().is_some() { paragraph += 1; }
+                                }
+                            }
+                        }
                         said.insert(key, paragraphs);
+                        if let Some(author) = comment_author_id
+                            .and_then(|index| author_names.get(index))
+                            .cloned()
+                        {
+                            authors_by_cell.insert(key, author);
+                        }
                     }
+                    comment_author_id = None;
                 }
                 _ => {}
             },
@@ -2627,13 +3519,13 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
     let mut held = Vec::new();
     // The space matters: `<v:shapetype>` starts with `<v:shape` too, so
     // splitting without it makes the first piece straddle the shapetype AND
-    // the first real note — and every size after that can pair with the wrong
+    // the first real note 遯ｶ繝ｻand every size after that can pair with the wrong
     // anchor.
     for shape in vml.split("<v:shape ").skip(1) {
         let shape = shape.split("</v:shape>").next().unwrap_or(shape);
         // A note the workbook pins open is drawn as its box. One it leaves
-        // closed is still drawn — as the red corner Excel puts on any cell
-        // that carries a note — so it is carried too, marked for what it is
+        // closed is still drawn 遯ｶ繝ｻas the red corner Excel puts on any cell
+        // that carries a note 遯ｶ繝ｻso it is carried too, marked for what it is
         // rather than dropped.
         let visible = shape.contains("<x:Visible/>");
         let tagged = |name: &str| -> Option<String> {
@@ -2655,7 +3547,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
         };
         // The anchor is eight numbers: the cell each corner hangs from and
         // how far into it, in pixels at 96 dpi. Measured against Excel's own
-        // picture of `002`, whose note lands at column 64 plus 12 pixels —
+        // picture of `002`, whose note lands at column 64 plus 12 pixels 遯ｶ繝ｻ
         // where the margin the same shape states is 13 pixels short.
         let Some(anchor) = tagged("Anchor") else { continue };
         let numbers: Vec<i64> = anchor
@@ -2686,10 +3578,13 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
         // A note is `#ffffe1` unless the shape says otherwise; the three-digit
         // form is the one Excel writes.
         let fill = shape
-            .split("fillcolor=\"#")
+            .split("fillcolor=\"")
             .nth(1)
             .and_then(|rest| rest.split('"').next())
-            .map(|held| held.split_whitespace().next().unwrap_or("").to_string())
+            .map(|held| match held {
+                "infoBackground [80]" => "FFFFE1".to_string(),
+                value => value.strip_prefix('#').unwrap_or(value).to_string(),
+            })
             .filter(|held| held.len() == 3 || held.len() == 6)
             .map(|held| {
                 if held.len() == 3 {
@@ -2699,9 +3594,54 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
                 }
             })
             .unwrap_or_else(|| "FFFFE1".to_string());
+        let fill_visible = shape
+            .split("filled=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('\"').next())
+            .map(|value| !matches!(value.trim().to_ascii_lowercase().as_str(), "f" | "false" | "0"))
+            .unwrap_or(true);
+        let vml_attribute = |name: &str| -> Option<String> {
+            let marker = format!("{name}=\"");
+            let start = shape.find(&marker)? + marker.len();
+            Some(shape[start..].split('"').next()?.to_string())
+        };
+        let line_color = vml_attribute("strokecolor").and_then(|value| {
+            let value = value.trim();
+            if value.starts_with('#') && value.len() == 7 {
+                Some(value[1..].to_uppercase())
+            } else {
+                let name = value.split_whitespace().next()?.to_ascii_lowercase();
+                Some(match name.as_str() {
+                    "black" => "000000",
+                    "white" => "FFFFFF",
+                    "red" => "FF0000",
+                    "green" => "008000",
+                    "lime" => "00FF00",
+                    "blue" => "0000FF",
+                    "yellow" => "FFFF00",
+                    "cyan" => "00FFFF",
+                    "magenta" => "FF00FF",
+                    "gray" | "grey" => "808080",
+                    "maroon" => "800000",
+                    "navy" => "000080",
+                    "olive" => "808000",
+                    "purple" => "800080",
+                    "teal" => "008080",
+                    _ => return None,
+                }.to_string())
+            }
+        });
+        let line_visible = vml_attribute("stroked")
+            .map(|value| !matches!(value.trim().to_ascii_lowercase().as_str(), "f" | "false" | "0"))
+            .unwrap_or(true);
+        let line_weight = vml_attribute("strokeweight")
+            .and_then(|value| vml_length(&value))
+            .unwrap_or(0.75);
+        let fill_transparency = vml_opacity_transparency(shape, "fill").unwrap_or(0.0);
+        let line_transparency = vml_opacity_transparency(shape, "stroke").unwrap_or(0.0);
         // What a note keeps between its box and its text. One that states
         // nothing keeps 7.2 points either side and 3.6 above and below, which
-        // is what Excel makes a note with — asked of COM of a fresh one.
+        // is what Excel makes a note with 遯ｶ繝ｻasked of COM of a fresh one.
         //
         // Excel honours the vertical part exactly. `_xlsx_note_002.py` writes
         // the corpus floor's own note with top insets of 0, 3.6, 7.2 and 20
@@ -2729,6 +3669,8 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
             .unwrap_or((7.2, 3.6, 7.2, 3.6));
         let emu = |points: f32| (points * 12700.0).round() as i64;
         held.push(Comment {
+            author: authors_by_cell.get(&(row, column)).cloned().unwrap_or_default(),
+            utf16_text: utf16_by_cell.get(&(row, column)).cloned(),
             from: corner(left, dx, top, dy),
             size: (wide, tall),
             cell: (row, column),
@@ -2739,7 +3681,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
                 insets: (emu(inset.0), emu(inset.1), emu(inset.2), emu(inset.3)),
                 wrap: true,
                 // A note keeps its text inside its box, and the file never
-                // says so — a note has no body properties at all, unlike a
+                // says so 遯ｶ繝ｻa note has no body properties at all, unlike a
                 // shape, which states `vertOverflow`. Measured instead:
                 // `_xlsx_note_clip.py` holds a box and grows the text, and
                 // Excel draws 3 lines in a 53-pixel box, 4 in an 80 and 6 in
@@ -2752,10 +3694,166 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
                 clip: true,
             },
             fill: Some(fill.to_uppercase()),
+            fill_visible,
+            fill_transparency,
+            line_color,
+            line_visible,
+            line_weight,
+            line_transparency,
             visible,
         });
     }
     held
+}
+
+fn vml_opacity_transparency(shape: &str, element: &str) -> Option<f32> {
+    let marker = format!("<v:{element} ");
+    let attributes = shape.split(&marker).nth(1)?.split('>').next()?;
+    let encoded = attributes
+        .split("opacity=\"")
+        .nth(1)?
+        .split('\"')
+        .next()?;
+    let opacity = if let Some(fixed) = encoded.strip_suffix('f') {
+        fixed.parse::<f32>().ok()? / 65_536.0
+    } else if let Some(percent) = encoded.strip_suffix('%') {
+        percent.parse::<f32>().ok()? / 100.0
+    } else {
+        encoded.parse::<f32>().ok()?
+    };
+    Some((1.0 - opacity).clamp(0.0, 1.0))
+}
+
+fn parse_threaded_comments(xml: &str) -> Vec<crate::ir::ThreadedComment> {
+    use crate::ir::ThreadedComment;
+
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut stack: Vec<(usize, bool)> = Vec::new();
+    let mut comments = Vec::<Option<ThreadedComment>>::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref event)) => {
+                match local_name(event.name().as_ref()).as_str() {
+                    "threadedComment" => {
+                        let Some((column, row)) = get_attr(event, "ref").map(|cell| parse_cell_ref(&cell)) else {
+                            buf.clear();
+                            continue;
+                        };
+                        let id = get_attr(event, "id").unwrap_or_default();
+                        let parent_id = get_attr(event, "parentId").or_else(|| {
+                            stack.last().and_then(|(parent, _)| {
+                                comments[*parent].as_ref().map(|parent| parent.id.clone())
+                            })
+                        });
+                        let index = comments.len();
+                        comments.push(None);
+                        comments[index] = Some(ThreadedComment {
+                            cell: (row, column),
+                            id,
+                            parent_id,
+                            person_id: get_attr(event, "personId").unwrap_or_default(),
+                            person_name: String::new(),
+                            person_provider_id: String::new(),
+                            person_user_id: String::new(),
+                            date: get_attr(event, "dT").unwrap_or_default(),
+                            text: String::new(),
+                            utf16_text: None,
+                            resolved: matches!(get_attr(event, "done").as_deref(), Some("1" | "true")),
+                        });
+                        stack.push((index, false));
+                    }
+                    "text" => {
+                        if let Some((_, in_text)) = stack.last_mut() {
+                            *in_text = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(ref event))
+                if local_name(event.name().as_ref()) == "threadedComment" =>
+            {
+                if let Some((column, row)) = get_attr(event, "ref").map(|cell| parse_cell_ref(&cell)) {
+                    let parent_id = get_attr(event, "parentId").or_else(|| {
+                        stack.last().and_then(|(parent, _)| {
+                            comments[*parent].as_ref().map(|parent| parent.id.clone())
+                        })
+                    });
+                    comments.push(Some(ThreadedComment {
+                        cell: (row, column),
+                        id: get_attr(event, "id").unwrap_or_default(),
+                        parent_id,
+                        person_id: get_attr(event, "personId").unwrap_or_default(),
+                        person_name: String::new(),
+                        person_provider_id: String::new(),
+                        person_user_id: String::new(),
+                        date: get_attr(event, "dT").unwrap_or_default(),
+                        text: String::new(),
+                            utf16_text: None,
+                        resolved: matches!(get_attr(event, "done").as_deref(), Some("1" | "true")),
+                    }));
+                }
+            }
+            Ok(Event::Text(event)) if stack.last().is_some_and(|(_, in_text)| *in_text) => {
+                if let (Some((index, _)), Ok(text)) = (stack.last(), event.unescape()) {
+                    if let Some(comment) = comments[*index].as_mut() {
+                        comment.text.push_str(&text);
+                    }
+                }
+            }
+            Ok(Event::End(ref event)) => match local_name(event.name().as_ref()).as_str() {
+                "text" => {
+                    if let Some((_, in_text)) = stack.last_mut() {
+                        *in_text = false;
+                    }
+                }
+                "threadedComment" => {
+                    stack.pop();
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    comments.into_iter().flatten().map(|mut comment| {
+        let units = crate::string_value::decode(&comment.text);
+        comment.text = String::from_utf16_lossy(&units);
+        if String::from_utf16(&units).is_err() { comment.utf16_text = Some(units); }
+        comment
+    }).collect()
+}
+
+#[derive(Default)]
+struct ThreadedCommentPerson {
+    display_name: String,
+    provider_id: String,
+    user_id: String,
+}
+
+fn parse_person_list(xml: &str) -> HashMap<String, ThreadedCommentPerson> {
+    let mut reader = Reader::from_str(xml);
+    let mut people = HashMap::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(person) | Event::Empty(person))
+                if local_name(person.name().as_ref()) == "person" =>
+            {
+                if let Some(id) = get_attr(&person, "id") {
+                    people.insert(id, ThreadedCommentPerson {
+                        display_name: get_attr(&person, "displayName").unwrap_or_default(),
+                        provider_id: get_attr(&person, "providerId").unwrap_or_default(),
+                        user_id: get_attr(&person, "userId").unwrap_or_default(),
+                    });
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    people
 }
 
 /// The theme slot a DrawingML colour names. `tx1` and `bg1` are the same two
@@ -2779,6 +3877,25 @@ pub(crate) fn scheme_colour(name: &str, theme: &Theme) -> Option<String> {
     theme.colours.get(slot).cloned()
 }
 
+/// The VBA `ObjectThemeColor` value corresponding to a DrawingML colour name.
+fn drawing_theme_index(name: &str) -> Option<usize> {
+    match name {
+        "dk1" | "tx1" => Some(1),
+        "lt1" | "bg1" => Some(2),
+        "dk2" | "tx2" => Some(3),
+        "lt2" | "bg2" => Some(4),
+        "accent1" => Some(5),
+        "accent2" => Some(6),
+        "accent3" => Some(7),
+        "accent4" => Some(8),
+        "accent5" => Some(9),
+        "accent6" => Some(10),
+        "hlink" => Some(11),
+        "folHlink" => Some(12),
+        _ => None,
+    }
+}
+
 /// A colour with the modifiers DrawingML hangs off it: `shade` and `tint`
 /// move every channel toward black or white, `lumMod` and `lumOff` scale and
 /// raise how light it is.
@@ -2792,11 +3909,11 @@ pub(crate) fn shaded(hex: &str, mods: &[(String, f32)]) -> String {
         (value & 0xFF) as f32 / 255.0,
     ];
     // `shade` and `tint` scale the LIGHT, not the byte. sRGB is not linear,
-    // so halving a byte and halving the light are different colours — and it
+    // so halving a byte and halving the light are different colours 遯ｶ繝ｻand it
     // is the light Excel halves. `cas-r02-ippan-4hyou` rules a box in `lt1`
     // under `shade 50000` and Excel draws 188, where halving the byte gives
     // 128. `_xlsx_shade_curve.py` sweeps both modifiers over four bases and
-    // three amounts: all twelve land on the light, several to the integer —
+    // three amounts: all twelve land on the light, several to the integer 遯ｶ繝ｻ
     // white shaded a quarter is 137 and not 64, `4472C4` shaded a quarter is
     // 32,58,104 and not 17,28,49.
     let straight = |part: f32| {
@@ -2823,7 +3940,7 @@ pub(crate) fn shaded(hex: &str, mods: &[(String, f32)]) -> String {
             }),
             // Lightness is HSL's, and only it moves: the hue and the
             // saturation stay where they are. Measured on `002`'s banner,
-            // whose fill is accent1 under `lumMod 20% lumOff 80%` — 5B9BD5
+            // whose fill is accent1 under `lumMod 20% lumOff 80%` 遯ｶ繝ｻ5B9BD5
             // becomes DEEBF7 exactly, where shifting the bytes by hand lands
             // at CCEDFF.
             "lumMod" | "lumOff" => {
@@ -2858,6 +3975,45 @@ pub(crate) fn shaded(hex: &str, mods: &[(String, f32)]) -> String {
     )
 }
 
+fn drawing_color_brightness(mods: &[(String, f32)]) -> Option<f32> {
+    let mut brightness = None;
+    for (name, value) in mods {
+        brightness = match name.as_str() {
+            "tint" => Some(*value),
+            "lumMod" => Some(*value - 1.0),
+            "lumOff" => Some(*value),
+            _ => brightness,
+        };
+    }
+    brightness.filter(|value| value.abs() > f32::EPSILON)
+}
+
+fn drawing_color_shade(mods: &[(String, f32)]) -> Option<f32> {
+    mods.iter().find_map(|(name, value)| (name == "shade").then_some(*value))
+}
+
+fn table_filter_xml_with_namespaces(xml: &str, namespaces: &[(Vec<u8>, Vec<u8>)]) -> Option<String> {
+    let mut reader = Reader::from_str(xml);
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader.read_event().ok()?;
+        let after = reader.buffer_position() as usize;
+        if let Event::Start(element) | Event::Empty(element) = &event {
+            let mut root = element.to_owned();
+            for (key, value) in namespaces {
+                if !element.attributes().flatten().any(|attribute| attribute.key.as_ref() == key.as_slice()) {
+                    root.push_attribute((key.as_slice(), value.as_slice()));
+                }
+            }
+            let mut writer = quick_xml::Writer::new(Vec::new());
+            writer.write_event(if matches!(event, Event::Empty(_)) { Event::Empty(root) } else { Event::Start(root) }).ok()?;
+            let root = String::from_utf8(writer.into_inner()).ok()?;
+            return Some(format!("{}{root}{}", &xml[..before], &xml[after..]));
+        }
+        if matches!(event, Event::Eof) { return None; }
+    }
+}
+
 fn parse_table_xml(
     xml: &str,
     theme: &Theme,
@@ -2867,18 +4023,34 @@ fn parse_table_xml(
     let mut range = None;
     let mut header_rows = 1;
     let mut totals_rows = 0;
+    let mut totals = Vec::<crate::ir::TableTotals>::new();
+    let mut totals_column = None;
+    let mut totals_formula = None::<String>;
+    let mut insert_row = false;
     let mut style = None;
     let mut banded_rows = false;
+    let mut banded_columns = false;
+    let mut emphasize_first_column = false;
+    let mut emphasize_last_column = false;
+    let mut show_auto_filter = false;
+    let mut auto_filter_xml = None;
+    let mut filter_start = None;
+    let mut namespaces = Vec::new();
+    let mut hidden_filter_buttons = Vec::new();
     let mut outline_at: Option<usize> = None;
     let mut name = String::new();
     let mut columns: Vec<String> = Vec::new();
     let mut buf = Vec::new();
     loop {
+        let before = reader.buffer_position() as usize;
         let event = reader.read_event_into(&mut buf);
         match event {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 match local_name(e.name().as_ref()).as_str() {
                     "table" => {
+                        namespaces = e.attributes().flatten().filter(|attribute| attribute.key.as_ref() == b"xmlns" || attribute.key.as_ref().starts_with(b"xmlns:"))
+                            .map(|attribute| (attribute.key.as_ref().to_vec(), attribute.value.to_vec())).collect();
+                        insert_row = is_true(get_attr(e, "insertRow").as_deref());
                         // `displayName` is what a formula writes; `name` is the
                         // same thing unless someone has renamed the table, and
                         // then only `displayName` follows.
@@ -2898,13 +4070,49 @@ fn parse_table_xml(
                     "tableColumn" => {
                         if let Some(heading) = get_attr(e, "name") {
                             columns.push(heading);
+                            totals.push(crate::ir::TableTotals {
+                                function: get_attr(e, "totalsRowFunction"),
+                                label: get_attr(e, "totalsRowLabel").map(|text| crate::string_value::decode(&text)),
+                                formula: None,
+                            });
+                            totals_column = (!matches!(event, Ok(Event::Empty(_)))).then_some(totals.len() - 1);
                         }
                     }
+                    "totalsRowFormula" => totals_formula = Some(String::new()),
                     "tableStyleInfo" => {
                         style = get_attr(e, "name");
                         banded_rows = is_true(get_attr(e, "showRowStripes").as_deref());
+                        banded_columns = is_true(get_attr(e, "showColumnStripes").as_deref());
+                        emphasize_first_column = is_true(get_attr(e, "showFirstColumn").as_deref());
+                        emphasize_last_column = is_true(get_attr(e, "showLastColumn").as_deref());
+                    }
+                    "autoFilter" => {
+                        show_auto_filter = true;
+                        if matches!(event, Ok(Event::Empty(_))) {
+                            auto_filter_xml = table_filter_xml_with_namespaces(&xml[before..reader.buffer_position() as usize], &namespaces);
+                        } else { filter_start = Some(before); }
+                    }
+                    "filterColumn" if is_true(get_attr(e, "hiddenButton").as_deref()) || matches!(get_attr(e, "showButton").as_deref(), Some("0" | "false")) => {
+                        if let Some(column) = get_attr(e, "colId").and_then(|value| value.parse().ok()) { hidden_filter_buttons.push(column); }
                     }
                     _ => {}
+                }
+            }
+            Ok(Event::Text(ref text)) if totals_formula.is_some() => {
+                totals_formula.as_mut().unwrap().push_str(&text.unescape().ok()?);
+            }
+            Ok(Event::CData(ref text)) if totals_formula.is_some() => {
+                totals_formula.as_mut().unwrap().push_str(&String::from_utf8_lossy(text));
+            }
+            Ok(Event::End(ref element)) if local_name(element.name().as_ref()) == "totalsRowFormula" => {
+                if let (Some(column), Some(formula)) = (totals_column, totals_formula.take()) {
+                    totals[column].formula = Some(crate::string_value::decode(&formula));
+                }
+            }
+            Ok(Event::End(ref element)) if local_name(element.name().as_ref()) == "tableColumn" => totals_column = None,
+            Ok(Event::End(ref element)) if local_name(element.name().as_ref()) == "autoFilter" => {
+                if let Some(start) = filter_start.take() {
+                    auto_filter_xml = table_filter_xml_with_namespaces(&xml[start..reader.buffer_position() as usize], &namespaces);
                 }
             }
             Ok(Event::Eof) | Err(_) => break,
@@ -2944,7 +4152,7 @@ fn parse_table_xml(
     let band = accent.as_deref().map(|colour| tinted(colour, 0.8));
     // A Medium table is ruled along every row in the accent under a lighter
     // tint: `doi-list` wears TableStyleMedium7 over accent6 4EA72E, and Excel
-    // draws its rules 8ED973 — which is that colour with its lightness moved
+    // draws its rules 8ED973 遯ｶ繝ｻwhich is that colour with its lightness moved
     // to `0.6 L + 0.4`, the tint below. The Light and Dark styles rule
     // themselves differently and are left alone until they are measured.
     let rule = accent
@@ -2952,6 +4160,7 @@ fn parse_table_xml(
         .filter(|_| style.as_deref().is_some_and(|name| name.starts_with("TableStyleMedium")))
         .map(|colour| tinted(colour, 0.4));
     Some(crate::ir::Table {
+        origin_part: None,
         name,
         columns,
         start_row,
@@ -2962,11 +4171,116 @@ fn parse_table_xml(
         outline,
         header_rows,
         totals_rows,
+        totals,
+        insert_row,
         banded_rows,
+        banded_columns,
+        emphasize_first_column,
+        emphasize_last_column,
+        show_auto_filter,
+        auto_filter_xml,
+        hidden_filter_buttons,
         accent,
         band,
         rule,
     })
+}
+
+fn worksheet_visual_extensions(xml: &str) -> Result<std::collections::BTreeMap<String, String>, XlsxError> {
+    let mut reader = Reader::from_str(xml);
+    let mut depth = 0usize;
+    let mut block = None;
+    let mut ids = Vec::new();
+    let mut result = std::collections::BTreeMap::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event()? {
+            Event::Start(ref e) => {
+                if e.name().as_ref() == b"x14:conditionalFormatting" {
+                    block = Some((depth, start)); ids.clear();
+                } else if block.is_some() && e.name().as_ref() == b"x14:cfRule" {
+                    if let Some(id) = get_attr(e, "id") { ids.push(id); }
+                }
+                depth += 1;
+            }
+            Event::Empty(ref e) if block.is_some() && e.name().as_ref() == b"x14:cfRule" => {
+                if let Some(id) = get_attr(e, "id") { ids.push(id); }
+            }
+            Event::End(ref e) => {
+                depth = depth.saturating_sub(1);
+                if e.name().as_ref() == b"x14:conditionalFormatting" && block.is_some_and(|(held, _)| held == depth) {
+                    let (_, first) = block.take().unwrap();
+                    if ids.len() == 1 { result.insert(ids[0].clone(), xml[first..reader.buffer_position() as usize].to_string()); }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(result)
+}
+
+/// Read an icon-set rule that exists only in an x14 extension. Keep the
+/// original block for lossless preservation and expose a base-shaped view to
+/// consumers that read threshold properties.
+fn extended_only_icon_rule(id: &str, xml: &str, stylesheet: &StyleSheet) -> Result<Option<crate::ir::ConditionalRule>, XlsxError> {
+    let mut reader = Reader::from_str(xml);
+    let mut rule = None;
+    let mut visual = String::new();
+    let mut threshold: Option<(String, Option<String>, String)> = None;
+    let mut in_formula = false;
+    let mut in_range = false;
+    let mut range = String::new();
+    let escaped = |value: &str| quick_xml::escape::escape(value).into_owned();
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref element) => match element.name().as_ref() {
+                b"x14:cfRule" if get_attr(element, "id").as_deref() == Some(id) => {
+                    if get_attr(element, "type").as_deref() != Some("iconSet") { return Ok(None); }
+                    rule = Some(conditional_from(element, &[], stylesheet));
+                }
+                b"x14:iconSet" => {
+                    visual.push_str("<iconSet");
+                    for name in ["iconSet", "showValue", "reverse"] {
+                        if let Some(value) = get_attr(element, name) { visual.push_str(&format!(" {name}=\"{}\"", escaped(&value))); }
+                    }
+                    visual.push('>');
+                }
+                b"x14:cfvo" => threshold = Some((get_attr(element, "type").unwrap_or_default(), get_attr(element, "gte"), String::new())),
+                b"xm:f" if threshold.is_some() => in_formula = true,
+                b"xm:sqref" => in_range = true,
+                _ => {}
+            },
+            Event::Empty(ref element) if element.name().as_ref() == b"x14:cfvo" => {
+                let kind = get_attr(element, "type").unwrap_or_default();
+                let gte = get_attr(element, "gte").map(|value| format!(" gte=\"{}\"", escaped(&value))).unwrap_or_default();
+                visual.push_str(&format!("<cfvo type=\"{}\"{gte}/>", escaped(&kind)));
+            }
+            Event::Text(ref text) if in_formula => if let Some((_, _, formula)) = threshold.as_mut() { formula.push_str(&text.unescape()?); },
+            Event::Text(ref text) if in_range => range.push_str(&text.unescape()?),
+            Event::End(ref element) => match element.name().as_ref() {
+                b"xm:f" => in_formula = false,
+                b"xm:sqref" => in_range = false,
+                b"x14:cfvo" => if let Some((kind, gte, formula)) = threshold.take() {
+                    let gte = gte.map(|value| format!(" gte=\"{}\"", escaped(&value))).unwrap_or_default();
+                    let value = if formula.is_empty() { String::new() } else { format!(" val=\"{}\"", escaped(&formula)) };
+                    visual.push_str(&format!("<cfvo type=\"{}\"{value}{gte}/>", escaped(&kind)));
+                },
+                b"x14:iconSet" => visual.push_str("</iconSet>"),
+                _ => {}
+            },
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    let Some(mut rule) = rule else { return Ok(None); };
+    rule.ranges = parse_sqref(&range);
+    if rule.ranges.is_empty() || !visual.starts_with("<iconSet") || !visual.ends_with("</iconSet>") { return Ok(None); }
+    rule.visual_xml = Some(visual);
+    rule.visual_extension_id = Some(id.to_string());
+    rule.visual_extension_xml = Some(xml.to_string());
+    rule.visual_extension_only = true;
+    Ok(Some(rule))
 }
 
 fn parse_worksheet(
@@ -2982,6 +4296,7 @@ fn parse_worksheet(
 
     // Column widths: index is 0-based col number
     let mut col_widths: Vec<f32> = Vec::new();
+    let mut col_custom_widths = std::collections::BTreeMap::new();
     let mut hidden_cols: Vec<u32> = Vec::new();
     let mut auto_filter: Option<crate::ir::AutoFilter> = None;
     let mut declared_range: Option<(u32, u32, u32, u32)> = None;
@@ -3001,6 +4316,13 @@ fn parse_worksheet(
     let mut cf_rule: Option<crate::ir::ConditionalRule> = None;
     let mut in_cf_formula = false;
     let mut cf_text = String::new();
+    let mut in_color_scale = false;
+    let mut visual_start: Option<(usize, String)> = None;
+    let mut in_visual_extension_id = false;
+    // Extended conditional-format payloads contain their own cfRule and
+    // conditionalFormatting tags. They supplement the base rule and must not
+    // be mistaken for another rule with no priority or ranges.
+    let mut conditional_extension_depth = 0usize;
     let mut filter_field: Option<u32> = None;
     let mut filter_criteria: Vec<String> = Vec::new();
     let mut filter_either = false;
@@ -3008,6 +4330,7 @@ fn parse_worksheet(
     // way a <col> width is; Excel's own default, for a sheet that states none,
     // is a plain count of characters instead, so the two cannot share a value.
     let mut default_col_width: f32 = 0.0;
+    let mut default_col_width_explicit = false;
     let mut default_row_height: f32 = 15.0;
     let mut frozen_rows: u32 = 0;
     let mut frozen_cols: u32 = 0;
@@ -3015,6 +4338,7 @@ fn parse_worksheet(
     // The fonts <col> styles put on their columns. A row's height is
     // measured from these, not from the number the sheet or the row states.
     let mut col_fonts: Vec<(u32, u32, String, f32)> = Vec::new();
+    let mut band_styles = crate::ir::BandStyles::default();
     let mut merge_cells: Vec<MergeCell> = Vec::new();
     // The colour on the sheet's tab, from <sheetPr><tabColor>.
     let mut tab_color: Option<String> = None;
@@ -3044,13 +4368,16 @@ fn parse_worksheet(
     // their values. Each anchor is noted as it is read and the block filled
     // in once every cell has been, since the members come later in the file.
     let mut cell_array_ref: Option<String> = None;
-    let mut array_anchors: Vec<(u32, u32, String, String)> = Vec::new();
+    let mut array_anchors: Vec<(u32, u32, String, String, Option<Vec<u16>>)> = Vec::new();
     // A cell may carry its text itself, in an <is>, instead of pointing into
     // the shared table. Anything that writes a sheet without building that
     // table does it this way. Its text sits in <t> elements, and its phonetic
     // guides in <rPh><t>, which are no more part of the cell's text here than
     // they are in a shared string.
     let mut in_inline = false;
+    let mut inline_start = None;
+    let mut inline_runs = Vec::new();
+    let mut inline_units = None;
     let mut in_inline_text = false;
     let mut in_inline_phonetic = false;
 
@@ -3058,19 +4385,32 @@ fn parse_worksheet(
     let mut in_merge_cells = false;
 
     loop {
+        let event_start = reader.buffer_position() as usize;
         match reader.read_event()? {
             Event::Start(e) => {
                 let name = local_name(e.name().as_ref());
                 note_unsupported(&name, &mut unsupported);
                 match name.as_str() {
+                    "extLst" => conditional_extension_depth += 1,
+                    "id" if conditional_extension_depth > 0 && cf_rule.is_some() && e.name().as_ref() == b"x14:id" => in_visual_extension_id = true,
                     "dataValidation" => rule = Some(validation_from(&e)),
-                    "conditionalFormatting" => {
+                    "conditionalFormatting" if conditional_extension_depth == 0 => {
                         cf_ranges = get_attr(&e, "sqref")
                             .map(|held| parse_sqref(&held))
                             .unwrap_or_default();
                     }
-                    "cfRule" => cf_rule = Some(conditional_from(&e, &cf_ranges, stylesheet)),
-                    "formula" if cf_rule.is_some() => {
+                    "cfRule" if conditional_extension_depth == 0 => cf_rule = Some(conditional_from(&e, &cf_ranges, stylesheet)),
+                    "colorScale" if conditional_extension_depth == 0 && cf_rule.as_ref().is_some_and(|r| r.kind == "colorScale") => {
+                        in_color_scale = true;
+                        visual_start = Some((event_start, name.clone()));
+                    }
+                    "dataBar" | "iconSet" if conditional_extension_depth == 0 && cf_rule.as_ref().is_some_and(|r| r.kind == name) => {
+                        visual_start = Some((event_start, name.clone()));
+                    }
+                    "cfvo" if in_color_scale && conditional_extension_depth == 0 => {
+                        if let Some(held) = cf_rule.as_mut() { held.color_scale_points = Some(held.color_scale_points.unwrap_or(0).saturating_add(1)); }
+                    }
+                    "formula" if conditional_extension_depth == 0 && cf_rule.is_some() => {
                         in_cf_formula = true;
                         cf_text.clear();
                     }
@@ -3128,6 +4468,11 @@ fn parse_worksheet(
                             .and_then(|v| v.parse::<u32>().ok())
                             .unwrap_or(current_row_index + 1);
                         current_row_index = row_num;
+                        if is_true(get_attr(&e, "customFormat").as_deref()) {
+                            if let Some(si) = get_attr(&e, "s").and_then(|value| value.parse::<usize>().ok()) {
+                                band_styles.rows.insert(row_num, resolve_cell_style(si, stylesheet));
+                            }
+                        }
 
                         // A row states its height whenever it is not the
                         // default one. customHeight says whether that number
@@ -3135,7 +4480,8 @@ fn parse_worksheet(
                         // from the machine that wrote the file, and Excel
                         // works the height out again from the row's content.
                         current_row_height =
-                            get_attr(&e, "ht").and_then(|v| v.parse::<f32>().ok());
+                            get_attr(&e, "ht").and_then(|v| v.parse::<f64>().ok())
+                                .map(crate::row_height::file_points);
                         current_row_custom =
                             is_true(get_attr(&e, "customHeight").as_deref());
                         current_row_font = row_style_font(&e, stylesheet);
@@ -3175,6 +4521,9 @@ fn parse_worksheet(
                     "is" if in_cell => {
                         in_inline = true;
                         in_inline_phonetic = false;
+                        inline_start = Some(reader.buffer_position() as usize);
+                        inline_runs.clear();
+                        inline_units = None;
                         value_text.clear();
                     }
                     "rPh" if in_inline => in_inline_phonetic = true,
@@ -3191,18 +4540,27 @@ fn parse_worksheet(
             Event::End(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
-                    "formula" => {
+                    "extLst" => conditional_extension_depth = conditional_extension_depth.saturating_sub(1),
+                    "id" if in_visual_extension_id && e.name().as_ref() == b"x14:id" => in_visual_extension_id = false,
+                    "colorScale" | "dataBar" | "iconSet" if conditional_extension_depth == 0 => {
+                        if name == "colorScale" { in_color_scale = false; }
+                        if visual_start.as_ref().is_some_and(|(_, tag)| *tag == name) {
+                            let (start, _) = visual_start.take().unwrap();
+                            if let Some(held) = cf_rule.as_mut() { held.visual_xml = Some(xml[start..reader.buffer_position() as usize].to_string()); }
+                        }
+                    }
+                    "formula" if conditional_extension_depth == 0 => {
                         if let Some(held) = cf_rule.as_mut() {
                             held.formulas.push(std::mem::take(&mut cf_text));
                         }
                         in_cf_formula = false;
                     }
-                    "cfRule" => {
+                    "cfRule" if conditional_extension_depth == 0 => {
                         if let Some(held) = cf_rule.take() {
                             conditional_rules.push(held);
                         }
                     }
-                    "conditionalFormatting" => cf_ranges.clear(),
+                    "conditionalFormatting" if conditional_extension_depth == 0 => cf_ranges.clear(),
                     "formula1" | "formula2" => {
                         if let Some(rule) = rule.as_mut() {
                             let held = std::mem::take(&mut rule_text);
@@ -3252,17 +4610,19 @@ fn parse_worksheet(
                     }
                     "c" => {
                         if in_cell {
-                            let cell_value =
-                                resolve_cell_value(&value_text, &cell_type, shared_strings);
+                            let cell_value = if cell_type.as_deref() == Some("inlineStr") {
+                                inline_units.take().map(CellValue::from_utf16)
+                                    .unwrap_or_else(|| resolve_cell_value(&value_text, &cell_type, shared_strings))
+                            } else {
+                                resolve_cell_value(&value_text, &cell_type, shared_strings)
+                            };
                             // A cell without an s wears the workbook's default
-                            // format, which is cellXfs[0] — not no format at all.
+                            // format, which is cellXfs[0] 遯ｶ繝ｻnot no format at all.
                             let style =
                                 resolve_cell_style(cell_style_index.unwrap_or(0), stylesheet);
-                            let formula = if formula_text.is_empty() {
-                                None
-                            } else {
-                                Some(formula_text.clone())
-                            };
+                            let units = crate::string_value::decode(&formula_text);
+                            let formula_utf16 = String::from_utf16(&units).err().map(|_| units.clone());
+                            let formula = (!units.is_empty()).then(|| String::from_utf16_lossy(&units));
                             if let (Some(reference), Some(formula)) =
                                 (cell_array_ref.take(), formula.as_ref())
                             {
@@ -3271,16 +4631,18 @@ fn parse_worksheet(
                                     cell_col,
                                     reference,
                                     formula.clone(),
+                                    formula_utf16.clone(),
                                 ));
                             }
                             current_cells.push(Cell {
+                                formula_utf16,
                                 array_block: None,
                                 spill: Default::default(),
                                 col: cell_col,
                                 value: cell_value,
                                 style,
                                 formula,
-                                runs: runs_of(&value_text, &cell_type, shared_strings),
+                                runs: if cell_type.as_deref()==Some("inlineStr") { std::mem::take(&mut inline_runs) } else { runs_of(&value_text, &cell_type, shared_strings) },
                             });
                             in_cell = false;
                             in_formula = false;
@@ -3295,6 +4657,16 @@ fn parse_worksheet(
                         in_value = false;
                     }
                     "is" => {
+                        if let Some(start)=inline_start.take() {
+                            let through_end=&xml[start..reader.buffer_position() as usize];
+                            if let Some(end)=through_end.rfind('<') {
+                                let fragment=format!("<sst><si>{}</si></sst>",&through_end[..end]);
+                                if let Some(held) = parse_shared_strings(&fragment)?.into_iter().next() {
+                                    inline_runs = held.runs;
+                                    inline_units = held.units;
+                                }
+                            }
+                        }
                         in_inline = false;
                         in_inline_text = false;
                     }
@@ -3307,15 +4679,16 @@ fn parse_worksheet(
                 }
             }
             Event::Text(e) => {
-                if in_cf_formula {
+                if in_visual_extension_id {
+                    if let Some(held) = cf_rule.as_mut() { held.visual_extension_id = Some(e.unescape()?.into_owned()); }
+                } else if in_cf_formula {
                     cf_text.push_str(&e.unescape()?);
                 } else if rule_formula > 0 {
                     rule_text.push_str(&e.unescape()?);
                 } else if in_formula {
-                    let text = unescape_wide(&e.unescape()?);
-                    formula_text.push_str(&text);
+                    formula_text.push_str(&e.unescape()?);
                 } else if in_value || in_inline_text {
-                    let text = unescape_wide(&e.unescape()?);
+                    let text = e.unescape()?;
                     value_text.push_str(&text);
                 }
             }
@@ -3332,8 +4705,14 @@ fn parse_worksheet(
                 }
                 match name.as_str() {
                     "dataValidation" => validations.push(validation_from(&e)),
-                    "cfRule" => {
+                    "cfRule" if conditional_extension_depth == 0 => {
                         conditional_rules.push(conditional_from(&e, &cf_ranges, stylesheet));
+                    }
+                    "cfvo" if in_color_scale && conditional_extension_depth == 0 => {
+                        if let Some(held) = cf_rule.as_mut() { held.color_scale_points = Some(held.color_scale_points.unwrap_or(0).saturating_add(1)); }
+                    }
+                    "colorScale" | "dataBar" | "iconSet" if conditional_extension_depth == 0 && cf_rule.as_ref().is_some_and(|r| r.kind == name) => {
+                        if let Some(held) = cf_rule.as_mut() { held.visual_xml = Some(xml[event_start..reader.buffer_position() as usize].to_string()); }
                     }
                     // <sheetProtection sheet="1"> is a sheet that is protected.
                     // The same element without it only records the options of
@@ -3372,6 +4751,7 @@ fn parse_worksheet(
                             get_attr(&e, "s").and_then(|v| v.parse::<usize>().ok());
                         let style = resolve_cell_style(si.unwrap_or(0), stylesheet);
                         current_cells.push(Cell {
+                            formula_utf16: None,
                             array_block: None,
                             spill: Default::default(),
                             col,
@@ -3394,6 +4774,7 @@ fn parse_worksheet(
                         if let Some(v) = get_attr(&e, "defaultColWidth") {
                             if let Ok(w) = v.parse::<f32>() {
                                 default_col_width = w;
+                                default_col_width_explicit = true;
                             }
                         }
                     }
@@ -3466,6 +4847,7 @@ fn parse_worksheet(
                         }
                         for c in min_col..=max_col_attr {
                             col_widths[(c - 1) as usize] = width;
+                            col_custom_widths.insert(c - 1, is_true(get_attr(&e, "customWidth").as_deref()));
                         }
                         if is_true(get_attr(&e, "hidden").as_deref()) {
                             for c in min_col..=max_col_attr {
@@ -3480,6 +4862,9 @@ fn parse_worksheet(
                             get_attr(&e, "style").and_then(|v| v.parse::<usize>().ok())
                         {
                             let style = resolve_cell_style(si, stylesheet);
+                            for column in min_col..=max_col_attr {
+                                band_styles.columns.insert(column - 1, style.clone());
+                            }
                             if let (Some(name), Some(size)) =
                                 (style.font_name, style.font_size)
                             {
@@ -3508,11 +4893,17 @@ fn parse_worksheet(
                             .and_then(|v| v.parse::<u32>().ok())
                             .unwrap_or(current_row_index + 1);
                         current_row_index = row_num;
+                        if is_true(get_attr(&e, "customFormat").as_deref()) {
+                            if let Some(si) = get_attr(&e, "s").and_then(|value| value.parse::<usize>().ok()) {
+                                band_styles.rows.insert(row_num, resolve_cell_style(si, stylesheet));
+                            }
+                        }
                         rows.push(Row {
                             index: row_num,
                             cells: Vec::new(),
                             height: get_attr(&e, "ht")
-                                .and_then(|v| v.parse::<f32>().ok()),
+                                .and_then(|v| v.parse::<f64>().ok())
+                                .map(crate::row_height::file_points),
                             custom_height:
                                 is_true(get_attr(&e, "customHeight").as_deref()),
                             style_font: row_style_font(&e, stylesheet),
@@ -3554,11 +4945,13 @@ fn parse_worksheet(
             }
         })
     };
+    let column_width_font = stylesheet.fonts.get(stylesheet.cell_style_xfs.first().map_or(0, |xf| xf.font_id))
+        .and_then(|font| font.latin_name.clone().or_else(|| font.name.clone()));
 
     // Deal every array formula across its block: each member gets the
     // formula's text and the block, and a member the file left out -- a cell
     // with nothing to say for itself -- is made so it can be worked out.
-    for (anchor_row, anchor_col, reference, formula) in array_anchors {
+    for (anchor_row, anchor_col, reference, formula, formula_utf16) in array_anchors {
         let block = match parse_range_ref(&reference) {
             Some((start_col, start_row, end_col, end_row)) => {
                 (start_row, start_col, end_row, end_col)
@@ -3598,10 +4991,12 @@ fn parse_worksheet(
                         cell.array_block = Some(block);
                         if !is_anchor {
                             cell.formula = Some(formula.clone());
+                            cell.formula_utf16 = formula_utf16.clone();
                         }
                     }
                     None => {
                         row.cells.push(Cell {
+                            formula_utf16: formula_utf16.clone(),
                             col,
                             value: CellValue::Empty,
                             style: resolve_cell_style(0, stylesheet),
@@ -3617,6 +5012,28 @@ fn parse_worksheet(
         }
     }
 
+    // A style explicitly covering every column is equivalent to a sheet-wide
+    // base plus exceptions. Keep that base compact: otherwise reopening a
+    // sheet-wide format creates 16,384 templates and applying one row format
+    // materializes 16,384 unnecessary intersection cells.
+    if band_styles.columns.len() == 16_384
+        && band_styles.columns.first_key_value().map(|(key, _)| *key) == Some(0)
+        && band_styles.columns.last_key_value().map(|(key, _)| *key) == Some(16_383)
+    {
+        // A majority candidate gives the common style when one exists; even
+        // without a majority, retaining all different entries is equivalent.
+        let mut candidate: Option<&CellStyle> = None;
+        let mut balance = 0usize;
+        for style in band_styles.columns.values() {
+            if balance == 0 { candidate = Some(style); balance = 1; }
+            else if candidate == Some(style) { balance += 1; }
+            else { balance -= 1; }
+        }
+        let base = candidate.expect("a complete set is not empty").clone();
+        band_styles.columns.retain(|_, style| *style != base);
+        band_styles.sheet = Some(base);
+    }
+
     // The first font in the list, which is what an indent is measured in.
     let first_font = stylesheet.fonts.first().and_then(|font| {
         match (font.name.clone(), font.size) {
@@ -3625,10 +5042,20 @@ fn parse_worksheet(
         }
     });
 
+    let visual_extensions = worksheet_visual_extensions(xml)?;
+    for rule in &mut conditional_rules {
+        if let Some(id) = &rule.visual_extension_id { rule.visual_extension_xml = visual_extensions.get(id).cloned(); }
+    }
+    for (id, raw) in &visual_extensions {
+        if conditional_rules.iter().any(|rule| rule.visual_extension_id.as_deref() == Some(id)) { continue; }
+        if let Some(rule) = extended_only_icon_rule(id, raw, stylesheet)? { conditional_rules.push(rule); }
+    }
     Ok(Sheet {
+        kind: Default::default(),
         tables: Vec::new(),
         drawings: Vec::new(),
         comments: Vec::new(),
+        threaded_comments: Vec::new(),
         name: sheet_name.to_string(),
         // The tab strip's business, which the workbook states rather than the
         // sheet: the caller fills it in from there.
@@ -3636,10 +5063,16 @@ fn parse_worksheet(
         rows,
         col_count,
         col_widths,
+        col_custom_widths,
+        cached_spills: None,
+        pending_used_bounds: None,
+        column_width_font,
         default_col_width,
+        default_col_width_explicit,
         default_row_height,
         default_row_custom,
         col_fonts,
+        band_styles,
         normal_font,
         first_font,
         frozen_rows,
@@ -3704,7 +5137,7 @@ fn resolve_cell_value(
             // Shared string index
             if let Ok(idx) = value_text.parse::<usize>() {
                 if idx < shared_strings.len() {
-                    CellValue::String(shared_strings[idx].text.clone())
+                    CellValue::from_utf16(shared_strings[idx].units.clone().unwrap_or_else(|| crate::string_value::decode(&shared_strings[idx].text)))
                 } else {
                     CellValue::Error(format!("Invalid SST index: {}", idx))
                 }
@@ -3718,7 +5151,7 @@ fn resolve_cell_value(
         Some("e") => CellValue::Error(value_text.to_string()),
         Some("str") | Some("inlineStr") => {
             // Inline string or formula string result
-            CellValue::String(value_text.to_string())
+            CellValue::from_utf16(crate::string_value::decode(value_text))
         }
         _ => {
             // No type attribute means number
@@ -3727,7 +5160,7 @@ fn resolve_cell_value(
             } else if let Ok(n) = value_text.parse::<f64>() {
                 CellValue::Number(n)
             } else {
-                CellValue::String(value_text.to_string())
+                CellValue::from_utf16(crate::string_value::decode(value_text))
             }
         }
     }
@@ -3736,7 +5169,7 @@ fn resolve_cell_value(
 /// Parse an .xlsx file from raw bytes into a Workbook IR.
 ///
 /// The values Excel cached in the file are **kept**. For display they are the
-/// correct answer — recalculating a freshly loaded workbook can only introduce
+/// correct answer 遯ｶ繝ｻrecalculating a freshly loaded workbook can only introduce
 /// divergence from what the user sees in Excel. Only formula cells that arrive
 /// without a cached value are computed.
 ///
@@ -3755,13 +5188,13 @@ pub fn parse_xlsx(data: &[u8]) -> Result<Workbook, XlsxError> {
 pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> {
     let mut archive = OoxmlArchive::new(data)?;
 
-    // 1. Parse shared strings (optional — some xlsx files have none)
+    // 1. Parse shared strings (optional 遯ｶ繝ｻsome xlsx files have none)
     let shared_strings = match archive.try_read_part("xl/sharedStrings.xml")? {
         Some(xml) => parse_shared_strings(&xml)?,
         None => Vec::new(),
     };
 
-    // 2. Parse styles.xml (optional — some simple xlsx have none)
+    // 2. Parse styles.xml (optional 遯ｶ繝ｻsome simple xlsx have none)
     // The theme has to be read first: a style may name one of its colours
     // rather than state one of its own.
     let mut theme = match archive.try_read_part("xl/theme/theme1.xml")? {
@@ -3772,7 +5205,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         Some(xml) => {
             // A hundred of the corpus's workbooks state a palette of their
             // own, and it sits at the foot of the same part as the styles
-            // that name it — so it is read in a pass of its own first.
+            // that name it 遯ｶ繝ｻso it is read in a pass of its own first.
             theme.indexed = indexed_palette(&xml);
             parse_styles_xml(&xml, &theme)?
         }
@@ -3786,15 +5219,25 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
     // 4. Parse workbook relationships to map rIds to sheet file paths
     let rels_xml = archive.read_part("xl/_rels/workbook.xml.rels")?;
     let rels = parse_relationships(&rels_xml)?;
+    let persons = match rels.values().find(|rel| rel.rel_type.ends_with("/person")) {
+        Some(relation) => {
+            let path = part_beside("xl/workbook.xml", &relation.target);
+            archive.try_read_part(&path)?.map(|xml| parse_person_list(&xml)).unwrap_or_default()
+        }
+        None => HashMap::new(),
+    };
 
     // Build rId -> target path map
+    let sheet_kinds: HashMap<String, crate::ir::SheetKind> = rels.iter().map(|(id,rel)| {
+        (id.clone(), if rel.rel_type.ends_with("/chartsheet") { crate::ir::SheetKind::Chart } else { crate::ir::SheetKind::Worksheet })
+    }).collect();
     let rid_to_path: HashMap<String, String> = rels
         .into_iter()
         .map(|(id, rel)| (id, rel.target))
         .collect();
 
     // 4b. The workbooks this one only links to, with the values it remembers
-    // of them. Their order is what `[1]`, `[2]` … mean in a formula.
+    // of them. Their order is what `[1]`, `[2]` 遯ｶ・ｦ mean in a formula.
     let mut external_books = Vec::new();
     for id in parse_external_references(&workbook_xml) {
         let Some(target) = rid_to_path.get(&id) else {
@@ -3813,6 +5256,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
 
     // 5. Parse each worksheet
     let mut sheets = Vec::new();
+    let chart_sources=crate::chart_edit::chart_part_names(&mut archive)?;
     for info in &sheet_infos {
         let sheet_path = match rid_to_path.get(&info.r_id) {
             Some(target) => {
@@ -3838,8 +5282,9 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
             Some(sheet_xml) => {
                 let mut sheet =
                     parse_worksheet(&sheet_xml, &info.name, &shared_strings, &stylesheet, &theme)?;
+                sheet.kind=sheet_kinds.get(&info.r_id).copied().unwrap_or_default();
                 // What the sheet's own parts turn out to hold, which is only
-                // known once they have been read — and which decides what the
+                // known once they have been read 遯ｶ繝ｻand which decides what the
                 // walk past their names in the sheet XML really meant.
                 let mut had_notes = false;
                 let mut has_controls = false;
@@ -3862,6 +5307,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                     .unwrap_or_default();
                 if let Some(rels_xml) = archive.try_read_part(&rels_path)? {
                     let rels = parse_relationships(&rels_xml)?;
+                    let ole_prog_ids = parse_ole_object_metadata(&sheet_xml, &rels);
                     // A note is two parts: its text, and the VML that says
                     // where its box is and whether the sheet shows it.
                     let beside = |ending: &str| {
@@ -3872,20 +5318,36 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                     // The legacy drawing is read whether or not notes come with
                     // it. The same part carries a sheet's buttons and tick
                     // boxes, and a sheet can hold a hundred of those and not a
-                    // single note — two of the four hundred workbooks swept do
+                    // single note 遯ｶ繝ｻtwo of the four hundred workbooks swept do
                     // exactly that, and were being reported as unread notes.
                     let vml = match beside("Drawing") {
                         Some(part) => archive.try_read_part(&part)?,
                         None => None,
+
                     };
+                    let ole_shadows = vml.as_deref().map(parse_vml_ole_shadows).unwrap_or_default();
+
                     let notes = match beside("/comments") {
                         Some(part) => archive.try_read_part(&part)?,
                         None => None,
                     };
-                    sheet.hyperlinks = parse_hyperlinks(&sheet_xml, &rels);
+                    let threaded_comments = match beside("/threadedComment") {
+                        Some(part) => archive.try_read_part(&part)?,
+                        None => None,
+                    };
                     had_notes = notes.is_some();
                     if let (Some(notes), Some(vml)) = (&notes, &vml) {
-                        sheet.comments = parse_comments(notes, vml);
+                        sheet.comments = parse_comments_with_theme(notes, vml, &theme);
+                    }
+                    if let Some(threaded_comments) = &threaded_comments {
+                        sheet.threaded_comments = parse_threaded_comments(threaded_comments);
+                        for comment in &mut sheet.threaded_comments {
+                            if let Some(person) = persons.get(&comment.person_id) {
+                                comment.person_name = person.display_name.clone();
+                                comment.person_provider_id = person.provider_id.clone();
+                                comment.person_user_id = person.user_id.clone();
+                            }
+                        }
                     }
                     if let Some(vml) = &vml {
                         sheet.form_controls = parse_form_controls(vml);
@@ -3902,9 +5364,10 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                         if rel.rel_type.ends_with("/table") {
                             let part = part_beside(&sheet_path, &rel.target);
                             if let Some(table_xml) = archive.try_read_part(&part)? {
-                                if let Some(table) =
+                                if let Some(mut table) =
                                     parse_table_xml(&table_xml, &theme, &stylesheet.dxf_borders)
                                 {
+                                    table.origin_part = Some(part);
                                     sheet.tables.push(table);
                                 }
                             }
@@ -3933,13 +5396,33 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                                 Some(xml) => parse_relationships(&xml)?,
                                 None => Default::default(),
                             };
-                            for (mut drawn, named) in parse_drawing_xml(&drawing_xml, &theme) {
-                                let beside = named
+                            for (mut drawn, image_relationships) in parse_drawing_xml(&drawing_xml, &theme) {
+                                if let Some(metadata) = image_relationships.shape_id.and_then(|shape_id| ole_prog_ids.get(&shape_id)) {
+                                    drawn.ole_prog_id = Some(metadata.prog_id.clone());
+                                    drawn.ole_placement = Some(metadata.placement);
+                                    drawn.ole_type = Some(metadata.ole_type);
+                                    drawn.ole_display_as_icon = Some(metadata.display_as_icon);
+                                    drawn.ole_auto_load = metadata.auto_load;
+                                    drawn.ole_enabled = metadata.enabled;
+                                    drawn.ole_locked = metadata.locked;
+                                    drawn.ole_print_object = metadata.print_object;
+                                    if let Some(metadata) = image_relationships.shape_id.and_then(|shape_id| ole_shadows.get(&shape_id)) {
+                                        drawn.ole_shadow = metadata.shadow;
+                                        drawn.ole_border_color = metadata.border_color.clone();
+                                        drawn.ole_border_weight = metadata.border_weight;
+                                        drawn.ole_interior_color = metadata.interior_color.clone();
+                                    }
+                                    drawn.ole_on_action = image_relationships.shape_id.and_then(|shape_id| ole_prog_ids.get(&shape_id).and_then(|metadata| metadata.on_action.clone()));
+                                }
+                                let beside = image_relationships.raster
+                                    .and_then(|named| media.get(&named))
+                                    .map(|rel| part_beside(&part, &rel.target));
+                                let vector_part = image_relationships.vector
                                     .and_then(|named| media.get(&named))
                                     .map(|rel| part_beside(&part, &rel.target));
                                 match (&mut drawn.kind, beside) {
                                     (
-                                        crate::ir::DrawingKind::Picture { bytes },
+                                        crate::ir::DrawingKind::Picture { bytes, .. },
                                         Some(image),
                                     ) => {
                                         if let Some(found) = archive.try_read_bytes(&image)? {
@@ -3953,7 +5436,10 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                                             .and_then(|xml| {
                                                 crate::chart::parse_chart_xml(xml, &theme)
                                             }) {
-                                            Some(read) => *chart = read,
+                                            Some(mut read) => {
+                                                read.origin_id=chart_sources.binary_search(&graph).ok().map(|index|index as u32);
+                                                *chart = read;
+                                            },
                                             // A chart nothing can draw is left
                                             // out rather than half-drawn.
                                             None => continue,
@@ -3989,6 +5475,15 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                                     }
                                     _ => {}
                                 }
+                                if let Some(vector_part) = vector_part {
+                                    if let Some(svg) = archive.try_read_bytes(&vector_part)? {
+                                        if let (Some(size), crate::ir::DrawingKind::Picture { format, .. }) =
+                                            (svg_intrinsic_size_points(&svg), &mut drawn.kind)
+                                        {
+                                            format.original_size_points = Some(size);
+                                        }
+                                    }
+                                }
                                 sheet.drawings.push(drawn);
                             }
                         }
@@ -4000,6 +5495,11 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                 // so anything that did arrive stops being a gap: a report of
                 // what cannot be shown is worth less than nothing when it lists
                 // what can.
+                let hyperlink_rels = match archive.try_read_part(&rels_path)? {
+                    Some(xml) => parse_relationships(&xml)?,
+                    None => Default::default(),
+                };
+                sheet.hyperlinks = parse_hyperlinks(&sheet_xml, &hyperlink_rels);
                 let drew = !sheet.drawings.is_empty();
                 let tabled = !sheet.tables.is_empty();
                 let noted = !sheet.comments.is_empty();
@@ -4027,16 +5527,49 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         }
     }
 
+    let (defined_names, defined_name_attributes) = parse_defined_names(&workbook_xml);
     Ok(Workbook {
         sheets,
+        theme_colors: theme.colours.clone(),
+        indexed_colors: theme.indexed.clone(),
+        recalculation: Default::default(),
+        calculation: parse_calculation(&workbook_xml),
         default_style: resolve_cell_style(0, &stylesheet),
-        defined_names: parse_defined_names(&workbook_xml),
+        defined_names,
+        defined_name_attributes,
+        compatibility_names: Default::default(),
         external_books,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn extended_conditional_rule_does_not_create_a_second_base_rule() {
+        let xml = r#"<worksheet><conditionalFormatting sqref="B2:B6"><cfRule type="dataBar" priority="2"><dataBar/><extLst><ext><x14:id>{ABC}</x14:id></ext></extLst></cfRule></conditionalFormatting><extLst><ext><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="dataBar" id="{ABC}"><x14:dataBar/></x14:cfRule><xm:sqref>B2:B6</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst></worksheet>"#;
+        let sheet = super::parse_worksheet(xml, "Sheet1", &[], &super::StyleSheet::default(), &super::Theme::default()).unwrap();
+        assert_eq!(sheet.conditional_rules.len(), 1);
+        assert_eq!(sheet.conditional_rules[0].kind, "dataBar");
+        assert_eq!(sheet.conditional_rules[0].priority, 2);
+        assert_eq!(sheet.conditional_rules[0].ranges, vec![(1, 1, 5, 1)]);
+    }
+
+    #[test]
+    fn average_conditional_rule_reads_excel_attributes() {
+        let mut element = quick_xml::events::BytesStart::new("cfRule");
+        element.push_attribute(("type", "aboveAverage"));
+        element.push_attribute(("aboveAverage", "0"));
+        element.push_attribute(("equalAverage", "1"));
+        element.push_attribute(("stdDev", "2"));
+        let rule = super::conditional_from(&element, &[(0, 0, 2, 0)], &super::StyleSheet::default());
+        assert!(!rule.above_average);
+        assert!(rule.equal_average);
+        assert_eq!(rule.standard_deviations, Some(2));
+        let default = super::conditional_from(&quick_xml::events::BytesStart::new("cfRule"), &[], &super::StyleSheet::default());
+        assert!(default.above_average);
+        assert!(!default.equal_average);
+        assert_eq!(default.standard_deviations, None);
+    }
     use super::*;
 
     #[test]
@@ -4047,7 +5580,7 @@ mod tests {
     }
 
     /// Furigana lives in `<rPh>` and is not part of the cell's text. Excel shows
-    /// "区分"; appending the reading would give "区分クブン" and silently corrupt
+    /// "陋ｹ・ｺ陋ｻ繝ｻ; appending the reading would give "陋ｹ・ｺ陋ｻ繝ｻ縺醍ｹ晄じﾎｦ" and silently corrupt
     /// most Japanese workbooks, which carry phonetic guides on names and
     /// addresses as a matter of course.
     #[test]
@@ -4066,28 +5599,40 @@ mod tests {
     fn shared_strings_exclude_phonetic_guides() {
         let xml = r#"<?xml version="1.0"?>
 <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="3">
-  <si><t>区分</t><rPh sb="0" eb="2"><t>クブン</t></rPh><phoneticPr fontId="1"/></si>
-  <si><r><t>山田</t></r><r><t>太郎</t></r><rPh sb="0" eb="2"><t>ヤマダ</t></rPh><rPh sb="2" eb="4"><t>タロウ</t></rPh></si>
+  <si><t>&#x533A;&#x5206;</t><rPh sb="0" eb="2"><t>&#x30AF;&#x30D6;&#x30F3;</t></rPh><phoneticPr fontId="1"/></si>
+  <si><r><t>&#x5C71;&#x7530;</t></r><r><t>&#x592A;&#x90CE;</t></r><rPh sb="0" eb="2"><t>&#x30E4;&#x30DE;&#x30C0;</t></rPh><rPh sb="2" eb="4"><t>&#x30BF;&#x30ED;&#x30A6;</t></rPh></si>
   <si><t>plain</t></si>
 </sst>"#;
         let strings = parse_shared_strings(xml).expect("should parse");
         let held: Vec<&str> = strings.iter().map(|one| one.text.as_str()).collect();
-        assert_eq!(held, vec!["区分", "山田太郎", "plain"]);
+        assert_eq!(held, vec!["\u{533a}\u{5206}", "\u{5c71}\u{7530}\u{592a}\u{90ce}", "plain"]);
+    }
+
+    #[test]
+    fn cell_string_escapes_are_decoded_within_each_text_run() {
+        let rich = "<r><t>_x0</t></r><r><t>041_ _x005F_x0041_</t></r><r><t>_xDE00_</t></r>";
+        let strings = parse_shared_strings(&format!("<sst><si>{rich}</si></sst>")).unwrap();
+        let expected: Vec<u16> = "_x0041_ _x0041_".encode_utf16().chain([0xDE00]).collect();
+        assert_eq!(strings[0].units.as_ref(), Some(&expected));
+        assert_eq!(resolve_cell_value("0", &Some("s".into()), &strings).string_units().unwrap().as_ref(), expected);
+        let xml = format!("<worksheet><sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is>{rich}</is></c></row></sheetData></worksheet>");
+        let sheet = parse_worksheet(&xml, "probe", &[], &StyleSheet::default(), &Theme::default()).unwrap();
+        assert_eq!(sheet.rows[0].cells[0].value.string_units().unwrap().as_ref(), expected);
     }
 
     /// A cell can hold its own text instead of pointing into the shared table.
     /// Whole sheets are written that way by anything that streams a workbook
     /// out without building the table first, and Excel shows them like any
-    /// other text — so a reader that only looks in <v> draws an empty sheet.
+    /// other text 遯ｶ繝ｻso a reader that only looks in <v> draws an empty sheet.
     #[test]
     fn inline_strings_are_read_from_the_cell() {
         let xml = r#"<?xml version="1.0"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
     <row r="1">
-      <c r="A1" t="inlineStr"><is><t>Ag亜</t></is></c>
+      <c r="A1" t="inlineStr"><is><t>Agreed</t></is></c>
       <c r="B1" t="inlineStr"><is><r><t>half </t></r><r><t>and half</t></r></is></c>
-      <c r="C1" t="inlineStr"><is><t>区分</t><rPh sb="0" eb="2"><t>クブン</t></rPh></is></c>
+      <c r="C1" t="inlineStr"><is><t>&#x533A;&#x5206;</t><rPh sb="0" eb="2"><t>&#x30AF;&#x30D6;&#x30F3;</t></rPh></is></c>
       <c r="D1"><v>42</v></c>
     </row>
   </sheetData>
@@ -4099,12 +5644,46 @@ mod tests {
             CellValue::String(held) => held.clone(),
             other => panic!("wanted text, found {other:?}"),
         };
-        assert_eq!(text_of(&cells[0]), "Ag亜");
+        assert_eq!(text_of(&cells[0]), "Agreed");
         assert_eq!(text_of(&cells[1]), "half and half");
         // A phonetic guide is no more part of the text here than in a shared
-        // string: Excel shows 区分, not 区分クブン.
-        assert_eq!(text_of(&cells[2]), "区分");
+        // string: Excel shows 陋ｹ・ｺ陋ｻ繝ｻ not 陋ｹ・ｺ陋ｻ繝ｻ縺醍ｹ晄じﾎｦ.
+        assert_eq!(text_of(&cells[2]), "\u{533a}\u{5206}");
         assert!(matches!(cells[3].value, CellValue::Number(n) if n == 42.0));
+    }
+
+    #[test]
+    fn complete_column_styles_are_compacted_without_losing_exceptions() {
+        let styles = r#"<styleSheet><fonts count="2"><font><sz val="11"/></font><font><b/><sz val="11"/></font></fonts>
+          <cellStyleXfs count="1"><xf fontId="0"/></cellStyleXfs>
+          <cellXfs count="2"><xf fontId="0" xfId="0"/><xf fontId="1" xfId="0" applyFont="1"/></cellXfs>
+        </styleSheet>"#;
+        let stylesheet = parse_styles_xml(styles, &Theme::default()).unwrap();
+        let full = r#"<worksheet><cols><col min="1" max="16384" style="1"/>
+          <col min="1" max="1" style="0"/></cols><sheetData/></worksheet>"#;
+        let sheet = parse_worksheet(full, "probe", &[], &stylesheet, &Theme::default()).unwrap();
+        assert!(sheet.band_styles.sheet.as_ref().unwrap().bold);
+        assert_eq!(sheet.band_styles.columns.len(), 1);
+        assert!(!sheet.band_styles.columns.get(&0).unwrap().bold);
+        let partial = r#"<worksheet><cols><col min="1" max="16383" style="1"/></cols><sheetData/></worksheet>"#;
+        let sheet = parse_worksheet(partial, "probe", &[], &stylesheet, &Theme::default()).unwrap();
+        assert!(sheet.band_styles.sheet.is_none());
+        assert_eq!(sheet.band_styles.columns.len(), 16_383);
+    }
+
+    #[test]
+    fn theme_colours_override_defaults_by_named_slot() {
+        let xml = r#"<theme><themeElements><clrScheme>
+          <hlink><srgbClr val="0563C1"/></hlink>
+          <dk1><sysClr val="windowText" lastClr="112233"/></dk1>
+          <accent2><srgbClr val="AABBCC"><alpha val="100000"/></srgbClr></accent2>
+        </clrScheme></themeElements></theme>"#;
+        let theme = parse_theme_xml(xml);
+        assert_eq!(theme.colours.len(), 12);
+        assert_eq!(theme.colour(10), Some("0563C1"));
+        assert_eq!(theme.colour(1), Some("112233"));
+        assert_eq!(theme.colour(5), Some("AABBCC"));
+        assert_eq!(theme.colour(0), Some("FFFFFF"));
     }
 
     #[test]
@@ -4147,6 +5726,7 @@ mod tests {
             .iter()
             .map(|text| SharedString {
                 text: (*text).to_string(),
+                units: None,
                 runs: Vec::new(),
             })
             .collect()
@@ -4274,7 +5854,7 @@ mod tests {
 
     /// A cell format that names a font and says nothing about applying it is
     /// using that font. Only an explicit `applyFont="0"` sends the reader to
-    /// the named style the format is built on — which is how a hyperlink keeps
+    /// the named style the format is built on 遯ｶ繝ｻwhich is how a hyperlink keeps
     /// its blue underline. Files written by anything other than Excel
     /// routinely leave every flag off, so reading absent as "do not apply"
     /// draws whole workbooks in the wrong face.
@@ -4306,9 +5886,9 @@ mod tests {
     }
 
     /// A face the machine has not got is answered from the two numbers beside
-    /// the name, not from the name: `sanko_tool` asks for `AR P丸ゴシック体E`
+    /// the name, not from the name: `sanko_tool` asks for `AR P闕ｳ・ｸ郢ｧ・ｴ郢ｧ・ｷ郢昴・縺題抄鞫倭
     /// with `family 3` (fixed pitch) and `charset 128` (Japanese), and Excel
-    /// draws ＭＳ ゴシック. Drop either number in the reader and the renderer
+    /// draws 繝ｻ・ｭ繝ｻ・ｳ 郢ｧ・ｴ郢ｧ・ｷ郢昴・縺・ Drop either number in the reader and the renderer
     /// has nothing to answer with.
     #[test]
     fn a_font_keeps_the_family_and_charset_beside_its_name() {
@@ -4336,7 +5916,7 @@ mod tests {
         assert_eq!(plain.font_charset, None);
     }
 
-    /// A generated header row is written as `<font><b/></font>` — bold, and
+    /// A generated header row is written as `<font><b/></font>` 遯ｶ繝ｻbold, and
     /// nothing else. The face and size it leaves out are the workbook's, not
     /// the reader's idea of a default: read otherwise, every such row is drawn
     /// in the wrong face and stands the wrong height.
@@ -4364,7 +5944,7 @@ mod tests {
     }
 
     /// A drawing part states where a shape hangs, what it is painted with,
-    /// and — for a picture — which part holds its bytes.
+    /// and 遯ｶ繝ｻfor a picture 遯ｶ繝ｻwhich part holds its bytes.
     #[test]
     fn a_drawing_part_gives_up_its_anchors_and_its_paint() {
         let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -4380,7 +5960,7 @@ mod tests {
       <xdr:spPr>
         <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
         <a:noFill/>
-        <a:ln w="28575"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln>
+        <a:ln w="28575"><a:headEnd type="diamond" w="lg" len="sm"/><a:tailEnd type="oval" w="sm" len="lg"/><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln>
       </xdr:spPr>
     </xdr:sp>
     <xdr:clientData/>
@@ -4399,8 +5979,9 @@ mod tests {
         let found = parse_drawing_xml(xml, &Theme::default());
         assert_eq!(found.len(), 2);
 
-        let (rectangle, embed) = &found[0];
-        assert_eq!(embed.as_deref(), None);
+        let (rectangle, embeds) = &found[0];
+        assert_eq!(embeds.raster, None);
+        assert_eq!(embeds.vector, None);
         assert_eq!(rectangle.from.col, 5);
         assert_eq!(rectangle.from.col_off, 12699);
         assert_eq!(rectangle.to.map(|to| (to.col, to.row)), Some((7, 9)));
@@ -4413,11 +5994,80 @@ mod tests {
         assert_eq!(line.color, "FF0000");
         assert_eq!(line.width, 28575, "three pixels at 96 dpi");
         assert_eq!(line.dash, None);
+        assert_eq!(line.head_end.as_deref(), Some("diamond"));
+        assert_eq!(line.head_end_width.as_deref(), Some("lg"));
+        assert_eq!(line.head_end_length.as_deref(), Some("sm"));
+        assert_eq!(line.tail_end.as_deref(), Some("oval"));
+        assert_eq!(line.tail_end_width.as_deref(), Some("sm"));
+        assert_eq!(line.tail_end_length.as_deref(), Some("lg"));
 
-        let (picture, embed) = &found[1];
-        assert_eq!(embed.as_deref(), Some("rId7"));
+        let (picture, embeds) = &found[1];
+        assert_eq!(embeds.raster.as_deref(), Some("rId7"));
+        assert_eq!(embeds.vector, None);
         assert_eq!(picture.extent, Some((952500, 476250)));
         assert!(matches!(picture.kind, crate::ir::DrawingKind::Picture { .. }));
+    }
+
+    #[test]
+    fn captures_svg_picture_relationship_and_intrinsic_extent() {
+        let xml = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from><xdr:ext cx="1" cy="1"/><xdr:pic><xdr:blipFill><a:blip r:embed="rId1"><a:extLst><a:ext><asvg:svgBlip r:embed="rId2"/></a:ext></a:extLst></a:blip></xdr:blipFill></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>"#;
+        let found = parse_drawing_xml(xml, &Theme::default());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].1.raster.as_deref(), Some("rId1"));
+        assert_eq!(found[0].1.vector.as_deref(), Some("rId2"));
+        assert_eq!(svg_intrinsic_size_points(br#"<svg width="120" height="80" viewBox="0 0 120 80"/>"#), Some((90.0, 60.0)));
+        assert_eq!(svg_intrinsic_size_points(br#"<svg width="1in" viewBox="0 0 2 1"/>"#), Some((72.0, 36.0)));
+    }
+
+    #[test]
+    fn excel_svg_picture_uses_vector_size_over_raster_preview() {
+        let book = crate::parse_xlsx(include_bytes!("../../../tests/fixtures/vba/scale_picture_original_svg.xlsx")).unwrap();
+        let format = book.sheets[0].drawings.iter().find_map(|drawing| match &drawing.kind {
+            crate::ir::DrawingKind::Picture { format, .. } => Some(format),
+            _ => None,
+        }).expect("picture format");
+        assert_eq!(format.original_size_points, Some((90.0, 60.0)));
+    }
+
+    #[test]
+    fn excel_ole_objects_keep_their_drawing_frames() {
+        let book = crate::parse_xlsx(include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx")).unwrap();
+        assert_eq!(book.sheets[0].drawings.len(), 2);
+        assert_eq!(book.sheets[0].drawings[0].name.as_deref(), Some("Object 1"));
+        assert_eq!(book.sheets[0].drawings[1].name.as_deref(), Some("Object 2"));
+        assert!(book.sheets[0].drawings.iter().all(|drawing| matches!(drawing.kind, crate::ir::DrawingKind::Shape(_))));
+        assert_eq!(book.sheets[0].drawings[0].ole_prog_id.as_deref(), Some("Package"));
+        assert_eq!(book.sheets[0].drawings[1].ole_prog_id.as_deref(), Some("Word.Document.12"));
+        assert_eq!(book.sheets[0].drawings[0].ole_placement, Some(2));
+        assert_eq!(book.sheets[0].drawings[1].ole_placement, Some(2));
+        assert_eq!(book.sheets[0].drawings[0].ole_type, Some(1));
+        assert_eq!(book.sheets[0].drawings[0].ole_auto_load, None);
+        assert_eq!(book.sheets[0].drawings[0].ole_enabled, None);
+        assert_eq!(book.sheets[0].drawings[0].ole_locked, None);
+        assert_eq!(book.sheets[0].drawings[0].ole_print_object, None);
+    }
+
+    #[test]
+    fn ole_object_placement_reads_move_and_size_anchor_flags() {
+        let xml = r#"<worksheet><oleObjects>
+          <oleObject shapeId="1" id="rId1" autoLoad="1" progId="A"><objectPr locked="0" print="0" disabled="1"><anchor moveWithCells="1" sizeWithCells="1"/></objectPr></oleObject>
+          <mc:AlternateContent><mc:Choice><oleObject shapeId="2" id="rId2" progId="B"><objectPr><anchor moveWithCells="1"/></objectPr></oleObject></mc:Choice><mc:Fallback><oleObject shapeId="2" id="rId2" progId="B"/></mc:Fallback></mc:AlternateContent>
+          <oleObject shapeId="3" progId="C"><objectPr><anchor/></objectPr></oleObject>
+        </oleObjects></worksheet>"#;
+        let relationships = HashMap::from([
+            ("rId1".into(), Relationship { id: "rId1".into(), rel_type: String::new(), target: "embeddings/a.bin".into(), target_mode: None }),
+            ("rId2".into(), Relationship { id: "rId2".into(), rel_type: String::new(), target: "C:/linked.bin".into(), target_mode: Some("External".into()) }),
+        ]);
+        let metadata = parse_ole_object_metadata(xml, &relationships);
+        assert_eq!(metadata.get(&1).map(|item| item.placement), Some(1));
+        assert_eq!(metadata.get(&2).map(|item| item.placement), Some(2));
+        assert_eq!(metadata.get(&3).map(|item| item.placement), Some(3));
+        assert_eq!(metadata.get(&1).map(|item| item.ole_type), Some(1));
+        assert_eq!(metadata.get(&2).map(|item| item.ole_type), Some(2));
+        assert_eq!(metadata.get(&1).and_then(|item| item.auto_load), Some(true));
+        assert_eq!(metadata.get(&1).and_then(|item| item.enabled), Some(false));
+        assert_eq!(metadata.get(&1).and_then(|item| item.locked), Some(false));
+        assert_eq!(metadata.get(&1).and_then(|item| item.print_object), Some(false));
     }
 
     /// A shape's own text, with the dressing of the run that starts each
@@ -4506,14 +6156,7 @@ mod tests {
         // A workbook that states its own palette is taken at its word.
         let own = xml.replace(
             "</styleSheet>",
-            "<colors><indexedColors>\
-             <rgbColor rgb=\"00000000\"/><rgbColor rgb=\"00FFFFFF\"/>\
-             <rgbColor rgb=\"00FF0000\"/><rgbColor rgb=\"0000FF00\"/>\
-             <rgbColor rgb=\"000000FF\"/><rgbColor rgb=\"00FFFF00\"/>\
-             <rgbColor rgb=\"00FF00FF\"/><rgbColor rgb=\"0000FFFF\"/>\
-             <rgbColor rgb=\"00000000\"/><rgbColor rgb=\"00FFFFFF\"/>\
-             <rgbColor rgb=\"00FF0000\"/><rgbColor rgb=\"0000FF00\"/>\
-             <rgbColor rgb=\"00123456\"/></indexedColors></colors></styleSheet>",
+            "<colors><indexedColors><rgbColor rgb=\"00000000\"/><rgbColor rgb=\"00FFFFFF\"/><rgbColor rgb=\"00FF0000\"/><rgbColor rgb=\"0000FF00\"/><rgbColor rgb=\"000000FF\"/><rgbColor rgb=\"00FFFF00\"/><rgbColor rgb=\"00FF00FF\"/><rgbColor rgb=\"0000FFFF\"/><rgbColor rgb=\"00000000\"/><rgbColor rgb=\"00FFFFFF\"/><rgbColor rgb=\"00FF0000\"/><rgbColor rgb=\"0000FF00\"/><rgbColor rgb=\"00123456\"/></indexedColors></colors></styleSheet>",
         );
         let mut theme = Theme::default();
         theme.indexed = indexed_palette(&own);
@@ -4522,8 +6165,18 @@ mod tests {
         assert_eq!(resolve_cell_style(1, &sheet).font_color.as_deref(), Some("123456"));
     }
 
+    #[test]
+    fn workbook_ir_retains_a_custom_indexed_color_palette() {
+        let workbook = parse_xlsx(include_bytes!(
+            "../../../tools/golden-test/documents/xlsx/e1c631fac30a_bunya_taikeizu_point.xlsx"
+        ))
+        .unwrap();
+        assert_eq!(workbook.indexed_colors.len(), 64);
+        assert_eq!(workbook.indexed_colors[12], "0000D4");
+    }
+
     /// `<a:br/>` starts a line without starting a paragraph. Without it
-    /// `sanko_tool`'s heading ran into the sentence under it — one line where
+    /// `sanko_tool`'s heading ran into the sentence under it 遯ｶ繝ｻone line where
     /// Excel draws two.
     #[test]
     fn a_break_inside_a_paragraph_starts_a_line() {
@@ -4539,12 +6192,12 @@ mod tests {
       <xdr:txBody>
         <a:bodyPr/>
         <a:p>
-          <a:r><a:rPr sz="1200" u="sng"/><a:t>イメージ</a:t></a:r>
+          <a:r><a:rPr sz="1200" u="sng"/><a:t>郢ｧ・､郢晢ｽ｡郢晢ｽｼ郢ｧ・ｸ</a:t></a:r>
           <a:br><a:rPr sz="1200"/></a:br>
           <a:br><a:rPr sz="1200"/></a:br>
-          <a:r><a:rPr sz="1200"/><a:t>１．確認したい品目</a:t></a:r>
+          <a:r><a:rPr sz="1200"/><a:t>繝ｻ謇假ｽｼ螳茨ｽ｢・ｺ髫ｱ髦ｪ・邵ｺ貅假ｼ櫁惓竏ｫ蟯ｼ</a:t></a:r>
         </a:p>
-        <a:p><a:r><a:rPr sz="1200"/><a:t>２．リンク係数</a:t></a:r></a:p>
+        <a:p><a:r><a:rPr sz="1200"/><a:t>繝ｻ謚ｵ・ｼ蠑ｱﾎ懃ｹ晢ｽｳ郢ｧ・ｯ闖ｫ繧育・</a:t></a:r></a:p>
       </xdr:txBody>
     </xdr:sp>
     <xdr:clientData/>
@@ -4556,13 +6209,13 @@ mod tests {
         };
         let said = shape.text.as_ref().expect("the shape says something");
         assert_eq!(said.paragraphs.len(), 2);
-        assert_eq!(said.paragraphs[0].text, "イメージ\n\n１．確認したい品目");
-        assert_eq!(said.paragraphs[1].text, "２．リンク係数");
+        assert_eq!(said.paragraphs[0].text, "郢ｧ・､郢晢ｽ｡郢晢ｽｼ郢ｧ・ｸ\n\n繝ｻ謇假ｽｼ螳茨ｽ｢・ｺ髫ｱ髦ｪ・邵ｺ貅假ｼ櫁惓竏ｫ蟯ｼ");
+        assert_eq!(said.paragraphs[1].text, "繝ｻ謚ｵ・ｼ蠑ｱﾎ懃ｹ晢ｽｳ郢ｧ・ｯ闖ｫ繧育・");
     }
 
     /// A rule states its colour before it says how it is broken, so the dash
     /// has to be put on the line at the end of `<a:ln>` rather than when the
-    /// colour is read — `glossary_05`'s dashed frame came out solid until it
+    /// colour is read 遯ｶ繝ｻ`glossary_05`'s dashed frame came out solid until it
     /// was.
     #[test]
     fn a_dash_stated_after_the_colour_still_reaches_the_line() {
@@ -4593,6 +6246,31 @@ mod tests {
         let line = shape.line.as_ref().expect("the shape is ruled");
         assert_eq!(line.dash.as_deref(), Some("dash"));
         assert_eq!(line.width, 19050);
+    }
+
+    #[test]
+    fn a_patterned_shape_line_keeps_both_colours() {
+        let xml = r##"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="2" name="Patterned"/><xdr:cNvSpPr/></xdr:nvSpPr>
+      <xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+        <a:ln><a:pattFill prst="pct10"><a:fgClr><a:srgbClr val="FF0000"/></a:fgClr>
+          <a:bgClr><a:srgbClr val="00FF00"/></a:bgClr></a:pattFill></a:ln>
+      </xdr:spPr>
+    </xdr:sp><xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"##;
+        let found = parse_drawing_xml(xml, &Theme::default());
+        let drawing = &found[0].0;
+        assert_eq!(drawing.name.as_deref(), Some("Patterned"));
+        let crate::ir::DrawingKind::Shape(shape) = &drawing.kind else { panic!("shape expected") };
+        let line = shape.line.as_ref().expect("patterned rule");
+        assert_eq!(line.pattern.as_deref(), Some("pct10"));
+        assert_eq!(line.color, "FF0000");
+        assert_eq!(line.back_color.as_deref(), Some("00FF00"));
     }
 
     /// A shape's run can name the theme's scheme instead of a face.
@@ -4680,15 +6358,25 @@ mod tests {
         assert_eq!(
             shape.line.as_ref().map(|line| line.color.as_str()),
             Some("2F528F"),
-            "a 50% shade halves the LIGHT, not the byte — halving the byte \
+            "a 50% shade halves the LIGHT, not the byte 遯ｶ繝ｻhalving the byte \
              would give 223962, and Excel draws neither that nor anything \
              near it (see `_xlsx_shade_curve.py`)"
         );
     }
 
+    #[test]
+    fn a_text_run_retains_theme_colour_brightness() {
+        let xml = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:txBody><a:bodyPr/><a:p><a:r><a:rPr><a:solidFill><a:schemeClr val="accent1"><a:lumMod val="60000"/><a:lumOff val="40000"/></a:schemeClr></a:solidFill></a:rPr><a:t>x</a:t></a:r></a:p></xdr:txBody></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>"#;
+        let found = parse_drawing_xml(xml, &Theme::default());
+        let crate::ir::DrawingKind::Shape(shape) = &found[0].0.kind else { panic!("shape expected") };
+        let run = &shape.text.as_ref().unwrap().paragraphs[0].runs[0];
+        assert_eq!(run.color_theme, Some(5));
+        assert_eq!(run.color_brightness, Some(0.4));
+    }
+
     /// How light a colour is moves through HSL, and Excel's own picture is
-    /// what says so: `002`'s banner is accent1 — 5B9BD5 in that workbook's
-    /// theme — under `lumMod 20% lumOff 80%`, and Excel paints it DEEBF7.
+    /// what says so: `002`'s banner is accent1 遯ｶ繝ｻ5B9BD5 in that workbook's
+    /// theme 遯ｶ繝ｻunder `lumMod 20% lumOff 80%`, and Excel paints it DEEBF7.
     #[test]
     fn lightness_is_moved_the_way_excel_moves_it() {
         assert_eq!(
@@ -4752,7 +6440,7 @@ mod tests {
         let stylesheet = parse_styles_xml(styles, &Theme::default()).unwrap();
         let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <c r="A1" t="inlineStr"><is><t>Agreed</t></is></c>
 </worksheet>"#;
         let sheet = parse_worksheet(xml, "probe", &[], &stylesheet, &Theme::default()).expect("should parse");
         assert_eq!(sheet.first_font, Some(("Calibri".to_string(), 11.0)));
@@ -4761,20 +6449,20 @@ mod tests {
 
     /// The pieces a shared string is dressed in add up to the string: a
     /// reader that draws them one after another must not be handed more text
-    /// than the cell holds. `f1b851d0a096_001290291`'s title is five pieces
-    /// of 23, 2, 3, 19 and 15 characters — 62 in all, which is what its cell
+    /// The pieces of a shared string add up to the string, and a
+    /// of several rich-text pieces, while phonetic text remains separate.
     /// shows.
     #[test]
     fn the_pieces_of_a_shared_string_add_up_to_it() {
         let xml = concat!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
             r#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
-            r#"<si><r><rPr><sz val="20"/><rFont val="ＭＳ 明朝"/></rPr>"#,
-            "<t xml:space=\"preserve\">\n\nはじめ</t></r>",
-            r#"<r><rPr><sz val="14"/><rFont val="ＭＳ 明朝"/></rPr>"#,
+            r#"<si><r><rPr><sz val="20"/><rFont val="Meiryo UI"/></rPr>"#,
+            "<t xml:space=\"preserve\">\n\n邵ｺ・ｯ邵ｺ蛟･・・</t></r>",
+            r#"<r><rPr><sz val="14"/><rFont val="Meiryo UI"/></rPr>"#,
             "<t xml:space=\"preserve\">\n\n</t></r>",
-            r#"<r><rPr><sz val="18"/><rFont val="ＭＳ 明朝"/></rPr><t>集計表</t></r>"#,
-            r#"<rPh sb="25" eb="28"><t>シュウケイヒョウ</t></rPh>"#,
+            r#"<r><rPr><sz val="18"/><rFont val="Meiryo UI"/></rPr><t>鬮ｮ繝ｻ・ｨ驛・ｽ｡・ｨ</t></r>"#,
+            r#"<rPh sb="25" eb="28"><t>郢ｧ・ｷ郢晢ｽ･郢ｧ・ｦ郢ｧ・ｱ郢ｧ・､郢晏・ﾎ咏ｹｧ・ｦ</t></rPh>"#,
             r#"<phoneticPr fontId="9"/></si></sst>"#,
         );
         let held = parse_shared_strings(xml).expect("should parse");
@@ -4784,7 +6472,7 @@ mod tests {
                    string.text, string.runs.iter().map(|r| &r.text).collect::<Vec<_>>());
         assert_eq!(string.runs.len(), 3);
         // The phonetic guide is in neither.
-        assert!(!string.text.contains('シ'));
+        assert!(!string.text.contains('\u{30b7}'));
     }
 
     #[test]
@@ -4899,7 +6587,64 @@ mod tests {
 }
 
 #[cfg(test)]
+mod threaded_comments {
+    use super::{parse_person_list, parse_threaded_comments};
+
+    #[test]
+    fn parses_person_display_and_identity_metadata() {
+        let people = parse_person_list(r#"<personList><person id="p1" displayName="Excel User" userId="user-123" providerId="Windows Live"/></personList>"#);
+        let person = people.get("p1").unwrap();
+        assert_eq!(person.display_name, "Excel User");
+        assert_eq!(person.user_id, "user-123");
+        assert_eq!(person.provider_id, "Windows Live");
+    }
+
+    #[test]
+    fn parses_threaded_comment_text_and_nested_reply_identity() {
+        let xml = r#"<ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments">
+          <threadedComment ref="C5" dT="2026-10-23T13:55:31.50" personId="person-a" id="thread-a">
+            <text>thread &amp; root</text>
+            <threadedComment ref="C5" dT="2026-10-23T13:56:00Z" personId="person-b" id="reply-b" parentId="thread-a">
+              <text>reply text</text>
+            </threadedComment>
+          </threadedComment>
+        </ThreadedComments>"#;
+        let comments = parse_threaded_comments(xml);
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].cell, (4, 2));
+        assert_eq!(comments[0].id, "thread-a");
+        assert_eq!(comments[0].person_id, "person-a");
+        assert_eq!(comments[0].text, "thread & root");
+        assert_eq!(comments[0].parent_id, None);
+        assert_eq!(comments[1].id, "reply-b");
+        assert_eq!(comments[1].person_id, "person-b");
+        assert_eq!(comments[1].parent_id.as_deref(), Some("thread-a"));
+        assert_eq!(comments[1].text, "reply text");
+    }
+}
+
+#[cfg(test)]
 mod note_room {
+    #[test]
+    fn escape_sequences_do_not_cross_rich_text_boundaries() {
+        let comments = r#"<comments><authors><author>a</author></authors><commentList><comment ref="B2" authorId="0"><text><r><t>_x0</t></r><r><t>041_ and _x005F_x0041_</t></r><r><t>_xDE00_</t></r></text></comment></commentList></comments>"#;
+        let vml = r#"<v:shape style='position:absolute;width:100pt;height:50pt'><x:ClientData><x:Anchor>1, 0, 1, 0, 3, 0, 3, 0</x:Anchor><x:Row>1</x:Row><x:Column>1</x:Column></x:ClientData></v:shape>"#;
+        let notes = super::parse_comments(comments, vml);
+        let expected: Vec<u16> = "_x0041_ and _x0041_".encode_utf16().chain([0xDE00]).collect();
+        assert_eq!(notes[0].utf16_text.as_ref(), Some(&expected));
+        assert_eq!(notes[0].text.paragraphs[0].text, "_x0041_ and _x0041_\u{fffd}");
+    }
+
+    #[test]
+    fn note_reads_each_rich_text_run() {
+        let comments = r#"<comments><authors><author>a</author></authors><commentList><comment ref="B2" authorId="0"><text><r><rPr><b/><sz val="9"/></rPr><t>ab</t></r><r><rPr><b/><i/><sz val="9"/></rPr><t>cd</t></r><r><rPr><color indexed="10"/></rPr><t>ef</t></r></text></comment></commentList></comments>"#;
+        let vml = r#"<v:shape style='position:absolute;width:100pt;height:50pt'><x:ClientData><x:Anchor>1, 0, 1, 0, 3, 0, 3, 0</x:Anchor><x:Row>1</x:Row><x:Column>1</x:Column></x:ClientData></v:shape>"#;
+        let notes = super::parse_comments(comments, vml);
+        let runs = &notes[0].text.paragraphs[0].runs;
+        assert_eq!(runs.iter().map(|run| run.text.as_str()).collect::<Vec<_>>(), ["ab", "cd", "ef"]);
+        assert_eq!(runs.iter().map(|run| run.italic).collect::<Vec<_>>(), [Some(false), Some(true), Some(false)]);
+        assert_eq!(runs[2].color.as_deref(), Some("FF0000"));
+    }
     /// A note keeps 7.2 points either side and 3.6 above and below unless it
     /// says otherwise, which is what Excel makes one with. The corpus's floor
     /// workbook states 2.5mm and 2.3mm instead, and those were being given to
@@ -4914,6 +6659,7 @@ mod note_room {
         let comments = "<comments><authors><author>a</author></authors>            <commentList><comment ref=\"B2\" authorId=\"0\"><text><r>            <t>said</t></r></text></comment></commentList></comments>";
         let bare = super::parse_comments(comments, &vml("style='mso-direction-alt:auto'"));
         assert_eq!(bare.len(), 1);
+        assert_eq!(bare[0].author, "a");
         assert_eq!(bare[0].text.insets, (91440, 45720, 91440, 45720));
         let stated = super::parse_comments(
             comments,
@@ -4926,6 +6672,39 @@ mod note_room {
             &vml("style='mso-direction-alt:auto' inset=\",0\""),
         );
         assert_eq!(partial[0].text.insets, (91440, 0, 91440, 45720));
+    }
+}
+
+#[cfg(test)]
+mod note_line_style {
+    #[test]
+    fn reads_vml_outline_color_visibility_and_width() {
+        let comments = r#"<comments><authors><author>a</author></authors><commentList><comment ref="B2" authorId="0"><text><t>said</t></text></comment></commentList></comments>"#;
+        let vml = r##"<v:shape style='position:absolute;width:100pt;height:50pt' fillcolor="#ffffe1" strokecolor="#FF0000" strokeweight="2.25pt" stroked="f"><v:textbox/><x:ClientData><x:Anchor>1, 0, 1, 0, 3, 0, 3, 0</x:Anchor><x:Row>1</x:Row><x:Column>1</x:Column></x:ClientData></v:shape>"##;
+        let parsed = super::parse_comments(comments, vml);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].line_color.as_deref(), Some("FF0000"));
+        assert!(!parsed[0].line_visible);
+        assert_eq!(parsed[0].line_weight, 2.25);
+
+        let default_vml = r##"<v:shape style='position:absolute;width:100pt;height:50pt' fillcolor="#ffffe1"><v:textbox/><x:ClientData><x:Anchor>1, 0, 1, 0, 3, 0, 3, 0</x:Anchor><x:Row>1</x:Row><x:Column>1</x:Column></x:ClientData></v:shape>"##;
+        let defaulted = super::parse_comments(comments, default_vml);
+        assert!(defaulted[0].line_visible);
+        assert_eq!(defaulted[0].line_weight, 0.75);
+        let hidden_fill_vml = default_vml.replace("<v:shape ", "<v:shape filled=\"f\" ");
+        let hidden_fill = super::parse_comments(comments, &hidden_fill_vml);
+        assert!(!hidden_fill[0].fill_visible);
+        let transparency_vml = default_vml.replace(
+            "<v:textbox/>",
+            "<v:fill opacity=\"39322f\"/><v:stroke opacity=\"39322f\"/><v:textbox/>",
+        );
+        let transparent = super::parse_comments(comments, &transparency_vml);
+        assert!((transparent[0].fill_transparency - 0.399_993_9).abs() < 0.000_001);
+        assert!((transparent[0].line_transparency - 0.399_993_9).abs() < 0.000_001);
+
+        let system_fill_vml = r##"<v:shape style='position:absolute;width:100pt;height:50pt' fillcolor="infoBackground [80]"><v:textbox/><x:ClientData><x:Anchor>1, 0, 1, 0, 3, 0, 3, 0</x:Anchor><x:Row>1</x:Row><x:Column>1</x:Column></x:ClientData></v:shape>"##;
+        let system_filled = super::parse_comments(comments, system_fill_vml);
+        assert_eq!(system_filled[0].fill.as_deref(), Some("FFFFE1"));
     }
 }
 

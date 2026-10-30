@@ -1,0 +1,2962 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "scope": "Complete Native macro returns for PHONETIC on cell references with no supplied phonetic reading, including formula, conditional, Evaluate and WorksheetFunction routes; one separate unsupported WorksheetFunction.Error_Type member control. Does not claim rich phonetic reading support or all argument shapes.",
+  "groups": [
+    {
+      "source": "phonetic_reference_results.bas",
+      "package": "phonetic_reference_results.xlsm",
+      "source_identity": 2026102136,
+      "source_packet_sha256": "90b2ec192ec223590253ce11d9e8bc450f44c17b87847560a32bcd28c9bf48a0",
+      "cases": [
+        {
+          "id": 3572,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                0,
+                0
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3573,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                0,
+                1
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3574,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                0,
+                2
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3575,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                0,
+                3
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3576,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                0,
+                4
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3577,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                0,
+                5
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3578,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                1,
+                0
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3579,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                1,
+                1
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3580,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                1,
+                2
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3581,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                1,
+                3
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3582,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                1,
+                4
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3583,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                1,
+                5
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    1,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3584,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                2,
+                0
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3585,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                2,
+                1
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3586,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                2,
+                2
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3587,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                2,
+                3
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3588,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                2,
+                4
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3589,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                2,
+                5
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    2,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3590,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                3,
+                0
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3591,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                3,
+                1
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3592,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                3,
+                2
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3593,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                3,
+                3
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3594,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                3,
+                4
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3595,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                3,
+                5
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    3,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3596,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                4,
+                0
+              ],
+              "expected": "8:fault"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    0
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    0
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    0
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3597,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                4,
+                1
+              ],
+              "expected": "8:fault"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    1
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    1
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    1
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3598,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                4,
+                2
+              ],
+              "expected": "8:fault"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    2
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    2
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    2
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3599,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                4,
+                3
+              ],
+              "expected": "8:fault"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    3
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    3
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    3
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3600,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                4,
+                4
+              ],
+              "expected": "8:fault"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    4
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    4
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    4
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3601,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                4,
+                5
+              ],
+              "expected": "8:fault"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    5
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    5
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    4,
+                    5
+                  ],
+                  "expected": "8:fault"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3602,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                5,
+                0
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3603,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                5,
+                1
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3604,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                5,
+                2
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3605,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                5,
+                3
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3606,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                5,
+                4
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3607,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                5,
+                5
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    5,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3608,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                6,
+                0
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    0
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3609,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                6,
+                1
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    1
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3610,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                6,
+                2
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    2
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3611,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                6,
+                3
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    3
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3612,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                6,
+                4
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    4
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3613,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                6,
+                5
+              ],
+              "expected": "10:errorCode=2042"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    6,
+                    5
+                  ],
+                  "expected": "10:errorCode=2042"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3614,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                7,
+                0
+              ],
+              "expected": "fault@phonetic:1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    0
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    0
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    0
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3615,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                7,
+                1
+              ],
+              "expected": "fault@phonetic:1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    1
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    1
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    1
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3616,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                7,
+                2
+              ],
+              "expected": "fault@phonetic:1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    2
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    2
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    2
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3617,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                7,
+                3
+              ],
+              "expected": "fault@phonetic:1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    3
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    3
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    3
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3618,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                7,
+                4
+              ],
+              "expected": "fault@phonetic:1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    4
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    4
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    4
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        },
+        {
+          "id": 3619,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                7,
+                5
+              ],
+              "expected": "fault@phonetic:1004"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    5
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    5
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    7,
+                    5
+                  ],
+                  "expected": "fault@phonetic:1004"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "source": "worksheet_function_error_type.bas",
+      "package": "worksheet_function_error_type.xlsm",
+      "source_identity": 2026102135,
+      "source_packet_sha256": "c6b5b33752bf0c4a588a693330d3d7387053aee16417e9ed65363c7b01b14d03",
+      "cases": [
+        {
+          "id": 3524,
+          "steps": [
+            {
+              "procedure": "PhoneticCase",
+              "arguments": [
+                0,
+                0
+              ],
+              "expected": "fault@phonetic:438"
+            }
+          ],
+          "native_observations": [
+            {
+              "repeat": 0,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "fault@phonetic:438"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 1,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "fault@phonetic:438"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            },
+            {
+              "repeat": 2,
+              "complete_steps": [
+                {
+                  "procedure": "PhoneticCase",
+                  "arguments": [
+                    0,
+                    0
+                  ],
+                  "expected": "fault@phonetic:438"
+                }
+              ],
+              "owned_exit_code": 0,
+              "controller_exit_code": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

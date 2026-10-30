@@ -1,0 +1,812 @@
+[
+  {
+    "name": "sheet_title_legend",
+    "source": "chart_persistence_sheet_title_legend.bas",
+    "procedure": "DriverModule.Probe",
+    "change_procedure": "DriverModule.Change",
+    "compile_project": true,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_persistence_empty_module.bas"
+      }
+    ],
+    "setup_sheets": 1,
+    "embedded": false,
+    "initial_title": null,
+    "package_fixture": "chart_persistence_sheet_title_legend.xlsm",
+    "package_refreshed": "chart_persistence_sheet_title_legend_saved.xlsm",
+    "outcome": "values",
+    "measurement_source": "chart_persistence_sheet_title_legend_driver.bas",
+    "host_context": {
+      "book_name": "sheet_title_legend.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "stage": "initial",
+        "value": "False|[off]|True|-4152"
+      },
+      {
+        "stage": "changed",
+        "value": "True|Revenue|False|[off]"
+      },
+      {
+        "stage": "reopened",
+        "value": "True|Revenue|False|[off]"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    },
+    "source_code_page": 932
+  },
+  {
+    "name": "sheet_unicode",
+    "source": "chart_persistence_sheet_unicode.bas",
+    "procedure": "DriverModule.Probe",
+    "change_procedure": "DriverModule.Change",
+    "compile_project": true,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_persistence_empty_module.bas"
+      }
+    ],
+    "setup_sheets": 1,
+    "embedded": false,
+    "initial_title": null,
+    "package_fixture": "chart_persistence_sheet_unicode.xlsm",
+    "package_refreshed": "chart_persistence_sheet_unicode_saved.xlsm",
+    "outcome": "values",
+    "measurement_source": "chart_persistence_sheet_unicode_driver.bas",
+    "host_context": {
+      "book_name": "sheet_unicode.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "stage": "initial",
+        "value": "False|[off]|True|-4152"
+      },
+      {
+        "stage": "changed",
+        "value": "True|売上 & <利益>\n2026|True|-4152"
+      },
+      {
+        "stage": "reopened",
+        "value": "True|売上 & <利益>\n2026|True|-4152"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    },
+    "source_code_page": 932
+  },
+  {
+    "name": "sheet_hide_title",
+    "source": "chart_persistence_sheet_hide_title.bas",
+    "procedure": "DriverModule.Probe",
+    "change_procedure": "DriverModule.Change",
+    "compile_project": true,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_persistence_empty_module.bas"
+      }
+    ],
+    "setup_sheets": 1,
+    "embedded": false,
+    "initial_title": "Original",
+    "package_fixture": "chart_persistence_sheet_hide_title.xlsm",
+    "package_refreshed": "chart_persistence_sheet_hide_title_saved.xlsm",
+    "outcome": "values",
+    "measurement_source": "chart_persistence_sheet_hide_title_driver.bas",
+    "host_context": {
+      "book_name": "sheet_hide_title.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "stage": "initial",
+        "value": "True|Original|True|-4152"
+      },
+      {
+        "stage": "changed",
+        "value": "False|[off]|True|-4152"
+      },
+      {
+        "stage": "reopened",
+        "value": "False|[off]|True|-4152"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    },
+    "source_code_page": 932
+  },
+  {
+    "name": "sheet_default_title",
+    "source": "chart_persistence_sheet_default_title.bas",
+    "procedure": "DriverModule.Probe",
+    "change_procedure": "DriverModule.Change",
+    "compile_project": true,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_persistence_empty_module.bas"
+      }
+    ],
+    "setup_sheets": 1,
+    "embedded": false,
+    "initial_title": null,
+    "package_fixture": "chart_persistence_sheet_default_title.xlsm",
+    "package_refreshed": "chart_persistence_sheet_default_title_saved.xlsm",
+    "outcome": "values",
+    "measurement_source": "chart_persistence_sheet_default_title_driver.bas",
+    "host_context": {
+      "book_name": "sheet_default_title.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "stage": "initial",
+        "value": "False|[off]|True|-4152"
+      },
+      {
+        "stage": "changed",
+        "value": "True|グラフ タイトル|True|-4152"
+      },
+      {
+        "stage": "reopened",
+        "value": "True|グラフ タイトル|True|-4152"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    },
+    "source_code_page": 932
+  },
+  {
+    "name": "sheet_empty_title",
+    "source": "chart_persistence_sheet_empty_title.bas",
+    "procedure": "DriverModule.Probe",
+    "change_procedure": "DriverModule.Change",
+    "compile_project": true,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_persistence_empty_module.bas"
+      }
+    ],
+    "setup_sheets": 1,
+    "embedded": false,
+    "initial_title": null,
+    "package_fixture": "chart_persistence_sheet_empty_title.xlsm",
+    "package_refreshed": "chart_persistence_sheet_empty_title_saved.xlsm",
+    "outcome": "values",
+    "measurement_source": "chart_persistence_sheet_empty_title_driver.bas",
+    "host_context": {
+      "book_name": "sheet_empty_title.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "stage": "initial",
+        "value": "False|[off]|True|-4152"
+      },
+      {
+        "stage": "changed",
+        "value": "False|[off]|True|-4152"
+      },
+      {
+        "stage": "reopened",
+        "value": "False|[off]|True|-4152"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    },
+    "source_code_page": 932
+  },
+  {
+    "name": "embedded_title_legend",
+    "source": "chart_persistence_embedded_title_legend.bas",
+    "procedure": "DriverModule.Probe",
+    "change_procedure": "DriverModule.Change",
+    "compile_project": true,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_persistence_empty_module.bas"
+      }
+    ],
+    "setup_sheets": 1,
+    "embedded": true,
+    "initial_title": null,
+    "package_fixture": "chart_persistence_embedded_title_legend.xlsm",
+    "package_refreshed": "chart_persistence_embedded_title_legend_saved.xlsm",
+    "outcome": "values",
+    "measurement_source": "chart_persistence_embedded_title_legend_driver.bas",
+    "host_context": {
+      "book_name": "embedded_title_legend.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 0,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      }
+    ],
+    "steps": [
+      {
+        "stage": "initial",
+        "value": "False|[off]|True|-4152"
+      },
+      {
+        "stage": "changed",
+        "value": "True|Revenue|False|[off]"
+      },
+      {
+        "stage": "reopened",
+        "value": "True|Revenue|False|[off]"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 0,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        }
+      ]
+    },
+    "source_code_page": 932
+  },
+  {
+    "name": "sheet_legend_left",
+    "source": "chart_persistence_sheet_legend_left.bas",
+    "procedure": "DriverModule.Probe",
+    "change_procedure": "DriverModule.Change",
+    "compile_project": true,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_persistence_empty_module.bas"
+      }
+    ],
+    "setup_sheets": 1,
+    "embedded": false,
+    "initial_title": null,
+    "package_fixture": "chart_persistence_sheet_legend_left.xlsm",
+    "package_refreshed": "chart_persistence_sheet_legend_left_saved.xlsm",
+    "outcome": "values",
+    "measurement_source": "chart_persistence_sheet_legend_left_driver.bas",
+    "host_context": {
+      "book_name": "sheet_legend_left.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "stage": "initial",
+        "value": "False|[off]|True|-4152"
+      },
+      {
+        "stage": "changed",
+        "value": "False|[off]|True|-4131"
+      },
+      {
+        "stage": "reopened",
+        "value": "False|[off]|True|-4131"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    },
+    "source_code_page": 932
+  },
+  {
+    "name": "sheet_restore_title",
+    "source": "chart_persistence_sheet_restore_title.bas",
+    "procedure": "DriverModule.Probe",
+    "change_procedure": "DriverModule.Change",
+    "compile_project": true,
+    "documents": [
+      {
+        "name": "Ledger",
+        "kind": "sheet",
+        "sheet": 0,
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "ArchiveHost",
+        "kind": "book",
+        "source": "chart_persistence_empty_module.bas"
+      },
+      {
+        "name": "PlotHost",
+        "kind": "chart",
+        "source": "chart_persistence_empty_module.bas"
+      }
+    ],
+    "setup_sheets": 1,
+    "embedded": false,
+    "initial_title": "Original",
+    "package_fixture": "chart_persistence_sheet_restore_title.xlsm",
+    "package_refreshed": "chart_persistence_sheet_restore_title_saved.xlsm",
+    "outcome": "values",
+    "measurement_source": "chart_persistence_sheet_restore_title_driver.bas",
+    "host_context": {
+      "book_name": "sheet_restore_title.xlsm",
+      "book_code_name": "ThisWorkbook",
+      "active_sheet": 0,
+      "sheets": [
+        {
+          "name": "グラフ1",
+          "code_name": "PlotHost",
+          "kind": "chart"
+        },
+        {
+          "name": "Sheet1",
+          "code_name": "Ledger",
+          "kind": "worksheet"
+        }
+      ]
+    },
+    "metadata_before": [
+      {
+        "name": "Ledger",
+        "baseType": "Excel.Worksheet",
+        "sheetIndex": 1,
+        "codeName": "Ledger"
+      },
+      {
+        "name": "ArchiveHost",
+        "baseType": "Excel.Workbook",
+        "codeName": "ThisWorkbook"
+      },
+      {
+        "name": "PlotHost",
+        "baseType": "Excel.Chart",
+        "sheetIndex": 0,
+        "codeName": "PlotHost"
+      }
+    ],
+    "steps": [
+      {
+        "stage": "initial",
+        "value": "True|Original|True|-4152"
+      },
+      {
+        "stage": "changed",
+        "value": "True|グラフ タイトル|True|-4152"
+      },
+      {
+        "stage": "reopened",
+        "value": "True|グラフ タイトル|True|-4152"
+      }
+    ],
+    "compilation_options": {
+      "documentModules": [
+        {
+          "name": "Ledger",
+          "baseType": "Excel.Worksheet",
+          "sheetIndex": 1,
+          "codeName": "Ledger"
+        },
+        {
+          "name": "ArchiveHost",
+          "baseType": "Excel.Workbook",
+          "codeName": "ThisWorkbook"
+        },
+        {
+          "name": "PlotHost",
+          "baseType": "Excel.Chart",
+          "sheetIndex": 0,
+          "codeName": "PlotHost"
+        }
+      ]
+    },
+    "source_code_page": 932
+  }
+]
