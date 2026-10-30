@@ -117,7 +117,12 @@ impl<'a> LineBreaker<'a> {
         let para_all_whitespace = fragments
             .iter()
             .all(|(text, _, _, _, _)| text.chars().all(|c| c.is_whitespace() || c == '\u{3000}'))
-            && fragments.iter().any(|(text, _, _, _, _)| !text.is_empty());
+            && fragments.iter().any(|(text, _, _, _, _)| !text.is_empty())
+            // OXI_WORDWRAP0_IDEOSPACE: under wordWrap 0 a paragraph of ideographic
+            // spaces wraps like text (Word: 38 spaces in a 36.6em column = 2 lines).
+            && !(!para_style.word_wrap
+                && std::env::var_os("OXI_WORDWRAP0_IDEOSPACE_DISABLE").is_none()
+                && fragments.iter().any(|(text, _, _, _, _)| text.contains('\u{3000}')));
 
         let mut lines = Vec::new();
         let mut current_line = Line {
@@ -6155,7 +6160,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // Oxi put the spaces on a 5th line.
                     let s1488_ascii_space_hang = ch == ' '
                         && std::env::var_os("OXI_S1488_DISABLE").is_none();
-                    let is_immune_space = (trailing_u3000 && line_near_full) || degenerate_space_overhang || s1436_space_hang || s1488_ascii_space_hang;
+                    // OXI_WORDWRAP0_IDEOSPACE (2026-10-31, default ON, opt-out _DISABLE):
+                    // under w:wordWrap="0" an ideographic space is an ordinary
+                    // character -- it neither hangs nor holds the line.
+                    // `_pb_ideospace_compat_gen.py` (ＭＳ 明朝 12, 36.6em column):
+                    // 37 / 38 / 60 / 80 spaces-only paragraphs take 1 line each by
+                    // default and 2 / 2 / 2 / 3 with wordWrap 0 (compat 11 and 15
+                    // alike); `_pb_ideospace_bisect.py` pins ja/creative__8af31dea's
+                    // 2-line 45-space paragraph on its 一太郎 style's wordWrap 0.
+                    let ideo_ordinary = ch == '\u{3000}' && !para_style.word_wrap
+                        && std::env::var_os("OXI_WORDWRAP0_IDEOSPACE_DISABLE").is_none();
+                    let is_immune_space = !ideo_ordinary && ((trailing_u3000 && line_near_full) || degenerate_space_overhang || s1436_space_hang)
+                        || s1488_ascii_space_hang;
                     let line_compress_count = current_line
                         .fragments
                         .iter()
