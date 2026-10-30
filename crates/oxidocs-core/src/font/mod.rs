@@ -2087,6 +2087,20 @@ impl FontMetricsRegistry {
             {
                 return advance_em * font_size;
             }
+            // OXI_CJK_LATIN_EXACT (2026-10-30, default ON, opt-out _DISABLE): the
+            // proportional Latin of an outline CJK face is not on the 10tw grid
+            // either. ja/reports__1dde6f31's table cell: «P<0.001» in Meiryo 11
+            // (w:spacing -10) advances 6.35 per digit in Word's PDF = hmtx 6.832 -
+            // 0.5; rounded to 7.0 the word measured 44.5 and broke after «0.» in a
+            // 43.3pt cell, where Word keeps it (`_pb_condensed_fit_gen.py`: fits
+            // from 43.4 = the exact sum 43.28; the body breaker already used it).
+            if std::env::var_os("OXI_CJK_LATIN_EXACT_DISABLE").is_none()
+                && c.is_ascii_graphic()
+                && metrics.units_per_em != 256
+                && metrics.is_cjk_83_64_font()
+            {
+                return advance_em * font_size;
+            }
             let width_tw = (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0;
             return width_tw / 20.0;
         }
