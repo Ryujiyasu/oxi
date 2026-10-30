@@ -5487,7 +5487,7 @@ impl<'a> WorkbookHost<'a> {
         ];
         // Measured: MergeArea, Errors, QueryTable and ID of a many-block
         // range are 1004.
-        if ["mergearea", "errors", "querytable", "id"].iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
+        if ["mergearea", "errors", "querytable", "id", "savedasarray"].iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
             return Err(host_error(1004, "Application-defined or object-defined error"));
         }
         if FIRST.iter().any(|wanted| name.eq_ignore_ascii_case(wanted)) {
@@ -5627,10 +5627,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn name_can_be_multiple(names: &[(String, String)], sheet: &str, requested: &str) -> bool {
-        let scoped = if requested.contains('!') { requested.to_string() } else { oxicells_core::ir::scoped_defined_name(sheet, requested) };
-        names.iter().find(|(n, _)| same_defined_name(n, &scoped))
-            .or_else(|| names.iter().find(|(n, _)| !n.contains('!') && same_defined_name(n, requested)))
-            .is_some_and(|(_, body)| body.contains(':'))
+        oxicells_core::editor::named_formula_needs_intersection(names, sheet, requested)
     }
 
     fn seed_compatibility_names(book: &mut Workbook) {
@@ -5644,6 +5641,7 @@ impl<'a> WorkbookHost<'a> {
                 if cell.formula.is_none() && cell.formula_utf16.is_none() { continue; }
                 if cell.array_block.is_none() && cell.spill.is_none() {
                     let _ = cell.rewrite_formula(|formula| Ok(oxicells_calc::implied_intersections(formula, &multiple)));
+                    cell.spill = oxicells_core::ir::Spill::Scalar;
                 }
                 let text = cell.formula.clone().unwrap_or_else(|| String::from_utf16_lossy(cell.formula_utf16.as_deref().unwrap_or_default()));
                 compatibility.extend(oxicells_calc::lexer::name_compatibility_identifiers(&text));
@@ -6949,14 +6947,18 @@ impl<'a> WorkbookHost<'a> {
     /// answers spills into the cells beside it.
     fn mark_dynamic(&mut self, range: CellRange, written: &[CellAddress]) {
         let written: BTreeSet<_> = written.iter().map(|at| (at.row, at.column)).collect();
+        let names = self.workbook.defined_names.clone();
         let Some(sheet) = self.workbook.sheets.get_mut(range.sheet) else {
             return;
         };
+        let multiple = |name: &str| oxicells_core::editor::named_formula_needs_intersection(&names, &sheet.name, name);
         for row in sheet.rows.iter_mut().filter(|row| (range.start_row..=range.end_row).contains(&row.index)) {
             let row_number = row.index;
             for cell in row.cells.iter_mut().filter(|cell| (range.start_column..=range.end_column).contains(&cell.col) && written.contains(&(row_number, cell.col))) {
-                if cell.formula.is_some() && cell.array_block.is_none() {
-                    cell.spill = oxicells_core::ir::Spill::Dynamic;
+                if let Some(formula) = cell.formula.as_deref().filter(|_| cell.array_block.is_none()) {
+                    cell.spill = if oxicells_calc::lexer::requires_array_storage(formula, &multiple) {
+                        oxicells_core::ir::Spill::Dynamic
+                    } else { oxicells_core::ir::Spill::Scalar };
                 }
             }
         }
@@ -7038,6 +7040,7 @@ impl<'a> WorkbookHost<'a> {
                     continue;
                 }
                 let _ = cell.rewrite_formula(|formula| Ok(oxicells_calc::implied_intersections(formula, &multi)));
+                cell.spill = oxicells_core::ir::Spill::Scalar;
                 let text = cell.formula.clone().unwrap_or_else(|| String::from_utf16_lossy(cell.formula_utf16.as_deref().unwrap_or_default()));
                 compatibility.extend(oxicells_calc::lexer::name_compatibility_identifiers(&text));
             }
@@ -17434,6 +17437,36 @@ impl<'a> WorkbookHost<'a> {
                 let x0 = left.max(block.start_column);let x1 = right.min(block.end_column);
                 let y0 = top.max(block.start_row);let y1 = bottom.min(block.end_row);
                 if x0 <= x1 && y0 <= y1 { covered += u64::from(x1 - x0 + 1) * u64::from(y1 - y0 + 1); }
+            }
+        }
+        Ok(Self::range_presence(covered, total))
+    }
+
+    fn range_saved_as_array(&self, range: CellRange) -> Result<Value, String> {
+        Self::range_cell_count_large(range)?;
+        let used = self.presence_used_range(range.sheet)?;
+        let left = range.start_column.max(used.start_column);
+        let right = range.end_column.min(used.end_column);
+        let top = range.start_row.max(used.start_row);
+        let bottom = range.end_row.min(used.end_row);
+        if left > right || top > bottom { return Ok(Value::Boolean(false)); }
+        let total = u64::from(right - left + 1) * u64::from(bottom - top + 1);
+        let overlap = |block: CellRange| {
+            let x0 = left.max(block.start_column);let x1 = right.min(block.end_column);
+            let y0 = top.max(block.start_row);let y1 = bottom.min(block.end_row);
+            if x0 <= x1 && y0 <= y1 { u64::from(x1 - x0 + 1) * u64::from(y1 - y0 + 1) } else { 0 }
+        };
+        let mut covered = self.arrays_on(range.sheet).into_iter().map(|(start_row, start_column, end_row, end_column)|
+            overlap(CellRange { sheet: range.sheet, start_row, start_column, end_row, end_column })).sum::<u64>();
+        let sheet = &self.workbook.sheets[range.sheet];
+        for row in &sheet.rows {
+            for cell in &row.cells {
+                if cell.spill != oxicells_core::ir::Spill::Dynamic || cell.array_block.is_some() || cell.formula.is_none() { continue; }
+                if let Some(block) = self.spill_block(range.sheet, row.index, cell.col) {
+                    covered += overlap(block);
+                } else {
+                    covered += overlap(CellRange { sheet: range.sheet, start_row: row.index, end_row: row.index, start_column: cell.col, end_column: cell.col });
+                }
             }
         }
         Ok(Self::range_presence(covered, total))
@@ -28694,12 +28727,16 @@ impl Host for WorkbookHost<'_> {
         }
         // What a book made here answers for the rest of a cell's dress and
         // links: measured, AllowEdit True, HasRichDataType False,
-        // ListHeaderRows 0, SavedAsArray False, MDX "", LinkedDataTypeState 0
+        // ListHeaderRows 0, MDX "", LinkedDataTypeState 0
         // and no threaded comment.
         if name.eq_ignore_ascii_case("allowedit") {
             return Ok(Some(Value::Boolean(true)));
         }
-        if name.eq_ignore_ascii_case("hasrichdatatype") || name.eq_ignore_ascii_case("savedasarray") {
+        if name.eq_ignore_ascii_case("savedasarray") {
+            self.settle_book();
+            return self.range_saved_as_array(range).map(Some);
+        }
+        if name.eq_ignore_ascii_case("hasrichdatatype") {
             return Ok(Some(Value::Boolean(false)));
         }
         if name.eq_ignore_ascii_case("listheaderrows") || name.eq_ignore_ascii_case("linkeddatatypestate") {
@@ -44058,6 +44095,191 @@ mod tests {
         let mut book=workbook();
         let answer=execute_with_host(&module,"Builtin",vec![],&mut WorkbookHost::new(&mut book,0).unwrap()).unwrap();
         assert_eq!(answer,Value::String("_FilterDatabase;Criteria;Extract;Mule!Print_Area;Mule!Print_Titles;".into()));
+    }
+
+    #[test]
+    fn saved_array_getters_match_excel_ranges_and_manual_calculation() {
+        let module = parse_module(r#"Public Sub Setup(ByVal mode As Long)
+            Range("D2").Formula2="=SEQUENCE(3)"
+            Range("E2").Formula2="=SUM(SEQUENCE(3)+1)"
+            Range("F2").Formula="=SUM(SEQUENCE(3)+1)"
+            Range("G2:G4").FormulaArray="=ROW(A1:A3)"
+            Range("H2").Value2=9:Range("I2").Formula2="=SEQUENCE(1)":Range("J2").Formula2="=1"
+            If mode=1 Then Range("A1").Value2=1
+            If mode=2 Then Range("D8").Value2=9
+            If mode=3 Then Range("D8").Font.Bold=True
+            Application.CalculateFullRebuild
+        End Sub
+        Public Function ReadSaved(ByVal address As String) As Variant
+            ReadSaved=Range(address).SavedAsArray
+        End Function
+        Public Function ErrorSaved(ByVal address As String) As Long
+            On Error Resume Next
+            Dim held As Variant
+            held=Range(address).SavedAsArray
+            ErrorSaved=Err.Number
+        End Function"#).unwrap();
+        let addresses = ["D1:D4","D2:D5","D1:D5","D5:D8","D:D","A:A","D2:J2","E2:F2","D2:E2","G2:G4","G1:G4","D5","K2"];
+        let expected = [
+            [1,1,1,0,1,0,2,2,1,1,1,0,0], [2,1,2,0,2,0,2,2,1,1,2,0,0],
+            [1,2,2,0,2,0,2,2,1,1,1,0,0], [1,2,2,0,2,0,2,2,1,1,1,0,0],
+        ];
+        for mode in 0..4 {
+            let mut book = workbook();let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            execute_with_host(&module, "Setup", vec![Value::Integer(mode as i64)], &mut host).unwrap();
+            for (address, flag) in addresses.iter().zip(expected[mode]) {
+                let actual = execute_with_host(&module, "ReadSaved", vec![Value::String((*address).into())], &mut host).unwrap();
+                let expected = if flag == 2 { Value::Null } else { Value::Boolean(flag == 1) };
+                assert_eq!(actual, expected, "mode={mode} {address}");
+            }
+            for (address, flag) in [("D2",true),("D3",true),("D4",true),("E2",true),("F2",false),
+                ("G2",true),("G3",true),("H2",false),("I2",true),("J2",false),("K2",false)] {
+                assert_eq!(execute_with_host(&module,"ReadSaved",vec![Value::String(address.into())],&mut host).unwrap(),
+                    Value::Boolean(flag), "mode={mode} {address}");
+            }
+            for address in ["D2,K2", "D2,E2", "K2,D2"] {
+                assert_eq!(execute_with_host(&module, "ErrorSaved", vec![Value::String(address.into())], &mut host).unwrap(), Value::Integer(1004));
+            }
+        }
+        let manual = parse_module(r#"Public Function Flag(ByVal address As String) As String
+            Dim held As Variant
+            held=Range(address).SavedAsArray
+            If IsNull(held) Then
+                Flag="N"
+            Else
+                Flag=CStr(held)
+            End If
+        End Function
+        Public Function Snapshot() As String
+            Snapshot=Flag("D2") & "," & Flag("D3") & "," & Flag("D2:D4") & ":" & WorksheetFunction.Count(Range("D2:D4"))
+        End Function
+        Public Function Manual() As String
+            Application.Calculation=xlCalculationManual
+            Range("A1").Value2=1:Range("D2").Formula2="=SEQUENCE(A1)":Application.CalculateFullRebuild
+            Manual=Snapshot()
+            Range("A1").Value2=3:Manual=Manual & "|" & Snapshot()
+            Application.CalculateFullRebuild:Manual=Manual & "|" & Snapshot()
+            Range("A1").Value2=0:Manual=Manual & "|" & Snapshot()
+            Application.CalculateFullRebuild:Manual=Manual & "|" & Snapshot()
+        End Function"#).unwrap();
+        let mut book = workbook();
+        assert_eq!(execute_with_host(&manual, "Manual", vec![], &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap(),
+            Value::String("True,False,True:1|True,False,True:1|True,True,True:3|True,True,True:3|True,False,N:0".into()));
+    }
+
+    #[test]
+    fn named_formula_modes_and_saved_array_getters_survive_save() {
+        let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let invalid = parse_module(r#"Public Function ValidateName(ByVal operation As Long, ByVal formula As String) As String
+            Names.Add "HeldName","=10"
+            On Error Resume Next
+            If operation=0 Then
+                Names.Add "HeldName",formula
+            Else
+                Names("HeldName").RefersTo=formula
+            End If
+            ValidateName=Err.Number & "|" & Names("HeldName").RefersTo
+        End Function"#).unwrap();
+        for (formula, code) in [("=#SPILL!",1004),("=IF(TRUE,#CALC!,1)",1004),("=IF(FALSE,#SPILL!,1)",1004),
+            ("=\"text #CALC!\"",0),("=NA()",0),("=SEQUENCE(0)",0)] {
+            for operation in 0..2 {
+                let mut book=workbook();let expected=format!("{code}|{}",if code==0 {formula} else {"=10"});
+                assert_eq!(execute_with_host(&invalid,"ValidateName",vec![Value::Integer(operation),Value::String(formula.into())],
+                    &mut WorkbookHost::new(&mut book,0).unwrap()).unwrap(),Value::String(expected),"{formula} operation={operation}");
+            }
+        }
+        let mut cases = vec![];
+        for (body, array) in [("10", false), ("-1.5", false), ("TRUE", false), ("Sheet1!$A$1", false),
+            ("SUM(1)", true), ("Seed", true), ("(10)", true), ("Sheet1!$A$1:$A$1", true)] {
+            for property in ["Formula", "Formula2"] {
+                cases.push(serde_json::json!({"name":"Measured","definition":body,"property":property,"input":"=Measured",
+                    "formula":"=Measured","formula2":if property=="Formula" && array {"=@Measured"} else {"=Measured"},
+                    "saved_as_array":property=="Formula2" && array}));
+            }
+        }
+        let mut seeds = vec![("Seed".to_string(), "10".to_string())];
+        if let Some(path) = std::env::var_os("OXI_NAMED_MODE_ORACLE") {
+            let data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            for key in ["native_named_array_result_edges", "native_named_array_expression_classes", "native_named_array_syntax_edges"] {
+                cases.extend(data[key].as_array().unwrap().iter().cloned());
+            }
+            cases.extend(data["native_named_array_alias_edges"]["cases"].as_array().unwrap().iter().cloned());
+            for seed in data["native_named_array_alias_edges"]["seeds"].as_array().unwrap() {
+                seeds.push((seed[0].as_str().unwrap().into(), seed[1].as_str().unwrap().trim_start_matches('=').into()));
+            }
+        }
+        for case in &cases {
+            if let (Some(name), Some(body)) = (case["name"].as_str(), case["definition"].as_str()) {
+                if !seeds.iter().any(|(held,_)| held==name) { seeds.push((name.into(), body.trim_start_matches('=').into())); }
+            }
+        }
+        let mut failures = Vec::new();
+        for case in &cases {
+            let mut book = oxicells_core::parse_xlsx(original).unwrap();book.sheets[0].name="Sheet1".into();book.defined_names = seeds.clone();
+            if case["name"]=="Measured" { book.defined_names.iter_mut().find(|(name,_)| name=="Measured").unwrap().1=case["definition"].as_str().unwrap().into(); }
+            let setup = parse_module(&format!(r#"Public Sub Setup()
+                Range("A1").Value2=1:Range("A2").Value2=2:Range("A3").Value2=3
+                Range("D2:M30").ClearContents
+                Range("D2").{}="{}"
+                Application.CalculateFullRebuild
+            End Sub"#, case["property"].as_str().unwrap(), case["input"].as_str().unwrap().replace('"', "\"\""))).unwrap();
+            execute_with_host(&setup, "Setup", vec![], &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap();
+            let read = parse_module(r#"Public Function ReadMode() As String
+                ReadMode=Range("D2").Formula & vbTab & Range("D2").Formula2 & vbTab & CStr(Range("D2").SavedAsArray)
+            End Function"#).unwrap();
+            for reopened in [false,true] {
+                if reopened { let mut edit=oxicells_core::XlsxEditor::new(original).unwrap();edit.apply_workbook(&book).unwrap();book=oxicells_core::parse_xlsx_preserving_values(&edit.save().unwrap()).unwrap(); }
+                let actual=execute_with_host(&read,"ReadMode",vec![],&mut WorkbookHost::new(&mut book,0).unwrap()).unwrap();
+                let expected=format!("{}\t{}\t{}",case["formula"].as_str().unwrap(),case["formula2"].as_str().unwrap(),if case["saved_as_array"].as_bool().unwrap() {"True"} else {"False"});
+                if actual!=Value::String(expected.clone()) { failures.push(format!("{} {} reopened={reopened}: {actual:?} != {expected:?}",case["name"],case["property"])); }
+                if let Some(expected) = case.get("value") {
+                    let expected = match expected.as_i64().filter(|number| (-2146826288..=-2146826238).contains(number)) {
+                        Some(number) => serde_json::json!(spreadsheet_error_text_exact(number + 2146828288).unwrap()),
+                        None => expected.clone(),
+                    };
+                    let actual=failure_value(failure_cell(&book.sheets[0],2,3));
+                    let same=match (actual.as_f64(),expected.as_f64()) { (Some(left),Some(right))=>left==right, _=>actual==expected };
+                    if !same { failures.push(format!("{} {} value reopened={reopened}: {actual} != {expected}",case["name"],case["property"])); }
+                }
+            }
+        }
+        assert!(failures.is_empty(),"{}",failures.into_iter().take(40).collect::<Vec<_>>().join("\n"));
+        for (property, initial, changed, value, array) in [
+            ("Formula",Some("10"),"Sheet1!$A$1:$A$3",2.,false),
+            ("Formula2",None,"Sheet1!$A$1:$A$3",1.,true),
+            ("Formula2",None,"10",10.,true),
+        ] {
+            let mut book=oxicells_core::parse_xlsx(original).unwrap();book.sheets[0].name="Sheet1".into();
+            let initialize=initial.map(|body|format!("Names.Add \"Changing\",\"={body}\"\n")).unwrap_or_default();
+            let source=parse_module(&format!(r#"Public Sub Start()
+                Range("A1").Value2=1:Range("A2").Value2=2:Range("A3").Value2=3
+                Range("D2:M30").ClearContents
+                {initialize}
+                Range("D2").{property}="=Changing"
+                Range("E2").Formula2="=FORMULATEXT(D2)"
+                Application.CalculateFullRebuild
+                Names.Add "Changing","={changed}"
+                Application.CalculateFullRebuild
+            End Sub
+            Public Function ReadMode() As String
+                Application.CalculateFullRebuild
+                ReadMode=Range("D2").Formula & vbTab & Range("D2").Formula2 & vbTab & CStr(Range("D2").SavedAsArray)
+            End Function"#)).unwrap();
+            execute_with_host(&source,"Start",vec![],&mut WorkbookHost::new(&mut book,0).unwrap()).unwrap();
+            for phase in 0..3 {
+                if phase==1 {book=serde_json::from_value(serde_json::to_value(&book).unwrap()).unwrap();}
+                if phase==2 {let mut edit=oxicells_core::XlsxEditor::new(original).unwrap();edit.apply_workbook(&book).unwrap();book=oxicells_core::parse_xlsx_preserving_values(&edit.save().unwrap()).unwrap();}
+                let modern=if phase==2 && !array && changed.contains(':') {"=@Changing"} else {"=Changing"};
+                let expected=format!("=Changing\t{modern}\t{}",if array {"True"} else {"False"});
+                assert_eq!(execute_with_host(&source,"ReadMode",vec![],&mut WorkbookHost::new(&mut book,0).unwrap()).unwrap(),Value::String(expected),
+                    "frozen {property} initial={initial:?} changed={changed} phase={phase}");
+                assert_eq!(failure_value(failure_cell(&book.sheets[0],2,3)),serde_json::json!(value),
+                    "frozen value {property} initial={initial:?} changed={changed} phase={phase}");
+                assert_eq!(failure_value(failure_cell(&book.sheets[0],2,4)),serde_json::json!(modern),
+                    "FORMULATEXT {property} initial={initial:?} changed={changed} phase={phase}");
+            }
+        }
+        println!("Named formula mode round trips: {} cases plus three mutation lifecycles",cases.len());
     }
 
     #[test]

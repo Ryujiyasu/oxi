@@ -868,6 +868,25 @@ pub fn requires_array_storage(input: &str, multiple_name: &dyn Fn(&str) -> bool)
     has_array_arithmetic(&node)
 }
 
+/// Whether using this defined-name formula needs implicit intersection.
+/// A named expression can require array evaluation even when its result
+/// is scalar. Only literal constants and direct single-cell references
+/// retain their scalar classification through the name.
+pub fn named_formula_needs_intersection(input: &str) -> bool {
+    let Ok(tokens) = tokenize(input) else { return true; };
+    match tokens.as_slice() {
+        [Token::Number(_) | Token::Text(_) | Token::ErrorLit(_)] => false,
+        [Token::Plus | Token::Minus, Token::Number(_)] => false,
+        [Token::Name { name, sheet }] => !(parse_a1(name).is_some()
+            || (sheet.is_none() && (name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE")))),
+        // An external workbook written by name rather than OOXML link number
+        // is a leading bracket group followed by its sheet-qualified cell.
+        [Token::Table { name: table, .. }, Token::Name { sheet: Some(_), name }]
+            if table.is_empty() && parse_a1(name).is_some() => false,
+        _ => true,
+    }
+}
+
 fn has_array_arithmetic(node: &AtNode) -> bool {
     match node {
         AtNode::Operation(parts) => parts.iter().any(modern_result_is_multiple) || parts.iter().any(has_array_arithmetic),
@@ -1027,6 +1046,9 @@ impl AtReader<'_> {
                     // contents must not acquire legacy intersections on import.
                     if stored_single { return Some(AtNode::Plain { number: None, cell: false }); }
                     return Some(AtNode::Call { start, name, args });
+                }
+                if sheet.is_none() && (name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE")) {
+                    return Some(AtNode::Plain { number: None, cell: false });
                 }
                 if parse_a1(&name).is_some() {
                     return Some(AtNode::Plain { number: None, cell: true });
@@ -3778,6 +3800,40 @@ mod shift_tests {
             assert_eq!(super::normalise_formula_ranges(written), stored, "{written}");
         }
     }
+    #[test]
+    fn named_expressions_keep_their_evaluation_class() {
+        for (formula, expected) in [
+            ("=10", false), ("=-1.5", false), ("=+10", false),
+            ("=TRUE", false), ("=FALSE", false), ("=\"txt\"", false), ("=#N/A", false),
+            ("=Sheet1!$A$1", false), ("=Sheet1!$A$1:$A$1", true),
+            ("='[Book1]Data'!$A$1", false), ("=[Book1]Data!$A$1", false),
+            ("=SUM('[Book1]Data'!$A$1)", true), ("='[Book1]Data'!$A$1:$A$1", true),
+            ("=1+2", true), ("=--10", true), ("=10%", true), ("=(10)", true),
+            ("=SUM(1)", true), ("=LEN(\"abc\")", true), ("=LET(x,10,x)", true),
+            ("=OtherName", true), ("={1}", true), ("=@A1:A3", true),
+        ] {
+            assert_eq!(super::named_formula_needs_intersection(formula), expected, "{formula}");
+        }
+        assert_eq!(super::implied_intersections("=TRUE", &|_| true), "=TRUE");
+        assert_eq!(super::implied_intersections("=FALSE", &|_| true), "=FALSE");
+        assert_eq!(super::implied_intersections("=LET(x,1,x+1)", &|_| true), "=LET(x,1,x+1)");
+        if std::env::var_os("OXI_NAMED_ARRAY_ORACLE_STDIN").is_some() {
+            use std::io::Read;
+            let mut input = String::new();std::io::stdin().read_to_string(&mut input).unwrap();
+            let mut count = 0;
+            for row in input.lines() {
+                let fields: Vec<_> = row.split('\t').collect();assert_eq!(fields.len(), 6);
+                let (property, written, definition, legacy, modern, array) = (fields[0], fields[1], fields[2], fields[3], fields[4], fields[5]);
+                let multiple = |_: &str| definition.is_empty() || super::named_formula_needs_intersection(definition);
+                if property == "Formula" { assert_eq!(super::implied_intersections(written, &multiple), modern, "{written}: {definition}"); }
+                assert_eq!(super::legacy_formula(modern, &multiple), legacy, "{written}: {definition}");
+                if property == "Formula2" { assert_eq!(super::requires_array_storage(modern, &multiple), array == "true", "{written}: {definition}"); }
+                count += 1;
+            }
+            println!("Native named-array oracle: {count} cases, 0 mismatches");
+        }
+    }
+
     #[test]
     fn array_modes_distinguish_references_value_arrays_and_argument_keywords() {
         for (input, expected) in [

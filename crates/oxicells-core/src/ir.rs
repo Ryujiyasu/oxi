@@ -520,8 +520,11 @@ pub enum Spill {
     /// An ordinary cell.
     #[default]
     None,
-    /// Its formula was written as a dynamic array (`.Formula2`) and spills
-    /// a block of answers across the cells beside it.
+    /// Its formula has been compiled for scalar evaluation. Retaining this
+    /// state prevents later name changes from changing its evaluation mode.
+    Scalar,
+    /// Its formula was compiled for array evaluation and may spill a block
+    /// of answers across the cells beside it, including a scalar result.
     Dynamic,
     /// Its value is a share of the spill of the formula above or left of it;
     /// it holds no formula of its own and goes when the spill does.

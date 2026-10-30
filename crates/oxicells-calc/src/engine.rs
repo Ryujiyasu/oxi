@@ -469,13 +469,16 @@ enum Cell {
 
 fn formula_source_value(source: &str, source_utf16: Option<&[u16]>) -> Value {
     if let Some(units) = source_utf16 {
+        let shown = crate::parser::transform_utf16_formula(units, crate::lexer::formula_from_ooxml).unwrap_or_else(|_| units.to_vec());
+        let units = shown.as_slice();
         let body = units.strip_prefix(&[b'=' as u16]).unwrap_or(units);
         let mut formula = Vec::with_capacity(body.len() + 1);
         formula.push(b'=' as u16);
         formula.extend_from_slice(body);
         Value::from_utf16(formula)
     } else {
-        Value::Text(format!("={}", source.strip_prefix('=').unwrap_or(source)))
+        let shown = crate::lexer::formula_from_ooxml(source).unwrap_or_else(|_| source.to_string());
+        Value::Text(format!("={}", shown.strip_prefix('=').unwrap_or(&shown)))
     }
 }
 
@@ -845,6 +848,17 @@ impl Workbook {
             cached: Value::Blank,
             share: None,
         });
+        Ok(())
+    }
+
+    /// Retain the displayed source after compiling an evaluation expression
+    /// with implicit coercions. The expression and cached value are unchanged.
+    pub fn remember_formula_source(&mut self, sheet: &str, a1: &str, original: &str, original_utf16: Option<&[u16]>) -> Result<(), CalcError> {
+        let cell = self.cell_ref(a1)?;
+        if let Some(Cell::Formula { source, source_utf16, .. }) = self.sheet_mut(sheet)?.cells.get_mut(&cell.coord()) {
+            *source = original.to_string();
+            *source_utf16 = original_utf16.map(<[u16]>::to_vec);
+        }
         Ok(())
     }
 
@@ -4739,6 +4753,23 @@ mod tests {
         assert_eq!(workbook.value("Sheet1", "A1"), Value::Utf16(vec![97, 0xD83D, 98]));
         assert_eq!(workbook.value("Sheet1", "B1"), Value::Utf16(formula));
         assert_eq!(workbook.value("Sheet1", "C1"), Value::Utf16(vec![97, 0xD83D, 98, 33]));
+    }
+
+    #[test]
+    fn formula_display_keeps_original_source_when_evaluation_adds_coercions() {
+        let mut workbook = book();
+        for row in 1..=3 { workbook.set_value("Sheet1",&format!("A{row}"),Value::Number(row as f64)).unwrap(); }
+        workbook.define_name("Changing","=Sheet1!$A$1:$A$3").unwrap();
+        workbook.set_formula("Sheet1","B2","=@Changing").unwrap();
+        workbook.remember_formula_source("Sheet1","B2","Changing",None).unwrap();
+        workbook.set_formula("Sheet1","C2","=FORMULATEXT(B2)").unwrap();
+        workbook.set_formula("Sheet1","A4","=_xlfn.SINGLE(A1:A3)").unwrap();
+        workbook.set_formula("Sheet1","B4","=FORMULATEXT(A4)").unwrap();
+        workbook.recalculate();
+        assert_eq!(workbook.value("Sheet1","B2"),Value::Number(2.));
+        assert_eq!(workbook.formula("Sheet1","B2"),Some("Changing"));
+        assert_eq!(workbook.value("Sheet1","C2"),Value::text("=Changing"));
+        assert_eq!(workbook.value("Sheet1","B4"),Value::text("=@A1:A3"));
     }
 
     fn a_block() -> Workbook {

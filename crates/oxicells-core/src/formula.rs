@@ -385,9 +385,22 @@ fn assemble_sheets(
         for row in &sheet.rows {
             for cell in &row.cells {
                 let addr = a1(cell.col, row.index);
+                // Name changes can change a reference's size without changing
+                // the source formula. Apply scalar coercions to the evaluation
+                // copy while preserving the formula's displayed spelling.
+                let scalar = cell.spill == crate::ir::Spill::Scalar && cell.array_block.is_none();
+                let multiple = |name: &str| crate::editor::named_formula_needs_intersection(names, &sheet.name, name);
+                let scalar_formula = if scalar { cell.formula.as_deref().map(|formula|
+                    oxicells_calc::lexer::implied_intersections(formula, &multiple)) } else { None };
+                let scalar_units = if scalar {
+                    cell.formula_units().and_then(|units| oxicells_calc::parser::transform_utf16_formula(units, |formula|
+                        Ok(oxicells_calc::lexer::implied_intersections(formula, &multiple))).ok())
+                } else { None };
+                let units = scalar_units.as_deref().or_else(|| cell.formula_units());
+                let formula = scalar_formula.as_deref().or(cell.formula.as_deref());
                 // A member of an array formula is worked out as its share of
                 // the block; a formula of its own as itself.
-                let placed = match (cell.formula_units(), formula_text(cell.formula.as_deref()), cell.array_block) {
+                let placed = match (units, formula_text(formula), cell.array_block) {
                     (Some(units), _, Some((top, left, _, _))) => book
                         .set_array_member_utf16(&sheet.name, &addr, units, (cell.col.saturating_sub(left), row.index.saturating_sub(top)))
                         .is_ok(),
@@ -412,6 +425,11 @@ fn assemble_sheets(
                     (None, Some(text), None) => book.set_formula(&sheet.name, &addr, text).is_ok(),
                     (None, None, _) => false,
                 };
+                if placed && scalar {
+                    if let Some(original) = formula_text(cell.formula.as_deref()) {
+                        let _ = book.remember_formula_source(&sheet.name, &addr, original, cell.formula_units());
+                    }
+                }
                 if placed && cell.spill == crate::ir::Spill::Dynamic {
                     let _ = book.set_dynamic(&sheet.name, &addr);
                 }
@@ -591,8 +609,16 @@ fn recalculate(
 /// Put what the formulas spilled into the cells beside them, taking back
 /// whatever an earlier spill left that this one does not reach.
 fn lay_out_spills(sheet: &mut Sheet, spilled: &[((u32, u32), Value)]) {
+    let retained: std::collections::BTreeSet<_> = spilled.iter().map(|(at, _)| *at).collect();
     for row in &mut sheet.rows {
         for cell in row.cells.iter_mut().filter(|cell| cell.spill == crate::ir::Spill::Member) {
+            let at = (cell.col, row.index.saturating_sub(1));
+            if !retained.contains(&at) {
+                sheet.pending_used_bounds = Some(match sheet.pending_used_bounds {
+                    Some((left, top, right, bottom)) => (left.min(at.0), top.min(at.1), right.max(at.0), bottom.max(at.1)),
+                    None => (at.0, at.1, at.0, at.1),
+                });
+            }
             cell.value = CellValue::Empty;
             cell.spill = crate::ir::Spill::None;
         }

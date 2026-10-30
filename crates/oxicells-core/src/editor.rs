@@ -612,9 +612,8 @@ impl XlsxEditor {
             let mut changes: Vec<((usize, u32, u32), CellEditValue)> = Vec::new();
             let held = cells_of(before);
             let now = cells_of(after);
-            let visiting = std::cell::RefCell::new(std::collections::BTreeSet::new());
             let memo = std::cell::RefCell::new(BTreeMap::new());
-            let multiple = |name: &str| named_array_shape(&edited.defined_names, &after.name, name, 0, &visiting, &memo);
+            let multiple = |name: &str| cached_named_array_shape(&edited.defined_names, &after.name, name, &memo);
             for (&(row, col), cell) in &now {
                 let same = held
                     .get(&(row, col))
@@ -1647,10 +1646,9 @@ impl XlsxEditor {
                             relationship_ids.push(Some(id));
                         }
                     }
-                    let visiting = std::cell::RefCell::new(std::collections::BTreeSet::new());
                     let memo = std::cell::RefCell::new(BTreeMap::new());
                     let names = self.name_plan.as_deref().unwrap_or(&self.workbook.defined_names);
-                    let multiple = |name: &str| named_array_shape(names, &sheet.name, name, 0, &visiting, &memo);
+                    let multiple = |name: &str| cached_named_array_shape(names, &sheet.name, name, &memo);
                     let mut sheet_xml = write_new_sheet(
                         sheet,
                         added_cell_styles.get(&index).unwrap_or(&empty_styles),
@@ -5818,39 +5816,34 @@ fn same_merges(before: &[MergeCell], after: &[MergeCell]) -> bool {
     before == after
 }
 
-fn named_array_shape(names: &[(String, String)], sheet: &str, requested: &str, depth: usize,
-    visiting: &std::cell::RefCell<std::collections::BTreeSet<String>>, memo: &std::cell::RefCell<BTreeMap<String, bool>>) -> bool {
-    if depth > 64 { return false; }
+/// The evaluation class of a name in a worksheet's scope. Undefined names
+/// can acquire an array definition later, so they also need intersection.
+pub fn named_formula_needs_intersection(names: &[(String, String)], sheet: &str, requested: &str) -> bool {
     let (owner, leaf) = crate::ir::defined_name_scope(requested).unwrap_or_else(|| (sheet.to_string(), requested));
     let key = oxicells_calc::case_fold::name_key;
     let definition = names.iter().find(|(held, _)| crate::ir::defined_name_scope(held)
         .is_some_and(|(scope, name)| key(&scope) == key(&owner) && key(name) == key(leaf)))
         .or_else(|| names.iter().find(|(held, _)| !held.contains('!') && key(held) == key(leaf)));
-    let Some((held, formula)) = definition else { return false; };
-    let identity = key(held);
-    if let Some(value) = memo.borrow().get(&identity) { return *value; }
-    if !visiting.borrow_mut().insert(identity.clone()) { return false; }
-    let scope = crate::ir::defined_name_scope(held).map(|(owner, _)| owner).unwrap_or_default();
-    let result = oxicells_calc::lexer::requires_array_storage(formula,
-        &|name| named_array_shape(names, &scope, name, depth + 1, visiting, memo));
-    visiting.borrow_mut().remove(&identity);
-    memo.borrow_mut().insert(identity, result);
-    result
+    definition.is_none_or(|(_, formula)| oxicells_calc::lexer::named_formula_needs_intersection(formula))
+}
+
+fn cached_named_array_shape(names: &[(String, String)], sheet: &str, requested: &str,
+    memo: &std::cell::RefCell<BTreeMap<String, bool>>) -> bool {
+    let key = oxicells_calc::case_fold::name_key(requested);
+    if let Some(value) = memo.borrow().get(&key) { return *value; }
+    let value = named_formula_needs_intersection(names, sheet, requested);
+    memo.borrow_mut().insert(key, value);
+    value
 }
 
 fn dynamic_array_plan(book: &Workbook) -> Vec<Vec<crate::ir::CachedSpill>> {
     book.sheets.iter().map(|sheet| {
         let mut arrays = Vec::new();
-        let visiting = std::cell::RefCell::new(std::collections::BTreeSet::new());
-        let memo = std::cell::RefCell::new(BTreeMap::new());
-        let multiple = |name: &str| named_array_shape(&book.defined_names, &sheet.name, name, 0, &visiting, &memo);
         for row in &sheet.rows {
             for cell in row.cells.iter().filter(|cell| cell.spill == crate::ir::Spill::Dynamic) {
-                let Some(formula) = cell.formula.as_deref() else { continue; };
+                if cell.formula.is_none() { continue; }
                 let anchor = (cell.col, row.index.saturating_sub(1));
                 let cached = sheet.cached_spills.as_ref().and_then(|blocks| blocks.iter().find(|(at, _)| *at == anchor)).map(|(_, size)| *size);
-                if !oxicells_calc::lexer::requires_array_storage(formula, &multiple)
-                    && !cached.is_some_and(|(w, h)| w > 1 || h > 1) { continue; }
                 let size = cached.unwrap_or_else(|| {
                     if sheet.cached_spills.is_some() { return (1, 1); }
                     let member = |col, index| sheet.rows.iter().find(|r| r.index == index)
@@ -12229,7 +12222,8 @@ mod tests {
             sheet.cached_spills = Some(vec![]);
             let cell = sheet.rows.iter_mut().find(|row| row.index == 2).unwrap().cells.iter_mut().find(|cell| cell.col == 3).unwrap();
             cell.formula = Some(formula.into());cell.formula_utf16 = None;cell.array_block = None;
-            cell.spill = if modern { crate::ir::Spill::Dynamic } else { crate::ir::Spill::None };
+            cell.spill = if modern && oxicells_calc::lexer::requires_array_storage(formula, &|_| false) { crate::ir::Spill::Dynamic }
+                else if modern { crate::ir::Spill::Scalar } else { crate::ir::Spill::None };
             cell.value = crate::ir::CellValue::Number(9.);
             let mut editor = XlsxEditor::new(&data).unwrap();editor.apply_workbook(&book).unwrap();
             let saved = editor.save().unwrap();
@@ -12238,6 +12232,33 @@ mod tests {
             assert_eq!(cell.spill == crate::ir::Spill::Dynamic, saved_array, "{formula} modern={modern}");
             assert!(cell.array_block.is_none());
             assert!(matches!(cell.value, crate::ir::CellValue::Number(9.)));
+        }
+    }
+
+    #[test]
+    fn named_evaluation_modes_preserve_scope_and_saved_array_metadata() {
+        let data = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let definitions = vec![("Rate".into(), "10".into()), ("Sheet1!Rate".into(), "SUM(1)".into()),
+            ("Alias".into(), "Rate".into()), ("Cell".into(), "Sheet1!$A$1".into())];
+        for (sheet, name, expected) in [("Sheet1", "Rate", true), ("Other", "Rate", false),
+            ("Other", "'Sheet1'!Rate", true), ("Sheet1", "Alias", true), ("Sheet1", "Cell", false), ("Sheet1", "Missing", true)] {
+            assert_eq!(named_formula_needs_intersection(&definitions, sheet, name), expected, "{sheet}!{name}");
+        }
+        for (body, needs_array) in [("10", false), ("-1.5", false), ("\"txt\"", false), ("TRUE", false),
+            ("Sheet1!$A$1", false), ("Sheet1!$A$1:$A$1", true), ("SUM(1)", true), ("(10)", true), ("OtherName", true)] {
+            for modern in [false, true] {
+                let mut book = parse_xlsx(data).unwrap();book.sheets[0].name="Sheet1".into();book.defined_names.push(("Measured".into(), body.into()));
+                let sheet = &mut book.sheets[0];sheet.cached_spills = Some(vec![]);
+                let cell = &mut sheet.rows[1].cells[1];cell.formula = Some(if !modern && needs_array { "@Measured" } else { "Measured" }.into());
+                cell.formula_utf16 = None;cell.array_block = None;cell.spill = if modern && oxicells_calc::lexer::named_formula_needs_intersection(body) { crate::ir::Spill::Dynamic }
+                    else if modern { crate::ir::Spill::Scalar } else { crate::ir::Spill::None };
+                cell.value = crate::ir::CellValue::Number(7.);
+                let mut editor = XlsxEditor::new(data).unwrap();editor.apply_workbook(&book).unwrap();let saved = editor.save().unwrap();
+                let reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();let cell = &reopened.sheets[0].rows[1].cells[1];
+                assert_eq!(cell.spill == crate::ir::Spill::Dynamic, modern && needs_array, "{body} modern={modern}");
+                assert!(cell.array_block.is_none());
+                assert_eq!(cell.formula.as_deref(), Some("Measured"), "{body} modern={modern}");
+            }
         }
     }
 
@@ -12266,7 +12287,8 @@ mod tests {
                 }
                 cell.formula = Some(String::from_utf16_lossy(&units));
                 cell.formula_utf16 = String::from_utf16(&units).err().map(|_| units);
-                cell.spill = if modern { crate::ir::Spill::Dynamic } else { crate::ir::Spill::None };
+                cell.spill = if modern && oxicells_calc::lexer::requires_array_storage(formula, &|_| false) { crate::ir::Spill::Dynamic }
+                    else if modern { crate::ir::Spill::Scalar } else { crate::ir::Spill::None };
                 cell.value = crate::ir::CellValue::Number(5.);
                 let mut editor = XlsxEditor::new(data).unwrap();
                 editor.apply_workbook(&edited).unwrap();
