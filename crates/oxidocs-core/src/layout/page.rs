@@ -9392,7 +9392,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         && img.host_exact_line.is_none()
                         && img.host_paragraph.as_deref().map_or(false, |h|
                             matches!(h.style.line_spacing_rule.as_deref(), None | Some("auto"))
-                            && h.style.line_spacing.map_or(false, |f| f > 1.001))
+                            // OXI_GRID_OBJ_SINGLE (2026-10-31, default ON, opt-out _DISABLE):
+                            // single spacing too (the derivation's 1.0 arm). ja/reports__70c9c05e's
+                            // 17.80pt logo (pitch 18, no w:spacing): a COM slice resizing it
+                            // gives ceil(h / 18) cells, the logo centred; Oxi's line box
+                            // added the paragraph mark's descent and took 2 cells.
+                            && (h.style.line_spacing.map_or(false, |f| f > 1.001)
+                                || (std::env::var_os("OXI_GRID_OBJ_SINGLE_DISABLE").is_none()
+                                    && h.style.line_spacing.map_or(true, |f| f > 0.999))))
                         && std::env::var_os("OXI_GRID_OBJ_NOLEAD_DISABLE").is_none()
                     {
                         let ext = img.height + if !self.doc_body_has_real_cjk
