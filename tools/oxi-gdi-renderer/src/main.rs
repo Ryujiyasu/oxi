@@ -914,10 +914,42 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                                     let _ = SetWorldTransform(mem_dc, &xf);
                                     Some(mode)
                                 } else { None };
-                                StretchDIBits(mem_dc, x, y, ew, eh,
-                                    0, 0, pw as i32, ph as i32,
-                                    Some(pixels.as_ptr() as *const _),
-                                    &bmi, DIB_RGB_COLORS, SRCCOPY);
+                                // OXI_GDI_IMAGE_ALPHA (2026-10-30, default ON, opt-out _DISABLE): a
+                                // picture with transparent pixels blends over the page. SRCCOPY
+                                // copied the colour under alpha 0 — black in an RGBA PNG — so
+                                // ja/reports__60bc67b6's logo and icons came out as black boxes
+                                // here while the DWrite renderer (premultiplied D2D) and Word
+                                // draw them on white.
+                                let has_alpha = rgba.pixels().any(|p| p[3] < 255);
+                                if has_alpha && std::env::var_os("OXI_GDI_IMAGE_ALPHA_DISABLE").is_none() {
+                                    for px in pixels.chunks_exact_mut(4) {
+                                        let a = px[3] as u16;
+                                        for c in &mut px[..3] {
+                                            *c = ((*c as u16 * a + 127) / 255) as u8;
+                                        }
+                                    }
+                                    let src_dc = CreateCompatibleDC(mem_dc);
+                                    let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+                                    if let Ok(dib) = CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+                                        std::ptr::copy_nonoverlapping(pixels.as_ptr(), bits as *mut u8, pixels.len());
+                                        let old_src = SelectObject(src_dc, dib);
+                                        let blend = BLENDFUNCTION {
+                                            BlendOp: AC_SRC_OVER as u8,
+                                            BlendFlags: 0,
+                                            SourceConstantAlpha: 255,
+                                            AlphaFormat: AC_SRC_ALPHA as u8,
+                                        };
+                                        let _ = AlphaBlend(mem_dc, x, y, ew, eh, src_dc, 0, 0, pw as i32, ph as i32, blend);
+                                        SelectObject(src_dc, old_src);
+                                        let _ = DeleteObject(dib);
+                                    }
+                                    let _ = DeleteDC(src_dc);
+                                } else {
+                                    StretchDIBits(mem_dc, x, y, ew, eh,
+                                        0, 0, pw as i32, ph as i32,
+                                        Some(pixels.as_ptr() as *const _),
+                                        &bmi, DIB_RGB_COLORS, SRCCOPY);
+                                }
                                 if let Some(mode) = old_mode {
                                     let _ = ModifyWorldTransform(mem_dc, None, MWT_IDENTITY);
                                     SetGraphicsMode(mem_dc, GRAPHICS_MODE(mode));
