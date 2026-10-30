@@ -202,6 +202,10 @@ pub struct Page {
     /// non-char-grid case; linesAndChars is grid-determined (charGrid mechanism).
     #[serde(default)]
     pub doc_grid_lines_and_chars: bool,
+    /// docGrid type == "snapToChars": the character grid of linesAndChars, but each
+    /// glyph is centred in its cell instead of starting at the cell's left edge.
+    #[serde(default)]
+    pub doc_grid_snap_to_chars: bool,
     /// Header content (paragraphs from header part) — the DEFAULT-type header
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub header: Vec<Block>,

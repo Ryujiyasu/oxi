@@ -3753,6 +3753,61 @@ impl<'a> PageLayouter<'a> {
                         } else {
                             page.margin.left + fp.x
                         };
+                        // OXI_TEXT_FRAME_ANCHOR_LINE (2026-10-30, default ON, opt-out _DISABLE): a
+                        // vAnchor=text frame sits y below its anchor paragraph's (the next
+                        // paragraph's) first line, so it takes the space-after before that
+                        // line and the anchor's space-before, and when that first line does
+                        // not fit the page, frame and anchor go to the next page together.
+                        // `_pb_textframe_anchor_gen.py` (golden probexframe, first frame's y
+                        // and docDefaults after varied, Word PDF): frame top - anchor top =
+                        // 0.00 at y0 for after 0 / 8 / 20pt, +1.0 at y 20tw; with after 20pt
+                        // the anchor moves to p2 and the frame with it (both 112.63). Oxi put
+                        // probexframe's frames 8pt above their anchors and the first one at
+                        // the foot of p1 (768.5) while its anchor began p2.
+                        let mut frame_anchor_lead = 0.0f32;
+                        if positioned_frame && !s1379 && !grouped_text_frame && s847_frame.is_none()
+                            && fp.v_anchor.as_deref() == Some("text") && fp.y >= 0.0
+                            && std::env::var_os("OXI_TEXT_FRAME_ANCHOR_LINE_DISABLE").is_none()
+                        {
+                            if let Some(Block::Paragraph(anchor)) = page.blocks.get(block_idx + 1) {
+                                if anchor.style.frame_pr.is_none() {
+                                    let lead = prev_space_after.max(0.0) + anchor.style.space_before.unwrap_or(0.0).max(0.0);
+                                    let line = self.resolve_font_size(&RunStyle::default(), &anchor.style) * 1.2;
+                                    if cursor.cursor_y + lead + line > start_y + content_height && !elements.is_empty() {
+                                        dbg_page_push(pages.len(), 0);
+                                        pages.push(LayoutPage {
+                                            width: page.size.width,
+                                            height: page.size.height,
+                                            elements: std::mem::take(&mut elements),
+                                        });
+                                        if let Some(g) = s755_geom.as_ref() {
+                                            start_y = g.top(pages.len() + 1);
+                                            content_height = g.ch(pages.len() + 1);
+                                        }
+                                        cursor.set(start_y);
+                                        current_column = 0;
+                                        start_x = col_x_positions[0];
+                                        content_width = col_widths[0];
+                                        lm2_cells = 0;
+                                        current_page_idx += 1;
+                                        footnote_reserve_current = 0.0;
+                                        footnote_ids_current_page.clear();
+                                        s900_fold(
+                                            &mut footnote_reserve_current,
+                                            &mut footnote_ids_current_page,
+                                            &mut s900_pending_deferred,
+                                            current_page_idx,
+                                        );
+                                        *block_page_indices.last_mut().unwrap() = current_page_idx;
+                                        *block_start_page_indices.last_mut().unwrap() = current_page_idx;
+                                        *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
+                                        prev_space_after = 0.0;
+                                    } else {
+                                        frame_anchor_lead = lead;
+                                    }
+                                }
+                            }
+                        }
                         let fy_decl = if s1379 {
                             let ya = fp.y_align.as_deref().unwrap_or("").to_string();
                             match s1379_group {
@@ -3849,7 +3904,7 @@ impl<'a> PageLayouter<'a> {
                                 }
                             }
                         } else if positioned_frame {
-                            fp.y + if fp.v_anchor.as_deref() == Some("text") { cursor.cursor_y } else { page.margin.top }
+                            fp.y + if fp.v_anchor.as_deref() == Some("text") { cursor.cursor_y + frame_anchor_lead } else { page.margin.top }
                         } else {
                             fp.y
                         };
@@ -11827,6 +11882,33 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // the same walk S912's post-pass does, just carried forward live.
         if !pages.is_empty() {
             *logical = (logical_base + pages.len() as i64 - 1).max(0) as u32;
+        }
+
+        // OXI_SNAP_CHARS_CENTER (2026-10-30, default ON, opt-out _DISABLE): under
+        // docGrid snapToChars Word centres each full-width glyph in its cell; under
+        // linesAndChars it starts at the cell's left edge (Oxi's placement).
+        // `_pb_gridcell_center_gen.py` (ＭＳ 明朝 10.5): the cells match linesAndChars
+        // (pitch 11.52 / 15.36 / 21.27 for charSpace 4096 / 20000 / 44093) and the
+        // glyph sits (pitch - em) / 2 in (0.48 / 2.40 / 5.40). ja/creative__285f61cb's
+        // 原稿用紙 (charSpace 44093): every character 5.35 right of Oxi's.
+        if page.doc_grid_snap_to_chars && std::env::var_os("OXI_SNAP_CHARS_CENTER_DISABLE").is_none() {
+            let wide = |c: char| ('\u{2E80}'..='\u{9FFF}').contains(&c)
+                || ('\u{F900}'..='\u{FAFF}').contains(&c)
+                || ('\u{FF01}'..='\u{FF60}').contains(&c);
+            for lp in &mut pages {
+                for el in &mut lp.elements {
+                    if el.paragraph_index.is_none() { continue; }
+                    let LayoutContent::Text { text, font_size, character_spacing, .. } = &el.content else { continue };
+                    let n = text.chars().count();
+                    if n == 0 || !text.chars().all(wide) { continue; }
+                    let gap = if *character_spacing > 0.0 {
+                        *character_spacing
+                    } else {
+                        (el.width - n as f32 * *font_size) / n as f32
+                    };
+                    if gap > 0.0 { el.x += gap * 0.5; }
+                }
+            }
         }
 
         pages

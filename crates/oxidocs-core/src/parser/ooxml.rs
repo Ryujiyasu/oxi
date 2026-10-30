@@ -1204,6 +1204,7 @@ impl OoxmlParser {
                     grid_char_cw_ratio: None,
                     doc_grid_no_type: section.properties.doc_grid_no_type,
                     doc_grid_lines_and_chars: section.properties.doc_grid_lines_and_chars,
+                    doc_grid_snap_to_chars: section.properties.doc_grid_snap_to_chars,
                     header,
                     footer,
                     watermark: watermark_found.clone(),
@@ -3108,6 +3109,7 @@ fn parse_body(
         grid_char_space_raw: None,
         doc_grid_no_type: false,
         doc_grid_lines_and_chars: false,
+        doc_grid_snap_to_chars: false,
         grid_char_quantized: false,
         header_refs: Vec::new(),
         footer_refs: Vec::new(),
@@ -14002,6 +14004,7 @@ struct SectionProperties {
     doc_grid_no_type: bool,
     /// docGrid type == "linesAndChars" (character grid)
     doc_grid_lines_and_chars: bool,
+    doc_grid_snap_to_chars: bool,
     grid_char_quantized: bool,
     /// Reference IDs for header parts (with type)
     header_refs: Vec<HdrFtrRef>,
@@ -14051,6 +14054,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
     let mut char_space_section: Option<i32> = None;
     let mut doc_grid_no_type = false;
     let mut doc_grid_lines_and_chars = false;
+    let mut doc_grid_snap_to_chars = false;
     let mut grid_char_quantized = false;
     let mut header_refs: Vec<HdrFtrRef> = Vec::new();
     let mut footer_refs: Vec<HdrFtrRef> = Vec::new();
@@ -14444,6 +14448,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                         //          actual_pitch = contentWidth / charsLine
                         // charSpace unit: 1/4096 of a point (ECMA-376 §17.6.5)
                         grid_char_quantized = s1368_snap;
+                        doc_grid_snap_to_chars = s1368_snap;
                         if grid_type == "linesAndChars" || s1368_snap {
                             doc_grid_lines_and_chars = true;
                             // charGrid raw_pitch uses the document's default font size.
@@ -14634,6 +14639,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
         grid_char_space_raw: char_space_section,
         doc_grid_no_type,
         doc_grid_lines_and_chars,
+        doc_grid_snap_to_chars,
         grid_char_quantized,
         header_refs,
         footer_refs,
