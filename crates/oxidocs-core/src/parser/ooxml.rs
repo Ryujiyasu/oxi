@@ -7861,6 +7861,10 @@ fn parse_drawing(
         fillref: (i32, Option<String>),
         /// OXI_WPG_TEXT_CHILDREN: the member's own txbxContent paragraphs.
         blocks: Vec<Block>,
+        /// OXI_WPG_PRESET_PATHS: prstGeom adjust values (gd name -> val) and
+        /// the member's own xfrm rotation in degrees.
+        adj: Vec<(String, f32)>,
+        rot: f32,
     }
     let mut s839_vector_shapes: Vec<crate::ir::VectorShape> = Vec::new();
     // OXI_WPG_TEXT_CHILDREN (2026-10-13, default ON, opt-out _DISABLE): a
@@ -7957,6 +7961,14 @@ fn parse_drawing(
                         s839_pic = Some(((0.0, 0.0), (0.0, 0.0), None));
                     }
                     "wsp" if s839_in_wgp => {
+                        // OXI_WPG_MEMBER_FONTREF (2026-10-31, default ON, opt-out _DISABLE):
+                        // a member's text colour comes from its own wps:style only. The
+                        // fontRef was a function-wide last-win, so ja/reports__67cf8704's
+                        // style-less label boxes took the previous member's lt1 and drew
+                        // their black «学び・授業づくり部» labels white.
+                        if wpg_children_on && std::env::var_os("OXI_WPG_MEMBER_FONTREF_DISABLE").is_none() {
+                            font_ref_color = None;
+                        }
                         if wpg_children_on {
                             // per-member text body properties (the globals are
                             // last-win; a member without a bodyPr keeps defaults)
@@ -7985,6 +7997,8 @@ fn parse_drawing(
                             lnref: (-1, None),
                             fillref: (-1, None),
                             blocks: Vec::new(),
+                            adj: Vec::new(),
+                            rot: 0.0,
                         });
                     }
                     "path" if s839_wsp.is_some() => {
@@ -8338,6 +8352,9 @@ fn parse_drawing(
                             match key.as_str() {
                                 "rot" => {
                                     rotation = val.parse::<f32>().ok().map(|v| v / 60000.0);
+                                    if let Some(wsp) = s839_wsp.as_mut() {
+                                        wsp.rot = val.parse::<f32>().map_or(0.0, |v| v / 60000.0);
+                                    }
                                 }
                                 // flipH/flipV: connector diagonal direction (S493h).
                                 "flipH" => {
@@ -9000,6 +9017,21 @@ fn parse_drawing(
                                 corner_radius_adj = Some(val);
                             }
                         }
+                        if let Some(wsp) = s839_wsp.as_mut() {
+                            let mut nm = None;
+                            let mut v = None;
+                            for attr in e.attributes().flatten() {
+                                match local_name(attr.key.as_ref()).as_str() {
+                                    "name" => nm = Some(String::from_utf8_lossy(&attr.value).to_string()),
+                                    "fmla" => v = String::from_utf8_lossy(&attr.value).strip_prefix("val ")
+                                        .and_then(|t| t.trim().parse::<f32>().ok()),
+                                    _ => {}
+                                }
+                            }
+                            if let (Some(nm), Some(v)) = (nm, v) {
+                                wsp.adj.push((nm, v));
+                            }
+                        }
                     }
                     // Shape solid fill color
                     "srgbClr" => {
@@ -9036,6 +9068,19 @@ fn parse_drawing(
                             let key = local_name(attr.key.as_ref());
                             if key == "val" {
                                 let val = String::from_utf8_lossy(&attr.value).to_string();
+                                // OXI_WPG_SCHEME_FILL (2026-10-31, default ON, opt-out _DISABLE):
+                                // a group member's theme fill (as srgbClr above). ja/reports__67cf8704's
+                                // section labels sit on bg1 (white) pills; the member took its fillRef
+                                // dk1 and drew them black.
+                                if let Some(wsp) = s839_wsp.as_mut() {
+                                    if wsp.fill.is_none() && !wsp.no_fill
+                                        && std::env::var_os("OXI_WPG_SCHEME_FILL_DISABLE").is_none()
+                                    {
+                                        if let Some(resolved) = ctx.theme.resolve(&val) {
+                                            wsp.fill = Some(resolved.clone());
+                                        }
+                                    }
+                                }
                                 if shape_fill.is_none() && !has_no_fill {
                                     if let Some(resolved) = ctx.theme.resolve(&val) {
                                         shape_fill = Some(resolved.clone());
@@ -9332,6 +9377,40 @@ fn parse_drawing(
                             } else {
                                 Vec::new()
                             };
+                            // OXI_WPG_PRESET_PATHS (2026-10-31, default ON, opt-out _DISABLE): a
+                            // group member drawn with prst snip2DiagRect / roundRect paints as
+                            // that outline (members were drawn only as rect / line / ellipse).
+                            // ja/reports__67cf8704: each of its three section frames is a
+                            // snip2DiagRect (adj1 10823, noFill, lnRef 2 dk1) plus a quarter-
+                            // turned roundRect (adj 50000, bg1 fill) behind a vertical label;
+                            // Oxi drew neither. A quarter turn swaps the box about its centre.
+                            let s1120_path = if s1120_path.is_empty() && !is_line && !is_rect
+                                && std::env::var_os("OXI_WPG_PRESET_PATHS_DISABLE").is_none()
+                                && matches!(w.prst.as_deref(), Some("snip2DiagRect") | Some("roundRect"))
+                            {
+                                use crate::ir::PathSeg::{C, L, M, Z};
+                                let quarter = ((w.rot / 90.0).round() as i32).rem_euclid(2) == 1;
+                                let (bw, bh) = if quarter { (w.ext.1, w.ext.0) } else { w.ext };
+                                let (bw, bh) = (bw.max(1.0), bh.max(1.0));
+                                let ss = bw.min(bh);
+                                let g = |n: &str, d: f32| w.adj.iter().find(|(k, _)| k == n).map_or(d, |(_, v)| *v);
+                                if w.prst.as_deref() == Some("snip2DiagRect") {
+                                    let a1 = (g("adj1", 0.0).clamp(0.0, 50000.0) / 100000.0) * ss;
+                                    let a2 = (g("adj2", 16667.0).clamp(0.0, 50000.0) / 100000.0) * ss;
+                                    let (x1, y1, x2, y2) = (a1 / bw, a1 / bh, a2 / bw, a2 / bh);
+                                    vec![M(x1, 0.0), L(1.0 - x2, 0.0), L(1.0, y2), L(1.0, 1.0 - y1),
+                                         L(1.0 - x1, 1.0), L(x2, 1.0), L(0.0, 1.0 - y2), L(0.0, y1), Z]
+                                } else {
+                                    let r = (g("adj", 16667.0).clamp(0.0, 50000.0) / 100000.0) * ss;
+                                    let (rx, ry) = (r / bw, r / bh);
+                                    let k = 0.5523;
+                                    vec![M(rx, 0.0), L(1.0 - rx, 0.0),
+                                         C(1.0 - rx + rx * k, 0.0, 1.0, ry - ry * k, 1.0, ry), L(1.0, 1.0 - ry),
+                                         C(1.0, 1.0 - ry + ry * k, 1.0 - rx + rx * k, 1.0, 1.0 - rx, 1.0), L(rx, 1.0),
+                                         C(rx - rx * k, 1.0, 0.0, 1.0 - ry + ry * k, 0.0, 1.0 - ry), L(0.0, ry),
+                                         C(0.0, ry - ry * k, rx - rx * k, 0.0, rx, 0.0), Z]
+                                }
+                            } else { s1120_path };
                             let s1120_curve = !s1120_path.is_empty()
                                 && (stroke.is_some() || fill.is_some());
                             // OXI_WPG_TEXT_CHILDREN: the member's rect through the
@@ -9428,6 +9507,14 @@ fn parse_drawing(
                                 || s1120_curve
                             {
                                 let (vx, vy, vw, vh) = member_rect(w.off, w.ext);
+                                // OXI_WPG_PRESET_PATHS: a quarter-turned member occupies its
+                                // box swapped about the centre.
+                                let (vx, vy, vw, vh) = if ((w.rot / 90.0).round() as i32).rem_euclid(2) == 1
+                                    && std::env::var_os("OXI_WPG_PRESET_PATHS_DISABLE").is_none()
+                                    && matches!(w.prst.as_deref(), Some("snip2DiagRect") | Some("roundRect"))
+                                {
+                                    (vx + (vw - vh) / 2.0, vy + (vh - vw) / 2.0, vh, vw)
+                                } else { (vx, vy, vw, vh) };
                                 s839_vector_shapes.push(crate::ir::VectorShape {
                                     x: vx,
                                     y: vy,

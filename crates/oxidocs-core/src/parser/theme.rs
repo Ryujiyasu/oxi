@@ -165,11 +165,21 @@ impl ThemeColors {
     /// Resolve a themeColor name to an RGB hex string
     pub fn resolve(&self, theme_color: &str) -> Option<&String> {
         // Map Word's themeColor attribute names to theme XML names
+        // OXI_THEME_BG_TX (2026-10-31, default ON, opt-out _DISABLE): DrawingML's
+        // schemeClr names bg1 / tx1 / bg2 / tx2 go through the default colour map
+        // (bg1 = lt1, tx1 = dk1, ...); they resolved to nothing, so a shape filled
+        // bg1 fell to its fillRef. ja/reports__67cf8704's white section-label pills
+        // came out black.
+        let bg_tx = std::env::var_os("OXI_THEME_BG_TX_DISABLE").is_none();
         let key = match theme_color {
             "dark1" | "text1" => "dk1",
             "light1" | "background1" => "lt1",
             "dark2" | "text2" => "dk2",
             "light2" | "background2" => "lt2",
+            "tx1" if bg_tx => "dk1",
+            "bg1" if bg_tx => "lt1",
+            "tx2" if bg_tx => "dk2",
+            "bg2" if bg_tx => "lt2",
             "accent1" => "accent1",
             "accent2" => "accent2",
             "accent3" => "accent3",
