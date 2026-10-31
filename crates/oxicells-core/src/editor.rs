@@ -9579,6 +9579,7 @@ fn builtin_number_format_id(format: &str) -> Option<u32> {
         "0.00" => Some(2),
         "#,##0" => Some(3),
         "#,##0.00" => Some(4),
+        "$#,##0.00_);($#,##0.00)" => Some(7),
         "0%" => Some(9),
         "0.00%" => Some(10),
         "0.00E+00" => Some(11),

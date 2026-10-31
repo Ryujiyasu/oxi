@@ -103,6 +103,28 @@ struct RangeInputWrite {
     formulas: Vec<CellAddress>,
 }
 
+struct RangeInputContinuation {
+    block: InputBlock,
+    writes: RangeInputWrite,
+    broadcast_dress: Option<Worn>,
+    header_writes: Vec<CellAddress>,
+    row: u32,
+    column: u32,
+}
+
+enum RangeInputProgress {
+    Done(RangeInputWrite),
+    Resolve(Value, Box<RangeInputContinuation>),
+}
+
+struct RangeArrayAssignment {
+    range: CellRange,
+    value: Value,
+    name: String,
+    style: FormulaStyle,
+    continuation: Option<Box<RangeInputContinuation>>,
+}
+
 impl RangeInputWrite {
     fn absorb(&mut self, other: Self) {
         self.wrote |= other.wrote;
@@ -17347,16 +17369,38 @@ impl<'a> WorkbookHost<'a> {
         }
     }
 
+    fn checked_formula_text(&self, address: CellAddress, value: Value, array_property: bool) -> Result<Value, String> {
+        let formula = self.workbook.sheets.get(address.sheet)
+            .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
+            .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+            .is_some_and(|cell| cell.formula.is_some() || cell.formula_utf16.is_some());
+        if formula { return Ok(value); }
+        let mut units = match value {
+            Value::String(text) if text.len() > 8_192 => text.encode_utf16().collect::<Vec<_>>(),
+            Value::Utf16(units) if units.len() > 8_192 => units,
+            value => return Ok(value),
+        };
+        if units.len() > 8_221 {
+            return if array_property { Ok(Value::Error(2015)) }
+                else { Err(host_error(1004, "Application-defined or object-defined error")) };
+        }
+        units.truncate(8_192);
+        Ok(Value::from_utf16(units))
+    }
+
     fn range_formula(&self, range: CellRange, style: FormulaStyle) -> Result<Value, String> {
         self.range_formula_as(range, style, false)
     }
 
     fn range_formula_as(&self, range: CellRange, style: FormulaStyle, dynamic: bool) -> Result<Value, String> {
         Self::range_cell_count(range)?;
-        let written = |address| match (style, dynamic) {
-            (FormulaStyle::A1, false) => Ok(self.cell_formula(address)),
-            (FormulaStyle::A1, true) => Ok(self.cell_formula2(address)),
-            (FormulaStyle::R1C1, _) => self.cell_formula_r1c1_as(address, dynamic),
+        let written = |address| {
+            let value = match (style, dynamic) {
+                (FormulaStyle::A1, false) => self.cell_formula(address),
+                (FormulaStyle::A1, true) => self.cell_formula2(address),
+                (FormulaStyle::R1C1, _) => self.cell_formula_r1c1_as(address, dynamic)?,
+            };
+            self.checked_formula_text(address, value, false)
         };
         if range.is_single() {
             return written(range.addresses().next().unwrap());
@@ -19048,10 +19092,10 @@ impl<'a> WorkbookHost<'a> {
     fn range_formula_array(&self, range: CellRange) -> Result<Value, String> {
         Self::range_cell_count(range)?;
         if range.is_single() {
-            return Ok(self.cell_formula(range.first()));
+            return self.checked_formula_text(range.first(), self.cell_formula(range.first()), true);
         }
         match range.addresses().find(|at| self.array_of(*at).is_some()) {
-            Some(member) => Ok(self.cell_formula(member)),
+            Some(member) => self.checked_formula_text(member, self.cell_formula(member), true),
             None => Ok(Value::Null),
         }
     }
@@ -19063,48 +19107,67 @@ impl<'a> WorkbookHost<'a> {
         operation: &str,
         style: FormulaStyle,
     ) -> Result<RangeInputWrite, String> {
-        Self::range_cell_count(range)?;
-        if !self.arrays_allow(range, true)? {
-            return Ok(RangeInputWrite::default());
+        match self.set_range_input_resumable(range, value, operation, style, None, None)? {
+            RangeInputProgress::Done(writes) => Ok(writes),
+            RangeInputProgress::Resolve(_, _) => Err(host_error(7, "Out of memory")),
         }
-        let array_input = matches!(&value, Value::Array(_));
-        let block = InputBlock::of(value, operation)?;
-        // A block with a locked cell in it is not refused whole: measured,
-        // `Range("A4:A6").Value = 3` over locked A4 and A6 and unlocked A5
-        // writes A5 and then raises 1004. So each unlocked cell is written and
-        // the refusal comes at the end.
-        let mut writes = RangeInputWrite {
-            dynamic_recalc: self.workbook.sheets.get(range.sheet).is_some_and(|sheet| sheet.rows.iter()
-                .filter(|row| row.index >= range.start_row && row.index <= range.end_row)
-                .flat_map(|row| row.cells.iter())
-                .any(|cell| cell.spill == oxicells_core::ir::Spill::Dynamic
-                    && cell.col >= range.start_column && cell.col <= range.end_column)),
-            ..RangeInputWrite::default()
-        };
-        let mut broadcast_dress: Option<Worn> = None;
-        let mut header_writes: Vec<CellAddress> = Vec::new();
+    }
+
+    fn set_range_input_resumable(
+        &mut self, range: CellRange, value: Value, operation: &str, style: FormulaStyle,
+        continuation: Option<Box<RangeInputContinuation>>, mut resolved: Option<Result<Value, String>>,
+    ) -> Result<RangeInputProgress, String> {
+        Self::range_cell_count(range)?;
+        let resumed = continuation.is_some();
+        let array_input = resumed || matches!(&value, Value::Array(_));
+        let (mut block, mut writes, mut broadcast_dress, mut header_writes, start_row, start_column) =
+            if let Some(held) = continuation {
+                let RangeInputContinuation { block, writes, broadcast_dress, header_writes, row, column } = *held;
+                (block, writes, broadcast_dress, header_writes, row, column)
+            } else {
+                if !self.arrays_allow(range, true)? {
+                    return Ok(RangeInputProgress::Done(RangeInputWrite::default()));
+                }
+                let block = InputBlock::of(value, operation)?;
+                let writes = RangeInputWrite {
+                    dynamic_recalc: self.workbook.sheets.get(range.sheet).is_some_and(|sheet| sheet.rows.iter()
+                        .filter(|row| row.index >= range.start_row && row.index <= range.end_row)
+                        .flat_map(|row| row.cells.iter())
+                        .any(|cell| cell.spill == oxicells_core::ir::Spill::Dynamic
+                            && cell.col >= range.start_column && cell.col <= range.end_column)),
+                    ..RangeInputWrite::default()
+                };
+                (block, writes, None, Vec::new(), 0, 0)
+            };
         // A cell a merge covers, other than its first, takes nothing: measured,
         // `Range("B2").Value = "x"` inside a merged A1:B2 changes nothing and
         // raises nothing.
         let merges = self.merges_on(range.sheet);
         'input: for row_step in 0..=(range.end_row - range.start_row) {
             for column_step in 0..=(range.end_column - range.start_column) {
+                if (row_step, column_step) < (start_row, start_column) { continue; }
+                let prepared = resumed && (row_step, column_step) == (start_row, start_column);
                 let address = CellAddress {
                     sheet: range.sheet,
                     row: range.start_row + row_step,
                     column: range.start_column + column_step,
                 };
-                if merges.iter().any(|merge| {
+                if !prepared && merges.iter().any(|merge| {
                     range_contains(*merge, CellRange::single(address)) && merge.first() != address
                 }) {
                     continue;
                 }
-                if self.write_is_protected(address) {
+                let object_input = array_input && (block.object_broadcast || matches!(block.at(
+                    if block.rows == 1 { 0 } else { row_step as usize },
+                    if block.columns == 1 { 0 } else { column_step as usize }), Some(Value::Object(_) | Value::Nothing)));
+                if !prepared && !object_input && self.write_is_protected(address) {
                     writes.refused = true;
                     continue;
                 }
-                self.grow_table_toward(address)?;
-                header_writes.push(address);
+                if !prepared {
+                    self.grow_table_toward(address)?;
+                    header_writes.push(address);
+                }
                 let from_row = if block.rows == 1 { 0 } else { row_step as usize };
                 let from_column = if block.columns == 1 {
                     0
@@ -19127,16 +19190,70 @@ impl<'a> WorkbookHost<'a> {
                         writes.wrote = true;
                     continue;
                 };
+                let value = if array_input && matches!(value, Value::Object(_) | Value::Nothing) {
+                    match resolved.take() {
+                        Some(Ok(value)) => {
+                            if block.rows == 1 && block.columns == 1 {
+                                block.values[0] = value.clone();
+                                block.object_broadcast = true;
+                            }
+                            value
+                        }
+                        Some(Err(_)) => {
+                            let failure = host_error(7, "Out of memory");
+                            if !writes.wrote { return Err(failure); }
+                            writes.failure = Some(failure);
+                            break 'input;
+                        }
+                        None => return Ok(RangeInputProgress::Resolve(value, Box::new(RangeInputContinuation {
+                            block, writes, broadcast_dress, header_writes, row: row_step, column: column_step,
+                        }))),
+                    }
+                } else { value };
+                let value = if array_input && matches!(value, Value::Array(_) | Value::Null) { Value::Empty } else { value };
+                if object_input && self.write_is_protected(address) {
+                    writes.refused = true;
+                    continue;
+                }
                 // An apostrophe first marks the cell as holding text, and the
                 // mark stays through later text and goes with anything else.
                 // Measured: `'0123` then `"text"` keeps PrefixCharacter `'`,
                 // where `5`, `"46"` and ClearContents take it off.
-                let quoted = matches!(&value, Value::String(written) if written.starts_with(APOSTROPHE));
+                let quoted = match &value {
+                    Value::String(text) => text.starts_with(APOSTROPHE),
+                    Value::Utf16(units) => units.first() == Some(&(APOSTROPHE as u16)),
+                    _ => false,
+                };
+                let value = if object_input {
+                    match value {
+                        Value::NullString => Value::String(String::new()),
+                        Value::String(text) => {
+                            let text = text_a_cell_keeps(&text);
+                            if text.encode_utf16().count() > 8_190 {
+                                let failure = host_error(7, "Out of memory");
+                                if !writes.wrote { return Err(failure); }
+                                writes.failure = Some(failure); break 'input;
+                            }
+                            Value::String(text.strip_prefix(APOSTROPHE).unwrap_or(text).to_string())
+                        }
+                        Value::Utf16(mut units) => {
+                            if let Some(index) = units.iter().position(|unit| *unit == 0) { units.truncate(index); }
+                            if units.len() > 8_190 {
+                                let failure = host_error(7, "Out of memory");
+                                if !writes.wrote { return Err(failure); }
+                                writes.failure = Some(failure); break 'input;
+                            }
+                            if units.first() == Some(&(APOSTROPHE as u16)) { units.remove(0); }
+                            Value::from_utf16(units)
+                        }
+                        value => value,
+                    }
+                } else { value };
                 // A cell formatted as text keeps what is written as text:
                 // measured, `"12"` into an `@` cell is the String "12".
                 let value = match value {
                     Value::String(written)
-                        if !written.starts_with('=') && self.cell_format_is_text(address) =>
+                        if !object_input && !written.starts_with('=') && self.cell_format_is_text(address) =>
                     {
                         self.set_cell_value(address, CellValue::String(written))?;
                         writes.wrote = true;
@@ -19145,7 +19262,7 @@ impl<'a> WorkbookHost<'a> {
                     other => other,
                 };
                 if let Value::Utf16(units) = &value {
-                    if units.first() == Some(&(b'=' as u16)) {
+                    if !object_input && units.first() == Some(&(b'=' as u16)) {
                         let written = oxicells_calc::parser::transform_utf16_formula(units, |formula| {
                             self.placed_formula(address, formula.to_string(), style,
                                 row_step as i64 - from_row as i64, column_step as i64 - from_column as i64)
@@ -19157,6 +19274,9 @@ impl<'a> WorkbookHost<'a> {
                             };
                             if one_formula && broadcast_dress.is_none() { broadcast_dress = Some(dress.clone()); }
                             self.set_cell_formula_utf16(address, &placed)?;
+                            if array_input {
+                                if let Some(cell) = self.cell_mut(address) { cell.value = CellValue::Number(0.0); }
+                            }
                             if let Worn::Format(format) = dress { self.dress_general_cell(address, &format); }
                             Ok(())
                         });
@@ -19167,9 +19287,16 @@ impl<'a> WorkbookHost<'a> {
                         }
                     }
                 }
-                let formula_text = matches!(&value, Value::String(text) if text.starts_with('='));
+                let formula_text = !object_input && matches!(&value, Value::String(text) if text.starts_with('='));
                 let invalid_error = matches!(&value, Value::Error(code) if spreadsheet_error_text_exact(*code).is_none());
-                let input = match cell_input(value, self.this_year()) {
+                let converted = match value {
+                    Value::String(text) if object_input => Ok(CellInput::Constant(CellValue::String(text), None)),
+                    Value::Utf16(units) if object_input => Ok(CellInput::Constant(CellValue::from_utf16(units), None)),
+                    Value::Date(serial) if object_input => Ok(CellInput::Constant(CellValue::Number(serial), None)),
+                    Value::Currency(units) if object_input => Ok(CellInput::Constant(CellValue::Number(units as f64 / 10_000.0), None)),
+                    value => cell_input(value, self.this_year()),
+                };
+                let input = match converted {
                     Ok(input) => input,
                     Err(error) if formula_text || (array_input && invalid_error) => {
                         // Excel commits earlier array members and reports 7
@@ -19213,6 +19340,9 @@ impl<'a> WorkbookHost<'a> {
                             broadcast_dress = Some(dress.clone());
                         }
                         self.set_cell_formula(address, placed)?;
+                        if array_input {
+                            if let Some(cell) = self.cell_mut(address) { cell.value = CellValue::Number(0.0); }
+                        }
                         writes.wrote = true; writes.formulas.push(address);
                         if let Worn::Format(format) = dress {
                             self.dress_general_cell(address, &format);
@@ -19277,7 +19407,7 @@ impl<'a> WorkbookHost<'a> {
         if wraps {
             self.refit_rows(range)?;
         }
-        Ok(writes)
+        Ok(RangeInputProgress::Done(writes))
     }
 
     /// A table's column takes the name typed into its header cell. Measured:
@@ -24253,6 +24383,50 @@ impl<'a> WorkbookHost<'a> {
 }
 
 impl Host for WorkbookHost<'_> {
+    fn begin_array_set(&mut self, receiver: &ObjectRef, name: &str, args: &[Value], value: &Value)
+        -> Result<Option<Box<dyn std::any::Any>>, String> {
+        if !matches!(value, Value::Array(_)) { return Ok(None); }
+        let Some(mut range) = self.range(receiver) else { return Ok(None) };
+        let mut name = name.to_ascii_lowercase();
+        let indexed_item = matches!(name.as_str(), "item" | "_default") && !args.is_empty();
+        if indexed_item {
+            if args.len() > 2 { return Err(host_error(450, "Range.Item needs a row and an optional column")); }
+            let Some(Value::Object(target)) = self.call(Some(receiver), "Item", args)? else { return Ok(None) };
+            let Some(target) = self.range(&target) else { return Ok(None) };
+            range = target;
+            name = "value".into();
+        }
+        if name == "_default" { name = "value".into(); }
+        if !matches!(name.as_str(), "value" | "value2" | "formula" | "formula2" | "formulalocal" | "formular1c1" | "formula2r1c1" | "formular1c1local") { return Ok(None); }
+        if name == "value" { if !indexed_item { validate_range_value_data_type(args)?; } }
+        else if !args.is_empty() { return Ok(None); }
+        if self.user_functions.borrow().running.is_some() {
+            return Err(host_error(1004, "a function called from a cell cannot change the sheet"));
+        }
+        if self.gone(receiver) { return Err(host_error(424, "the object's worksheet has been deleted")); }
+        let style = if name.contains("r1c1") { FormulaStyle::R1C1 } else { FormulaStyle::A1 };
+        let value = if name == "value2" { range_value2_input(value.clone()) } else { value.clone() };
+        Ok(Some(Box::new(RangeArrayAssignment { range, value, name, style, continuation: None })))
+    }
+
+    fn resume_array_set(&mut self, state: &mut dyn std::any::Any, resolved: Option<Result<Value, String>>)
+        -> Result<Option<Value>, String> {
+        let state = state.downcast_mut::<RangeArrayAssignment>().expect("range array continuation");
+        let progress = self.set_range_input_resumable(state.range, std::mem::replace(&mut state.value, Value::Empty),
+            "range assignment", state.style, state.continuation.take(), resolved)?;
+        match progress {
+            RangeInputProgress::Resolve(value, continuation) => { state.continuation = Some(continuation); Ok(Some(value)) }
+            RangeInputProgress::Done(writes) => {
+                if matches!(state.name.as_str(), "formula2" | "formula2r1c1") { self.mark_dynamic(state.range, &writes.formulas); }
+                else { self.imply_intersections(state.range, &writes.formulas); }
+                if state.name.starts_with("formula") && !writes.formulas.is_empty() { self.spread_calculated_column(state.range)?; }
+                self.calculate_input(&writes);
+                writes.finish()?;
+                Ok(None)
+            }
+        }
+    }
+
     fn assignment_global_type(&self, name: &str) -> Option<String> {
         builtin_compilation_references().library.global_type_name(name)
     }
@@ -30534,6 +30708,7 @@ impl Host for WorkbookHost<'_> {
             return Ok(false);
         };
         if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
+            let value = if name.eq_ignore_ascii_case("value2") { range_value2_input(value) } else { value };
             let writes = self.set_range_input(range, value, "range assignment", FormulaStyle::A1)?;
             self.imply_intersections(range, &writes.formulas);
             self.calculate_input(&writes);
@@ -36721,7 +36896,7 @@ fn written_calendar_date(text: &str, this_year: i64) -> Option<(f64, &'static st
                 // this year's, `1/32` January 1932, `2/29` (2026) February
                 // 2029, `1/0` January 2000, and `1/100` stays text.
                 [(month, _), (day, digits)] => match excel_serial(this_year, *month as u32, *day as u32) {
-                    Some(serial) => Some((serial, "m\"月\"d\"日\"")),
+                    Some(serial) => Some((serial, "d-mmm")),
                     None if *digits <= 2 => {
                         let serial = excel_serial(widened_year(*day, *digits), *month as u32, 1)?;
                         Some((serial, "mmm-yy"))
@@ -37203,10 +37378,23 @@ enum CellInput {
 /// one-dimensional array is a single ROW — which is why `Array(1, 2, 3)`
 /// written down a column leaves the FIRST entry filled down it rather than the
 /// three entries stacked.
+fn range_value2_input(value: Value) -> Value {
+    match value {
+        Value::Date(serial) => Value::Double(serial),
+        Value::Currency(units) => Value::Double(units as f64 / 10_000.0),
+        Value::Array(mut array) => {
+            array.values = array.values.into_iter().map(range_value2_input).collect();
+            Value::Array(array)
+        }
+        value => value,
+    }
+}
+
 struct InputBlock {
     rows: usize,
     columns: usize,
     values: Vec<Value>,
+    object_broadcast: bool,
 }
 
 impl InputBlock {
@@ -37227,12 +37415,14 @@ impl InputBlock {
                     rows,
                     columns,
                     values: array.values,
+                    object_broadcast: false,
                 })
             }
             value => Ok(Self {
                 rows: 1,
                 columns: 1,
                 values: vec![value],
+                object_broadcast: false,
             }),
         }
     }
@@ -44713,6 +44903,1741 @@ mod tests {
             execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
         };
         assert_eq!(answer, Value::String("0Empty|a|0Empty|a|1|1".to_string()));
+    }
+
+    #[test]
+    fn array_default_strings_match_native_lengths_and_nul_termination() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "ArrayValue"
+Option Explicit
+Public Kind As Long
+Public Text As String
+Public Payload As Variant
+Public Property Get ReadValue() As Variant
+Attribute ReadValue.VB_UserMemId = 0
+ ArrayDriver.arrayTrace=ArrayDriver.arrayTrace & "G" & CStr(Range("B1").Value2)
+ Range("F1").Value2=Range("F1").Value2+1
+ Select Case Kind
+ Case 0:ReadValue=55
+ Case 1:Err.Raise 5,"ArrayValue","array getter failed"
+ Case 2:Set ReadValue=Range("D1")
+ Case 3:ReadValue=CVErr(2007)
+ Case 4:ReadValue=Array(6,7)
+ Case 5:ReadValue=Range("F1").Value2
+ Case 6:
+ Dim nested(1 To 1,1 To 2) As Variant
+ nested(1,1)=8:Set nested(1,2)=Range("D1")
+ Range("H1:I1").Value2=nested
+ ReadValue=66
+ Case 7:ReadValue=CStr(Range("B1").Value2)
+ Case 8:ReadValue=Text
+ Case 9:ReadValue=Payload
+ End Select
+End Property
+Attribute VB_Name = "ArrayDriver"
+Option Explicit
+Public arrayTrace As String
+Public Function ArrayObjectPayload(ByVal kind As Long) As Variant
+ Dim a(1 To 2,1 To 2) As Variant,obj As Object,custom As ArrayValue
+ a(1,1)=1:a(1,2)=2:a(2,1)=3:a(2,2)=4
+ Select Case kind
+ Case 0:Set a(1,2)=Nothing
+ Case 1:Set a(1,2)=Range("D1")
+ Case 2:Set a(1,2)=Range("D1:E2")
+ Case 3:Set a(1,2)=ActiveSheet
+ Case 4:Set obj=New Collection:Set a(1,2)=obj
+ Case 5:Set obj=CreateObject("Scripting.Dictionary"):Set a(1,2)=obj
+ Case 6 To 10:Set custom=New ArrayValue:custom.Kind=kind-6:Set a(1,2)=custom
+ Case 11:a(1,2)=Array(6,7)
+ Case 12:a(1,2)=Null
+ Case 13:a(1,2)=Empty
+ Case 14:Set a(1,2)=Range("B1")
+ Case 15:Set a(1,2)=Range("C1")
+ End Select
+ ArrayObjectPayload=a
+End Function
+Public Function ArrayObjectProbe(ByVal prop As Long,ByVal kind As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Value2=99:Range("D1:E2").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim target As Object:Set target=Range("B1:C2"):Err.Clear
+ Select Case prop
+ Case 0:target.Value=ArrayObjectPayload(kind)
+ Case 1:target.Value2=ArrayObjectPayload(kind)
+ Case 2:target.Formula=ArrayObjectPayload(kind)
+ Case 3:target.Formula2=ArrayObjectPayload(kind)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayObjectProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2)
+End Function
+Public Function ArrayTraversalProbe(ByVal profile As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect
+ Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:I4").Value2=99:Range("D1").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim custom As ArrayValue,a(1 To 2,1 To 2) As Variant,vector(1 To 2) As Variant,oneRow(1 To 1,1 To 2) As Variant,one(1 To 1,1 To 1) As Variant,payload As Variant,target As Object
+ Set custom=New ArrayValue:custom.Kind=5
+ a(1,1)=1:Set a(1,2)=custom:a(2,1)=3:a(2,2)=4
+ Set target=Range("B1:C2")
+ Select Case profile
+ Case 1:Set a(1,1)=custom:a(1,2)=2
+ Case 2:custom.Kind=1
+ Case 3:Set a(1,1)=custom:a(1,2)=2:custom.Kind=1
+ Case 4:Set a(1,1)=custom
+ Case 5:vector(1)=1:Set vector(2)=custom:payload=vector
+ Case 6:oneRow(1,1)=1:Set oneRow(1,2)=custom:payload=oneRow
+ Case 7:Range("B1:C2").Locked=False:Range("C1").Locked=True:ActiveSheet.Protect
+ Case 8:Range("B1:C1").Merge
+ Case 9:a(1,1)="=1+1":custom.Kind=7
+ Case 10:custom.Kind=6
+ Case 11:Set a(1,2)=Range("B1")
+ Case 12:Set one(1,1)=custom:payload=one
+ Case 13:Set target=Range("B1"):custom.Kind=1
+ End Select
+ If profile<>5 And profile<>6 And profile<>12 Then payload=a
+ Err.Clear
+ Select Case prop
+ Case 0:target.Value=payload
+ Case 1:target.Value2=payload
+ Case 2:target.Formula=payload
+ Case 3:target.Formula2=payload
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTraversalProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2,Range("H1").Value2,Range("I1").Value2,Range("B1").Formula,Range("C1").Formula)
+End Function
+Public Function ArrayTextProbe(ByVal mode As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:C2").Value2=99:Range("F1").Value2=0:arrayTrace=""
+ Dim a(1 To 2,1 To 2) As Variant,custom As ArrayValue,texts As Variant
+ texts=Array("2","TRUE","1/2","=1+1")
+ a(1,1)=1:a(1,2)=texts(Int(mode/2)):a(2,1)=3:a(2,2)=4
+ If mode Mod 2=1 Then
+ Set custom=New ArrayValue:custom.Kind=8:custom.Text=texts(Int(mode/2)):Set a(1,2)=custom
+ End If
+ Err.Clear
+ Select Case prop
+ Case 0:Range("B1:C2").Value=a
+ Case 1:Range("B1:C2").Value2=a
+ Case 2:Range("B1:C2").Formula=a
+ Case 3:Range("B1:C2").Formula2=a
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTextProbe=Array(n,d,s,hc,VarType(Range("C1").Value2),Range("C1").Value2,Range("C1").Formula,Range("C1").NumberFormat)
+End Function
+Public Function ArrayVariantProbe(ByVal kind As Long,ByVal objectValue As Boolean,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:C2").Value2=99:Range("F1").Value2=0:arrayTrace=""
+ Dim payload As Variant,a(1 To 2,1 To 2) As Variant,custom As ArrayValue
+ Select Case kind
+ Case 0:payload=CDbl(12.3456)
+ Case 1:payload=#1/2/2003 12:34:56#
+ Case 2:payload=CCur(12.3456)
+ Case 3:payload=True
+ Case 4:payload=CVErr(1)
+ Case 5:payload=CVErr(2007)
+ Case 6:payload=Empty
+ Case 7:payload=Null
+ Case 8:payload=vbNullString
+ Case 9:payload="a" & Chr(0) & "b"
+ Case 10:payload="'0123"
+ Case 11:payload="a" & vbLf & "b"
+ Case 12:payload="caf" & ChrW(233)
+ Case 13:payload=ChrW(&HD800)
+ Case 14:payload=String$(40000,"x")
+ Case 15:payload="="
+ End Select
+ a(1,1)=1:a(1,2)=payload:a(2,1)=3:a(2,2)=4
+ If objectValue Then
+ Set custom=New ArrayValue:custom.Kind=9:custom.Payload=payload:Set a(1,2)=custom
+ End If
+ Err.Clear
+ Select Case prop
+ Case 0:Range("B1:C2").Value=a
+ Case 1:Range("B1:C2").Value2=a
+ Case 2:Range("B1:C2").Formula=a
+ Case 3:Range("B1:C2").Formula2=a
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long,v As Variant,f As Variant
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ v=Range("C1").Value2:f=Range("C1").Formula
+ If kind=14 Then
+ v=Len(CStr(v)):f=Len(CStr(f))
+ End If
+ ArrayVariantProbe=Array(n,d,s,hc,VarType(Range("C1").Value2),v,f,Range("C1").NumberFormat,Range("C1").PrefixCharacter,Range("C1").WrapText,Range("B1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2)
+End Function
+Public Function ArrayObjectLengthProbe(ByVal length As Long,Optional ByVal prop As Long=0) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:C2").Clear
+ Range("B1:C2").Value2=99:Range("F1").Value2=0:arrayTrace=""
+ Dim a(1 To 2,1 To 2) As Variant,custom As ArrayValue,payload As Variant
+ If length>=0 Then payload=String$(length,"x")
+ Select Case length
+ Case -1:payload=Chr(0)
+ Case -2:payload=Chr(0) & String$(40000,"x")
+ Case -3:payload="'" & String$(32767,"x")
+ Case -4:payload="'" & String$(32766,"x")
+ Case -5:payload=vbNullString
+ Case -6:payload=""
+ End Select
+ Set custom=New ArrayValue:custom.Kind=9:custom.Payload=payload
+ a(1,1)=1:Set a(1,2)=custom:a(2,1)=3:a(2,2)=4
+ Err.Clear
+ Select Case prop
+ Case 0:Range("B1:C2").Value=a
+ Case 1:Range("B1:C2").Value2=a
+ Case 2:Range("B1:C2").Formula=a
+ Case 3:Range("B1:C2").Formula2=a
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayObjectLengthProbe=Array(n,d,s,hc,VarType(Range("C1").Value2),Len(CStr(Range("C1").Value2)),Range("B1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2,Range("C1").PrefixCharacter)
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let cases = [
+            (0, 8190, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8190), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, 8191, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, 8192, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, 256, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(256), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, -1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, -2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, -5, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, -6, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (1, 8190, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8190), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (1, 8191, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (1, 8192, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (1, 256, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(256), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (1, -1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (1, -2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (1, -5, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (1, -6, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (2, 8190, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8190), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (2, 8191, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (2, 8192, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (2, 256, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(256), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (2, -1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (2, -2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (2, -5, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (2, -6, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 8190, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8190), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 8191, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 8192, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 256, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(256), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, -1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, -2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, -5, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, -6, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())])
+        ];
+        for (prop, length, expected) in cases {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("ArrayDriver.ArrayObjectLengthProbe", vec![Value::Integer(length), Value::Integer(prop)]).unwrap();
+            let Value::Array(answer) = actual else { panic!("expected default string results"); };
+            assert_eq!(answer.values, expected, "property={prop} length={length}");
+        }
+    }
+
+    #[test]
+    fn array_default_strings_count_utf16_and_preserve_prefix_order() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "ArrayValue"
+Option Explicit
+Public Kind As Long
+Public Text As String
+Public Payload As Variant
+Public Property Get ReadValue() As Variant
+Attribute ReadValue.VB_UserMemId = 0
+ ArrayDriver.arrayTrace=ArrayDriver.arrayTrace & "G" & CStr(Range("B1").Value2)
+ Range("F1").Value2=Range("F1").Value2+1
+ Select Case Kind
+ Case 0:ReadValue=55
+ Case 1:Err.Raise 5,"ArrayValue","array getter failed"
+ Case 2:Set ReadValue=Range("D1")
+ Case 3:ReadValue=CVErr(2007)
+ Case 4:ReadValue=Array(6,7)
+ Case 5:ReadValue=Range("F1").Value2
+ Case 6:
+ Dim nested(1 To 1,1 To 2) As Variant
+ nested(1,1)=8:Set nested(1,2)=Range("D1")
+ Range("H1:I1").Value2=nested
+ ReadValue=66
+ Case 7:ReadValue=CStr(Range("B1").Value2)
+ Case 8:ReadValue=Text
+ Case 9:ReadValue=Payload
+ End Select
+End Property
+Attribute VB_Name = "ArrayDriver"
+Option Explicit
+Public arrayTrace As String
+Public Function ArrayObjectPayload(ByVal kind As Long) As Variant
+ Dim a(1 To 2,1 To 2) As Variant,obj As Object,custom As ArrayValue
+ a(1,1)=1:a(1,2)=2:a(2,1)=3:a(2,2)=4
+ Select Case kind
+ Case 0:Set a(1,2)=Nothing
+ Case 1:Set a(1,2)=Range("D1")
+ Case 2:Set a(1,2)=Range("D1:E2")
+ Case 3:Set a(1,2)=ActiveSheet
+ Case 4:Set obj=New Collection:Set a(1,2)=obj
+ Case 5:Set obj=CreateObject("Scripting.Dictionary"):Set a(1,2)=obj
+ Case 6 To 10:Set custom=New ArrayValue:custom.Kind=kind-6:Set a(1,2)=custom
+ Case 11:a(1,2)=Array(6,7)
+ Case 12:a(1,2)=Null
+ Case 13:a(1,2)=Empty
+ Case 14:Set a(1,2)=Range("B1")
+ Case 15:Set a(1,2)=Range("C1")
+ End Select
+ ArrayObjectPayload=a
+End Function
+Public Function ArrayObjectProbe(ByVal prop As Long,ByVal kind As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Value2=99:Range("D1:E2").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim target As Object:Set target=Range("B1:C2"):Err.Clear
+ Select Case prop
+ Case 0:target.Value=ArrayObjectPayload(kind)
+ Case 1:target.Value2=ArrayObjectPayload(kind)
+ Case 2:target.Formula=ArrayObjectPayload(kind)
+ Case 3:target.Formula2=ArrayObjectPayload(kind)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayObjectProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2)
+End Function
+Public Function ArrayTraversalProbe(ByVal profile As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect
+ Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:I4").Value2=99:Range("D1").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim custom As ArrayValue,a(1 To 2,1 To 2) As Variant,vector(1 To 2) As Variant,oneRow(1 To 1,1 To 2) As Variant,one(1 To 1,1 To 1) As Variant,payload As Variant,target As Object
+ Set custom=New ArrayValue:custom.Kind=5
+ a(1,1)=1:Set a(1,2)=custom:a(2,1)=3:a(2,2)=4
+ Set target=Range("B1:C2")
+ Select Case profile
+ Case 1:Set a(1,1)=custom:a(1,2)=2
+ Case 2:custom.Kind=1
+ Case 3:Set a(1,1)=custom:a(1,2)=2:custom.Kind=1
+ Case 4:Set a(1,1)=custom
+ Case 5:vector(1)=1:Set vector(2)=custom:payload=vector
+ Case 6:oneRow(1,1)=1:Set oneRow(1,2)=custom:payload=oneRow
+ Case 7:Range("B1:C2").Locked=False:Range("C1").Locked=True:ActiveSheet.Protect
+ Case 8:Range("B1:C1").Merge
+ Case 9:a(1,1)="=1+1":custom.Kind=7
+ Case 10:custom.Kind=6
+ Case 11:Set a(1,2)=Range("B1")
+ Case 12:Set one(1,1)=custom:payload=one
+ Case 13:Set target=Range("B1"):custom.Kind=1
+ End Select
+ If profile<>5 And profile<>6 And profile<>12 Then payload=a
+ Err.Clear
+ Select Case prop
+ Case 0:target.Value=payload
+ Case 1:target.Value2=payload
+ Case 2:target.Formula=payload
+ Case 3:target.Formula2=payload
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTraversalProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2,Range("H1").Value2,Range("I1").Value2,Range("B1").Formula,Range("C1").Formula)
+End Function
+Public Function ArrayTextProbe(ByVal mode As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:C2").Value2=99:Range("F1").Value2=0:arrayTrace=""
+ Dim a(1 To 2,1 To 2) As Variant,custom As ArrayValue,texts As Variant
+ texts=Array("2","TRUE","1/2","=1+1")
+ a(1,1)=1:a(1,2)=texts(Int(mode/2)):a(2,1)=3:a(2,2)=4
+ If mode Mod 2=1 Then
+ Set custom=New ArrayValue:custom.Kind=8:custom.Text=texts(Int(mode/2)):Set a(1,2)=custom
+ End If
+ Err.Clear
+ Select Case prop
+ Case 0:Range("B1:C2").Value=a
+ Case 1:Range("B1:C2").Value2=a
+ Case 2:Range("B1:C2").Formula=a
+ Case 3:Range("B1:C2").Formula2=a
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTextProbe=Array(n,d,s,hc,VarType(Range("C1").Value2),Range("C1").Value2,Range("C1").Formula,Range("C1").NumberFormat)
+End Function
+Public Function ArrayVariantProbe(ByVal kind As Long,ByVal objectValue As Boolean,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:C2").Value2=99:Range("F1").Value2=0:arrayTrace=""
+ Dim payload As Variant,a(1 To 2,1 To 2) As Variant,custom As ArrayValue
+ Select Case kind
+ Case 0:payload=CDbl(12.3456)
+ Case 1:payload=#1/2/2003 12:34:56#
+ Case 2:payload=CCur(12.3456)
+ Case 3:payload=True
+ Case 4:payload=CVErr(1)
+ Case 5:payload=CVErr(2007)
+ Case 6:payload=Empty
+ Case 7:payload=Null
+ Case 8:payload=vbNullString
+ Case 9:payload="a" & Chr(0) & "b"
+ Case 10:payload="'0123"
+ Case 11:payload="a" & vbLf & "b"
+ Case 12:payload="caf" & ChrW(233)
+ Case 13:payload=ChrW(&HD800)
+ Case 14:payload=String$(40000,"x")
+ Case 15:payload="="
+ End Select
+ a(1,1)=1:a(1,2)=payload:a(2,1)=3:a(2,2)=4
+ If objectValue Then
+ Set custom=New ArrayValue:custom.Kind=9:custom.Payload=payload:Set a(1,2)=custom
+ End If
+ Err.Clear
+ Select Case prop
+ Case 0:Range("B1:C2").Value=a
+ Case 1:Range("B1:C2").Value2=a
+ Case 2:Range("B1:C2").Formula=a
+ Case 3:Range("B1:C2").Formula2=a
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long,v As Variant,f As Variant
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ v=Range("C1").Value2:f=Range("C1").Formula
+ If kind=14 Then
+ v=Len(CStr(v)):f=Len(CStr(f))
+ End If
+ ArrayVariantProbe=Array(n,d,s,hc,VarType(Range("C1").Value2),v,f,Range("C1").NumberFormat,Range("C1").PrefixCharacter,Range("C1").WrapText,Range("B1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2)
+End Function
+Public Function ArrayObjectLengthProbe(ByVal length As Long,Optional ByVal prop As Long=0,Optional ByVal charKind As Long=0) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:C2").Clear
+ Range("B1:C2").Value2=99:Range("F1").Value2=0:arrayTrace=""
+ Dim a(1 To 2,1 To 2) As Variant,custom As ArrayValue,payload As Variant
+ If length>=0 Then
+ Dim letter As String:letter="x"
+ If charKind=1 Then letter=ChrW(12354)
+ If charKind=2 Then letter=Chr(34)
+ payload=String$(length,letter)
+ If charKind=3 Then payload="'" & payload
+ If charKind=4 Then payload=payload & Chr(0) & String$(40000,"x")
+ End If
+ Select Case length
+ Case -1:payload=Chr(0)
+ Case -2:payload=Chr(0) & String$(40000,"x")
+ Case -3:payload="'" & String$(32767,"x")
+ Case -4:payload="'" & String$(32766,"x")
+ Case -5:payload=vbNullString
+ Case -6:payload=""
+ End Select
+ Set custom=New ArrayValue:custom.Kind=9:custom.Payload=payload
+ a(1,1)=1:Set a(1,2)=custom:a(2,1)=3:a(2,2)=4
+ Err.Clear
+ Select Case prop
+ Case 0:Range("B1:C2").Value=a
+ Case 1:Range("B1:C2").Value2=a
+ Case 2:Range("B1:C2").Formula=a
+ Case 3:Range("B1:C2").Formula2=a
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayObjectLengthProbe=Array(n,d,s,hc,VarType(Range("C1").Value2),Len(CStr(Range("C1").Value2)),Range("B1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2,Range("C1").PrefixCharacter)
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let cases = [
+            (0, 8190, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8190), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, 8191, 1, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, 4095, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(4095), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, 4096, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(4096), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, 8190, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8190), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, 8191, 2, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, 8189, 3, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8189), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("'".into())]),
+            (0, 8190, 3, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, 8190, 4, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8190), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (0, 8191, 4, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 8190, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8190), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 8191, 1, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 4095, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(4095), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 4096, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(4096), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 8190, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8190), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 8191, 2, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 8189, 3, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8189), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("'".into())]),
+            (3, 8190, 3, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 8190, 4, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8190), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())]),
+            (3, 8191, 4, vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::String("".into())])
+        ];
+        for (prop, length, kind, expected) in cases {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("ArrayDriver.ArrayObjectLengthProbe", vec![Value::Integer(length), Value::Integer(prop), Value::Integer(kind)]).unwrap();
+            let Value::Array(answer) = actual else { panic!("expected default string results"); };
+            assert_eq!(answer.values, expected, "property={prop} length={length}");
+        }
+    }
+
+    #[test]
+    fn array_variant_subtypes_match_native_value_and_value2() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "ArrayValue"
+Option Explicit
+Public Kind As Long
+Public Text As String
+Public Payload As Variant
+Public Property Get ReadValue() As Variant
+Attribute ReadValue.VB_UserMemId = 0
+ ArrayDriver.arrayTrace=ArrayDriver.arrayTrace & "G" & CStr(Range("B1").Value2)
+ Range("F1").Value2=Range("F1").Value2+1
+ Select Case Kind
+ Case 0:ReadValue=55
+ Case 1:Err.Raise 5,"ArrayValue","array getter failed"
+ Case 2:Set ReadValue=Range("D1")
+ Case 3:ReadValue=CVErr(2007)
+ Case 4:ReadValue=Array(6,7)
+ Case 5:ReadValue=Range("F1").Value2
+ Case 6:
+ Dim nested(1 To 1,1 To 2) As Variant
+ nested(1,1)=8:Set nested(1,2)=Range("D1")
+ Range("H1:I1").Value2=nested
+ ReadValue=66
+ Case 7:ReadValue=CStr(Range("B1").Value2)
+ Case 8:ReadValue=Text
+ Case 9:ReadValue=Payload
+ End Select
+End Property
+Attribute VB_Name = "ArrayDriver"
+Option Explicit
+Public arrayTrace As String
+Public Function ArrayObjectPayload(ByVal kind As Long) As Variant
+ Dim a(1 To 2,1 To 2) As Variant,obj As Object,custom As ArrayValue
+ a(1,1)=1:a(1,2)=2:a(2,1)=3:a(2,2)=4
+ Select Case kind
+ Case 0:Set a(1,2)=Nothing
+ Case 1:Set a(1,2)=Range("D1")
+ Case 2:Set a(1,2)=Range("D1:E2")
+ Case 3:Set a(1,2)=ActiveSheet
+ Case 4:Set obj=New Collection:Set a(1,2)=obj
+ Case 5:Set obj=CreateObject("Scripting.Dictionary"):Set a(1,2)=obj
+ Case 6 To 10:Set custom=New ArrayValue:custom.Kind=kind-6:Set a(1,2)=custom
+ Case 11:a(1,2)=Array(6,7)
+ Case 12:a(1,2)=Null
+ Case 13:a(1,2)=Empty
+ Case 14:Set a(1,2)=Range("B1")
+ Case 15:Set a(1,2)=Range("C1")
+ End Select
+ ArrayObjectPayload=a
+End Function
+Public Function ArrayObjectProbe(ByVal prop As Long,ByVal kind As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Value2=99:Range("D1:E2").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim target As Object:Set target=Range("B1:C2"):Err.Clear
+ Select Case prop
+ Case 0:target.Value=ArrayObjectPayload(kind)
+ Case 1:target.Value2=ArrayObjectPayload(kind)
+ Case 2:target.Formula=ArrayObjectPayload(kind)
+ Case 3:target.Formula2=ArrayObjectPayload(kind)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayObjectProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2)
+End Function
+Public Function ArrayTraversalProbe(ByVal profile As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect
+ Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:I4").Value2=99:Range("D1").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim custom As ArrayValue,a(1 To 2,1 To 2) As Variant,vector(1 To 2) As Variant,oneRow(1 To 1,1 To 2) As Variant,one(1 To 1,1 To 1) As Variant,payload As Variant,target As Object
+ Set custom=New ArrayValue:custom.Kind=5
+ a(1,1)=1:Set a(1,2)=custom:a(2,1)=3:a(2,2)=4
+ Set target=Range("B1:C2")
+ Select Case profile
+ Case 1:Set a(1,1)=custom:a(1,2)=2
+ Case 2:custom.Kind=1
+ Case 3:Set a(1,1)=custom:a(1,2)=2:custom.Kind=1
+ Case 4:Set a(1,1)=custom
+ Case 5:vector(1)=1:Set vector(2)=custom:payload=vector
+ Case 6:oneRow(1,1)=1:Set oneRow(1,2)=custom:payload=oneRow
+ Case 7:Range("B1:C2").Locked=False:Range("C1").Locked=True:ActiveSheet.Protect
+ Case 8:Range("B1:C1").Merge
+ Case 9:a(1,1)="=1+1":custom.Kind=7
+ Case 10:custom.Kind=6
+ Case 11:Set a(1,2)=Range("B1")
+ Case 12:Set one(1,1)=custom:payload=one
+ Case 13:Set target=Range("B1"):custom.Kind=1
+ End Select
+ If profile<>5 And profile<>6 And profile<>12 Then payload=a
+ Err.Clear
+ Select Case prop
+ Case 0:target.Value=payload
+ Case 1:target.Value2=payload
+ Case 2:target.Formula=payload
+ Case 3:target.Formula2=payload
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTraversalProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2,Range("H1").Value2,Range("I1").Value2,Range("B1").Formula,Range("C1").Formula)
+End Function
+Public Function ArrayTextProbe(ByVal mode As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:C2").Value2=99:Range("F1").Value2=0:arrayTrace=""
+ Dim a(1 To 2,1 To 2) As Variant,custom As ArrayValue,texts As Variant
+ texts=Array("2","TRUE","1/2","=1+1")
+ a(1,1)=1:a(1,2)=texts(Int(mode/2)):a(2,1)=3:a(2,2)=4
+ If mode Mod 2=1 Then
+ Set custom=New ArrayValue:custom.Kind=8:custom.Text=texts(Int(mode/2)):Set a(1,2)=custom
+ End If
+ Err.Clear
+ Select Case prop
+ Case 0:Range("B1:C2").Value=a
+ Case 1:Range("B1:C2").Value2=a
+ Case 2:Range("B1:C2").Formula=a
+ Case 3:Range("B1:C2").Formula2=a
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTextProbe=Array(n,d,s,hc,VarType(Range("C1").Value2),Range("C1").Value2,Range("C1").Formula,Range("C1").NumberFormat)
+End Function
+Public Function ArrayVariantProbe(ByVal kind As Long,ByVal objectValue As Boolean,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:C2").Value2=99:Range("F1").Value2=0:arrayTrace=""
+ Dim payload As Variant,a(1 To 2,1 To 2) As Variant,custom As ArrayValue
+ Select Case kind
+ Case 0:payload=CDbl(12.3456)
+ Case 1:payload=#1/2/2003 12:34:56#
+ Case 2:payload=CCur(12.3456)
+ Case 3:payload=True
+ Case 4:payload=CVErr(1)
+ Case 5:payload=CVErr(2007)
+ Case 6:payload=Empty
+ Case 7:payload=Null
+ Case 8:payload=vbNullString
+ Case 9:payload="a" & Chr(0) & "b"
+ Case 10:payload="'0123"
+ Case 11:payload="a" & vbLf & "b"
+ Case 12:payload="caf" & ChrW(233)
+ Case 13:payload=ChrW(&HD800)
+ Case 14:payload=String$(40000,"x")
+ Case 15:payload="="
+ End Select
+ a(1,1)=1:a(1,2)=payload:a(2,1)=3:a(2,2)=4
+ If objectValue Then
+ Set custom=New ArrayValue:custom.Kind=9:custom.Payload=payload:Set a(1,2)=custom
+ End If
+ Err.Clear
+ Select Case prop
+ Case 0:Range("B1:C2").Value=a
+ Case 1:Range("B1:C2").Value2=a
+ Case 2:Range("B1:C2").Formula=a
+ Case 3:Range("B1:C2").Formula2=a
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long,v As Variant,f As Variant
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ v=Range("C1").Value2:f=Range("C1").Formula
+ If kind=14 Then
+ v=Len(CStr(v)):f=Len(CStr(f))
+ End If
+ ArrayVariantProbe=Array(n,d,s,hc,VarType(Range("C1").Value2),v,f,Range("C1").NumberFormat,Range("C1").PrefixCharacter,Range("C1").WrapText,Range("B1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2)
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let expected = [
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(5), Value::Double(12.3456), Value::String("12.3456".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(5), Value::Double(37623.52425925926), Value::String("37623.5242592593".into()), Value::String("m/d/yyyy h:mm".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(5), Value::Double(12.35), Value::String("12.35".into()), Value::String("$#,##0.00_);($#,##0.00)".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(11), Value::Boolean(true), Value::String("TRUE".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Double(99.0), Value::String("99".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(10), Value::Error(2007), Value::String("#DIV/0!".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(0), Value::Empty, Value::String("".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(0), Value::Empty, Value::String("".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(0), Value::Empty, Value::String("".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("a".into()), Value::String("a".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("0123".into()), Value::String("0123".into()), Value::String("General".into()), Value::String("'".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("a\nb".into()), Value::String("a\nb".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(true), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("café".into()), Value::String("café".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Utf16(vec![55296]), Value::Utf16(vec![55296]), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(32767), Value::Integer(0), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("=".into()), Value::String("=".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(5), Value::Double(12.3456), Value::String("12.3456".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(5), Value::Double(37623.52425925926), Value::String("37623.5242592593".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(5), Value::Double(12.3456), Value::String("12.3456".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(11), Value::Boolean(true), Value::String("TRUE".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Double(99.0), Value::String("99".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(10), Value::Error(2007), Value::String("#DIV/0!".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(0), Value::Empty, Value::String("".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(0), Value::Empty, Value::String("".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("".into()), Value::String("".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("a".into()), Value::String("a".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("0123".into()), Value::String("0123".into()), Value::String("General".into()), Value::String("'".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("a\nb".into()), Value::String("a\nb".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(true), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("café".into()), Value::String("café".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Utf16(vec![55296]), Value::Utf16(vec![55296]), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Integer(5), Value::Integer(2), Value::Integer(2), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("=".into()), Value::String("=".into()), Value::String("General".into()), Value::String("".into()), Value::Boolean(false), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)]
+        ];
+        for prop in 0..4 {
+            for object in [false, true] {
+                for kind in 0..16 {
+                    let mut expected = expected[usize::from(object) * 16 + kind].clone();
+                    if prop == 1 && !object {
+                        if kind == 1 { expected[7] = Value::String("General".into()); }
+                        if kind == 2 { expected[5] = Value::Double(12.3456); expected[6] = Value::String("12.3456".into()); expected[7] = Value::String("General".into()); }
+                    }
+                    let mut book = workbook();
+                    let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                    host.error_language = ErrorLanguage::Japanese;
+                    let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                        .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                        .call("ArrayDriver.ArrayVariantProbe", vec![Value::Integer(kind as i64), Value::Boolean(object), Value::Integer(prop)]).unwrap();
+                    let Value::Array(answer) = actual else { panic!("expected array subtype results"); };
+                    assert_eq!(answer.values, expected, "property={prop} object={object} kind={kind}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn long_cell_formula_getters_match_native_errors_and_lengths() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "ArrayValue"
+Option Explicit
+Public Kind As Long
+Public Text As String
+Public Property Get ReadValue() As Variant
+Attribute ReadValue.VB_UserMemId = 0
+ ArrayDriver.arrayTrace=ArrayDriver.arrayTrace & "G" & CStr(Range("B1").Value2)
+ Range("F1").Value2=Range("F1").Value2+1
+ Select Case Kind
+ Case 0:ReadValue=55
+ Case 1:Err.Raise 5,"ArrayValue","array getter failed"
+ Case 2:Set ReadValue=Range("D1")
+ Case 3:ReadValue=CVErr(2007)
+ Case 4:ReadValue=Array(6,7)
+ Case 5:ReadValue=Range("F1").Value2
+ Case 6:
+ Dim nested(1 To 1,1 To 2) As Variant
+ nested(1,1)=8:Set nested(1,2)=Range("D1")
+ Range("H1:I1").Value2=nested
+ ReadValue=66
+ Case 7:ReadValue=CStr(Range("B1").Value2)
+ Case 8:ReadValue=Text
+ End Select
+End Property
+Attribute VB_Name = "ArrayDriver"
+Option Explicit
+Public arrayTrace As String
+Public Function ArrayObjectPayload(ByVal kind As Long) As Variant
+ Dim a(1 To 2,1 To 2) As Variant,obj As Object,custom As ArrayValue
+ a(1,1)=1:a(1,2)=2:a(2,1)=3:a(2,2)=4
+ Select Case kind
+ Case 0:Set a(1,2)=Nothing
+ Case 1:Set a(1,2)=Range("D1")
+ Case 2:Set a(1,2)=Range("D1:E2")
+ Case 3:Set a(1,2)=ActiveSheet
+ Case 4:Set obj=New Collection:Set a(1,2)=obj
+ Case 5:Set obj=CreateObject("Scripting.Dictionary"):Set a(1,2)=obj
+ Case 6 To 10:Set custom=New ArrayValue:custom.Kind=kind-6:Set a(1,2)=custom
+ Case 11:a(1,2)=Array(6,7)
+ Case 12:a(1,2)=Null
+ Case 13:a(1,2)=Empty
+ Case 14:Set a(1,2)=Range("B1")
+ Case 15:Set a(1,2)=Range("C1")
+ End Select
+ ArrayObjectPayload=a
+End Function
+Public Function ArrayObjectProbe(ByVal prop As Long,ByVal kind As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Value2=99:Range("D1:E2").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim target As Object:Set target=Range("B1:C2"):Err.Clear
+ Select Case prop
+ Case 0:target.Value=ArrayObjectPayload(kind)
+ Case 1:target.Value2=ArrayObjectPayload(kind)
+ Case 2:target.Formula=ArrayObjectPayload(kind)
+ Case 3:target.Formula2=ArrayObjectPayload(kind)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayObjectProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2)
+End Function
+Public Function ArrayTraversalProbe(ByVal profile As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect
+ Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:I4").Value2=99:Range("D1").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim custom As ArrayValue,a(1 To 2,1 To 2) As Variant,vector(1 To 2) As Variant,oneRow(1 To 1,1 To 2) As Variant,one(1 To 1,1 To 1) As Variant,payload As Variant,target As Object
+ Set custom=New ArrayValue:custom.Kind=5
+ a(1,1)=1:Set a(1,2)=custom:a(2,1)=3:a(2,2)=4
+ Set target=Range("B1:C2")
+ Select Case profile
+ Case 1:Set a(1,1)=custom:a(1,2)=2
+ Case 2:custom.Kind=1
+ Case 3:Set a(1,1)=custom:a(1,2)=2:custom.Kind=1
+ Case 4:Set a(1,1)=custom
+ Case 5:vector(1)=1:Set vector(2)=custom:payload=vector
+ Case 6:oneRow(1,1)=1:Set oneRow(1,2)=custom:payload=oneRow
+ Case 7:Range("B1:C2").Locked=False:Range("C1").Locked=True:ActiveSheet.Protect
+ Case 8:Range("B1:C1").Merge
+ Case 9:a(1,1)="=1+1":custom.Kind=7
+ Case 10:custom.Kind=6
+ Case 11:Set a(1,2)=Range("B1")
+ Case 12:Set one(1,1)=custom:payload=one
+ Case 13:Set target=Range("B1"):custom.Kind=1
+ End Select
+ If profile<>5 And profile<>6 And profile<>12 Then payload=a
+ Err.Clear
+ Select Case prop
+ Case 0:target.Value=payload
+ Case 1:target.Value2=payload
+ Case 2:target.Formula=payload
+ Case 3:target.Formula2=payload
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTraversalProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2,Range("H1").Value2,Range("I1").Value2,Range("B1").Formula,Range("C1").Formula)
+End Function
+Public Function ArrayTextProbe(ByVal mode As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:C2").Value2=99:Range("F1").Value2=0:arrayTrace=""
+ Dim a(1 To 2,1 To 2) As Variant,custom As ArrayValue,texts As Variant
+ texts=Array("2","TRUE","1/2","=1+1")
+ a(1,1)=1:a(1,2)=texts(Int(mode/2)):a(2,1)=3:a(2,2)=4
+ If mode Mod 2=1 Then
+ Set custom=New ArrayValue:custom.Kind=8:custom.Text=texts(Int(mode/2)):Set a(1,2)=custom
+ End If
+ Err.Clear
+ Select Case prop
+ Case 0:Range("B1:C2").Value=a
+ Case 1:Range("B1:C2").Value2=a
+ Case 2:Range("B1:C2").Formula=a
+ Case 3:Range("B1:C2").Formula2=a
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTextProbe=Array(n,d,s,hc,VarType(Range("C1").Value2),Range("C1").Value2,Range("C1").Formula,Range("C1").NumberFormat)
+End Function
+Public Function ArrayStringGetProbe(ByVal length As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:C2").Clear
+ Dim a(1 To 2,1 To 2) As Variant,v As Variant
+ a(1,1)=1:a(1,2)=String$(length,"x"):a(2,1)=3:a(2,2)=4
+ Range("B1:C2").Value2=a
+ Err.Clear
+ Select Case prop
+ Case 0:v=Range("C1").Value
+ Case 1:v=Range("C1").Value2
+ Case 2:v=Range("C1").Formula
+ Case 3:v=Range("C1").Formula2
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayStringGetProbe=Array(n,d,s,hc,VarType(v),Len(CStr(v)),Len(CStr(Range("C1").Value2)))
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let cases = [
+            (0, 8191, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8191), Value::Integer(8191)]),
+            (0, 8192, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (0, 8193, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8193), Value::Integer(8193)]),
+            (0, 16383, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(16383), Value::Integer(16383)]),
+            (0, 16384, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(16384), Value::Integer(16384)]),
+            (0, 32766, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(32766), Value::Integer(32766)]),
+            (0, 32767, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(32767), Value::Integer(32767)]),
+            (0, 32768, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(32767), Value::Integer(32767)]),
+            (0, 40000, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(32767), Value::Integer(32767)]),
+            (1, 8191, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8191), Value::Integer(8191)]),
+            (1, 8192, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (1, 8193, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8193), Value::Integer(8193)]),
+            (1, 16383, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(16383), Value::Integer(16383)]),
+            (1, 16384, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(16384), Value::Integer(16384)]),
+            (1, 32766, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(32766), Value::Integer(32766)]),
+            (1, 32767, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(32767), Value::Integer(32767)]),
+            (1, 32768, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(32767), Value::Integer(32767)]),
+            (1, 40000, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(32767), Value::Integer(32767)]),
+            (2, 8191, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8191), Value::Integer(8191)]),
+            (2, 8192, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (2, 8193, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)]),
+            (2, 16383, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(16383)]),
+            (2, 16384, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(16384)]),
+            (2, 32766, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(32766)]),
+            (2, 32767, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(32767)]),
+            (2, 32768, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(32767)]),
+            (2, 40000, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(32767)]),
+            (3, 8191, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8191), Value::Integer(8191)]),
+            (3, 8192, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (3, 8193, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)]),
+            (3, 16383, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(16383)]),
+            (3, 16384, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(16384)]),
+            (3, 32766, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(32766)]),
+            (3, 32767, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(32767)]),
+            (3, 32768, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(32767)]),
+            (3, 40000, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(32767)])
+        ];
+        for (prop, length, expected) in cases {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("ArrayDriver.ArrayStringGetProbe", vec![Value::Integer(length), Value::Integer(prop)]).unwrap();
+            let Value::Array(answer) = actual else { panic!("expected formula getter results"); };
+            assert_eq!(answer.values, expected, "property={prop} length={length}");
+        }
+    }
+
+    #[test]
+    fn long_cell_formula_getters_match_native_r1c1_local_and_array() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "ArrayValue"
+Option Explicit
+Public Kind As Long
+Public Text As String
+Public Property Get ReadValue() As Variant
+Attribute ReadValue.VB_UserMemId = 0
+ ArrayDriver.arrayTrace=ArrayDriver.arrayTrace & "G" & CStr(Range("B1").Value2)
+ Range("F1").Value2=Range("F1").Value2+1
+ Select Case Kind
+ Case 0:ReadValue=55
+ Case 1:Err.Raise 5,"ArrayValue","array getter failed"
+ Case 2:Set ReadValue=Range("D1")
+ Case 3:ReadValue=CVErr(2007)
+ Case 4:ReadValue=Array(6,7)
+ Case 5:ReadValue=Range("F1").Value2
+ Case 6:
+ Dim nested(1 To 1,1 To 2) As Variant
+ nested(1,1)=8:Set nested(1,2)=Range("D1")
+ Range("H1:I1").Value2=nested
+ ReadValue=66
+ Case 7:ReadValue=CStr(Range("B1").Value2)
+ Case 8:ReadValue=Text
+ End Select
+End Property
+Attribute VB_Name = "ArrayDriver"
+Option Explicit
+Public arrayTrace As String
+Public Function ArrayObjectPayload(ByVal kind As Long) As Variant
+ Dim a(1 To 2,1 To 2) As Variant,obj As Object,custom As ArrayValue
+ a(1,1)=1:a(1,2)=2:a(2,1)=3:a(2,2)=4
+ Select Case kind
+ Case 0:Set a(1,2)=Nothing
+ Case 1:Set a(1,2)=Range("D1")
+ Case 2:Set a(1,2)=Range("D1:E2")
+ Case 3:Set a(1,2)=ActiveSheet
+ Case 4:Set obj=New Collection:Set a(1,2)=obj
+ Case 5:Set obj=CreateObject("Scripting.Dictionary"):Set a(1,2)=obj
+ Case 6 To 10:Set custom=New ArrayValue:custom.Kind=kind-6:Set a(1,2)=custom
+ Case 11:a(1,2)=Array(6,7)
+ Case 12:a(1,2)=Null
+ Case 13:a(1,2)=Empty
+ Case 14:Set a(1,2)=Range("B1")
+ Case 15:Set a(1,2)=Range("C1")
+ End Select
+ ArrayObjectPayload=a
+End Function
+Public Function ArrayObjectProbe(ByVal prop As Long,ByVal kind As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Value2=99:Range("D1:E2").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim target As Object:Set target=Range("B1:C2"):Err.Clear
+ Select Case prop
+ Case 0:target.Value=ArrayObjectPayload(kind)
+ Case 1:target.Value2=ArrayObjectPayload(kind)
+ Case 2:target.Formula=ArrayObjectPayload(kind)
+ Case 3:target.Formula2=ArrayObjectPayload(kind)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayObjectProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2)
+End Function
+Public Function ArrayTraversalProbe(ByVal profile As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect
+ Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:I4").Value2=99:Range("D1").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim custom As ArrayValue,a(1 To 2,1 To 2) As Variant,vector(1 To 2) As Variant,oneRow(1 To 1,1 To 2) As Variant,one(1 To 1,1 To 1) As Variant,payload As Variant,target As Object
+ Set custom=New ArrayValue:custom.Kind=5
+ a(1,1)=1:Set a(1,2)=custom:a(2,1)=3:a(2,2)=4
+ Set target=Range("B1:C2")
+ Select Case profile
+ Case 1:Set a(1,1)=custom:a(1,2)=2
+ Case 2:custom.Kind=1
+ Case 3:Set a(1,1)=custom:a(1,2)=2:custom.Kind=1
+ Case 4:Set a(1,1)=custom
+ Case 5:vector(1)=1:Set vector(2)=custom:payload=vector
+ Case 6:oneRow(1,1)=1:Set oneRow(1,2)=custom:payload=oneRow
+ Case 7:Range("B1:C2").Locked=False:Range("C1").Locked=True:ActiveSheet.Protect
+ Case 8:Range("B1:C1").Merge
+ Case 9:a(1,1)="=1+1":custom.Kind=7
+ Case 10:custom.Kind=6
+ Case 11:Set a(1,2)=Range("B1")
+ Case 12:Set one(1,1)=custom:payload=one
+ Case 13:Set target=Range("B1"):custom.Kind=1
+ End Select
+ If profile<>5 And profile<>6 And profile<>12 Then payload=a
+ Err.Clear
+ Select Case prop
+ Case 0:target.Value=payload
+ Case 1:target.Value2=payload
+ Case 2:target.Formula=payload
+ Case 3:target.Formula2=payload
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTraversalProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2,Range("H1").Value2,Range("I1").Value2,Range("B1").Formula,Range("C1").Formula)
+End Function
+Public Function ArrayTextProbe(ByVal mode As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:C2").Value2=99:Range("F1").Value2=0:arrayTrace=""
+ Dim a(1 To 2,1 To 2) As Variant,custom As ArrayValue,texts As Variant
+ texts=Array("2","TRUE","1/2","=1+1")
+ a(1,1)=1:a(1,2)=texts(Int(mode/2)):a(2,1)=3:a(2,2)=4
+ If mode Mod 2=1 Then
+ Set custom=New ArrayValue:custom.Kind=8:custom.Text=texts(Int(mode/2)):Set a(1,2)=custom
+ End If
+ Err.Clear
+ Select Case prop
+ Case 0:Range("B1:C2").Value=a
+ Case 1:Range("B1:C2").Value2=a
+ Case 2:Range("B1:C2").Formula=a
+ Case 3:Range("B1:C2").Formula2=a
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTextProbe=Array(n,d,s,hc,VarType(Range("C1").Value2),Range("C1").Value2,Range("C1").Formula,Range("C1").NumberFormat)
+End Function
+Public Function ArrayStringGetProbe(ByVal length As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:C2").Clear
+ Dim a(1 To 2,1 To 2) As Variant,v As Variant
+ a(1,1)=1:a(1,2)=String$(length,"x"):a(2,1)=3:a(2,2)=4
+ Range("B1:C2").Value2=a
+ Err.Clear
+ Select Case prop
+ Case 0:v=Range("C1").Value
+ Case 1:v=Range("C1").Value2
+ Case 2:v=Range("C1").Formula
+ Case 3:v=Range("C1").Formula2
+ Case 4:v=Range("C1").FormulaR1C1
+ Case 5:v=Range("C1").Formula2R1C1
+ Case 6:v=Range("C1").FormulaLocal
+ Case 7:v=Range("C1").FormulaR1C1Local
+ Case 8:v=Range("C1").FormulaArray
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayStringGetProbe=Array(n,d,s,hc,VarType(v),Len(CStr(v)),Len(CStr(Range("C1").Value2)))
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let cases = [
+            (4, 8191, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8191), Value::Integer(8191)]),
+            (4, 8192, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (4, 8193, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)]),
+            (4, 8221, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (4, 8222, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (4, 32767, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(32767)]),
+            (5, 8191, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8191), Value::Integer(8191)]),
+            (5, 8192, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (5, 8193, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)]),
+            (5, 8221, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (5, 8222, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (5, 32767, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(32767)]),
+            (6, 8191, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8191), Value::Integer(8191)]),
+            (6, 8192, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (6, 8193, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)]),
+            (6, 8221, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (6, 8222, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (6, 32767, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(32767)]),
+            (7, 8191, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8191), Value::Integer(8191)]),
+            (7, 8192, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (7, 8193, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)]),
+            (7, 8221, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (7, 8222, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (7, 32767, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(32767)]),
+            (8, 8191, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8191), Value::Integer(8191)]),
+            (8, 8192, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (8, 8193, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)]),
+            (8, 8221, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (8, 8222, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(10), Value::Integer(8), Value::Integer(8222)]),
+            (8, 32767, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(10), Value::Integer(8), Value::Integer(32767)])
+        ];
+        for (prop, length, expected) in cases {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("ArrayDriver.ArrayStringGetProbe", vec![Value::Integer(length), Value::Integer(prop)]).unwrap();
+            let Value::Array(answer) = actual else { panic!("expected formula getter results"); };
+            assert_eq!(answer.values, expected, "property={prop} length={length}");
+        }
+    }
+
+    #[test]
+    fn long_cell_formula_getters_count_native_utf16_units() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "ArrayValue"
+Option Explicit
+Public Kind As Long
+Public Text As String
+Public Property Get ReadValue() As Variant
+Attribute ReadValue.VB_UserMemId = 0
+ ArrayDriver.arrayTrace=ArrayDriver.arrayTrace & "G" & CStr(Range("B1").Value2)
+ Range("F1").Value2=Range("F1").Value2+1
+ Select Case Kind
+ Case 0:ReadValue=55
+ Case 1:Err.Raise 5,"ArrayValue","array getter failed"
+ Case 2:Set ReadValue=Range("D1")
+ Case 3:ReadValue=CVErr(2007)
+ Case 4:ReadValue=Array(6,7)
+ Case 5:ReadValue=Range("F1").Value2
+ Case 6:
+ Dim nested(1 To 1,1 To 2) As Variant
+ nested(1,1)=8:Set nested(1,2)=Range("D1")
+ Range("H1:I1").Value2=nested
+ ReadValue=66
+ Case 7:ReadValue=CStr(Range("B1").Value2)
+ Case 8:ReadValue=Text
+ End Select
+End Property
+Attribute VB_Name = "ArrayDriver"
+Option Explicit
+Public arrayTrace As String
+Public Function ArrayObjectPayload(ByVal kind As Long) As Variant
+ Dim a(1 To 2,1 To 2) As Variant,obj As Object,custom As ArrayValue
+ a(1,1)=1:a(1,2)=2:a(2,1)=3:a(2,2)=4
+ Select Case kind
+ Case 0:Set a(1,2)=Nothing
+ Case 1:Set a(1,2)=Range("D1")
+ Case 2:Set a(1,2)=Range("D1:E2")
+ Case 3:Set a(1,2)=ActiveSheet
+ Case 4:Set obj=New Collection:Set a(1,2)=obj
+ Case 5:Set obj=CreateObject("Scripting.Dictionary"):Set a(1,2)=obj
+ Case 6 To 10:Set custom=New ArrayValue:custom.Kind=kind-6:Set a(1,2)=custom
+ Case 11:a(1,2)=Array(6,7)
+ Case 12:a(1,2)=Null
+ Case 13:a(1,2)=Empty
+ Case 14:Set a(1,2)=Range("B1")
+ Case 15:Set a(1,2)=Range("C1")
+ End Select
+ ArrayObjectPayload=a
+End Function
+Public Function ArrayObjectProbe(ByVal prop As Long,ByVal kind As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Value2=99:Range("D1:E2").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim target As Object:Set target=Range("B1:C2"):Err.Clear
+ Select Case prop
+ Case 0:target.Value=ArrayObjectPayload(kind)
+ Case 1:target.Value2=ArrayObjectPayload(kind)
+ Case 2:target.Formula=ArrayObjectPayload(kind)
+ Case 3:target.Formula2=ArrayObjectPayload(kind)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayObjectProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2)
+End Function
+Public Function ArrayTraversalProbe(ByVal profile As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect
+ Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:I4").Value2=99:Range("D1").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim custom As ArrayValue,a(1 To 2,1 To 2) As Variant,vector(1 To 2) As Variant,oneRow(1 To 1,1 To 2) As Variant,one(1 To 1,1 To 1) As Variant,payload As Variant,target As Object
+ Set custom=New ArrayValue:custom.Kind=5
+ a(1,1)=1:Set a(1,2)=custom:a(2,1)=3:a(2,2)=4
+ Set target=Range("B1:C2")
+ Select Case profile
+ Case 1:Set a(1,1)=custom:a(1,2)=2
+ Case 2:custom.Kind=1
+ Case 3:Set a(1,1)=custom:a(1,2)=2:custom.Kind=1
+ Case 4:Set a(1,1)=custom
+ Case 5:vector(1)=1:Set vector(2)=custom:payload=vector
+ Case 6:oneRow(1,1)=1:Set oneRow(1,2)=custom:payload=oneRow
+ Case 7:Range("B1:C2").Locked=False:Range("C1").Locked=True:ActiveSheet.Protect
+ Case 8:Range("B1:C1").Merge
+ Case 9:a(1,1)="=1+1":custom.Kind=7
+ Case 10:custom.Kind=6
+ Case 11:Set a(1,2)=Range("B1")
+ Case 12:Set one(1,1)=custom:payload=one
+ Case 13:Set target=Range("B1"):custom.Kind=1
+ End Select
+ If profile<>5 And profile<>6 And profile<>12 Then payload=a
+ Err.Clear
+ Select Case prop
+ Case 0:target.Value=payload
+ Case 1:target.Value2=payload
+ Case 2:target.Formula=payload
+ Case 3:target.Formula2=payload
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTraversalProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2,Range("H1").Value2,Range("I1").Value2,Range("B1").Formula,Range("C1").Formula)
+End Function
+Public Function ArrayTextProbe(ByVal mode As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:C2").Value2=99:Range("F1").Value2=0:arrayTrace=""
+ Dim a(1 To 2,1 To 2) As Variant,custom As ArrayValue,texts As Variant
+ texts=Array("2","TRUE","1/2","=1+1")
+ a(1,1)=1:a(1,2)=texts(Int(mode/2)):a(2,1)=3:a(2,2)=4
+ If mode Mod 2=1 Then
+ Set custom=New ArrayValue:custom.Kind=8:custom.Text=texts(Int(mode/2)):Set a(1,2)=custom
+ End If
+ Err.Clear
+ Select Case prop
+ Case 0:Range("B1:C2").Value=a
+ Case 1:Range("B1:C2").Value2=a
+ Case 2:Range("B1:C2").Formula=a
+ Case 3:Range("B1:C2").Formula2=a
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTextProbe=Array(n,d,s,hc,VarType(Range("C1").Value2),Range("C1").Value2,Range("C1").Formula,Range("C1").NumberFormat)
+End Function
+Public Function ArrayStringGetProbe(ByVal length As Long,ByVal prop As Long,Optional ByVal charKind As Long=0) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:C2").Clear
+ Dim a(1 To 2,1 To 2) As Variant,v As Variant
+ Dim letter As String:letter="x"
+ If charKind=1 Then letter=ChrW(12354)
+ If charKind=2 Then letter=Chr(34)
+ a(1,1)=1:a(1,2)=String$(length,letter):a(2,1)=3:a(2,2)=4
+ Range("B1:C2").Value2=a
+ Err.Clear
+ Select Case prop
+ Case 0:v=Range("C1").Value
+ Case 1:v=Range("C1").Value2
+ Case 2:v=Range("C1").Formula
+ Case 3:v=Range("C1").Formula2
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayStringGetProbe=Array(n,d,s,hc,VarType(v),Len(CStr(v)),Len(CStr(Range("C1").Value2)))
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let cases = [
+            (2, 8192, 0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (2, 12288, 0, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(12288)]),
+            (2, 10240, 0, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(10240)]),
+            (2, 9216, 0, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(9216)]),
+            (2, 8704, 0, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8704)]),
+            (2, 8448, 0, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8448)]),
+            (2, 8320, 0, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8320)]),
+            (2, 8256, 0, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8256)]),
+            (2, 8224, 0, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8224)]),
+            (2, 8208, 0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8208)]),
+            (2, 8216, 0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8216)]),
+            (2, 8220, 0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8220)]),
+            (2, 8222, 0, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (2, 8221, 0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (2, 8221, 0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (2, 8222, 0, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (2, 8192, 0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (2, 8193, 0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)]),
+            (3, 8221, 0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (3, 8222, 0, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (3, 8192, 0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (3, 8193, 0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)]),
+            (2, 8192, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (2, 12288, 1, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(12288)]),
+            (2, 10240, 1, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(10240)]),
+            (2, 9216, 1, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(9216)]),
+            (2, 8704, 1, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8704)]),
+            (2, 8448, 1, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8448)]),
+            (2, 8320, 1, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8320)]),
+            (2, 8256, 1, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8256)]),
+            (2, 8224, 1, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8224)]),
+            (2, 8208, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8208)]),
+            (2, 8216, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8216)]),
+            (2, 8220, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8220)]),
+            (2, 8222, 1, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (2, 8221, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (2, 8221, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (2, 8222, 1, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (2, 8192, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (2, 8193, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)]),
+            (3, 8221, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (3, 8222, 1, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (3, 8192, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (3, 8193, 1, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)]),
+            (2, 8192, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (2, 12288, 2, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(12288)]),
+            (2, 10240, 2, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(10240)]),
+            (2, 9216, 2, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(9216)]),
+            (2, 8704, 2, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8704)]),
+            (2, 8448, 2, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8448)]),
+            (2, 8320, 2, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8320)]),
+            (2, 8256, 2, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8256)]),
+            (2, 8224, 2, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8224)]),
+            (2, 8208, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8208)]),
+            (2, 8216, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8216)]),
+            (2, 8220, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8220)]),
+            (2, 8222, 2, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (2, 8221, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (2, 8221, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (2, 8222, 2, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (2, 8192, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (2, 8193, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)]),
+            (3, 8221, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8221)]),
+            (3, 8222, 2, vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Integer(0), Value::Integer(0), Value::Integer(8222)]),
+            (3, 8192, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8192)]),
+            (3, 8193, 2, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::Integer(8192), Value::Integer(8193)])
+        ];
+        for (prop, length, kind, expected) in cases {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("ArrayDriver.ArrayStringGetProbe", vec![Value::Integer(length), Value::Integer(prop), Value::Integer(kind)]).unwrap();
+            let Value::Array(answer) = actual else { panic!("expected formula getter results"); };
+            assert_eq!(answer.values, expected, "property={prop} length={length}");
+        }
+    }
+
+    #[test]
+    fn array_object_text_keeps_native_variant_types_instead_of_reparsing() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "ArrayValue"
+Option Explicit
+Public Kind As Long
+Public Text As String
+Public Property Get ReadValue() As Variant
+Attribute ReadValue.VB_UserMemId = 0
+ ArrayDriver.arrayTrace=ArrayDriver.arrayTrace & "G" & CStr(Range("B1").Value2)
+ Range("F1").Value2=Range("F1").Value2+1
+ Select Case Kind
+ Case 0:ReadValue=55
+ Case 1:Err.Raise 5,"ArrayValue","array getter failed"
+ Case 2:Set ReadValue=Range("D1")
+ Case 3:ReadValue=CVErr(2007)
+ Case 4:ReadValue=Array(6,7)
+ Case 5:ReadValue=Range("F1").Value2
+ Case 6:
+ Dim nested(1 To 1,1 To 2) As Variant
+ nested(1,1)=8:Set nested(1,2)=Range("D1")
+ Range("H1:I1").Value2=nested
+ ReadValue=66
+ Case 7:ReadValue=CStr(Range("B1").Value2)
+ Case 8:ReadValue=Text
+ End Select
+End Property
+Attribute VB_Name = "ArrayDriver"
+Option Explicit
+Public arrayTrace As String
+Public Function ArrayObjectPayload(ByVal kind As Long) As Variant
+ Dim a(1 To 2,1 To 2) As Variant,obj As Object,custom As ArrayValue
+ a(1,1)=1:a(1,2)=2:a(2,1)=3:a(2,2)=4
+ Select Case kind
+ Case 0:Set a(1,2)=Nothing
+ Case 1:Set a(1,2)=Range("D1")
+ Case 2:Set a(1,2)=Range("D1:E2")
+ Case 3:Set a(1,2)=ActiveSheet
+ Case 4:Set obj=New Collection:Set a(1,2)=obj
+ Case 5:Set obj=CreateObject("Scripting.Dictionary"):Set a(1,2)=obj
+ Case 6 To 10:Set custom=New ArrayValue:custom.Kind=kind-6:Set a(1,2)=custom
+ Case 11:a(1,2)=Array(6,7)
+ Case 12:a(1,2)=Null
+ Case 13:a(1,2)=Empty
+ Case 14:Set a(1,2)=Range("B1")
+ Case 15:Set a(1,2)=Range("C1")
+ End Select
+ ArrayObjectPayload=a
+End Function
+Public Function ArrayObjectProbe(ByVal prop As Long,ByVal kind As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Value2=99:Range("D1:E2").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim target As Object:Set target=Range("B1:C2"):Err.Clear
+ Select Case prop
+ Case 0:target.Value=ArrayObjectPayload(kind)
+ Case 1:target.Value2=ArrayObjectPayload(kind)
+ Case 2:target.Formula=ArrayObjectPayload(kind)
+ Case 3:target.Formula2=ArrayObjectPayload(kind)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayObjectProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2)
+End Function
+Public Function ArrayTraversalProbe(ByVal profile As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect
+ Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:I4").Value2=99:Range("D1").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim custom As ArrayValue,a(1 To 2,1 To 2) As Variant,vector(1 To 2) As Variant,oneRow(1 To 1,1 To 2) As Variant,one(1 To 1,1 To 1) As Variant,payload As Variant,target As Object
+ Set custom=New ArrayValue:custom.Kind=5
+ a(1,1)=1:Set a(1,2)=custom:a(2,1)=3:a(2,2)=4
+ Set target=Range("B1:C2")
+ Select Case profile
+ Case 1:Set a(1,1)=custom:a(1,2)=2
+ Case 2:custom.Kind=1
+ Case 3:Set a(1,1)=custom:a(1,2)=2:custom.Kind=1
+ Case 4:Set a(1,1)=custom
+ Case 5:vector(1)=1:Set vector(2)=custom:payload=vector
+ Case 6:oneRow(1,1)=1:Set oneRow(1,2)=custom:payload=oneRow
+ Case 7:Range("B1:C2").Locked=False:Range("C1").Locked=True:ActiveSheet.Protect
+ Case 8:Range("B1:C1").Merge
+ Case 9:a(1,1)="=1+1":custom.Kind=7
+ Case 10:custom.Kind=6
+ Case 11:Set a(1,2)=Range("B1")
+ Case 12:Set one(1,1)=custom:payload=one
+ Case 13:Set target=Range("B1"):custom.Kind=1
+ End Select
+ If profile<>5 And profile<>6 And profile<>12 Then payload=a
+ Err.Clear
+ Select Case prop
+ Case 0:target.Value=payload
+ Case 1:target.Value2=payload
+ Case 2:target.Formula=payload
+ Case 3:target.Formula2=payload
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTraversalProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2,Range("H1").Value2,Range("I1").Value2,Range("B1").Formula,Range("C1").Formula)
+End Function
+Public Function ArrayTextProbe(ByVal mode As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect:Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:C2").Value2=99:Range("F1").Value2=0:arrayTrace=""
+ Dim a(1 To 2,1 To 2) As Variant,custom As ArrayValue,texts As Variant
+ texts=Array("2","TRUE","1/2","=1+1")
+ a(1,1)=1:a(1,2)=texts(Int(mode/2)):a(2,1)=3:a(2,2)=4
+ If mode Mod 2=1 Then
+ Set custom=New ArrayValue:custom.Kind=8:custom.Text=texts(Int(mode/2)):Set a(1,2)=custom
+ End If
+ Err.Clear
+ Select Case prop
+ Case 0:Range("B1:C2").Value=a
+ Case 1:Range("B1:C2").Value2=a
+ Case 2:Range("B1:C2").Formula=a
+ Case 3:Range("B1:C2").Formula2=a
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTextProbe=Array(n,d,s,hc,VarType(Range("C1").Value2),Range("C1").Value2,Range("C1").Formula,Range("C1").NumberFormat)
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let expected = [
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(5), Value::Double(2.0), Value::String("2".into()), Value::String("General".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("2".into()), Value::String("2".into()), Value::String("General".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(11), Value::Boolean(true), Value::String("TRUE".into()), Value::String("General".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("TRUE".into()), Value::String("TRUE".into()), Value::String("General".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(5), Value::Double(46024.0), Value::String("46024".into()), Value::String("d-mmm".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("1/2".into()), Value::String("1/2".into()), Value::String("General".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(5), Value::Double(2.0), Value::String("=1+1".into()), Value::String("General".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(8), Value::String("=1+1".into()), Value::String("=1+1".into()), Value::String("General".into())]
+        ];
+        for prop in 0..4 {
+            for (mode, expected) in expected.iter().enumerate() {
+                let mut book = workbook();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                host.error_language = ErrorLanguage::Japanese;
+                host.now = Some(46027.5);
+                let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                    .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                    .call("ArrayDriver.ArrayTextProbe", vec![Value::Integer(mode as i64), Value::Integer(prop)]).unwrap();
+                let Value::Array(answer) = actual else { panic!("expected array text results"); };
+                assert_eq!(&answer.values, expected, "property={prop} mode={mode}");
+            }
+        }
+    }
+
+    #[test]
+    fn array_object_traversal_matches_native_broadcast_protection_and_nested_writes() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "ArrayValue"
+Option Explicit
+Public Kind As Long
+Public Property Get ReadValue() As Variant
+Attribute ReadValue.VB_UserMemId = 0
+ ArrayDriver.arrayTrace=ArrayDriver.arrayTrace & "G" & CStr(Range("B1").Value2)
+ Range("F1").Value2=Range("F1").Value2+1
+ Select Case Kind
+ Case 0:ReadValue=55
+ Case 1:Err.Raise 5,"ArrayValue","array getter failed"
+ Case 2:Set ReadValue=Range("D1")
+ Case 3:ReadValue=CVErr(2007)
+ Case 4:ReadValue=Array(6,7)
+ Case 5:ReadValue=Range("F1").Value2
+ Case 6:
+ Dim nested(1 To 1,1 To 2) As Variant
+ nested(1,1)=8:Set nested(1,2)=Range("D1")
+ Range("H1:I1").Value2=nested
+ ReadValue=66
+ Case 7:ReadValue=CStr(Range("B1").Value2)
+ End Select
+End Property
+Attribute VB_Name = "ArrayDriver"
+Option Explicit
+Public arrayTrace As String
+Public Function ArrayObjectPayload(ByVal kind As Long) As Variant
+ Dim a(1 To 2,1 To 2) As Variant,obj As Object,custom As ArrayValue
+ a(1,1)=1:a(1,2)=2:a(2,1)=3:a(2,2)=4
+ Select Case kind
+ Case 0:Set a(1,2)=Nothing
+ Case 1:Set a(1,2)=Range("D1")
+ Case 2:Set a(1,2)=Range("D1:E2")
+ Case 3:Set a(1,2)=ActiveSheet
+ Case 4:Set obj=New Collection:Set a(1,2)=obj
+ Case 5:Set obj=CreateObject("Scripting.Dictionary"):Set a(1,2)=obj
+ Case 6 To 10:Set custom=New ArrayValue:custom.Kind=kind-6:Set a(1,2)=custom
+ Case 11:a(1,2)=Array(6,7)
+ Case 12:a(1,2)=Null
+ Case 13:a(1,2)=Empty
+ Case 14:Set a(1,2)=Range("B1")
+ Case 15:Set a(1,2)=Range("C1")
+ End Select
+ ArrayObjectPayload=a
+End Function
+Public Function ArrayObjectProbe(ByVal prop As Long,ByVal kind As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Value2=99:Range("D1:E2").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim target As Object:Set target=Range("B1:C2"):Err.Clear
+ Select Case prop
+ Case 0:target.Value=ArrayObjectPayload(kind)
+ Case 1:target.Value2=ArrayObjectPayload(kind)
+ Case 2:target.Formula=ArrayObjectPayload(kind)
+ Case 3:target.Formula2=ArrayObjectPayload(kind)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayObjectProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2)
+End Function
+Public Function ArrayTraversalProbe(ByVal profile As Long,ByVal prop As Long) As Variant
+ On Error Resume Next
+ ActiveSheet.Unprotect
+ Range("B1:C2").UnMerge:Range("B1:I4").Clear
+ Range("B1:I4").Value2=99:Range("D1").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim custom As ArrayValue,a(1 To 2,1 To 2) As Variant,vector(1 To 2) As Variant,oneRow(1 To 1,1 To 2) As Variant,one(1 To 1,1 To 1) As Variant,payload As Variant,target As Object
+ Set custom=New ArrayValue:custom.Kind=5
+ a(1,1)=1:Set a(1,2)=custom:a(2,1)=3:a(2,2)=4
+ Set target=Range("B1:C2")
+ Select Case profile
+ Case 1:Set a(1,1)=custom:a(1,2)=2
+ Case 2:custom.Kind=1
+ Case 3:Set a(1,1)=custom:a(1,2)=2:custom.Kind=1
+ Case 4:Set a(1,1)=custom
+ Case 5:vector(1)=1:Set vector(2)=custom:payload=vector
+ Case 6:oneRow(1,1)=1:Set oneRow(1,2)=custom:payload=oneRow
+ Case 7:Range("B1:C2").Locked=False:Range("C1").Locked=True:ActiveSheet.Protect
+ Case 8:Range("B1:C1").Merge
+ Case 9:a(1,1)="=1+1":custom.Kind=7
+ Case 10:custom.Kind=6
+ Case 11:Set a(1,2)=Range("B1")
+ Case 12:Set one(1,1)=custom:payload=one
+ Case 13:Set target=Range("B1"):custom.Kind=1
+ End Select
+ If profile<>5 And profile<>6 And profile<>12 Then payload=a
+ Err.Clear
+ Select Case prop
+ Case 0:target.Value=payload
+ Case 1:target.Value2=payload
+ Case 2:target.Formula=payload
+ Case 3:target.Formula2=payload
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayTraversalProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2,Range("H1").Value2,Range("I1").Value2,Range("B1").Formula,Range("C1").Formula)
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let expected = [
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("1".into()), Value::String("1".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(2.0), Value::Double(3.0), Value::Double(4.0), Value::String("G99".into()), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("1".into()), Value::String("2".into())],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("1".into()), Value::String("99".into())],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::String("G99".into()), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("99".into()), Value::String("99".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(2.0), Value::Double(3.0), Value::Double(4.0), Value::String("G99G1".into()), Value::Double(2.0), Value::Double(99.0), Value::Double(99.0), Value::String("1".into()), Value::String("2".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(1.0), Value::Double(1.0), Value::Double(2.0), Value::String("G1G1".into()), Value::Double(2.0), Value::Double(99.0), Value::Double(99.0), Value::String("1".into()), Value::String("1".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(1.0), Value::Double(1.0), Value::Double(2.0), Value::String("G1G1".into()), Value::Double(2.0), Value::Double(99.0), Value::Double(99.0), Value::String("1".into()), Value::String("1".into())],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(0.0), Value::Double(99.0), Value::Double(99.0), Value::String("1".into()), Value::String("99".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Empty, Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0), Value::Double(99.0), Value::Double(99.0), Value::String("1".into()), Value::String("".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(2.0), Value::String("2".into()), Value::Double(3.0), Value::Double(4.0), Value::String("G0".into()), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("=1+1".into()), Value::String("2".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(66.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0), Value::Double(8.0), Value::Double(88.0), Value::String("1".into()), Value::String("66".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0), Value::Double(99.0), Value::Double(99.0), Value::String("1".into()), Value::String("1".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(1.0), Value::Double(1.0), Value::Double(1.0), Value::String("G99".into()), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::String("1".into()), Value::String("1".into())],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::String("".into()), Value::Double(0.0), Value::Double(99.0), Value::Double(99.0), Value::String("1".into()), Value::String("99".into())]
+        ];
+        for prop in 0..4 {
+            for (profile, expected) in expected.iter().enumerate() {
+                let mut book = workbook();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                host.error_language = ErrorLanguage::Japanese;
+                let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                    .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                    .call("ArrayDriver.ArrayTraversalProbe", vec![Value::Integer(profile as i64), Value::Integer(prop)]).unwrap();
+                let Value::Array(answer) = actual else { panic!("expected array traversal results"); };
+                assert_eq!(&answer.values, expected, "property={prop} profile={profile}");
+            }
+        }
+    }
+
+    #[test]
+    fn array_object_assignments_match_native_default_member_order() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "ArrayValue"
+Option Explicit
+Public Kind As Long
+Public Property Get Value() As Variant
+Attribute Value.VB_UserMemId = 0
+ ArrayDriver.arrayTrace=ArrayDriver.arrayTrace & "G" & CStr(Range("B1").Value2)
+ Range("F1").Value2=Range("F1").Value2+1
+ Select Case Kind
+ Case 0:Value=55
+ Case 1:Err.Raise 5,"ArrayValue","array getter failed"
+ Case 2:Set Value=Range("D1")
+ Case 3:Value=CVErr(2007)
+ Case 4:Value=Array(6,7)
+ End Select
+End Property
+Attribute VB_Name = "ArrayDriver"
+Option Explicit
+Public arrayTrace As String
+Public Function ArrayObjectPayload(ByVal kind As Long) As Variant
+ Dim a(1 To 2,1 To 2) As Variant,obj As Object,custom As ArrayValue
+ a(1,1)=1:a(1,2)=2:a(2,1)=3:a(2,2)=4
+ Select Case kind
+ Case 0:Set a(1,2)=Nothing
+ Case 1:Set a(1,2)=Range("D1")
+ Case 2:Set a(1,2)=Range("D1:E2")
+ Case 3:Set a(1,2)=ActiveSheet
+ Case 4:Set obj=New Collection:Set a(1,2)=obj
+ Case 5:Set obj=CreateObject("Scripting.Dictionary"):Set a(1,2)=obj
+ Case 6 To 10:Set custom=New ArrayValue:custom.Kind=kind-6:Set a(1,2)=custom
+ Case 11:a(1,2)=Array(6,7)
+ Case 12:a(1,2)=Null
+ Case 13:a(1,2)=Empty
+ Case 14:Set a(1,2)=Range("B1")
+ Case 15:Set a(1,2)=Range("C1")
+ End Select
+ ArrayObjectPayload=a
+End Function
+Public Function ArrayObjectProbe(ByVal prop As Long,ByVal kind As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Value2=99:Range("D1:E2").Value2=88:Range("F1").Value2=0
+ arrayTrace=""
+ Dim target As Object:Set target=Range("B1:C2"):Err.Clear
+ Select Case prop
+ Case 0:target.Value=ArrayObjectPayload(kind)
+ Case 1:target.Value2=ArrayObjectPayload(kind)
+ Case 2:target.Formula=ArrayObjectPayload(kind)
+ Case 3:target.Formula2=ArrayObjectPayload(kind)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ArrayObjectProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2,arrayTrace,Range("F1").Value2)
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let expected = [
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(88.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Empty, Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(55.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(88.0), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Error(2007), Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Empty, Value::Double(3.0), Value::Double(4.0), Value::String("G1".into()), Value::Double(1.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Empty, Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Empty, Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Empty, Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(1.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(99.0), Value::Double(3.0), Value::Double(4.0), Value::String("".into()), Value::Double(0.0)]
+        ];
+        for prop in 0..4 {
+            for (kind, expected) in expected.iter().enumerate() {
+                let mut book = workbook();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                host.error_language = ErrorLanguage::Japanese;
+                let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                    .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                    .call("ArrayDriver.ArrayObjectProbe", vec![Value::Integer(prop), Value::Integer(kind as i64)]).unwrap();
+                let Value::Array(answer) = actual else { panic!("expected array assignment results"); };
+                assert_eq!(&answer.values, expected, "property={prop} kind={kind}");
+            }
+        }
+    }
+
+    #[test]
+    fn array_object_and_error_fields_match_native_setter_paths() {
+        let module = parse_module(r#"Public Function ErrorFieldValue(ByVal kind As Long) As Variant
+ Select Case kind
+ Case 0:ErrorFieldValue=CVErr(1):Exit Function
+ Case 3:ErrorFieldValue=CVErr(2007):Exit Function
+ Case 4:ErrorFieldValue=CVErr(65536):Exit Function
+ End Select
+ Dim a(1 To 2,1 To 2) As Variant
+ a(1,1)=1:a(1,2)=2:a(2,1)=3:a(2,2)=4
+ Select Case kind
+ Case 1:a(1,1)=CVErr(1)
+ Case 2:a(1,2)=CVErr(1)
+ Case 5:Set a(1,2)=Nothing
+ Case 6:Set a(1,2)=Range("D1")
+ End Select
+ ErrorFieldValue=a
+End Function
+Public Function ErrorAssignmentFieldProbe(ByVal prop As Long,ByVal kind As Long) As Variant
+ On Error Resume Next
+ Range("B1:C2").Value2=99:Range("D1").Value2=88
+ Dim target As Object,sheet As Object
+ Set target=Range("B1:C2"):Set sheet=ActiveSheet:Err.Clear
+ Select Case prop
+ Case 0:target.Value=ErrorFieldValue(kind)
+ Case 1:target.Value2=ErrorFieldValue(kind)
+ Case 2:target.Formula=ErrorFieldValue(kind)
+ Case 3:target.Formula2=ErrorFieldValue(kind)
+ Case 4:target=ErrorFieldValue(kind)
+ Case 5:Range("B1:C2")=ErrorFieldValue(kind)
+ Case 6:sheet.Range("B1:C2")=ErrorFieldValue(kind)
+ Case 7:target.Value(RangeValueDataType:=10)=ErrorFieldValue(kind)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ ErrorAssignmentFieldProbe=Array(n,d,s,hc,Range("B1").Value2,Range("C1").Value2,Range("B2").Value2,Range("C2").Value2)
+End Function
+"#).unwrap();
+        let expected = [
+            vec![Value::Integer(1004), Value::String("アプリケーション定義またはオブジェクト定義のエラーです。".into()), Value::String("VBAProject".into()), Value::Integer(1000095), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0)],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0)],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Error(2007), Value::Error(2007), Value::Error(2007), Value::Error(2007)],
+            vec![Value::Integer(5), Value::String("プロシージャの呼び出し、または引数が不正です。".into()), Value::String("VBAProject".into()), Value::Integer(1000005), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0)],
+            vec![Value::Integer(7), Value::String("メモリが不足しています｡".into()), Value::String("VBAProject".into()), Value::Integer(1000007), Value::Double(1.0), Value::Double(99.0), Value::Double(99.0), Value::Double(99.0)],
+            vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Double(1.0), Value::Double(88.0), Value::Double(3.0), Value::Double(4.0)]
+        ];
+        for prop in 0..8 {
+            for (kind, expected) in expected.iter().enumerate() {
+                let mut book = workbook();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                host.error_language = ErrorLanguage::Japanese;
+                let actual = Runtime::new(&module).with_host(&mut host)
+                    .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                    .call("ErrorAssignmentFieldProbe", vec![Value::Integer(prop), Value::Integer(kind as i64)]).unwrap();
+                let Value::Array(answer) = actual else { panic!("expected array assignment results"); };
+                assert_eq!(&answer.values, expected, "property={prop} kind={kind}");
+            }
+        }
     }
 
     #[test]
@@ -61405,9 +63330,9 @@ End Sub
         let measured = [
             ("2024/1/5", "Date", "45296", "m/d/yyyy"),
             ("1/5/2024", "Date", "45296", "m/d/yyyy"),
-            ("1/5", "Date", "46027", "m\"月\"d\"日\""),
+            ("1/5", "Date", "46027", "d-mmm"),
             ("2024-01-05", "Date", "45296", "m/d/yyyy"),
-            ("1-5", "Date", "46027", "m\"月\"d\"日\""),
+            ("1-5", "Date", "46027", "d-mmm"),
             ("5-Jan", "Date", "46027", "d-mmm"),
             ("5-Jan-24", "Date", "45296", "d-mmm-yy"),
             ("January 5, 2024", "Date", "45296", "d-mmm-yy"),
@@ -61417,7 +63342,7 @@ End Sub
             ("1/5/2024 13:30", "Date", "45296.5625", "m/d/yyyy h:mm"),
             ("2024/1/5 1:30 PM", "Date", "45296.5625", "m/d/yyyy h:mm"),
             ("5/13/2024", "Date", "45425", "m/d/yyyy"),
-            ("3/4", "Date", "46085", "m\"月\"d\"日\""),
+            ("3/4", "Date", "46085", "d-mmm"),
             ("1/5/24", "Date", "45296", "m/d/yyyy"),
             ("1/5/2024 25:00", "Double", "45297.0416666667", "General"),
             ("24:00", "Double", "1", "[h]:mm:ss"),

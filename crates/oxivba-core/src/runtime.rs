@@ -248,6 +248,15 @@ pub trait Host {
         Ok((!names.iter().any(Option::is_some)).then(|| args.to_vec()))
     }
 
+    /// Start a host array write which may need VBA default-member calls between
+    /// elements. The host owns its continuation; nested calls keep their own state.
+    fn begin_array_set(&mut self, _receiver: &ObjectRef, _name: &str, _args: &[Value], _value: &Value)
+        -> Result<Option<Box<dyn std::any::Any>>, String> { Ok(None) }
+
+    /// Return the next value to resolve, or None after committing the write.
+    fn resume_array_set(&mut self, _state: &mut dyn std::any::Any, _resolved: Option<Result<Value, String>>)
+        -> Result<Option<Value>, String> { Ok(None) }
+
     fn assignment_global_type(&self, _name: &str) -> Option<String> { None }
 
     fn assignment_call_parameters(&self, _receiver_type: Option<&str>, _name: &str) -> Option<Vec<String>> { None }
@@ -9404,6 +9413,42 @@ impl<'a> Runtime<'a> {
         result
     }
 
+    fn host_array_set(&mut self, receiver: &ObjectRef, name: &str, args: &[Value], value: &Value, line: u32)
+        -> Result<Option<bool>, RuntimeError> {
+        if !matches!(value, Value::Array(_)) { return Ok(None); }
+        let Some(host) = self.host.as_deref_mut() else { return Ok(None) };
+        let Some(mut state) = host.begin_array_set(receiver, name, args, value)
+            .map_err(|message| host_failure(message, line))? else { return Ok(None) };
+        let mut resolved = None;
+        loop {
+            self.tick(Some(line))?;
+            let next = self.host.as_deref_mut().expect("array write host").resume_array_set(state.as_mut(), resolved.take())
+                .map_err(|message| host_failure(message, line))?;
+            let Some(value) = next else { return Ok(Some(true)) };
+            resolved = Some(self.array_assignment_value(value, line).map_err(|failure| failure.message));
+        }
+    }
+
+    fn array_assignment_value(&mut self, mut value: Value, line: u32) -> Result<Value, RuntimeError> {
+        loop {
+            self.tick(Some(line))?;
+            value = match value {
+                Value::Object(receiver) => {
+                    if let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&receiver.handle) {
+                        let member = self.member_with_id(&instance.class, "0")
+                            .ok_or_else(|| no_such_member("the array member has no default property".into(), Some(line)))?;
+                        self.instance_member(&receiver, &member, &[], line)?
+                    } else {
+                        self.host_get(&receiver, "Value", line)?
+                            .ok_or_else(|| no_such_member("the array member has no default value".into(), Some(line)))?
+                    }
+                }
+                Value::Nothing => return Err(language_error(91, "object variable not set", line)),
+                value => return Ok(value),
+            };
+        }
+    }
+
     fn host_set(
         &mut self,
         receiver: &ObjectRef,
@@ -9456,8 +9501,13 @@ impl<'a> Runtime<'a> {
         }
         if let Some(host) = self.host.as_deref_mut() { host.begin_member_set(receiver, name); }
         let result = (|| {
-            let Some(host) = self.host.as_deref_mut() else { return Ok(false) };
-            let answer = host.set(receiver, name, value);
+            let answer = match self.host_array_set(receiver, name, &[], &value, line)? {
+                Some(answer) => Ok(answer),
+                None => {
+                    let Some(host) = self.host.as_deref_mut() else { return Ok(false) };
+                    host.set(receiver, name, value)
+                }
+            };
             while self.work_out_user_functions()? {
                 self.tick(Some(line))?;
                 if let Some(host) = self.host.as_deref_mut() { host.resume_user_function_calculation().map_err(|message| host_failure(message, line))?; }
@@ -9484,8 +9534,13 @@ impl<'a> Runtime<'a> {
         }
         if let Some(host) = self.host.as_deref_mut() { host.begin_member_set(receiver, name); }
         let result = (|| {
-            let Some(host) = self.host.as_deref_mut() else { return Ok(false) };
-            let answer = host.set_indexed(receiver, name, args, value);
+            let answer = match self.host_array_set(receiver, name, args, &value, line)? {
+                Some(answer) => Ok(answer),
+                None => {
+                    let Some(host) = self.host.as_deref_mut() else { return Ok(false) };
+                    host.set_indexed(receiver, name, args, value)
+                }
+            };
             while self.work_out_user_functions()? {
                 self.tick(Some(line))?;
                 if let Some(host) = self.host.as_deref_mut() { host.resume_user_function_calculation().map_err(|message| host_failure(message, line))?; }
