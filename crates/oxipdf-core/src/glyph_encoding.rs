@@ -16,8 +16,6 @@ pub enum GlyphEncodingError {
     InvalidGlyphIndex,
     #[error("A font resource needs more than 65535 character codes")]
     TooManyCodes,
-    #[error("CFF glyph aliases need an explicit CID charset mapping")]
-    AmbiguousCffGlyph,
 }
 
 pub(crate) struct FontEncoding {
@@ -69,7 +67,17 @@ impl FontEncoding {
                 .get(&gid)
                 .is_some_and(|old| *old != unicode)
             {
-                return Err(GlyphEncodingError::AmbiguousCffGlyph);
+                // A CFF CID is its glyph, so two characters drawn with one
+                // glyph -- a no-break space and a space, a Kangxi radical and
+                // its unified ideograph, or any two characters the font lacks
+                // (.notdef) -- share one code. The page draws the same either
+                // way; ToUnicode can name only one, so keep the canonical one.
+                // Refusing here threw away whole documents over copy-paste.
+                if alias_rank(unicode) < alias_rank(self.cid_to_unicode[&gid]) {
+                    self.cid_to_unicode.insert(gid, unicode);
+                }
+                self.pairs.insert((gid, unicode), gid);
+                return Ok(());
             }
             gid
         } else {
@@ -98,6 +106,21 @@ impl FontEncoding {
             bytes[at..at + 2].copy_from_slice(&gid.to_be_bytes());
         }
         bytes
+    }
+}
+
+/// How poor a choice `unicode` is for the text a shared glyph extracts to:
+/// 0 for an ordinary character, 1 for a compatibility or private-use form that
+/// names the same thing as an ordinary one.
+fn alias_rank(unicode: u32) -> u8 {
+    match unicode {
+        0x00A0
+        | 0x2E80..=0x2EFF // CJK Radicals Supplement
+        | 0x2F00..=0x2FDF // Kangxi Radicals
+        | 0xE000..=0xF8FF // Private Use Area (symbol fonts)
+        | 0xF900..=0xFAFF // CJK Compatibility Ideographs
+        | 0x2F800..=0x2FA1F => 1,
+        _ => 0,
     }
 }
 
@@ -151,4 +174,53 @@ pub(crate) fn font_encodings(doc: &PdfDocument) -> Result<FontEncodings, GlyphEn
         }
     }
     Ok(encodings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cff() -> FontEncoding {
+        FontEncoding {
+            cid_to_gid: BTreeMap::new(),
+            cid_to_unicode: HashMap::new(),
+            pairs: HashMap::new(),
+            cmap: HashMap::new(),
+            direct_gids: true,
+        }
+    }
+
+    #[test]
+    fn cff_glyph_shared_by_two_characters_extracts_the_ordinary_one() {
+        // no-break space first, space second: the space wins
+        let mut e = cff();
+        e.add(1, 0x00A0).unwrap();
+        e.add(1, 0x0020).unwrap();
+        assert_eq!(e.cid_to_unicode[&1], 0x0020);
+        // unified ideograph first, Kangxi radical second: the ideograph stays
+        e.add(18580, 0x6238).unwrap();
+        e.add(18580, 0x2F3E).unwrap();
+        assert_eq!(e.cid_to_unicode[&18580], 0x6238);
+        // both characters still encode, to the one shared code
+        assert_eq!(e.pairs[&(1, 0x00A0)], 1);
+        assert_eq!(e.pairs[&(18580, 0x2F3E)], 18580);
+        assert_eq!(e.cid_to_gid.len(), 2);
+    }
+
+    #[test]
+    fn cff_notdef_shared_by_missing_characters_keeps_the_first() {
+        let mut e = cff();
+        e.add(0, 0xF0FE).unwrap();
+        e.add(0, 0xF06C).unwrap();
+        assert_eq!(e.cid_to_unicode[&0], 0xF0FE);
+        assert_eq!(e.pairs[&(0, 0xF06C)], 0);
+    }
+
+    #[test]
+    fn truetype_glyph_shared_by_two_characters_gets_two_codes() {
+        let mut e = FontEncoding { direct_gids: false, ..cff() };
+        e.add(1, 0x0020).unwrap();
+        e.add(1, 0x00A0).unwrap();
+        assert_ne!(e.pairs[&(1, 0x0020)], e.pairs[&(1, 0x00A0)]);
+    }
 }

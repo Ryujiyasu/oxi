@@ -2780,8 +2780,21 @@ fn build_embedded_fonts(
         }
     }
 
+    // Every character the pages draw. The IR's body blocks miss whatever the
+    // layout produces or pulls in itself -- page numbers and other field
+    // results, list labels, headers, footers, footnotes, shape text -- and a
+    // character missing from the subset is drawn as .notdef.
+    let mut drawn_chars: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
+    for page in &layout.pages {
+        for elem in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Text { text, .. } = &elem.content {
+                drawn_chars.extend(text.chars());
+            }
+        }
+    }
+
     // Embed Latin fonts (Calibri + Cambria) regardless of CJK usage
-    let mut used_chars_latin: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
+    let mut used_chars_latin: std::collections::BTreeSet<char> = drawn_chars.clone();
     for page in &doc.pages {
         for block in &page.blocks {
             collect_chars_from_block(block, &mut used_chars_latin);
@@ -2795,7 +2808,7 @@ fn build_embedded_fonts(
     }
 
     // Collect all unique characters used in the document (for font subsetting)
-    let mut used_chars: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
+    let mut used_chars: std::collections::BTreeSet<char> = drawn_chars;
     for page in &doc.pages {
         for block in &page.blocks {
             collect_chars_from_block(block, &mut used_chars);
