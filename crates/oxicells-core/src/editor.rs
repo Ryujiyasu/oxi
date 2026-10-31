@@ -1926,10 +1926,10 @@ fn table_column_elements(xml: &str) -> Result<Vec<String>, XlsxError> {
 }
 
 fn table_child_elements(xml: &str, wanted: &str) -> Result<Vec<String>, XlsxError> {
-    Ok(table_child_spans(xml, wanted)?.into_iter().map(|(start, end)| xml[start..end].to_string()).collect())
+    Ok(root_child_spans(xml, wanted)?.into_iter().map(|(start, end)| xml[start..end].to_string()).collect())
 }
 
-fn table_child_spans(xml: &str, wanted: &str) -> Result<Vec<(usize, usize)>, XlsxError> {
+fn root_child_spans(xml: &str, wanted: &str) -> Result<Vec<(usize, usize)>, XlsxError> {
     let mut reader = Reader::from_str(xml);
     let mut result = Vec::new();
     let mut depth = 0usize;
@@ -1969,7 +1969,7 @@ fn table_filter_buttons(xml: &str, table: &crate::ir::Table) -> Result<String, X
         }
     }
     let mut output = xml.to_string();
-    for (start, end) in table_child_spans(xml, "filterColumn")?.into_iter().rev() {
+    for (start, end) in root_child_spans(xml, "filterColumn")?.into_iter().rev() {
         output.replace_range(start..end, "");
     }
     if !columns.is_empty() {
@@ -9602,9 +9602,12 @@ fn patch_workbook_names(xml: &str, names: &[(String, String)], attributes: &crat
             (start, end)
         }
         None => {
-            let after = xml.find("</sheets>").map(|at| at + "</sheets>".len())
-                .or_else(|| xml.find("<sheets").and_then(|at| xml[at..].find("/>").map(|n| at + n + 2)))
+            let mut after = root_child_spans(xml, "sheets")?.first().map(|(_, end)| *end)
                 .ok_or_else(|| XlsxError::InvalidData("the workbook does not list its sheets".to_string()))?;
+            // These optional workbook children precede definedNames, too.
+            for preceding in ["functionGroups", "externalReferences"] {
+                for (_, end) in root_child_spans(xml, preceding)? { after = after.max(end); }
+            }
             (after, after)
         }
     };
@@ -12528,7 +12531,7 @@ mod tests {
     }
 
     /// A workbook that had no names gets a list, put where the schema wants
-    /// it: straight after the sheets.
+    /// it: after the sheets when no reference metadata intervenes.
     #[test]
     fn a_workbook_with_no_names_is_given_a_list() {
         let xml = "<workbook><sheets><sheet name=\"S\"/></sheets><calcPr/></workbook>";
@@ -12540,6 +12543,28 @@ mod tests {
              <definedNames><definedName name=\"Sales\">S!$A$1:$A$5</definedName></definedNames>\
              <calcPr/></workbook>"
         );
+    }
+
+    #[test]
+    fn added_names_follow_native_function_groups_and_external_references() {
+        let data = include_bytes!("../../../tests/fixtures/vba/save_calculation.xlsm");
+        let mut workbook = parse_xlsx(data).unwrap();
+        assert!(workbook.defined_names.is_empty());
+        workbook.defined_names.push(("Added".into(), "Sheet1!$D$1".into()));
+        let mut editor = XlsxEditor::new(data).unwrap();
+        editor.apply_workbook(&workbook).unwrap();
+        let saved = editor.save().unwrap();
+        let xml = OoxmlArchive::new(&saved).unwrap().read_part("xl/workbook.xml").unwrap();
+        assert!(xml.find("<functionGroups").unwrap() < xml.find("<definedNames").unwrap());
+        assert!(xml.find("<definedNames").unwrap() < xml.find("<calcPr").unwrap());
+        assert_eq!(crate::parse_xlsx_preserving_values(&saved).unwrap().defined_names, workbook.defined_names);
+
+        for groups in ["<functionGroups/>", "<functionGroups><functionGroup name=\"User\"/></functionGroups>"] {
+            let xml = format!("<workbook><sheets/>{groups}<externalReferences><externalReference r:id=\"rId2\"/></externalReferences><calcPr/></workbook>");
+            let patched = patch_workbook_names(&xml, &workbook.defined_names, &Default::default()).unwrap();
+            assert!(patched.find("</externalReferences>").unwrap() < patched.find("<definedNames").unwrap());
+            assert!(patched.find("<definedNames").unwrap() < patched.find("<calcPr").unwrap());
+        }
     }
 
     #[test]

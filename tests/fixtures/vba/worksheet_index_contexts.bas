@@ -149,6 +149,8 @@ Public Function Driver() As Long
     Range("E1").Value2 = ChrW(&HD83D)
     Range("E2").Value2 = ChrW(&HDE00)
     Range("E3").ClearContents
+    ThisWorkbook.Names.Add Name:="NativeRows", RefersTo:="='" & ActiveSheet.Name & "'!$1:$3"
+    ThisWorkbook.Names.Add Name:="NativeArea", RefersTo:="='" & ActiveSheet.Name & "'!$A$1:$O$3"
     Driver = 21
 End Function
 
@@ -325,4 +327,44 @@ Public Function CellIndexCseReport(ByVal expression As String) As String
     CellIndexCseReport = ArrayReport(Range("M1:M3").Value2)
     Range("M1:Q10").ClearContents
     Application.Calculation = previousCalculation
+End Function
+
+Public Function LargeProbe() As Variant
+ Dim previous As Long, spillCells As Double, n As Long
+ previous=Application.Calculation
+ Application.Calculation=xlCalculationManual
+ Range("M1:N2").ClearContents
+ Range("A1").Value2=7
+ Range("M1").Formula2="=INDEX(A1,ROW(B1:B600000),{1,1})"
+ Range("M1").Calculate
+ On Error Resume Next
+ Err.Clear
+ spillCells=Range("M1").SpillingToRange.CountLarge
+ n=Err.Number:Err.Clear
+ LargeProbe=Array(n,VarType(Range("M1").Value2),Range("M1").Value2,VarType(Range("N1").Value2),Range("N1").Value2,spillCells,IsError(Range("M600000").Value2),IsError(Range("N600000").Value2))
+ Range("M1").ClearContents
+ Application.Calculation=previous
+End Function
+
+Public Function CyclicStages(ByVal expression As String, ByVal initial As Long) As String
+ Dim previous As Long, report As String
+ previous=Application.Calculation
+ Application.Calculation=xlCalculationManual
+ Driver
+ Range("D1").Value2=initial
+ Range("M1:AA3").ClearContents
+ Range("M1").Formula2="=" & expression
+ Range("M1").Calculate
+ report="entry:" & ArrayReport(Range("M1:AA3").Value2)
+ Range("M1").Calculate
+ report=report & "|repeat:" & ArrayReport(Range("M1:AA3").Value2)
+ Range("D1").Value2=1-initial
+ Range("M1").Calculate
+ report=report & "|changed:" & ArrayReport(Range("M1:AA3").Value2)
+ Application.Calculate
+ report=report & "|normal:" & ArrayReport(Range("M1:AA3").Value2)
+ Application.CalculateFullRebuild
+ CyclicStages=report & "|full:" & ArrayReport(Range("M1:AA3").Value2)
+ Range("M1").ClearContents
+ Application.Calculation=previous
 End Function

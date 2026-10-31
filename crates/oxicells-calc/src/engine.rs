@@ -17,6 +17,22 @@ use std::fmt;
 use crate::ast::{BinaryOp, Expr, UnaryOp};
 use crate::functions::{self, block_of, reach, Arg, RangeData};
 
+#[derive(Debug, Clone)]
+enum LocalBinding {
+    Value(Arg),
+    Reference { sheet: String, range: RangeRef },
+}
+
+impl LocalBinding {
+    fn reference(&self) -> Option<(String, RangeRef)> {
+        match self {
+            Self::Reference { sheet, range } => Some((sheet.clone(), *range)),
+            Self::Value(Arg::Range(block)) => block.cell_reference(),
+            _ => None,
+        }
+    }
+}
+
 /// Which part of a table a structured reference names.
 enum TablePart {
     /// The rows below the heading, which is what a bare column name means.
@@ -603,7 +619,7 @@ pub struct Workbook {
     linked: BTreeMap<(u32, String), BTreeMap<(u32, u32), Value>>,
     /// The names a LET is binding while its last argument is worked out,
     /// innermost last. Asked before the workbook's own names.
-    let_scope: std::cell::RefCell<Vec<(String, Arg)>>,
+    let_scope: std::cell::RefCell<Vec<(String, LocalBinding)>>,
     /// The LAMBDAs a LET has given a name, innermost last, so that
     /// `LET(f,LAMBDA(x,x*2),f(4))` can call one by it.
     lambda_scope: std::cell::RefCell<Vec<(String, Expr)>>,
@@ -1678,10 +1694,27 @@ impl Workbook {
                 if let Some(expr) = self.expr_at(sheet, coord) {
                     *self.watched.borrow_mut() = Some((sheet.to_string(), *coord));
                     self.watched_read.set(false);
-                    let value = formula_result(self.eval(&expr, sheet, 0, Some(*coord)));
+                    let worked = self.eval_arg(&expr, sheet, 0, Some(*coord));
                     *self.watched.borrow_mut() = None;
+                    // A dynamic array can contain a self-reference in one
+                    // element and independent answers in its other elements.
+                    // Publishing only the anchor loses those answers.
+                    if self.sheets.get(sheet).is_some_and(|held| held.dynamic.contains(coord))
+                        && matches!(&worked, Arg::Range(block) if block.cells.len() > 1) {
+                        // A circular spill keeps its first completed result,
+                        // including its members, on subsequent calculations.
+                        let cached_spill = self.sheets.get(sheet).is_some_and(|held|
+                            held.spills.contains_key(coord)
+                                && held.cells.get(coord).is_some_and(|cell| !matches!(cell.value(), Value::Blank)));
+                        if self.watched_read.get() && cached_spill {
+                            self.keep_or_zero(sheet, coord);
+                            return self.value(sheet, &CellRef::new(coord.0, coord.1).to_a1());
+                        }
+                        self.clear_spill(sheet, *coord);
+                        return self.publish_spill(sheet, *coord, worked, false);
+                    }
                     if !self.watched_read.get() {
-                        return value;
+                        return formula_result(worked.first());
                     }
                 }
                 self.keep_or_zero(sheet, coord);
@@ -1971,7 +2004,18 @@ impl Workbook {
             Expr::Unary { op, operand } => Expr::Unary { op: *op, operand: Box::new(self.ordering_expression(operand, sheet, at)) },
             Expr::Binary { op, lhs, rhs } => Expr::Binary { op: *op, lhs: Box::new(self.ordering_expression(lhs, sheet, at)), rhs: Box::new(self.ordering_expression(rhs, sheet, at)) },
             Expr::Function { name, args } => {
-                let args: Vec<_> = args.iter().map(|arg| self.ordering_expression(arg, sheet, at)).collect();
+                let mut args: Vec<_> = args.iter().map(|arg| self.ordering_expression(arg, sheet, at)).collect();
+                if name == "INDEX" && !self.array_formula_context(sheet, at) {
+                    // Legacy formulas consume only the first literal selector.
+                    // Unused selector elements must not introduce graph cycles.
+                    for arg in args.iter_mut().skip(1) {
+                        if let Expr::Array(rows) = arg {
+                            if let Some(first) = rows.first().and_then(|row| row.first()) {
+                                *arg = Expr::Literal(first.clone());
+                            }
+                        }
+                    }
+                }
                 if name == "IF" && (2..=3).contains(&args.len()) && self.dependency_value_is_fixed(&args[0], sheet) {
                     let condition = self.eval_arg(&args[0], sheet, 0, at);
                     if !matches!(&condition, Arg::Range(block) if block.is_array() || block.cells.len() != 1) {
@@ -2132,6 +2176,79 @@ impl Workbook {
         Arg::Range(data)
     }
 
+    fn array_formula_context(&self, sheet: &str, at: At) -> bool {
+        at.is_some_and(|coord| self.share_at(sheet, &coord).is_some()
+            || self.sheets.get(sheet).is_some_and(|held| held.dynamic.contains(&coord)))
+    }
+
+    /// Resolve stored references without reading their cell contents or
+    /// evaluating a source expression twice when it is not a reference.
+    fn stored_reference(&self, expr: &Expr, sheet: &str, depth: u32, at: At) -> Option<(String, RangeRef)> {
+        if depth > 100 { return None; }
+        match expr {
+            Expr::Ref(reference) if reference.book.is_none() => {
+                let target = reference.sheet.as_deref().unwrap_or(sheet);
+                self.sheets.contains_key(target).then(|| (target.to_string(), reference.range))
+            }
+            Expr::Table { name, asked } => self.table_range(name, asked, sheet, at).ok(),
+            Expr::Name(name) => {
+                if let Some((_, value)) = self.let_scope.borrow().iter().rev().find(|(label, _)| label == name) {
+                    return value.reference();
+                }
+                self.name_bound(name, sheet, at).and_then(|bound| self.stored_reference(&bound, sheet, depth + 1, at))
+            }
+            Expr::Function { name, args } if name == "CHOOSE" => {
+                let Expr::Literal(index) = args.first()? else { return None; };
+                let index = index.to_number().ok()?;
+                if !index.is_finite() || index < 1.0 || index >= args.len() as f64 { return None; }
+                self.stored_reference(&args[index as usize], sheet, depth + 1, at)
+            }
+            _ => None,
+        }
+    }
+
+    /// INDEX reads its selection, not every cell in the source rectangle.
+    /// In particular, unselected cells can include the formula itself.
+    fn index_reference_arg(&self, sheet: &str, range: &RangeRef, indexes: &[Arg], skip: Skip) -> Arg {
+        let error = |why| Arg::Value(Value::Error(why));
+        if !(1..=2).contains(&indexes.len()) { return error(ExcelError::Value); }
+        if indexes.iter().any(|arg| matches!(arg, Arg::Range(block) if block.is_array() || block.cells.len() > 1)) {
+            let blocks: Vec<_> = indexes.iter().map(Arg::as_range).collect();
+            let width = blocks.iter().map(|block| block.width).max().unwrap_or(1);
+            let height = blocks.iter().map(|block| block.height).max().unwrap_or(1);
+            let Some(size) = width.checked_mul(height) else { return error(ExcelError::Num); };
+            let mut cells = Vec::with_capacity(size);
+            for row in 0..height {
+                for col in 0..width {
+                    let selected: Vec<_> = blocks.iter().map(|block| {
+                        let x = if block.width == 1 { 0 } else { col };
+                        let y = if block.height == 1 { 0 } else { row };
+                        Arg::Value(if x < block.width && y < block.height { block.at(x, y) } else { Value::Error(ExcelError::NA) })
+                    }).collect();
+                    cells.push(self.index_reference_arg(sheet, range, &selected, skip).first());
+                }
+            }
+            return Arg::Range(RangeData { origin: crate::functions::BlockOrigin::Array, width, height, cells });
+        }
+        let number = |arg: &Arg| -> Result<u32, ExcelError> {
+            let n = arg.scalar().to_number()?;
+            if n < 0.0 { return Err(ExcelError::Value); }
+            if !n.is_finite() || n > u32::MAX as f64 { return Err(ExcelError::Ref); }
+            Ok(n.trunc() as u32)
+        };
+        let first = match number(&indexes[0]) { Ok(n) => n, Err(why) => return error(why) };
+        let (row, col) = if let Some(index) = indexes.get(1) {
+            match number(index) { Ok(col) => (first, col), Err(why) => return error(why) }
+        } else if range.height() == 1 { (1, first) }
+        else if range.width() == 1 { (first, 1) }
+        else { return error(ExcelError::Ref); };
+        if row > range.height() || col > range.width() { return error(ExcelError::Ref); }
+        let mut selected = *range;
+        if row != 0 { selected.start.row += row - 1; selected.end.row = selected.start.row; }
+        if col != 0 { selected.start.col += col - 1; selected.end.col = selected.start.col; }
+        self.reference_arg(sheet, &selected, skip)
+    }
+
     fn scalar_cell_reference<'a>(name: &str, index: usize, argument: &'a Expr) -> Option<&'a crate::reference::Reference> {
         if functions::is_known_function(name) || user_reference_argument(name, index)
             || user_variant_argument(name, index) { return None; }
@@ -2166,11 +2283,20 @@ impl Workbook {
     }
 
     fn unready_argument(&self, argument: &Arg) -> bool {
-        if !self.provisional_value.get() { return false; }
         let Arg::Range(block) = argument else { return false; };
         let Some((sheet, range)) = block.cell_reference() else { return false; };
+        self.unready_reference(&sheet, &range)
+    }
+
+    fn unready_reference(&self, sheet: &str, range: &RangeRef) -> bool {
+        if !self.provisional_value.get() { return false; }
         let cells = self.unready_cells.borrow();
-        cells.iter().any(|(target, coord)| self.reference_waits_for_formula(&sheet, &range, target, *coord))
+        cells.iter().any(|(target, coord)| self.reference_waits_for_formula(sheet, range, target, *coord))
+    }
+
+    fn require_ready_reference(&self, sheet: &str, range: &RangeRef) -> bool {
+        if self.unready_reference(sheet, range) { self.value_deferred.set(true); }
+        !self.value_deferred.get()
     }
 
     fn require_ready_value(&self, argument: &Arg) -> bool {
@@ -2279,7 +2405,10 @@ impl Workbook {
                     .find(|(held, _)| held == name)
                     .map(|(_, value)| value.clone());
                 if let Some(value) = bound_by_let {
-                    return value;
+                    return match value {
+                        LocalBinding::Value(value) => value,
+                        LocalBinding::Reference { sheet, range } => self.reference_arg(&sheet, &range, skip),
+                    };
                 }
                 match self.name_bound(name, sheet, at) {
                     Some(bound) => self.eval_arg_inner(&bound, sheet, depth + 1, skip, at),
@@ -2506,14 +2635,35 @@ impl Workbook {
                 if matches!(name.as_str(), "INDEX" | "TAKE" | "DROP" | "XLOOKUP")
                     && !(name == "INDEX" && matches!(args.first(), Some(Expr::Function { name, .. }) if name == "_UNION")) =>
             {
+                if name == "INDEX" && (2..=3).contains(&args.len()) {
+                    let source = args.first().and_then(|source| match source {
+                        Expr::Function { name, args } if name == "OFFSET" => Some(self.offset_range(args, sheet, depth + 1, at)),
+                        Expr::Function { name, args } if name == "INDIRECT" => Some(self.indirect_range(args, sheet, depth + 1, at)),
+                        _ => self.stored_reference(source, sheet, depth + 1, at).map(Ok),
+                    });
+                    if let Some(source) = source {
+                        let mut indexes: Vec<_> = args.iter().skip(1).map(|index| self.eval_arg_inner(index, sheet, depth + 1, skip, at)).collect();
+                        if indexes.iter().any(|index| !self.require_ready_value(index)) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                        if !self.array_formula_context(sheet, at) {
+                            for index in &mut indexes { *index = Arg::Value(index.first()); }
+                        }
+                        return match source {
+                            Ok((target, range)) => self.index_reference_arg(&target, &range, &indexes, skip),
+                            Err(why) => {
+                                let mut evaluated = vec![Arg::Value(Value::Error(why))];
+                                evaluated.extend(indexes);
+                                functions::call_arg_with_text_context(name, &evaluated, self.compatibility_version, self.dbcs_language.unwrap_or(true))
+                            }
+                        };
+                    }
+                }
                 let mut evaluated: Vec<Arg> = args.iter().map(|arg| self.eval_arg_inner(arg, sheet, depth + 1, skip, at)).collect();
                 let selectors: Vec<_> = if name == "XLOOKUP" { [0, 1, 4, 5].iter().filter_map(|i| evaluated.get(*i)).collect() } else { evaluated.iter().skip(1).collect() };
                 if selectors.iter().any(|arg| !self.require_ready_value(arg)) { return Arg::Value(Value::Error(ExcelError::Value)); }
                 if name == "INDEX" {
                     // Excel Evaluate uses the first index in an index block;
                     // it does not produce one selection per index element.
-                    let array_context = at.is_some_and(|coord| self.share_at(sheet, &coord).is_some()
-                        || self.sheets.get(sheet).is_some_and(|held| held.dynamic.contains(&coord)));
+                    let array_context = self.array_formula_context(sheet, at);
                     if !array_context {
                         for arg in evaluated.iter_mut().skip(1) {
                             *arg = Arg::Value(match &*arg { Arg::Range(block) => block.cells.first().cloned().unwrap_or(Value::Blank), other => other.scalar() });
@@ -2821,8 +2971,20 @@ impl Workbook {
                         self.lambda_scope.borrow_mut().push((label.clone(), pair[1].clone()));
                         named_lambdas += 1;
                     }
-                    let value = self.eval_arg_inner(&pair[1], sheet, depth + 1, skip, at);
-                    if !self.reference_context.get() && !self.require_ready_value(&value) { answer = Some(Arg::Value(Value::Error(ExcelError::Value))); break; }
+                    let value = if let Some((sheet, range)) = self.stored_reference(&pair[1], sheet, depth + 1, at) {
+                        // LET still waits for a binding's precedents even when
+                        // its final expression does not consume that binding.
+                        // Deferring its cell reads must not run a UDF early.
+                        if !self.reference_context.get() && !self.require_ready_reference(&sheet, &range) {
+                            answer = Some(Arg::Value(Value::Error(ExcelError::Value)));
+                            break;
+                        }
+                        LocalBinding::Reference { sheet, range }
+                    } else {
+                        let value = self.eval_arg_inner(&pair[1], sheet, depth + 1, skip, at);
+                        if !self.reference_context.get() && !self.require_ready_value(&value) { answer = Some(Arg::Value(Value::Error(ExcelError::Value))); break; }
+                        LocalBinding::Value(value)
+                    };
                     self.let_scope.borrow_mut().push((label.clone(), value));
                     bound += 1;
                 }
@@ -3870,11 +4032,11 @@ impl Workbook {
             let mut values = values.into_iter();
             for (label, _) in labels {
                 match values.next() {
-                    Some(value) => scope.push((label, value)),
+                    Some(value) => scope.push((label, LocalBinding::Value(value))),
                     None => {
                         omitted.push(label.clone());
                         left_out += 1;
-                        scope.push((label, Arg::Value(Value::Logical(false))));
+                        scope.push((label, LocalBinding::Value(Arg::Value(Value::Logical(false)))));
                     }
                 }
             }
@@ -4005,10 +4167,7 @@ impl Workbook {
             Expr::Table { name, asked } => self.table_range(name, asked, sheet, at).ok(),
             Expr::Name(name) if self.let_scope.borrow().iter().any(|(label, _)| label == name) => {
                 let scope = self.let_scope.borrow();
-                match &scope.iter().rev().find(|(label, _)| label == name)?.1 {
-                    Arg::Range(block) => block.cell_reference(),
-                    _ => None,
-                }
+                scope.iter().rev().find(|(label, _)| label == name)?.1.reference()
             },
             Expr::Name(name) => match self.name_bound(name, sheet, at) {
                 Some(bound) => {

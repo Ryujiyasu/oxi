@@ -34,6 +34,8 @@ fn book(version: u8) -> Workbook {
     }
     book.define_name("OriginArray", "={\"abc\"}").unwrap();
     book.define_name("OriginCell", "=S!$A$1").unwrap();
+    book.define_name("NativeRows", "=S!$1:$3").unwrap();
+    book.define_name("NativeArea", "=S!$A$1:$O$3").unwrap();
     book.set_value("S", "E1", Value::from_utf16(vec![0xD83D])).unwrap();
     book.set_value("S", "E2", Value::from_utf16(vec![0xDE00])).unwrap();
     book
@@ -60,12 +62,36 @@ fn scalar(value: &Value) -> String {
     }
 }
 
+fn grid_report(book: &Workbook, cols: u32) -> String {
+    let values: Vec<_> = (0..3).flat_map(|row| (0..cols).map(move |col| (row, col))).map(|(row, col)| {
+        let address = oxicells_calc::reference::CellRef::new(12 + col, row).to_a1();
+        scalar(&book.value("S", &address))
+    }).collect();
+    format!("A2:1:3:1:{cols}|{}", values.join("|"))
+}
+
 
 #[test]
 fn native_index_distinguishes_legacy_dynamic_and_cse_cells() {
     let mut failures = Vec::new(); let mut count = 0;
     for line in include_str!("../../../tests/fixtures/vba/worksheet_index_contexts.tsv").lines().filter(|line| !line.is_empty() && !line.starts_with('#')) {
         let f: Vec<_> = line.split('\t').collect(); let mut book = book(f[0].parse().unwrap());
+        if let Some(initial) = f[3].strip_prefix("cycle") {
+            let initial: u32 = initial.parse().unwrap();
+            book.set_value("S", "D1", Value::Number(initial as f64)).unwrap();
+            book.set_formula("S", "M1", f[2]).unwrap();
+            book.set_dynamic("S", "M1").unwrap();
+            let mut stages = Vec::new();
+            for stage in ["entry", "repeat", "changed", "normal", "full"] {
+                if stage == "changed" { book.set_value("S", "D1", Value::Number((1 - initial) as f64)).unwrap(); }
+                book.recalculate();
+                stages.push(format!("{stage}:{}", grid_report(&book, 15)));
+            }
+            let actual = stages.join("|");
+            if actual != f[4] { failures.push(format!("{line}\tactual:{actual}")); }
+            count += 1;
+            continue;
+        }
         if f[3] == "cse" {
             for row in 0..3 { book.set_array_member("S", &format!("M{}", row + 1), f[2], (0, row)).unwrap(); }
         } else {
@@ -74,12 +100,11 @@ fn native_index_distinguishes_legacy_dynamic_and_cse_cells() {
         }
         book.recalculate();
         let cols = if f[1] == "CellIndexGridReport" { 3 } else { 1 };
-        let values: Vec<_> = (1..=3).flat_map(|row| (0..cols).map(move |col| (row, col))).map(|(row, col)| scalar(&book.value("S", &format!("{}{}", (b'M' + col) as char, row)))).collect();
-        let actual = format!("A2:1:3:1:{cols}|{}", values.join("|"));
+        let actual = grid_report(&book, cols);
         if actual != f[4] { failures.push(format!("{line}\tactual:{actual}")); }
         count += 1;
     }
-    assert_eq!(count, 108); assert!(failures.is_empty(), "{}differences:\n{}", failures.len(), failures.join("\n"));
+    assert_eq!(count, 228); assert!(failures.is_empty(), "{}differences:\n{}", failures.len(), failures.join("\n"));
     let mut circular = book(2);
     circular.set_formula("S", "M1", "INDEX(1:3,1,13)").unwrap();
     assert_eq!(circular.recalculate().circular, vec!["S!M1"]);

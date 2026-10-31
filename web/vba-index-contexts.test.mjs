@@ -18,9 +18,9 @@ const cases = [];
 for (const line of (await readFile(path.join(fixture, 'worksheet_index_contexts.tsv'), 'utf8')).split(/\r?\n/)) {
     if (!line || line.startsWith('#')) continue;
     const [version, method, expression, mode, expected] = line.split('\t');
-    cases.push({version: Number(version), method, args: mode === 'cse' ? [expression] : [expression, mode === 'dynamic'], expected});
+    cases.push({version: Number(version), method, args: mode.startsWith('cycle') ? [expression, Number(mode.slice(5))] : mode === 'cse' ? [expression] : [expression, mode === 'dynamic'], expected});
 }
-assert.equal(cases.length, 108);
+assert.equal(cases.length, 228);
 const options = {worksheetDbcsLanguage: false, hostAnsiCodePage: 932, errorLanguage: 'ja-JP'};
 const seed = version => {
     const book = wasm.parse_spreadsheet(original);
@@ -51,6 +51,12 @@ for (const version of [1, 2]) {
         }
     } finally {session.free();}
 }
+// Native Excel 16.0 produces a 600000-by-2 result for this reference INDEX.
+// Check the spill before the macro clears its anchor, keeping the output small.
+const large = wasm.run_spreadsheet_vba_with_outcome(seed(2), source, 'LargeProbe', [], 0, 'arrays.xlsx', options);
+assert.equal(large.error, undefined, 'large reference INDEX: ' + JSON.stringify(large.error));
+assert.equal(large.result.type, 'array');
+assert.deepEqual(large.result.value.values.map(item => item.value ?? null), [0, 5, 7, 5, 7, 1200000, true, true]);
 const shim = `import init,{SpreadsheetVbaSession,spreadsheet_vba_project_name,spreadsheet_vba_source}from ${JSON.stringify(bindingUrl)};
 import{readFile}from'node:fs/promises';await init({module_or_path:await readFile(${JSON.stringify(path.join(pkg, 'oxidocs_wasm_bg.wasm'))})});
 export{SpreadsheetVbaSession,spreadsheet_vba_project_name,spreadsheet_vba_source};export default function ready(){return Promise.resolve();}`;
@@ -75,4 +81,4 @@ try {
         }
     }
 } finally {runner.closeVbaProject(); globalThis.Worker = previous;}
-console.log(JSON.stringify({passed: true, native_index_context_cases: 108, compatibility_versions: 2, direct: true, session: true, worker: true}));
+console.log(JSON.stringify({passed: true, native_index_context_cases: 228, large_reference_array_cases: 1, large_spill_cells: 1200000, compatibility_versions: 2, direct: true, session: true, worker: true}));
