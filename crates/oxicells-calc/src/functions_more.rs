@@ -251,6 +251,7 @@ pub(crate) fn call(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                     Arg::Range(block) => {
                         for value in &block.cells {
                             match value {
+                                Value::Lambda(_) => return Err(ExcelError::Value),
                                 Value::Error(e) => return Err(*e),
                                 Value::Number(n) => values.push(*n),
                                 Value::Logical(b) => values.push(f64::from(*b)),

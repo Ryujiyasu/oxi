@@ -15,6 +15,7 @@ fn units(report: &str) -> Value {
 }
 fn report(value: Value) -> String {
     match value {
+        Value::Lambda(_) => panic!("uncalled function escaped a calculation result boundary"),
         Value::Error(_) => "E".into(),
         Value::Number(n) => format!("5:{n}"),
         Value::Logical(b) => format!("11:{}", if b { "True" } else { "False" }),

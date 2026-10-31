@@ -623,14 +623,38 @@ pub fn qualify_name_formula(
     sheet_case: &dyn Fn(&str) -> Option<String>,
     name_case: &dyn Fn(Option<&str>, &str) -> Option<(Option<String>, String)>,
 ) -> Result<String, String> {
-    qualify_name_formula_mode(input, Some(sheet), sheet_case, name_case, false)
+    qualify_name_formula_mode(input, Some(sheet), sheet_case, name_case, false, None)
 }
 
 /// Display supported OOXML future functions without their storage namespaces.
 pub fn formula_from_ooxml(input: &str) -> Result<String, String> {
     let upper = input.to_ascii_uppercase();
-    if !upper.contains("_XLFN.") && !upper.contains("_XLPM.") { return Ok(input.to_string()); }
-    qualify_name_formula_mode(input, None, &|_| None, &|_, _| None, false)
+    if !["_XLFN.", "_XLPM.", "_XLOP.", "_XLETA."].iter().any(|prefix| upper.contains(prefix)) { return Ok(input.to_string()); }
+    qualify_name_formula_mode(input, None, &|_| None, &|_, _| None, false, None)
+}
+
+/// A builtin usable as a function value. Cell addresses and logical
+/// literals retain their ordinary meaning unless explicitly eta-qualified.
+pub fn builtin_function_value(name: &str) -> Option<String> {
+    let upper = name.to_ascii_uppercase();
+    let (plain, explicit) = upper.strip_prefix("_XLETA.").map_or((upper.as_str(), false), |name| (name, true));
+    if matches!(plain, "LET" | "LAMBDA") || !crate::functions::is_known_function(plain)
+        || (!explicit && (matches!(plain, "TRUE" | "FALSE") || crate::reference::parse_a1(plain).is_some())) { return None; }
+    Some(plain.to_string())
+}
+
+/// Rewrite only builtin value names, retaining the other source tokens.
+/// The callback resolves workbook/sheet names and explicit eta references.
+pub fn rewrite_builtin_function_values(input: &str, qualify: &dyn Fn(&str, bool) -> bool) -> Result<String, String> {
+    qualify_name_formula_mode(input, None, &|_| None, &|_, _| None, false, Some((qualify, true)))
+}
+
+pub fn formula_from_ooxml_with_builtin_values(input: &str, qualify: &dyn Fn(&str, bool) -> bool) -> Result<String, String> {
+    let upper = input.to_ascii_uppercase();
+    if !["_XLFN.", "_XLPM.", "_XLOP."].iter().any(|prefix| upper.contains(prefix)) {
+        return rewrite_builtin_function_values(input, qualify);
+    }
+    qualify_name_formula_mode(input, None, &|_| None, &|_, _| None, false, Some((qualify, false)))
 }
 
 /// Future-function and parameter spelling used by workbook formulas in OOXML.
@@ -640,7 +664,7 @@ pub fn name_formula_to_ooxml(input: &str) -> Result<String, String> {
         Token::Name { sheet: None, name } if name.to_uppercase().starts_with("_XLFN.")
             || (matches!(tokens.get(i + 1), Some(Token::LParen)) && normalized_builtin_call(name).as_deref().and_then(future_function_prefix).is_some())));
     if !needs_namespace { return Ok(input.to_string()); }
-    let namespaced = qualify_name_formula_mode(input, None, &|_| None, &|_, _| None, true)?;
+    let namespaced = qualify_name_formula_mode(input, None, &|_| None, &|_, _| None, true, None)?;
     rewrite_intersection_syntax(&namespaced, true)
 }
 
@@ -710,6 +734,8 @@ pub fn name_compatibility_identifiers(input: &str) -> Vec<String> {
         match token {
             Token::Name { name, .. } if name.to_uppercase().starts_with("_XLFN.") => names.push(format!("_xlfn.{}", &name[6..])),
             Token::Name { name, .. } if name.to_uppercase().starts_with("_XLPM.") => names.push(format!("_xlpm.{}", &name[6..])),
+            Token::Name { name, .. } if name.to_uppercase().starts_with("_XLOP.") => names.push(format!("_xlop.{}", &name[6..])),
+            Token::Name { name, .. } if name.to_uppercase().starts_with("_XLETA.") && builtin_function_value(&name).is_some() => names.push(format!("_xleta.{}", &name[7..])),
             Token::At => names.push("_xlfn.SINGLE".into()),
             _ => {}
         }
@@ -723,11 +749,13 @@ fn qualify_name_formula_mode(
     sheet_case: &dyn Fn(&str) -> Option<String>,
     name_case: &dyn Fn(Option<&str>, &str) -> Option<(Option<String>, String)>,
     ooxml: bool,
+    builtin_values: Option<(&dyn Fn(&str, bool) -> bool, bool)>,
 ) -> Result<String, String> {
     use std::collections::HashMap;
     use crate::reference::{letters_to_col, parse_a1};
-    let input = if ooxml { input.to_string() } else { rewrite_intersection_syntax(input, false)? };
-    let input = canonical_formula(&input, sheet_case, &|_| None);
+    let names_only = builtin_values.is_some_and(|(_, names_only)| names_only);
+    let input = if ooxml || names_only { input.to_string() } else { rewrite_intersection_syntax(input, false)? };
+    let input = if names_only { input } else { canonical_formula(&input, sheet_case, &|_| None) };
     let tokens = tokenize_spanned(&input).map_err(|e| e.to_string())?;
     let mut counts = vec![0; tokens.len()];
     let mut stack = Vec::<(usize, usize)>::new();
@@ -759,18 +787,41 @@ fn qualify_name_formula_mode(
         let before_colon = matches!(tokens.get(index + 1), Some((Token::Colon, _)));
         let mut replacement = None;
         if let Token::Name { sheet: owner, name } = token {
-            let key = crate::case_fold::name_key(name);
+            let parameter = owner.is_none() && (name.to_ascii_uppercase().starts_with("_XLPM.") || name.to_ascii_uppercase().starts_with("_XLOP."));
+            let plain = if parameter { &name[6..] } else { name.as_str() };
+            let key = crate::case_fold::name_key(plain);
             let binder = owner.is_none() && frames.last().is_some_and(|f| f.arg + 1 < f.total
                 && (f.function == "LAMBDA" || (f.function == "LET" && f.arg % 2 == 0)));
             let lexical = (owner.is_none() && !(calls && normalized_builtin_call(name).is_some()))
                 .then(|| frames.iter().rev().find_map(|f| f.locals.get(&key).cloned())).flatten();
-            if binder {
-                let plain = name.strip_prefix("_xlpm.").unwrap_or(name);
-                let printed = if ooxml { format!("_xlpm.{plain}") } else { plain.to_string() };
-                frames.last_mut().unwrap().pending = Some((key, printed.clone()));
-                replacement = Some(Token::Name { sheet: None, name: printed });
+            let explicit_eta = owner.is_none() && name.to_ascii_uppercase().starts_with("_XLETA.");
+            let builtin_value = owner.is_none().then(|| builtin_function_value(name)).flatten();
+            let lexical_eta = builtin_value.as_ref().is_some_and(|name| frames.iter().rev().any(|frame| frame.locals.contains_key(&crate::case_fold::name_key(name))));
+            if names_only {
+                if binder { frames.last_mut().unwrap().pending = Some((key, name.clone())); }
+                else if !calls && lexical.is_none() {
+                    if let Some(builtin) = builtin_value {
+                        let qualify = builtin_values.unwrap().0(&builtin, explicit_eta) || (explicit_eta && lexical_eta);
+                        if qualify || explicit_eta {
+                            replacement = Some(Token::Name { sheet: None, name: if qualify { format!("_xleta.{builtin}") } else { builtin } });
+                        }
+                    }
+                }
+            } else if binder {
+                let optional = name.to_ascii_uppercase().starts_with("_XLOP.");
+                let body_name = if ooxml { format!("_xlpm.{plain}") } else { plain.to_string() };
+                frames.last_mut().unwrap().pending = Some((key, body_name));
+                replacement = Some(if optional && !ooxml { Token::Table { name: String::new(), asked: plain.to_string() } }
+                    else { Token::Name { sheet: None, name: if ooxml { format!("{}{}", if optional { "_xlop." } else { "_xlpm." }, plain) } else { plain.to_string() } } });
             } else if let Some(name) = lexical {
                 replacement = Some(Token::Name { sheet: None, name });
+            } else if !calls && explicit_eta && builtin_value.is_some() {
+                let builtin = builtin_value.unwrap();
+                let qualify = ooxml || lexical_eta || (sheet.is_some() && builtin_values.is_none())
+                    || builtin_values.is_some_and(|(choose, _)| choose(&builtin, true));
+                replacement = Some(Token::Name { sheet: None, name: if qualify { format!("_xleta.{builtin}") } else { builtin } });
+            } else if !calls && builtin_value.as_ref().is_some_and(|name| builtin_values.is_some_and(|(choose, _)| choose(name, false))) {
+                replacement = Some(Token::Name { sheet: None, name: format!("_xleta.{}", builtin_value.unwrap()) });
             } else {
                 let cell = !calls && parse_a1(name).is_some();
                 let line = !calls && (before_colon || after_colon) && (letters_to_col(name.trim_start_matches('$')).is_some()
@@ -791,6 +842,12 @@ fn qualify_name_formula_mode(
                 } else if let Some((scope, name)) = name_case(owner.as_deref(), name) {
                     replacement = Some(Token::Name { sheet: owner.clone().or(scope), name });
                 }
+            }
+        } else if let Token::Table { name, asked } = token {
+            if name.is_empty() && frames.last().is_some_and(|frame| frame.function == "LAMBDA" && frame.arg + 1 < frame.total) {
+                let body_name = if ooxml { format!("_xlpm.{asked}") } else { asked.clone() };
+                frames.last_mut().unwrap().pending = Some((crate::case_fold::name_key(asked), body_name));
+                if ooxml && !names_only { replacement = Some(Token::Name { sheet: None, name: format!("_xlop.{asked}") }); }
             }
         } else if let Token::Number(row) = token {
             if before_colon && !after_colon && sheet.is_some() { replacement = Some(Token::Name { sheet: sheet.map(str::to_string), name: row.to_string() }); }
@@ -867,6 +924,7 @@ pub fn requires_array_storage(input: &str, multiple_name: &dyn Fn(&str) -> bool)
     if reader.pos != tokens.len() { return false; }
     bind_intersection_shapes(&mut node, &std::collections::BTreeMap::new());
     has_array_arithmetic(&node) || modern_value_array(&node) || has_array_index_arguments(&node)
+        || has_dynamic_type_arguments(&node)
 }
 
 /// Whether using this defined-name formula needs implicit intersection.
@@ -952,6 +1010,24 @@ fn has_array_index_arguments(node: &AtNode) -> bool {
         AtNode::Written(operand) => has_array_index_arguments(operand),
         AtNode::Invoke { callee, args, .. } => has_array_index_arguments(callee)
             || args.iter().flatten().any(has_array_index_arguments),
+        _ => false,
+    }
+}
+
+// TYPE itself is scalar, but a reference, named expression or reference-form
+// function in its argument still needs array evaluation. Intrinsic arrays
+// already retain their kind in legacy evaluation and do not set this bit.
+fn has_dynamic_type_arguments(node: &AtNode) -> bool {
+    match node {
+        AtNode::Call { name, args, .. } => (name == "TYPE" && args.first().and_then(Option::as_ref)
+            .is_some_and(|arg| modern_result_is_multiple(arg) && !is_value_array(arg)
+                && !matches!(arg, AtNode::Call { name, args, .. } if name == "INDEX"
+                    && matches!(args.first().and_then(Option::as_ref), Some(AtNode::Plain { cell: false, .. })))) )
+            || args.iter().flatten().any(has_dynamic_type_arguments),
+        AtNode::Operation(parts) | AtNode::Group(parts) => parts.iter().any(has_dynamic_type_arguments),
+        AtNode::Written(operand) => has_dynamic_type_arguments(operand),
+        AtNode::Invoke { callee, args, .. } => has_dynamic_type_arguments(callee)
+            || args.iter().flatten().any(has_dynamic_type_arguments),
         _ => false,
     }
 }
@@ -1365,7 +1441,8 @@ fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>)
                 if let Some(arg) = arg {
                     if (name == "LET" && index + 1 < args.len() && index % 2 == 0)
                         || (name == "LAMBDA" && index + 1 < args.len()) { continue; }
-                    let context = if matches!(name.as_str(), "LET" | "LAMBDA") { AtContext::Range }
+                    let context = if name == "CHOOSE" && index == 0 && context != AtContext::Value && is_value_array(arg) { AtContext::Array }
+                        else if matches!(name.as_str(), "LET" | "LAMBDA") { AtContext::Range }
                         else { parameter_kind(name, index, args) };
                     mark_intersections(arg, context, marks);
                 }
@@ -4017,6 +4094,10 @@ mod shift_tests {
     fn native_builtin_call_names_are_separate_from_let_and_lambda_parameters() {
         let mut mismatches = Vec::new();
         for (input, stored, shown) in [
+            ("=LAMBDA(a,[b],IF(ISOMITTED(b),\"omitted\",b))(1)", "=_xlfn.LAMBDA(_xlpm.a,_xlop.b,IF(_xlfn.ISOMITTED(_xlpm.b),\"omitted\",_xlpm.b))(1)", "=LAMBDA(a,[b],IF(ISOMITTED(b),\"omitted\",b))(1)"),
+            ("=LAMBDA([b],ISOMITTED(b))()", "=_xlfn.LAMBDA(_xlop.b,_xlfn.ISOMITTED(_xlpm.b))()", "=LAMBDA([b],ISOMITTED(b))()"),
+            ("=LAMBDA(a,[b],IF(ISOMITTED(b),a,b))(1,7)", "=_xlfn.LAMBDA(_xlpm.a,_xlop.b,IF(_xlfn.ISOMITTED(_xlpm.b),_xlpm.a,_xlpm.b))(1,7)", "=LAMBDA(a,[b],IF(ISOMITTED(b),a,b))(1,7)"),
+
             ("=LET(n,2,N(n))","=_xlfn.LET(_xlpm.n,2,N(_xlpm.n))","=LET(n,2,N(n))"),
             ("=LET(n,2,n(n))","=_xlfn.LET(_xlpm.n,2,N(_xlpm.n))","=LET(n,2,N(n))"),
             ("=LET(N,2,N(N))","=_xlfn.LET(_xlpm.N,2,N(_xlpm.N))","=LET(N,2,N(N))"),

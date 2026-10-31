@@ -17,17 +17,25 @@ use std::fmt;
 use crate::ast::{BinaryOp, Expr, UnaryOp};
 use crate::functions::{self, block_of, reach, Arg, RangeData};
 
-#[derive(Debug, Clone)]
-enum LocalBinding {
-    Value(Arg),
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum LocalBinding {
+    Value { value: std::sync::Arc<Arg>, self_read: Option<(String, (u32, u32))> },
     Reference { sheet: String, range: RangeRef },
+    Omitted,
 }
 
 impl LocalBinding {
+    fn from_arg(value: Arg) -> Self {
+        if let Arg::Range(block) = &value {
+            if let Some((sheet, range)) = block.cell_reference() { return Self::Reference { sheet, range }; }
+        }
+        Self::Value { value: std::sync::Arc::new(value), self_read: None }
+    }
+
     fn reference(&self) -> Option<(String, RangeRef)> {
         match self {
             Self::Reference { sheet, range } => Some((sheet.clone(), *range)),
-            Self::Value(Arg::Range(block)) => block.cell_reference(),
+            Self::Value { value, .. } => match value.as_ref() { Arg::Range(block) => block.cell_reference(), _ => None },
             _ => None,
         }
     }
@@ -649,12 +657,6 @@ pub struct Workbook {
     /// The names a LET is binding while its last argument is worked out,
     /// innermost last. Asked before the workbook's own names.
     let_scope: std::cell::RefCell<Vec<(String, LocalBinding)>>,
-    /// The LAMBDAs a LET has given a name, innermost last, so that
-    /// `LET(f,LAMBDA(x,x*2),f(4))` can call one by it.
-    lambda_scope: std::cell::RefCell<Vec<(String, Expr)>>,
-    /// The optional LAMBDA parameters (`[b]`) a call left out, innermost
-    /// last, for ISOMITTED to find.
-    omitted: std::cell::RefCell<Vec<String>>,
     /// The state RAND draws from: seeded from the moment on first use, and
     /// moved on by every draw.
     rand_state: std::cell::Cell<u64>,
@@ -1078,8 +1080,12 @@ impl Workbook {
         let expr = parse(formula)?;
         let mut answer = self.eval_arg(&expr, sheet, 0, None);
         match &mut answer {
-            Arg::Range(block) => for value in &mut block.cells { *value = formula_result(value.clone()); },
-            Arg::Value(value) => *value = formula_result(value.clone()),
+            // Keep function values for the consuming host to marshal. They
+            // differ from a cell's uncalled-function #CALC! result.
+            Arg::Range(block) => for value in &mut block.cells {
+                if !matches!(value, Value::Lambda(_)) { *value = formula_result(value.clone()); }
+            },
+            Arg::Value(value) => if !matches!(value, Value::Lambda(_)) { *value = formula_result(value.clone()); },
         }
         Ok(answer)
     }
@@ -1702,7 +1708,10 @@ impl Workbook {
                             if held_back.insert(j) { downstream.extend(dependents[j].iter().copied()); }
                         }
                     }
-                    else { self.store_cached(sheet, coord, value); self.unready_cells.borrow_mut().remove(&(sheet.clone(), *coord)); completed.insert(i); remaining.remove(&i); accepted.push(i); }
+                    else {
+                        if reads_itself.contains(&i) && !self.array_entry && !self.watched_read.get() { reads_itself.remove(&i); }
+                        self.store_cached(sheet, coord, value); self.unready_cells.borrow_mut().remove(&(sheet.clone(), *coord)); completed.insert(i); remaining.remove(&i); accepted.push(i);
+                    }
                 } else {
                     // A spill child reveals its owner when the chain reaches
                     // the consumer first. Retain that owner before this
@@ -1743,6 +1752,7 @@ impl Workbook {
                 let (sheet, coord) = &keys[i];
                 let value = self.calculate_cell(sheet, coord, reads_itself.contains(&i));
                 if user_function_pending() { break; }
+                if reads_itself.contains(&i) && !self.array_entry && !self.watched_read.get() { reads_itself.remove(&i); }
                 self.store_cached(sheet, coord, value); accepted.push(i);
             }
         }
@@ -2688,6 +2698,16 @@ impl Workbook {
     }
 
     fn eval_function_argument(&self, (name, index): (&str, usize), expr: &Expr, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        // Legacy array members retain value-read provenance so that their
+        // VBA callbacks run again in each explicit calculation stage.
+        if name == "TYPE" && at.is_none_or(|at| self.share_at(sheet, &at).is_none()) {
+            if let Some((sheet, range)) = self.stored_reference(expr, sheet, depth + 1, at) {
+                if !range.is_single() {
+                    return Arg::Range(RangeData { width: range.width() as usize, height: range.height() as usize,
+                        origin: functions::BlockOrigin::Cells { sheet, range }, cells: Vec::new() });
+                }
+            }
+        }
         let user_function_argument = !functions::is_known_function(name);
         let previous_argument_context = if user_function_argument {
             USER_FUNCTION_ARGUMENT_CONTEXT.with(|held| held.replace(Some((name.to_ascii_uppercase(), index))))
@@ -2782,6 +2802,13 @@ impl Workbook {
             Expr::Table { name, asked } => self.a_table_column(name, asked, sheet, skip, at),
 
             Expr::Name(name) => {
+                if name.starts_with("_XLETA.") {
+                    if let Some(name) = crate::lexer::builtin_function_value(name) {
+                        return Arg::Value(Value::Lambda(std::sync::Arc::new(functions::LambdaValue {
+                            definition: functions::LambdaDefinition::Builtin(name),
+                        })));
+                    }
+                }
                 let bound_by_let = self
                     .let_scope
                     .borrow()
@@ -2791,17 +2818,23 @@ impl Workbook {
                     .map(|(_, value)| value.clone());
                 if let Some(value) = bound_by_let {
                     return match value {
-                        LocalBinding::Value(value) => value,
+                        LocalBinding::Value { value, self_read } => {
+                            if self_read.as_ref().is_some_and(|read| self.watched.borrow().as_ref() == Some(read)) { self.watched_read.set(true); }
+                            value.as_ref().clone()
+                        },
                         LocalBinding::Reference { sheet, range } => self.reference_arg(&sheet, &range, skip),
+                        LocalBinding::Omitted => Arg::Value(Value::Logical(false)),
                     };
                 }
                 match self.name_bound(name, sheet, at) {
-                    Some(bound) => self.eval_arg_inner(&bound, sheet, depth + 1, skip, at),
+                    Some(bound) => self.eval_defined_name(&bound, sheet, depth, skip, at),
                     // A table's bare name is its data: `COLUMNS(tbl)`.
                     None if self.tables.contains_key(&crate::case_fold::table_key(name)) => {
                         self.a_table_column(name, "", sheet, skip, at)
                     }
-                    None => Arg::Value(Value::Error(ExcelError::Name)),
+                    None => crate::lexer::builtin_function_value(name).map(|name| Arg::Value(Value::Lambda(std::sync::Arc::new(functions::LambdaValue {
+                        definition: functions::LambdaDefinition::Builtin(name),
+                    })))).unwrap_or(Arg::Value(Value::Error(ExcelError::Name))),
                 }
             }
 
@@ -3131,7 +3164,7 @@ impl Workbook {
             Expr::Function { name, args }
                 if matches!(name.as_str(), "ROWS" | "COLUMNS") =>
             {
-                self.how_many_lines(name, args, sheet, at)
+                self.how_many_lines(name, args, sheet, depth, at)
             }
 
             // OFFSET and INDIRECT hand back a *reference*, computed here where
@@ -3338,17 +3371,15 @@ impl Workbook {
             // A LAMBDA called where it is written: measured,
             // `LAMBDA(x,x+1)(5)` is 6.
             Expr::Function { name, args } if name == "_INVOKE" && !args.is_empty() => {
-                let values = args[1..]
-                    .iter()
-                    .map(|expr| self.eval_arg_inner(expr, sheet, depth + 1, skip, at))
-                    .collect();
-                self.call_lambda(&args[0], values, sheet, depth, skip, at)
+                let lambda = self.eval_arg_inner(&args[0], sheet, depth + 1, skip, at);
+                self.invoke_lambda_expressions(&lambda, &args[1..], sheet, depth, skip, at)
             }
             // Outside a LAMBDA nothing is left out: measured, ISOMITTED(1)
             // is FALSE.
             Expr::Function { name, args } if name == "ISOMITTED" && args.len() == 1 => {
                 let left_out = matches!(&args[0], Expr::Name(label)
-                    if self.omitted.borrow().iter().any(|held| held.eq_ignore_ascii_case(label)));
+                    if self.let_scope.borrow().iter().rev().find(|(held, _)| held.eq_ignore_ascii_case(label))
+                        .is_some_and(|(_, binding)| matches!(binding, LocalBinding::Omitted)));
                 Arg::Value(Value::Logical(left_out))
             }
             Expr::Function { name, args } if name == "LET" => {
@@ -3356,7 +3387,6 @@ impl Workbook {
                     return Arg::Value(Value::Error(ExcelError::Value));
                 }
                 let mut bound = 0;
-                let mut named_lambdas = 0;
                 let mut answer = None;
                 for pair in args[..args.len() - 1].chunks(2) {
                     // A name given twice is refused: measured, LET(x,1,x,2,x)
@@ -3369,10 +3399,6 @@ impl Workbook {
                         answer = Some(Arg::Value(Value::Error(ExcelError::Value)));
                         break;
                     };
-                    if matches!(&pair[1], Expr::Function { name, .. } if name == "LAMBDA") {
-                        self.lambda_scope.borrow_mut().push((label.clone(), pair[1].clone()));
-                        named_lambdas += 1;
-                    }
                     let value = if let Some((sheet, range)) = self.stored_reference(&pair[1], sheet, depth + 1, at) {
                         LocalBinding::Reference { sheet, range }
                     } else {
@@ -3384,7 +3410,7 @@ impl Workbook {
                             LocalBinding::Reference { sheet, range }
                         } else {
                             if !self.reference_context.get() && !self.projecting_array_values() && !self.require_ready_value(&value) { answer = Some(Arg::Value(Value::Error(ExcelError::Value))); break; }
-                            LocalBinding::Value(value)
+                            LocalBinding::from_arg(value)
                         }
                     };
                     self.let_scope.borrow_mut().push((label.clone(), value));
@@ -3396,22 +3422,18 @@ impl Workbook {
                 let mut scope = self.let_scope.borrow_mut();
                 let kept = scope.len() - bound;
                 scope.truncate(kept);
-                let mut lambdas = self.lambda_scope.borrow_mut();
-                let kept = lambdas.len() - named_lambdas;
-                lambdas.truncate(kept);
                 answer
             }
-            // A LAMBDA nobody calls is #CALC!: measured, `=LAMBDA(x,x)`.
-            Expr::Function { name, .. } if name == "LAMBDA" => Arg::Value(Value::Error(ExcelError::Calc)),
+            // Keep the callable until a value consumer or cell boundary asks
+            // for its result. Capturing here excludes the LET binding being
+            // initialized and retains earlier bindings and reference identity.
+            Expr::Function { name, args } if name == "LAMBDA" => self.capture_lambda(args, sheet, at),
             // A LAMBDA a LET named, called by that name.
             Expr::Function { name, args } if crate::lexer::normalized_builtin_call(name).is_none()
-                && self.named_lambda(name, sheet, at).is_some() => {
-                let lambda = self.named_lambda(name, sheet, at).expect("just asked");
-                let values = args
-                    .iter()
-                    .map(|expr| self.eval_arg_inner(expr, sheet, depth + 1, skip, at))
-                    .collect();
-                self.call_lambda(&lambda, values, sheet, depth, skip, at)
+                && (self.let_scope.borrow().iter().any(|(held, _)| held.eq_ignore_ascii_case(name))
+                    || self.name_definition(name, sheet).is_some()) => {
+                let lambda = self.named_lambda(name, sheet, depth, skip, at).expect("just asked");
+                self.invoke_lambda_expressions(&lambda, args, sheet, depth, skip, at)
             }
             // IF works out only the branch it takes, so a branch naming the
             // formula's own cell is no circle unless it is taken: measured,
@@ -4093,9 +4115,12 @@ impl Workbook {
     /// says — `materialise` cuts a range back to what the sheet holds, and
     /// counting the cut-down block would answer with the sheet's height
     /// instead of the reference's.
-    fn how_many_lines(&self, name: &str, args: &[Expr], sheet: &str, at: At) -> Arg {
+    fn how_many_lines(&self, name: &str, args: &[Expr], sheet: &str, depth: u32, at: At) -> Arg {
         let down = name == "ROWS";
         if args.len() != 1 { return Arg::Value(Value::Error(ExcelError::Value)); }
+        if let Some((_, range)) = self.stored_reference(&args[0], sheet, depth + 1, at) {
+            return Arg::Value(Value::Number(f64::from(if down { range.height() } else { range.width() })));
+        }
         let range = match args.first() {
             Some(Expr::Ref(reference)) => reference.range,
             Some(Expr::Table { name, asked }) => match self.table_range(name, asked, sheet, at) {
@@ -4103,7 +4128,7 @@ impl Workbook {
                 Err(why) => return Arg::Value(Value::Error(why)),
             },
             Some(other) => {
-                let answer = self.eval_reference_argument(other, sheet, 0, at);
+                let answer = self.eval_reference_argument(other, sheet, depth + 1, at);
                 match &answer {
                     Arg::Range(block) if block.cell_reference().is_some() => block.cell_reference().unwrap().1,
                     _ => {
@@ -4469,69 +4494,187 @@ impl Workbook {
             .unwrap_or_default()
     }
 
-    fn named_lambda(&self, name: &str, sheet: &str, at: At) -> Option<Expr> {
-        self.lambda_scope
-            .borrow()
-            .iter()
-            .rev()
-            .find(|(held, _)| held.eq_ignore_ascii_case(name))
-            .map(|(_, lambda)| lambda.clone())
-            .or_else(|| {
-                self.name_bound(name, sheet, at)
-                    .filter(|held| matches!(held, Expr::Function { name, .. } if name == "LAMBDA"))
-            })
+    fn capture_lambda(&self, args: &[Expr], sheet: &str, at: At) -> Arg {
+        let Some((body, parameters)) = args.split_last() else {
+            return Arg::Value(Value::Error(ExcelError::Value));
+        };
+        let mut labels = Vec::with_capacity(parameters.len());
+        for parameter in parameters {
+            let label = match parameter {
+                Expr::Name(label) => match label.strip_prefix("_XLOP.") {
+                    Some(label) => (format!("_XLPM.{label}"), true),
+                    None => (label.clone(), false),
+                },
+                Expr::Table { name, asked } if name.is_empty() => (asked.to_uppercase(), true),
+                _ => return Arg::Value(Value::Error(ExcelError::Value)),
+            };
+            labels.push(label);
+        }
+        Arg::Value(Value::Lambda(std::sync::Arc::new(functions::LambdaValue {
+            definition: functions::LambdaDefinition::Closure {
+                parameters: labels, body: body.clone(), scope: self.let_scope.borrow().clone(),
+                sheet: sheet.to_string(), at,
+            },
+        })))
+    }
+
+    fn eval_defined_name(&self, bound: &Expr, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        // Defined names have workbook/sheet scope, independent of the caller's
+        // LET variables. A factory or alias can return a captured function too.
+        let caller_scope = self.let_scope.replace(Vec::new());
+        let answer = self.eval_arg_inner(bound, sheet, depth + 1, skip, at);
+        self.let_scope.replace(caller_scope);
+        answer
+    }
+
+    fn named_lambda(&self, name: &str, sheet: &str, depth: u32, skip: Skip, at: At) -> Option<Arg> {
+        if let Some((_, binding)) = self.let_scope.borrow().iter().rev()
+            .find(|(held, _)| held.eq_ignore_ascii_case(name)) {
+            return Some(match binding {
+                LocalBinding::Value { value, self_read } => {
+                    if self_read.as_ref().is_some_and(|read| self.watched.borrow().as_ref() == Some(read)) { self.watched_read.set(true); }
+                    value.as_ref().clone()
+                },
+                LocalBinding::Reference { .. } => Arg::Value(Value::Error(ExcelError::Ref)),
+                LocalBinding::Omitted => Arg::Value(Value::Error(ExcelError::Value)),
+            });
+        }
+        let bound = self.name_bound(name, sheet, at)?;
+        Some(self.eval_defined_name(&bound, sheet, depth, skip, at))
+    }
+
+    fn lambda_arguments(&self, args: &[Expr], sheet: &str, depth: u32, skip: Skip, at: At) -> Vec<Option<LocalBinding>> {
+        args.iter().map(|expr| {
+            if matches!(expr, Expr::Literal(Value::Blank)) { None }
+            else if let Some((sheet, range)) = self.stored_reference(expr, sheet, depth + 1, at) {
+                Some(LocalBinding::Reference { sheet, range })
+            }
+            else if let Some(binding) = self.lambda_computed_reference(expr, sheet, depth, skip, at) { Some(binding) }
+            else {
+                let previous = self.watched_read.replace(false);
+                let value = self.eval_arg_inner(expr, sheet, depth + 1, skip, at);
+                let self_read = self.watched_read.replace(previous).then(|| self.watched.borrow().clone()).flatten();
+                match value {
+                    Arg::Value(Value::Blank) => None,
+                    value => {
+                        let mut binding = LocalBinding::from_arg(value);
+                        if let LocalBinding::Value { self_read: read, .. } = &mut binding { *read = self_read; }
+                        else if self_read.is_some() { self.watched_read.set(true); }
+                        Some(binding)
+                    },
+                }
+            }
+        }).collect()
+    }
+
+    /// Resolve a reference argument's address without reading its selected
+    /// cells. Selector expressions retain their normal evaluation and are
+    /// never retried on an invalid selection or an array-valued result.
+    fn lambda_computed_reference(&self, expr: &Expr, sheet: &str, depth: u32, skip: Skip, at: At) -> Option<LocalBinding> {
+        let Expr::Function { name, args } = expr else { return None; };
+        let binding = |result: Result<(String, RangeRef), ExcelError>| match result {
+            Ok((sheet, range)) => LocalBinding::Reference { sheet, range },
+            Err(why) => LocalBinding::from_arg(Arg::Value(Value::Error(why))),
+        };
+        if name == "OFFSET" { return Some(binding(self.offset_range(args, sheet, depth + 1, at))); }
+        if name == "INDIRECT" { return Some(binding(self.indirect_range(args, sheet, depth + 1, at))); }
+        if name != "INDEX" || !(2..=3).contains(&args.len()) { return None; }
+        let source = match &args[0] {
+            Expr::Function { name, args } if name == "OFFSET" => self.offset_range(args, sheet, depth + 1, at),
+            Expr::Function { name, args } if name == "INDIRECT" => self.indirect_range(args, sheet, depth + 1, at),
+            other => self.stored_reference(other, sheet, depth + 1, at).map(Ok)?,
+        };
+        let mut indexes: Vec<_> = args.iter().skip(1).map(|index| self.eval_arg_inner(index, sheet, depth + 1, skip, at)).collect();
+        if indexes.iter().any(|index| !self.require_ready_value(index)) {
+            return Some(LocalBinding::from_arg(Arg::Value(Value::Error(ExcelError::Value))));
+        }
+        let materialized = self.prepare_array_indexes(&mut indexes, &args[1..]);
+        if !self.array_formula_context(sheet, at) && !materialized {
+            for index in &mut indexes { *index = Arg::Value(index.first()); }
+        }
+        let (target, range) = match source { Ok(source) => source, Err(why) => return Some(binding(Err(why))) };
+        let array_index = indexes.iter().any(|index| matches!(index, Arg::Range(block) if block.is_array() || block.cells.len() > 1));
+        let mut selected = vec![Arg::Range(RangeData { origin: functions::BlockOrigin::Cells { sheet: target.clone(), range },
+            width: range.width() as usize, height: range.height() as usize, cells: Vec::new() })];
+        selected.extend(indexes.iter().cloned());
+        if let Some((sheet, range)) = (!array_index).then(|| self.selection_reference(name, &selected)).flatten() {
+            return Some(LocalBinding::Reference { sheet, range });
+        }
+        Some(LocalBinding::from_arg(self.index_reference_arg(&target, &range, &indexes, skip)))
+    }
+
+    fn invoke_lambda_expressions(&self, lambda: &Arg, args: &[Expr], sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        if let Arg::Value(Value::Lambda(function)) = lambda {
+            if let functions::LambdaDefinition::Builtin(name) = &function.definition {
+                return self.eval_arg_inner(&Expr::Function { name: name.clone(), args: args.to_vec() }, sheet, depth + 1, skip, at);
+            }
+        }
+        let values = self.lambda_arguments(args, sheet, depth, skip, at);
+        self.invoke_lambda(lambda, values, sheet, depth, skip, at)
+    }
+
+    fn call_lambda_value(&self, lambda: &Arg, values: Vec<Arg>, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        self.invoke_lambda(lambda, values.into_iter().map(|value| Some(LocalBinding::from_arg(value))).collect(), sheet, depth, skip, at)
     }
 
     fn call_lambda(&self, lambda: &Expr, values: Vec<Arg>, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
-        if let Expr::Name(label) = lambda {
-            return match self.named_lambda(label, sheet, at) {
-                Some(named) => self.call_lambda(&named, values, sheet, depth + 1, skip, at),
-                None => Arg::Value(Value::Error(ExcelError::Value)),
-            };
+        let lambda = self.eval_arg_inner(lambda, sheet, depth + 1, skip, at);
+        self.call_lambda_value(&lambda, values, sheet, depth, skip, at)
+    }
+
+    fn invoke_lambda(&self, value: &Arg, values: Vec<Option<LocalBinding>>, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        if let Arg::Value(Value::Error(why)) = value { return Arg::Value(Value::Error(*why)); }
+        if let Arg::Range(block) = value {
+            // A function-containing array call produces a scalar zero in
+            // Excel, independent of member order; no closure body is invoked.
+            return Arg::Value(if block.cell_reference().is_some() {
+                Value::Error(ExcelError::Ref)
+            } else if block.cells.iter().any(|cell| matches!(cell, Value::Lambda(_))) {
+                Value::Number(0.0)
+            } else { match block.cells.first() {
+                Some(Value::Error(why)) => Value::Error(*why),
+                _ => Value::Error(ExcelError::Value),
+            } });
         }
-        let Expr::Function { name, args } = lambda else {
+        let Arg::Value(Value::Lambda(lambda)) = value else {
             return Arg::Value(Value::Error(ExcelError::Value));
         };
-        if name != "LAMBDA" || args.is_empty() || values.len() > args.len() - 1 {
-            return Arg::Value(Value::Error(ExcelError::Value));
-        }
-        // A parameter in brackets, `[b]`, may be left out: measured,
-        // LAMBDA(a,[b],IF(ISOMITTED(b),"no b",b))(1) is "no b".
-        let mut labels = Vec::with_capacity(args.len() - 1);
-        for parameter in &args[..args.len() - 1] {
-            match parameter {
-                Expr::Name(label) => labels.push((label.clone(), false)),
-                Expr::Table { name, asked } if name.is_empty() => labels.push((asked.to_uppercase(), true)),
-                _ => return Arg::Value(Value::Error(ExcelError::Value)),
-            }
-        }
-        if labels[values.len()..].iter().any(|(_, optional)| !optional) {
-            return Arg::Value(Value::Error(ExcelError::Value));
-        }
-        let bound = labels.len();
-        let mut left_out = 0;
-        {
-            let mut scope = self.let_scope.borrow_mut();
-            let mut omitted = self.omitted.borrow_mut();
-            let mut values = values.into_iter();
-            for (label, _) in labels {
-                match values.next() {
-                    Some(value) => scope.push((label, LocalBinding::Value(value))),
-                    None => {
-                        omitted.push(label.clone());
-                        left_out += 1;
-                        scope.push((label, LocalBinding::Value(Arg::Value(Value::Logical(false)))));
-                    }
+        match &lambda.definition {
+            functions::LambdaDefinition::Builtin(name) => {
+                let mut scope = Vec::new();
+                let args = values.into_iter().enumerate().map(|(index, value)| match value {
+                    Some(value) => {
+                        let label = format!("__OXI_FUNCTION_ARGUMENT_{index}");
+                        scope.push((label.clone(), value));
+                        Expr::Name(label)
+                    },
+                    None => Expr::Literal(Value::Blank),
+                }).collect();
+                self.invoke_lambda_body(scope, &Expr::Function { name: name.clone(), args }, sheet, depth, skip, at)
+            },
+            functions::LambdaDefinition::Closure { parameters, body, scope, sheet, at } => {
+                if values.len() > parameters.len()
+                    || parameters[values.len()..].iter().any(|(_, optional)| !optional) {
+                    return Arg::Value(Value::Error(ExcelError::Value));
                 }
-            }
+                let mut scope = scope.clone();
+                let mut values = values.into_iter();
+                for (label, _) in parameters {
+                    scope.push((label.clone(), values.next().flatten().unwrap_or(LocalBinding::Omitted)));
+                }
+                self.invoke_lambda_body(scope, body, sheet, depth, skip, *at)
+            },
         }
-        let answer = self.eval_arg_inner(&args[args.len() - 1], sheet, depth + 1, skip, at);
-        let mut scope = self.let_scope.borrow_mut();
-        let kept = scope.len() - bound;
-        scope.truncate(kept);
-        let mut omitted = self.omitted.borrow_mut();
-        let kept = omitted.len() - left_out;
-        omitted.truncate(kept);
+    }
+
+    fn invoke_lambda_body(&self, scope: Vec<(String, LocalBinding)>, body: &Expr, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        let caller_scope = self.let_scope.replace(scope);
+        let reference = self.reference_context.get().then(|| self.stored_reference(body, sheet, depth + 1, at)).flatten();
+        let answer = if let Some((sheet, range)) = reference {
+            Arg::Range(RangeData { width: range.width() as usize, height: range.height() as usize,
+                origin: functions::BlockOrigin::Cells { sheet, range }, cells: Vec::new() })
+        } else { self.eval_arg_inner(body, sheet, depth + 1, skip, at) };
+        self.let_scope.replace(caller_scope);
         answer
     }
 
@@ -4549,6 +4692,7 @@ impl Workbook {
             .iter()
             .map(|expr| block_of(&self.eval_arg_inner(expr, sheet, depth + 1, skip, at)))
             .collect();
+        let lambda = self.eval_arg_inner(lambda, sheet, depth + 1, skip, at);
         match name {
             "MAP" => {
                 let Some(first) = blocks.first() else {
@@ -4562,7 +4706,7 @@ impl Workbook {
                             .iter()
                             .map(|block| Arg::Value(reach(block, col, row).unwrap_or(Value::Error(ExcelError::NA))))
                             .collect();
-                        cells.push(one(self.call_lambda(lambda, values, sheet, depth, skip, at)));
+                        cells.push(one(self.call_lambda_value(&lambda, values, sheet, depth, skip, at)));
                     }
                 }
                 Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width, height, cells })
@@ -4576,7 +4720,7 @@ impl Workbook {
                 let mut steps = Vec::with_capacity(data.cells.len());
                 for value in &data.cells {
                     let values = vec![Arg::Value(total), Arg::Value(value.clone())];
-                    total = one(self.call_lambda(lambda, values, sheet, depth, skip, at));
+                    total = one(self.call_lambda_value(&lambda, values, sheet, depth, skip, at));
                     steps.push(total.clone());
                 }
                 if name == "REDUCE" {
@@ -4600,7 +4744,7 @@ impl Workbook {
                     };
                     // One value per line: measured, BYROW(A1:B3,LAMBDA(r,r))
                     // is a single #CALC!.
-                    match self.call_lambda(lambda, vec![Arg::Range(piece)], sheet, depth, skip, at) {
+                    match self.call_lambda_value(&lambda, vec![Arg::Range(piece)], sheet, depth, skip, at) {
                         Arg::Range(block) if block.cells.len() > 1 => {
                             return Arg::Value(Value::Error(ExcelError::Calc));
                         }
@@ -4633,7 +4777,7 @@ impl Workbook {
                 for row in 1..=height {
                     for col in 1..=width {
                         let values = vec![Arg::Value(Value::Number(row as f64)), Arg::Value(Value::Number(col as f64))];
-                        cells.push(one(self.call_lambda(lambda, values, sheet, depth, skip, at)));
+                        cells.push(one(self.call_lambda_value(&lambda, values, sheet, depth, skip, at)));
                     }
                 }
                 Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width, height, cells })
@@ -5187,6 +5331,7 @@ fn element_of(worked: &Arg, (dx, dy): (u32, u32)) -> Value {
 
 fn formula_result(value: Value) -> Value {
     match value {
+        Value::Lambda(_) => Value::Error(ExcelError::Calc),
         Value::Blank => Value::Number(0.0),
         // A cell holds no negative zero: `=-A1` over a blank, or a SUM of
         // nothing, is 0 in Excel, and a macro reading it writes 0.
@@ -6598,6 +6743,281 @@ mod tests {
             }
         }
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+
+    #[test]
+    fn native_first_class_lambda_values_and_lexical_captures() {
+        let cases: &[(&str, Option<Value>, Option<bool>)] = &[
+            ("LET(n,2,N(n))", Some(Value::Number(2.0)), Some(false)),
+            ("LET(n,2,n(n))", Some(Value::Number(2.0)), Some(false)),
+            ("LET(N,2,N(N))", Some(Value::Number(2.0)), Some(false)),
+            ("LET(N,2,n(N))", Some(Value::Number(2.0)), Some(false)),
+            ("LET(n,LAMBDA(x,x+3),N(2))", Some(Value::Number(2.0)), Some(true)),
+            ("LET(n,LAMBDA(x,x+3),n(2))", Some(Value::Number(2.0)), Some(true)),
+            ("LET(N,LAMBDA(x,x+3),N(2))", Some(Value::Number(2.0)), Some(true)),
+            ("LET(SEQUENCE,100,SUM(SEQUENCE(2)))", Some(Value::Number(3.0)), Some(false)),
+            ("LET(SEQUENCE,LAMBDA(x,x+3),SEQUENCE(2))", Some(Value::Number(1.0)), Some(true)),
+            ("LET(sequence,LAMBDA(x,x+3),SEQUENCE(2))", Some(Value::Number(1.0)), Some(true)),
+            ("LET(sequence,LAMBDA(x,x+3),sequence(2))", Some(Value::Number(1.0)), Some(true)),
+            ("LAMBDA(n,N(n))(2)", Some(Value::Number(2.0)), Some(true)),
+            ("LAMBDA(N,N(N))(2)", Some(Value::Number(2.0)), Some(true)),
+            ("LAMBDA(n,n(2))(LAMBDA(x,x+3))", Some(Value::Number(2.0)), Some(true)),
+            ("LET(n,D1:D3,SUM(INDEX(D1:D3,N(n),1)))", Some(Value::Number(1.0)), Some(false)),
+            ("LET(n,{1;2;3},SUM(INDEX(D1:D3,N(n),1)))", Some(Value::Number(6.0)), Some(true)),
+            ("LET(len,\"abc\",LEN(len))", Some(Value::Number(3.0)), Some(false)),
+            ("LET(sum,4,SUM(sum))", Some(Value::Number(4.0)), Some(false)),
+            ("LET(sum,LAMBDA(x,x+3),SUM(2))", Some(Value::Number(2.0)), Some(true)),
+            ("LET(SeQuEnCe,LAMBDA(x,x+3),SeQuEnCe(2))", Some(Value::Number(1.0)), Some(true)),
+            ("LET(fn,LAMBDA(x,x+3),fn(2))", Some(Value::Number(5.0)), Some(true)),
+            ("LAMBDA(fn,fn(2))(LAMBDA(x,x+3))", Some(Value::Number(5.0)), Some(true)),
+            ("LET(x,3,LAMBDA(fn,fn(2))(LAMBDA(y,x+y)))", Some(Value::Number(5.0)), Some(true)),
+            ("LET(x,3,LAMBDA(fn,LAMBDA(x,fn(2))(100))(LAMBDA(y,x+y)))", Some(Value::Number(5.0)), Some(true)),
+            ("LAMBDA(x,LAMBDA(y,x+y))(3)(2)", Some(Value::Number(5.0)), Some(true)),
+            ("LET(make,LAMBDA(x,LAMBDA(y,x+y)),make(3)(2))", Some(Value::Number(5.0)), Some(true)),
+            ("LET(x,1,LAMBDA(fn,LET(x,9,fn(2)))(LAMBDA(y,x+y)))", Some(Value::Number(3.0)), Some(true)),
+            ("LET(make,LAMBDA(a,LAMBDA(b,a+b)),LET(a,100,make(3)(2)))", Some(Value::Number(5.0)), Some(true)),
+            ("LAMBDA(fn,fn(7))(LAMBDA(x,x+1))", Some(Value::Number(8.0)), Some(true)),
+            ("LET(src,D1:D3,LAMBDA(fn,SUM(fn(0)))(LAMBDA(unused,src)))", Some(Value::Number(6.0)), Some(true)),
+            ("LAMBDA(fn,LET(src,100,SUM(fn(0))))(LET(src,D1:D3,LAMBDA(x,src)))", Some(Value::Number(6.0)), Some(true)),
+            ("TYPE(LAMBDA(x,x))", Some(Value::Number(128.0)), Some(false)),
+            ("ISREF(LAMBDA(x,x))", Some(Value::Logical(false)), Some(false)),
+            ("ISERROR(LAMBDA(x,x))", Some(Value::Logical(false)), Some(false)),
+            ("ISNUMBER(LAMBDA(x,x))", Some(Value::Logical(false)), Some(false)),
+            ("ISTEXT(LAMBDA(x,x))", Some(Value::Logical(false)), Some(false)),
+            ("N(LAMBDA(x,x))", Some(Value::Error(ExcelError::Value)), Some(false)),
+            ("T(LAMBDA(x,x))", Some(Value::Error(ExcelError::Value)), Some(false)),
+            ("LAMBDA(x,x)", Some(Value::Error(ExcelError::Calc)), Some(false)),
+            ("LET(fn,LAMBDA(x,x+1),TYPE(fn))", Some(Value::Number(128.0)), Some(true)),
+            ("LET(fn,LAMBDA(x,x+1),ISERROR(fn))", Some(Value::Logical(false)), Some(true)),
+            ("IF(TRUE,LAMBDA(x,x+1),LAMBDA(x,x+2))(2)", Some(Value::Number(3.0)), Some(true)),
+            ("CHOOSE(2,LAMBDA(x,x+1),LAMBDA(x,x+2))(2)", Some(Value::Number(4.0)), Some(true)),
+            ("LET(fn,CHOOSE(1,LAMBDA(x,x+1)),fn(2))", Some(Value::Number(3.0)), Some(true)),
+            ("IFERROR(LAMBDA(x,x+1),LAMBDA(x,x+2))(2)", None, None),
+            ("LET(fn,LAMBDA(x,x+1),fn)", Some(Value::Error(ExcelError::Calc)), Some(true)),
+            ("LET(fn,LAMBDA(x,x+1),LAMBDA(g,g(2))(fn))", Some(Value::Number(3.0)), Some(true)),
+            ("LAMBDA(fn,TYPE(fn))(LAMBDA(x,x+1))", Some(Value::Number(128.0)), Some(true)),
+            ("LAMBDA(fn,ISREF(fn))(LAMBDA(x,x+1))", Some(Value::Logical(false)), Some(true)),
+            ("LET(make,LAMBDA(x,LAMBDA(y,x+y)),TYPE(make(3)))", Some(Value::Number(128.0)), Some(true)),
+            ("LAMBDA(f,f)(LAMBDA(x,x+1))(2)", Some(Value::Number(3.0)), Some(true)),
+            ("LAMBDA(f,LAMBDA(x,f(x)+1))(LAMBDA(y,y*2))(3)", Some(Value::Number(7.0)), Some(true)),
+            ("LET(src,D1:D3,fn,LAMBDA(x,src),SUM(fn(0)))", Some(Value::Number(6.0)), Some(false)),
+            ("LET(src,D1:D3,fn,LAMBDA(x,src),LAMBDA(src,SUM(fn(0)))(100))", Some(Value::Number(6.0)), Some(true)),
+            ("LAMBDA(a,[b],IF(ISOMITTED(b),\"omitted\",b))(1)", Some(Value::Text("omitted".to_string())), Some(true)),
+            ("LAMBDA(a,b,IF(ISOMITTED(b),\"omitted\",b))(1)", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("LAMBDA(a,b,IF(ISOMITTED(b),\"omitted\",b))(1,)", Some(Value::Text("omitted".to_string())), Some(true)),
+            ("LAMBDA(a,b,ISOMITTED(b))(1,\"\")", Some(Value::Logical(false)), Some(true)),
+            ("LAMBDA(a,b,ISOMITTED(b))(1,D9)", Some(Value::Logical(false)), Some(true)),
+            ("LET(f,LAMBDA(n,IF(n=0,0,1+f(n-1))),f(3))", Some(Value::Error(ExcelError::Name)), Some(true)),
+            ("LET(f,LAMBDA(me,n,IF(n=0,0,1+me(me,n-1))),f(f,3))", Some(Value::Number(3.0)), Some(true)),
+            ("LET(fn,IFERROR(LAMBDA(x,x+1),0),fn(2))", Some(Value::Number(3.0)), Some(true)),
+            ("LET(fn,IFNA(LAMBDA(x,x+1),0),fn(2))", Some(Value::Number(3.0)), Some(true)),
+            ("TYPE(IFERROR(LAMBDA(x,x+1),0))", Some(Value::Number(128.0)), Some(true)),
+            ("LAMBDA(x,ISREF(x))(D1:D3)", Some(Value::Logical(true)), Some(true)),
+            ("LAMBDA(x,ISREF(x))(D1:D3+0)", Some(Value::Logical(false)), Some(true)),
+            ("GlobalRecursive(3)", Some(Value::Number(3.0)), Some(true)),
+            ("LET(GlobalRecursive,LAMBDA(n,100),GlobalRecursive(3))", Some(Value::Number(100.0)), Some(true)),
+            ("LET(GlobalX,100,GlobalClosure(2))", Some(Value::Number(5.0)), Some(true)),
+            ("GlobalClosure(2)", Some(Value::Number(5.0)), Some(true)),
+            ("LET(fn,LAMBDA(x,x+1),fn)(2)", Some(Value::Number(3.0)), Some(true)),
+            ("IFNA(LAMBDA(x,x+1),0)(2)", None, None),
+            ("IFS(TRUE,LAMBDA(x,x+1))(2)", Some(Value::Number(3.0)), Some(true)),
+            ("SWITCH(1,1,LAMBDA(x,x+1))(2)", Some(Value::Number(3.0)), Some(true)),
+            ("SUM(1)(2)", None, None),
+            ("N(1)(2)", None, None),
+            ("(LAMBDA(x,x+1))(2)", Some(Value::Number(3.0)), Some(true)),
+            ("LET(fn,1,fn(2))", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("LET(fn,0,LAMBDA(fn,fn(2))(LAMBDA(x,x+1)))", Some(Value::Number(3.0)), Some(true)),
+            ("LAMBDA(x,ISOMITTED(x))(IF(TRUE,,))", Some(Value::Logical(true)), Some(true)),
+            ("LAMBDA(x,LET(x,1,ISOMITTED(x)))(,)", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("LAMBDA(x,LAMBDA(y,ISOMITTED(x)))(,)(2)", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("ISERR(LAMBDA(x,x))", Some(Value::Logical(false)), Some(false)),
+            ("ISNA(LAMBDA(x,x))", Some(Value::Logical(false)), Some(false)),
+            ("ERROR.TYPE(LAMBDA(x,x))", Some(Value::Error(ExcelError::NA)), Some(false)),
+            ("IFERROR(LAMBDA(x,x),0)", Some(Value::Error(ExcelError::Calc)), Some(false)),
+            ("LAMBDA(x,x+1)+0", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("LET(fn,LAMBDA(x,x+1),fn(2))(3)", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("CHOOSE(1,LAMBDA(x,x+1))(2)", Some(Value::Number(3.0)), Some(true)),
+            ("IF(TRUE,LAMBDA(x,x+1))(2)", Some(Value::Number(3.0)), Some(true)),
+            ("(IFERROR(LAMBDA(x,x+1),0))(2)", None, None),
+            ("(IFNA(LAMBDA(x,x+1),0))(2)", None, None),
+            ("(SUM(1))(2)", None, None),
+            ("(1)(2)", None, None),
+            ("(IF(TRUE,LAMBDA(x,x+1)))(2)", Some(Value::Number(3.0)), Some(true)),
+            ("LAMBDA(x,ISOMITTED(x))()", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("LAMBDA(x,LET(x,1,ISOMITTED(x)))()", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("LAMBDA(x,LAMBDA(y,ISOMITTED(x)))()(2)", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("LET(g,LAMBDA(x,LAMBDA(y,ISOMITTED(x)))(),g(2))", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("TYPE(LET(g,LAMBDA(x,x),g))", Some(Value::Number(128.0)), Some(false)),
+            ("COUNT(LAMBDA(x,x))", Some(Value::Number(0.0)), Some(false)),
+            ("COUNTA(LAMBDA(x,x))", Some(Value::Number(1.0)), Some(false)),
+            ("+LAMBDA(x,x)", Some(Value::Error(ExcelError::Calc)), Some(false)),
+            ("ISREF(IFERROR(LAMBDA(x,x),0))", Some(Value::Logical(false)), Some(false)),
+            ("LAMBDA(x,ISOMITTED(x))(IF(FALSE,1))", Some(Value::Logical(false)), Some(true)),
+            ("LET(fn,1,TYPE(fn(2)))", Some(Value::Number(16.0)), Some(true)),
+            ("LET(fn,LAMBDA(x,x+1),IFERROR(1/0,fn)(2))", None, None),
+            ("INDEX(LAMBDA(x,x+1),1)(2)", Some(Value::Number(3.0)), Some(true)),
+            ("LAMBDA(fn,MAP({1;2},fn))(LAMBDA(x,x+1))", Some(Value::Number(2.0)), Some(true)),
+            ("TYPE(INDEX(LAMBDA(x,x+1),1))", Some(Value::Number(128.0)), Some(true)),
+            ("INDEX(LAMBDA(x,x+1),0)(2)", Some(Value::Number(0.0)), Some(true)),
+            ("INDEX(LAMBDA(x,x+1),2)(2)", Some(Value::Error(ExcelError::Ref)), Some(true)),
+            ("INDEX(LAMBDA(x,x+1),1,1)(2)", Some(Value::Number(3.0)), Some(true)),
+            ("INDEX(LAMBDA(x,x+1),1,2)(2)", Some(Value::Error(ExcelError::Ref)), Some(true)),
+            ("XLOOKUP(1,1,LAMBDA(x,x+1))(2)", Some(Value::Number(3.0)), Some(true)),
+            ("VLOOKUP(1,LAMBDA(x,x+1),1)(2)", None, None),
+            ("HLOOKUP(1,LAMBDA(x,x+1),1)(2)", None, None),
+            ("TAKE(LAMBDA(x,x+1),1)(2)", Some(Value::Number(0.0)), Some(true)),
+            ("FILTER(LAMBDA(x,x+1),TRUE)(2)", None, None),
+            ("CHOOSECOLS(LAMBDA(x,x+1),1)(2)", None, None),
+            ("TOCOL(LAMBDA(x,x+1))(2)", None, None),
+            ("TRANSPOSE(LAMBDA(x,x+1))(2)", None, None),
+            ("IFERROR(1,LAMBDA(x,x+1))(2)", None, None),
+            ("IF(FALSE,0,LAMBDA(x,x+1))(2)", Some(Value::Number(3.0)), Some(true)),
+            ("LAMBDA(a,b,LET(b,1,ISOMITTED(b)))(1,)", Some(Value::Logical(false)), Some(true)),
+            ("LAMBDA(a,b,LAMBDA(y,ISOMITTED(b)))(1,)(2)", Some(Value::Logical(true)), Some(true)),
+            ("LET(fn,LAMBDA(x,x+1),TYPE(+fn))", Some(Value::Number(128.0)), Some(true)),
+            ("(LET(fn,LAMBDA(x,x+1),fn))(2)", Some(Value::Number(3.0)), Some(true)),
+            ("(IFS(TRUE,LAMBDA(x,x+1)))(2)", Some(Value::Number(3.0)), Some(true)),
+            ("TYPE(INDEX(LAMBDA(x,x+1),0))", Some(Value::Number(64.0)), Some(true)),
+            ("TYPE(TAKE(LAMBDA(x,x+1),1))", Some(Value::Number(64.0)), Some(true)),
+            ("INDEX(LAMBDA(x,x+1),0)", Some(Value::Error(ExcelError::Calc)), Some(true)),
+            ("TAKE(LAMBDA(x,x+1),1)", Some(Value::Error(ExcelError::Calc)), Some(true)),
+            ("LET(fn,INDEX(LAMBDA(x,x+1),0),fn(2))", Some(Value::Number(0.0)), Some(true)),
+            ("LET(fn,TAKE(LAMBDA(x,x+1),1),fn(2))", Some(Value::Number(0.0)), Some(true)),
+            ("LET(fn,{1},fn(2))", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("LET(fn,{1;2},fn(2))", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("TYPE(CHOOSE({1},LAMBDA(x,x+1)))", Some(Value::Number(64.0)), Some(true)),
+            ("CHOOSE({1},LAMBDA(x,x+1))(2)", Some(Value::Number(0.0)), Some(true)),
+            ("LET(fn,CHOOSE({1},LAMBDA(x,x+1)),fn(2))", Some(Value::Number(0.0)), Some(true)),
+            ("TYPE(INDEX(LAMBDA(x,x+1),1,0))", Some(Value::Number(64.0)), Some(true)),
+            ("INDEX(LAMBDA(x,x+1),1,0)(2)", Some(Value::Number(0.0)), Some(true)),
+            ("TYPE(INDEX(1,0))", Some(Value::Number(1.0)), Some(false)),
+            ("TYPE(INDEX(1,0,1))", Some(Value::Number(1.0)), Some(false)),
+            ("TYPE(INDEX(1,1,0))", Some(Value::Number(1.0)), Some(false)),
+            ("TYPE(INDEX({1},0))", Some(Value::Number(64.0)), Some(true)),
+            ("TYPE(INDEX(LAMBDA(x,x+1),0,1))", Some(Value::Number(64.0)), Some(true)),
+            ("CHOOSE({1;2},LAMBDA(x,x+1),10)(2)", Some(Value::Number(0.0)), Some(true)),
+            ("CHOOSE({1;2},LAMBDA(x,x+1),1/0)(2)", Some(Value::Number(0.0)), Some(true)),
+            ("TAKE(LAMBDA(x,x+1),1)(1/0)", Some(Value::Number(0.0)), Some(true)),
+            ("TAKE(LAMBDA(x,x+1),1)()", Some(Value::Number(0.0)), Some(true)),
+            ("TAKE(LAMBDA(x,99),1)(2)", Some(Value::Number(0.0)), Some(true)),
+            ("TYPE(LAMBDA(x,M1))", Some(Value::Number(128.0)), Some(false)),
+            ("LET(fn,LAMBDA(x,M1),TYPE(fn))", Some(Value::Number(128.0)), Some(false)),
+            ("LET(x,3,fn,LAMBDA(y,x+y),LET(x,100,fn(2)))", Some(Value::Number(5.0)), Some(true)),
+            ("LAMBDA(fn,TYPE(fn))(TAKE(LAMBDA(x,x+1),1))", Some(Value::Number(64.0)), Some(true)),
+            ("TYPE(IFERROR(TAKE(LAMBDA(x,x+1),1),0))", Some(Value::Number(64.0)), Some(true)),
+            ("GlobalFactory(2)", Some(Value::Number(5.0)), Some(true)),
+            ("LET(GlobalX,100,GlobalFactory(2))", Some(Value::Number(5.0)), Some(true)),
+            ("GlobalAlias(2)", Some(Value::Number(5.0)), Some(true)),
+            ("LET(GlobalX,100,GlobalValue)", Some(Value::Number(4.0)), Some(true)),
+            ("LET(GlobalX,100,LAMBDA(fn,fn(2))(GlobalFactory))", Some(Value::Number(5.0)), Some(true)),
+            ("LET(GlobalClosure,LAMBDA(n,200),GlobalAlias(2))", Some(Value::Number(5.0)), Some(true)),
+            ("LET(GlobalClosure,LAMBDA(n,200),GlobalClosure(2))", Some(Value::Number(200.0)), Some(true)),
+            ("LET(fn,D1,fn(2))", Some(Value::Error(ExcelError::Ref)), Some(true)),
+            ("LET(fn,SEQUENCE(2),fn(2))", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("LAMBDA(fn,fn(2))(GlobalAlias)", Some(Value::Number(5.0)), Some(true)),
+            ("SUM(CHOOSE({1},LAMBDA(x,x)))", Some(Value::Error(ExcelError::Value)), Some(false)),
+            ("SUM(LAMBDA(x,x))", Some(Value::Error(ExcelError::Value)), Some(false)),
+            ("ISERROR(TAKE(LAMBDA(x,x),1))", Some(Value::Logical(false)), Some(true)),
+            ("TYPE(IFERROR(GlobalFactory,0))", Some(Value::Number(128.0)), Some(true)),
+            ("LET(GlobalX,100,TYPE(GlobalFactory))", Some(Value::Number(128.0)), Some(true)),
+            ("CHOOSE({1;2},10,LAMBDA(x,x+1))(2)", Some(Value::Number(0.0)), Some(true)),
+            ("CHOOSE({1;2},1/0,LAMBDA(x,x+1))(2)", Some(Value::Number(0.0)), Some(true)),
+            ("TAKE(LAMBDA(x,x),1)(2)", Some(Value::Number(0.0)), Some(true)),
+            ("LET(fn,D1:D3,fn(2))", Some(Value::Error(ExcelError::Ref)), Some(true)),
+            ("LET(fn,LAMBDA(x,x+1),INDEX(fn,1)(2))", Some(Value::Number(3.0)), Some(true)),
+            ("LET(fn,LAMBDA(x,x+1),INDEX(fn,0)(2))", Some(Value::Number(0.0)), Some(true)),
+            ("TYPE(TAKE(1,1))", Some(Value::Number(64.0)), Some(false)),
+            ("TYPE(DROP(LAMBDA(x,x),0))", Some(Value::Number(64.0)), Some(false)),
+            ("LAMBDA(x,x,x)(1,2)", None, None),
+            ("LAMBDA(x,ISREF(x))(M1)", Some(Value::Logical(true)), Some(true)),
+            ("LAMBDA(x,ROWS(x))(M1:M3)", Some(Value::Number(3.0)), Some(true)),
+            ("LAMBDA(x,1)(M1)", Some(Value::Number(1.0)), Some(true)),
+            ("LET(fn,LAMBDA(x,ISREF(x)),fn(M1))", Some(Value::Logical(true)), Some(true)),
+            ("LET(fn,LAMBDA(x,ROWS(x)),fn(M1:M3))", Some(Value::Number(3.0)), Some(true)),
+            ("LET(fn,LAMBDA(x,1),fn(M1))", Some(Value::Number(1.0)), Some(true)),
+            ("ISREF(LAMBDA(x,x)(D1:D3))", Some(Value::Logical(true)), Some(false)),
+            ("TYPE(LAMBDA(x,x)(D1:D3))", Some(Value::Number(64.0)), Some(true)),
+            ("SUM(LAMBDA(x,x)(D1:D3))", Some(Value::Number(6.0)), Some(false)),
+            ("LET(src,M1,fn,LAMBDA(x,ISREF(src)),fn(0))", Some(Value::Logical(true)), Some(true)),
+            ("LAMBDA(src,LAMBDA(x,ISREF(src)))(M1)(0)", Some(Value::Logical(true)), Some(true)),
+            ("LAMBDA(src,LAMBDA(x,ROWS(src)))(M1:M3)(0)", Some(Value::Number(3.0)), Some(true)),
+            ("LAMBDA(x,1)(1/0)", Some(Value::Number(1.0)), Some(true)),
+            ("LAMBDA(x,SUM(x))(D1:D3)", Some(Value::Number(6.0)), Some(true)),
+            ("LET(src,D1:D3,fn,LAMBDA(x,SUM(src)),fn(0))", Some(Value::Number(6.0)), Some(true)),
+            ("TYPE(D1)", Some(Value::Number(1.0)), Some(false)),
+            ("TYPE(D1:D3)", Some(Value::Number(64.0)), Some(true)),
+            ("TYPE({1})", Some(Value::Number(64.0)), Some(false)),
+            ("TYPE({1;2})", Some(Value::Number(64.0)), Some(false)),
+            ("TYPE(INDEX({1},1))", Some(Value::Number(1.0)), Some(true)),
+            ("TYPE(SEQUENCE(1))", Some(Value::Number(64.0)), Some(false)),
+            ("SUM(CHOOSE({1},LAMBDA(x,x+1)))", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("SUM(LAMBDA(x,x+1))", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("SUM(LAMBDA(x,x+1)(1))", Some(Value::Number(2.0)), Some(true)),
+            ("SUM(CHOOSE({1},1))", Some(Value::Number(1.0)), Some(false)),
+            ("SUM(CHOOSE({1;2},1,2))", Some(Value::Number(3.0)), Some(false)),
+            ("SUM(CHOOSE({1;2},D1,D2))", Some(Value::Number(3.0)), Some(false)),
+            ("SUM(CHOOSE({1;2},LAMBDA(x,x),LAMBDA(x,x+1)))", Some(Value::Error(ExcelError::Value)), Some(true)),
+            ("LAMBDA(x,TYPE(x))(M1:M3)", Some(Value::Number(64.0)), Some(true)),
+            ("LAMBDA(x,ISREF(x))(INDEX(M1:M3,1))", Some(Value::Logical(true)), Some(true)),
+            ("LAMBDA(x,ROWS(x))(OFFSET(M1,0,0,3,1))", Some(Value::Number(3.0)), Some(true)),
+            ("ISREF(LAMBDA(x,x)(M1))", Some(Value::Logical(true)), Some(false)),
+            ("LAMBDA(x,1)(M1+0)", Some(Value::Number(1.0)), Some(true)),
+            ("LAMBDA(x,ISREF(x))(M1+0)", Some(Value::Logical(false)), Some(true)),
+            ("LET(outputs,MAP({1;2;3},LET(draw,RAND(),LAMBDA(x,draw))),MAX(outputs)-MIN(outputs))", Some(Value::Number(0.0)), Some(false)),
+            ("SUM(MAP({1;4;9},SQRT))", Some(Value::Number(6.0)), Some(false)),
+            ("TYPE(SUM)", Some(Value::Number(128.0)), Some(false)),
+            ("SUM(MAP({-1;2;-3},ABS))", Some(Value::Number(6.0)), Some(false)),
+            ("LAMBDA(fn,fn(2))(SUM)", Some(Value::Number(2.0)), Some(true)),
+        ];
+        let mut mismatches = Vec::new();
+        for (formula, expected, saved_as_array) in cases {
+            for version in [1, 2] {
+                let mut wb = Workbook::new();
+                wb.add_sheet("Sheet1");
+                wb.set_compatibility_version(version);
+                for (cell, value) in [("D1", 1.0), ("D2", 2.0), ("D3", 3.0)] {
+                    wb.set_value("Sheet1", cell, Value::Number(value)).unwrap();
+                }
+                for (name, source) in [
+                    ("GlobalRecursive", "=LAMBDA(n,IF(n=0,0,1+GlobalRecursive(n-1)))"),
+                    ("GlobalX", "=3"),
+                    ("GlobalClosure", "=LAMBDA(n,n+GlobalX)"),
+                    ("GlobalFactory", "=LET(captured,GlobalX,LAMBDA(n,n+captured))"),
+                    ("GlobalAlias", "=GlobalClosure"),
+                    ("GlobalValue", "=GlobalX+1"),
+                ] {
+                    wb.define_name(name, source).unwrap();
+                }
+                let entered = wb.set_formula("Sheet1", "M1", &format!("={formula}"));
+                let Some(expected) = &expected else {
+                    if entered.is_ok() {
+                        mismatches.push(format!("{formula}, version {version}: accepted a formula rejected by Native"));
+                    }
+                    continue;
+                };
+                if let Err(error) = entered {
+                    mismatches.push(format!("{formula}, version {version}: {error:?} != {expected:?}"));
+                    continue;
+                }
+                let multiple = |name: &str| matches!(name.to_ascii_uppercase().as_str(),
+                    "GLOBALRECURSIVE" | "GLOBALCLOSURE" | "GLOBALFACTORY" | "GLOBALALIAS" | "GLOBALVALUE");
+                let storage = crate::lexer::requires_array_storage(formula, &multiple);
+                if Some(storage) != *saved_as_array {
+                    mismatches.push(format!("{formula}, version {version}: SavedAsArray {storage} != {saved_as_array:?}"));
+                }
+                wb.set_dynamic("Sheet1", "M1").unwrap();
+                let report = wb.recalculate();
+                if !report.circular.is_empty() {
+                    mismatches.push(format!("{formula}, version {version}: false circular report {:?}", report.circular));
+                }
+                let actual = wb.value("Sheet1", "M1");
+                if &actual != expected {
+                    mismatches.push(format!("{formula}, version {version}: {actual:?} != {expected:?}"));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{} Native LAMBDA mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
     }
 
     #[test]

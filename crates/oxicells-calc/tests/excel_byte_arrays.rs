@@ -37,6 +37,7 @@ fn book(version: u8) -> Workbook {
 
 fn scalar(value: &Value) -> String {
     match value {
+        Value::Lambda(_) => panic!("uncalled function escaped a calculation result boundary"),
         Value::Error(error) => format!("E:{}", match error {
             ExcelError::Null => 1, ExcelError::DivZero => 2, ExcelError::Value => 3,
             ExcelError::Ref => 4, ExcelError::Name => 5, ExcelError::Num => 6,

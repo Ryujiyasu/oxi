@@ -169,6 +169,7 @@ pub(crate) fn call(name: &str, args: &[Arg], version: u8) -> Option<Result<Value
         if name == "T" {
             return match args[0].scalar() {
                 value @ (Value::Text(_) | Value::Utf16(_)) => Ok(value),
+                Value::Lambda(_) => Err(ExcelError::Value),
                 Value::Error(error) => Err(error),
                 _ => Ok(Value::Text(String::new())),
             };

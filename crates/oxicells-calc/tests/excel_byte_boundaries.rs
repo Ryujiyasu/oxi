@@ -15,6 +15,7 @@ fn value(text: &str) -> Value {
 }
 fn report(value: Value) -> String {
     match value {
+        Value::Lambda(_) => panic!("uncalled function escaped a calculation result boundary"),
         Value::Error(error) => format!(
             "E:{}",
             match error {

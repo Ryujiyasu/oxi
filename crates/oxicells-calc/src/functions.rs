@@ -117,6 +117,25 @@ pub enum Arg {
     Range(RangeData),
 }
 
+/// A worksheet function value. Its lexical bindings are private to evaluation;
+/// storing one in a cell produces #CALC!, while TYPE can still report 128.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LambdaValue {
+    pub(crate) definition: LambdaDefinition,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum LambdaDefinition {
+    Closure {
+        parameters: Vec<(String, bool)>,
+        body: crate::ast::Expr,
+        scope: Vec<(String, crate::engine::LocalBinding)>,
+        sheet: String,
+        at: Option<(u32, u32)>,
+    },
+    Builtin(String),
+}
+
 impl Arg {
     /// Collapse to a single value for scalar contexts.
     ///
@@ -314,6 +333,7 @@ pub(crate) fn numeric_operands(args: &[Arg]) -> Result<Vec<f64>, ExcelError> {
     for arg in args {
         match arg {
             Arg::Value(v) => match v {
+                Value::Lambda(_) => return Err(ExcelError::Value),
                 Value::Error(e) => return Err(*e),
                 Value::Blank => {}
                 Value::Text(_) | Value::Utf16(_) | Value::Logical(_) | Value::Number(_) => out.push(v.to_number()?),
@@ -321,6 +341,7 @@ pub(crate) fn numeric_operands(args: &[Arg]) -> Result<Vec<f64>, ExcelError> {
             Arg::Range(r) => {
                 for v in &r.cells {
                     match v {
+                        Value::Lambda(_) => return Err(ExcelError::Value),
                         Value::Error(e) => return Err(*e),
                         Value::Number(n) => out.push(*n),
                         // Text and logicals inside a range are ignored, not coerced.
@@ -963,6 +984,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             let mut count = 0u64;
             for value in args.iter().flat_map(|a| a.flatten()) {
                 match value {
+                    Value::Lambda(_) => return Err(ExcelError::Value),
                     Value::Error(e) => return Err(e),
                     Value::Number(n) => {
                         sum += n;
@@ -1486,6 +1508,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             Some(Arg::Range(block)) => block.cells.first().cloned().unwrap_or(Value::Blank),
             _ => one_value(args),
         } {
+            Value::Lambda(_) => return Err(ExcelError::Value),
             Value::Number(n) => Value::Number(n),
             Value::Logical(b) => Value::Number(f64::from(b)),
             _ => Value::Number(0.0),
@@ -1497,6 +1520,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 Arg::Range(block) if block.is_array() || block.cells.len() > 1
                     || block.cell_reference().is_some_and(|(_, range)| !range.is_single()) => 64.0,
                 _ => match arg.scalar() {
+                    Value::Lambda(_) => 128.0,
                     Value::Text(_) | Value::Utf16(_) => 2.0,
                     Value::Logical(_) => 4.0,
                     Value::Error(_) => 16.0,
@@ -2175,6 +2199,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             let mut best: Option<f64> = None;
             for value in args.iter().flat_map(|a| a.flatten()) {
                 let x = match value {
+                    Value::Lambda(_) => return Err(ExcelError::Value),
                     Value::Error(e) => return Err(e),
                     Value::Number(n) => n,
                     Value::Logical(b) => f64::from(b),
@@ -2193,6 +2218,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             let mut values = Vec::new();
             for value in args.iter().flat_map(|a| a.flatten()) {
                 match value {
+                    Value::Lambda(_) => return Err(ExcelError::Value),
                     Value::Error(e) => return Err(e),
                     Value::Number(n) => values.push(n),
                     Value::Logical(b) => values.push(f64::from(b)),
@@ -2330,6 +2356,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                     }
                     let value = if column.len() == 1 { &column[0] } else { &column[at] };
                     running *= match value {
+                        Value::Lambda(_) => return Err(ExcelError::Value),
                         Value::Number(n) => *n,
                         // A Boolean counts for nothing, as text does:
                         // measured, TRUE among the cells adds 0.
@@ -2542,7 +2569,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                     &format,
                 ))),
                 Value::Blank => Ok(Value::Text(crate::numfmt::format_number(0.0, &format))),
-                Value::Utf16(_) => Err(ExcelError::Value),
+                Value::Utf16(_) | Value::Lambda(_) => Err(ExcelError::Value),
                 Value::Error(e) => Err(e),
             }
         }
@@ -2765,6 +2792,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         // The text of what you are given, and nothing at all if it is not
         // text. A number is not text, and neither is a logical.
         "T" => Ok(match one_arg(args)?.scalar() {
+            Value::Lambda(_) => return Err(ExcelError::Value),
             Value::Text(held) => Value::Text(held),
             Value::Error(why) => return Err(why),
             _ => Value::text(""),
@@ -5562,6 +5590,7 @@ fn sorting_rank(value: &Value) -> u8 {
         Value::Text(_) | Value::Utf16(_) => 1,
         Value::Logical(_) => 2,
         Value::Error(_) => 3,
+        Value::Lambda(_) => 4,
         // Handled before the rank is asked for.
         Value::Blank => 4,
     }
@@ -5627,10 +5656,24 @@ fn same_row(a: &[Value], b: &[Value]) -> bool {
 /// column entire. `INDEX(range,3,0)` is the third row. `INDEX(range,0,0)` is
 /// everything. Anything else is one cell and belongs to `index_at`.
 fn a_whole_line(args: &[Arg]) -> Option<Arg> {
+    if let [Arg::Value(value), index] = args {
+        if a_missing_index(index) == Some(0) {
+            return Some(if matches!(value, Value::Lambda(_)) {
+                Arg::Range(RangeData { origin: BlockOrigin::Array,
+                    width: 1, height: 1, cells: vec![value.clone()] })
+            } else { Arg::Value(value.clone()) });
+        }
+    }
+    if let [Arg::Range(block), index] = args {
+        if block.is_array() && block.cells.len() == 1 && a_missing_index(index) == Some(0) {
+            return Some(Arg::Range(block.clone()));
+        }
+    }
     if args.len() < 3 {
         return None;
     }
-    let table = args[0].as_range();
+    let mut table = args[0].as_range();
+    if matches!(&args[0], Arg::Value(Value::Lambda(_))) { table.origin = BlockOrigin::Array; }
     let (row, col) = (a_missing_index(&args[1])?, a_missing_index(&args[2])?);
     let taken = |rows: std::ops::Range<usize>, cols: std::ops::Range<usize>| {
         let (width, height) = (cols.len(), rows.len());
@@ -5790,7 +5833,12 @@ fn reshaped(name: &str, args: &[Arg]) -> Result<RangeData, ExcelError> {
                     .map(|row| cols.iter().map(|col| block.at(*col, *row)).collect())
                     .collect(),
             )?;
-            output.origin = origin;
+            output.origin = if block.cell_reference().is_none() && !block.is_array() {
+                match origin {
+                    BlockOrigin::WithReads { reads, .. } => BlockOrigin::WithReads { kind: BlockKind::Array, reads },
+                    _ => BlockOrigin::Array,
+                }
+            } else { origin };
             Ok(output)
         }
         "CHOOSEROWS" | "CHOOSECOLS" => {

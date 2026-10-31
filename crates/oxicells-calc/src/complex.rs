@@ -80,7 +80,7 @@ impl Complex {
 fn parse(arg: &Arg) -> Result<(Complex, Option<char>), ExcelError> {
     let text = match arg.scalar() {
         Value::Number(n) => return Ok((Complex::new(n, 0.0), None)),
-        Value::Logical(_) => return Err(ExcelError::Value),
+        Value::Logical(_) | Value::Lambda(_) => return Err(ExcelError::Value),
         Value::Error(e) => return Err(e),
         Value::Blank => return Ok((Complex::new(0.0, 0.0), None)),
         Value::Text(t) => t,

@@ -710,6 +710,7 @@ fn from_calc(value: &Value) -> CellValue {
         Value::Utf16(units) => CellValue::from_utf16(units.clone()),
         Value::Logical(b) => CellValue::Boolean(*b),
         Value::Error(e) => CellValue::Error(e.as_str().to_string()),
+        Value::Lambda(_) => CellValue::Error(ExcelError::Calc.as_str().to_string()),
     }
 }
 

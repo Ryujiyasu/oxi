@@ -480,7 +480,7 @@ impl Parser {
                 if !self.eat(&Token::RParen) {
                     return Err(ParseError::UnexpectedToken("expected `)`".to_string()));
                 }
-                Ok(inner)
+                self.finish_invocations(inner)
             }
             Token::LBrace => self.parse_array(),
             Token::Table { name, asked } => Ok(Expr::Table { name, asked }),
@@ -555,12 +555,44 @@ impl Parser {
         Ok(value)
     }
 
+    /// Calls may themselves return a callable. Excel permits this for local
+    /// and named calls and its function selectors, but refuses e.g. a direct
+    /// IFERROR(...)(...) or SUM(...)(...) at formula entry.
+    fn finish_invocations(&mut self, mut call: Expr) -> Result<Expr, ParseError> {
+        let callable = match &call {
+            Expr::Name(_) => true,
+            Expr::Function { name, .. } => crate::lexer::normalized_builtin_call(name).is_none()
+                || matches!(name.as_str(), "LAMBDA" | "LET" | "IF" | "CHOOSE" | "IFS" | "SWITCH" | "INDEX" | "XLOOKUP" | "TAKE"),
+            _ => false,
+        };
+        while callable && self.peek() == Some(&Token::LParen) {
+            self.pos += 1;
+            let mut handed = vec![call];
+            handed.extend(self.parse_args()?);
+            call = Expr::Function { name: "_INVOKE".to_string(), args: handed };
+        }
+        Ok(call)
+    }
+
     /// Decide what a bare name meant, now that we can see what follows it.
     fn finish_name(&mut self, sheet: Option<String>, name: String) -> Result<Expr, ParseError> {
         // A following `(` makes it a call, even for TRUE()/FALSE().
         if self.peek() == Some(&Token::LParen) {
             self.pos += 1;
             let args = self.parse_args()?;
+            if sheet.is_none() && crate::lexer::normalized_builtin_call(&name).as_deref() == Some("LAMBDA") {
+                let mut parameters = std::collections::BTreeSet::new();
+                for parameter in args.iter().take(args.len().saturating_sub(1)) {
+                    let label = match parameter {
+                        Expr::Name(label) => Some(label.strip_prefix("_XLOP.").map(|label| format!("_XLPM.{label}")).unwrap_or_else(|| label.clone())),
+                        Expr::Table { name, asked } if name.is_empty() => Some(asked.to_uppercase()),
+                        _ => None,
+                    };
+                    if label.is_some_and(|label| !parameters.insert(label)) {
+                        return Err(ParseError::UnexpectedToken("LAMBDA parameter names must be distinct".to_string()));
+                    }
+                }
+            }
             // A LET wants name-value pairs and then what it works out:
             // measured, `=LET(x,1)` is refused as a formula (1004).
             if sheet.is_none() && crate::lexer::normalized_builtin_call(&name).as_deref() == Some("LET") && (args.len() < 3 || args.len() % 2 == 0) {
@@ -569,24 +601,17 @@ impl Parser {
             let called = if sheet.is_none() && name.eq_ignore_ascii_case("_xlfn.SINGLE") {
                 "_AT".to_string()
             } else {
-                crate::lexer::normalized_builtin_call(&name).unwrap_or_else(|| name.to_uppercase())
+                crate::lexer::normalized_builtin_call(&name).or_else(|| crate::lexer::builtin_function_value(&name)).unwrap_or_else(|| name.to_uppercase())
             };
             let called = match sheet.as_deref() {
                 Some(owner) => format!("'{}'!{called}", owner.replace('\'', "''")),
                 None => called,
             };
-            let mut call = Expr::Function {
+            let call = Expr::Function {
                 name: called,
                 args,
             };
-            // `LAMBDA(x,x+1)(5)`: a LAMBDA called where it is written.
-            while sheet.is_none() && crate::lexer::normalized_builtin_call(&name).as_deref() == Some("LAMBDA") && self.peek() == Some(&Token::LParen) {
-                self.pos += 1;
-                let mut handed = vec![call];
-                handed.extend(self.parse_args()?);
-                call = Expr::Function { name: "_INVOKE".to_string(), args: handed };
-            }
-            return Ok(call);
+            return self.finish_invocations(call);
         }
 
         if sheet.is_none() {

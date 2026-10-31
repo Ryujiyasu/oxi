@@ -83,6 +83,9 @@ pub enum Value {
     Utf16(Vec<u16>),
     Logical(bool),
     Error(ExcelError),
+    /// A callable with its lexical bindings, including inside array values.
+    /// Cell/package boundaries turn an uncalled function into #CALC!.
+    Lambda(std::sync::Arc<crate::functions::LambdaValue>),
 }
 
 impl Value {
@@ -132,7 +135,7 @@ impl Value {
             Value::Number(n) => Ok(*n),
             Value::Logical(b) => Ok(if *b { 1.0 } else { 0.0 }),
             Value::Text(s) => parse_numeric_text(s).ok_or(ExcelError::Value),
-            Value::Utf16(_) => Err(ExcelError::Value),
+            Value::Utf16(_) | Value::Lambda(_) => Err(ExcelError::Value),
             Value::Error(e) => Err(*e),
         }
     }
@@ -146,7 +149,7 @@ impl Value {
             Value::Blank => Ok(String::new()),
             Value::Number(n) => Ok(number_to_text(*n)),
             Value::Text(s) => Ok(s.clone()),
-            Value::Utf16(_) => Err(ExcelError::Value),
+            Value::Utf16(_) | Value::Lambda(_) => Err(ExcelError::Value),
             Value::Logical(b) => Ok(if *b { "TRUE".into() } else { "FALSE".into() }),
             Value::Error(e) => Err(*e),
         }
@@ -170,7 +173,7 @@ impl Value {
                     Err(ExcelError::Value)
                 }
             }
-            Value::Utf16(_) => Err(ExcelError::Value),
+            Value::Utf16(_) | Value::Lambda(_) => Err(ExcelError::Value),
             Value::Error(e) => Err(*e),
         }
     }
@@ -209,6 +212,7 @@ impl fmt::Display for Value {
             Value::Utf16(units) => f.write_str(&String::from_utf16_lossy(units)),
             Value::Logical(b) => f.write_str(if *b { "TRUE" } else { "FALSE" }),
             Value::Error(e) => f.write_str(e.as_str()),
+            Value::Lambda(_) => f.write_str(ExcelError::Calc.as_str()),
         }
     }
 }
@@ -350,6 +354,7 @@ fn type_rank(v: &Value) -> u8 {
         Value::Text(_) | Value::Utf16(_) => 1,
         Value::Logical(_) => 2,
         Value::Error(_) => 3,
+        Value::Lambda(_) => 4,
     }
 }
 
@@ -358,6 +363,9 @@ fn type_rank(v: &Value) -> u8 {
 /// A `Blank` operand adopts the type of the other side: it compares as `0`
 /// against a number, as `""` against text, and as `FALSE` against a logical.
 pub fn compare(a: &Value, b: &Value) -> Result<Ordering, ExcelError> {
+    if matches!(a, Value::Lambda(_)) || matches!(b, Value::Lambda(_)) {
+        return Err(ExcelError::Value);
+    }
     if let Some(e) = a.err() {
         return Err(e);
     }

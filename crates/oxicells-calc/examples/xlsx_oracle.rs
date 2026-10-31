@@ -64,6 +64,7 @@ struct Report {
 
 fn type_name(v: &Value) -> &'static str {
     match v {
+        Value::Lambda(_) => "function",
         Value::Blank => "blank",
         Value::Number(_) => "number",
         Value::Text(_) | Value::Utf16(_) => "text",

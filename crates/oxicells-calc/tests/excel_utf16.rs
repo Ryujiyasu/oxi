@@ -13,6 +13,7 @@ fn value(report: &str) -> Value {
 }
 fn report(value: &Value) -> String {
     match value {
+        Value::Lambda(_) => panic!("uncalled function escaped a calculation result boundary"),
         Value::Error(_) => "E".into(),
         Value::Number(number) => format!("5:{number}"),
         Value::Logical(state) => format!("11:{}", if *state { "True" } else { "False" }),

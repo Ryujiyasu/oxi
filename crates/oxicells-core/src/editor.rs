@@ -493,6 +493,23 @@ impl XlsxEditor {
             &rewritten
         };
 
+        // Qualify function values in the serialized copy using this sheet's
+        // real names. A named SUM stays a name; a builtin SUM uses _xleta.SUM.
+        let mut callable_storage = edited.clone();
+        let callable_names = callable_storage.defined_names.clone();
+        let default_owner = callable_storage.sheets.first().map(|sheet| sheet.name.clone()).unwrap_or_default();
+        for sheet in &mut callable_storage.sheets {
+            for cell in sheet.rows.iter_mut().flat_map(|row| &mut row.cells) {
+                let _ = cell.rewrite_formula(|formula| qualify_builtin_function_values(&callable_names, &sheet.name, formula));
+            }
+        }
+        for (name, formula) in &mut callable_storage.defined_names {
+            let owner = crate::ir::defined_name_scope(name).map(|(owner, _)| owner).unwrap_or_else(|| default_owner.clone());
+            let qualify = |name: &str, explicit: bool| explicit || defined_name_formula(&callable_names, &owner, name).is_none();
+            *formula = oxicells_calc::lexer::rewrite_builtin_function_values(formula, &qualify).unwrap_or_else(|_| formula.clone());
+        }
+        let edited = &callable_storage;
+
         if edited.defined_names != self.workbook.defined_names
             || edited.defined_name_attributes != self.workbook.defined_name_attributes
         {
@@ -5818,13 +5835,25 @@ fn same_merges(before: &[MergeCell], after: &[MergeCell]) -> bool {
 
 /// The evaluation class of a name in a worksheet's scope. Undefined names
 /// can acquire an array definition later, so they also need intersection.
-pub fn named_formula_needs_intersection(names: &[(String, String)], sheet: &str, requested: &str) -> bool {
+pub fn defined_name_formula<'a>(names: &'a [(String, String)], sheet: &str, requested: &str) -> Option<&'a str> {
     let (owner, leaf) = crate::ir::defined_name_scope(requested).unwrap_or_else(|| (sheet.to_string(), requested));
     let key = oxicells_calc::case_fold::name_key;
     let definition = names.iter().find(|(held, _)| crate::ir::defined_name_scope(held)
         .is_some_and(|(scope, name)| key(&scope) == key(&owner) && key(name) == key(leaf)))
         .or_else(|| names.iter().find(|(held, _)| !held.contains('!') && key(held) == key(leaf)));
-    definition.is_none_or(|(_, formula)| oxicells_calc::lexer::named_formula_needs_intersection(formula))
+    definition.map(|(_, formula)| formula.as_str())
+}
+
+pub fn named_formula_needs_intersection(names: &[(String, String)], sheet: &str, requested: &str) -> bool {
+    if requested.to_ascii_uppercase().starts_with("_XLETA.") && oxicells_calc::lexer::builtin_function_value(requested).is_some() { return false; }
+    defined_name_formula(names, sheet, requested).map_or_else(|| oxicells_calc::lexer::builtin_function_value(requested).is_none(),
+        oxicells_calc::lexer::named_formula_needs_intersection)
+}
+
+/// Retain builtin function identity independently of later name lookup.
+pub fn qualify_builtin_function_values(names: &[(String, String)], sheet: &str, formula: &str) -> Result<String, String> {
+    oxicells_calc::lexer::rewrite_builtin_function_values(formula,
+        &|name, explicit| explicit || defined_name_formula(names, sheet, name).is_none())
 }
 
 fn cached_named_array_shape(names: &[(String, String)], sheet: &str, requested: &str,
@@ -12481,6 +12510,13 @@ mod tests {
     fn saved_lexical_functions_use_excel_namespaces_and_keep_exact_utf16() {
         let data = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
         for (source, xml, cached) in [
+            ("TYPE(SUM)", "TYPE(_xleta.SUM)", crate::ir::CellValue::Number(128.0)),
+            ("LAMBDA(a,[b],IF(ISOMITTED(b),\"omitted\",b))(1)", "_xlfn.LAMBDA(_xlpm.a,_xlop.b,IF(_xlfn.ISOMITTED(_xlpm.b),\"omitted\",_xlpm.b))(1)", crate::ir::CellValue::String("omitted".to_string())),
+            ("LAMBDA([b],ISOMITTED(b))()", "_xlfn.LAMBDA(_xlop.b,_xlfn.ISOMITTED(_xlpm.b))()", crate::ir::CellValue::Boolean(true)),
+            ("LAMBDA(a,[b],IF(ISOMITTED(b),a,b))(1,7)", "_xlfn.LAMBDA(_xlpm.a,_xlop.b,IF(_xlfn.ISOMITTED(_xlpm.b),_xlpm.a,_xlpm.b))(1,7)", crate::ir::CellValue::Number(7.0)),
+            ("SUM(MAP({1;4;9},SQRT))", "SUM(_xlfn.MAP({1;4;9},_xleta.SQRT))", crate::ir::CellValue::Number(6.0)),
+            ("LAMBDA(fn,fn(2))(SUM)", "_xlfn.LAMBDA(_xlpm.fn,_xlpm.fn(2))(_xleta.SUM)", crate::ir::CellValue::Number(2.0)),
+
             ("LET(Rate,100,Rate)", "_xlfn.LET(_xlpm.Rate,100,_xlpm.Rate)", crate::ir::CellValue::Number(100.)),
             ("LAMBDA(x,x+1)(2)", "_xlfn.LAMBDA(_xlpm.x,_xlpm.x+1)(2)", crate::ir::CellValue::Number(3.)),
             ("LET(value,\"a!@b\",value)", "_xlfn.LET(_xlpm.value,\"a_xD83D_@b\",_xlpm.value)", crate::ir::CellValue::Utf16(vec![97,0xd83d,64,98])),

@@ -4890,6 +4890,7 @@ impl<'a> WorkbookHost<'a> {
                         oxicells_calc::Value::Utf16(text) => Value::from_utf16(text.clone()),
                         oxicells_calc::Value::Logical(state) => Value::Boolean(*state),
                         oxicells_calc::Value::Blank => Value::Empty,
+                        oxicells_calc::Value::Lambda(_) => Value::Error(2015),
                         oxicells_calc::Value::Error(why) => {
                             Value::Error(spreadsheet_error_number(why.as_str()))
                         }
@@ -4932,6 +4933,7 @@ impl<'a> WorkbookHost<'a> {
             oxicells_calc::Value::Utf16(text) => Ok(Value::from_utf16(text)),
             oxicells_calc::Value::Logical(state) => Ok(Value::Boolean(state)),
             oxicells_calc::Value::Blank => Ok(Value::Empty),
+            oxicells_calc::Value::Lambda(_) => Ok(Value::Error(2015)),
         }
     }
 
@@ -5675,6 +5677,7 @@ impl<'a> WorkbookHost<'a> {
                     let _ = cell.rewrite_formula(|formula| Ok(oxicells_calc::implied_intersections(formula, &multiple)));
                     cell.spill = oxicells_core::ir::Spill::Scalar;
                 }
+                let _ = cell.rewrite_formula(|formula| oxicells_core::editor::qualify_builtin_function_values(&names, &sheet_name, formula));
                 let text = cell.formula.clone().unwrap_or_else(|| String::from_utf16_lossy(cell.formula_utf16.as_deref().unwrap_or_default()));
                 compatibility.extend(oxicells_calc::lexer::name_compatibility_identifiers(&text));
             }
@@ -9232,7 +9235,7 @@ impl<'a> WorkbookHost<'a> {
                 oxicells_calc::Value::Utf16(units) => Some(Value::from_utf16(units)),
                 oxicells_calc::Value::Logical(state) => Some(Value::Boolean(state)),
                 oxicells_calc::Value::Blank => Some(Value::Empty),
-                oxicells_calc::Value::Error(_) => None,
+                oxicells_calc::Value::Error(_) | oxicells_calc::Value::Lambda(_) => None,
             }
         };
         match condition.kind {
@@ -14574,6 +14577,14 @@ impl<'a> WorkbookHost<'a> {
         };
         let formula = oxicells_calc::lexer::qualify_name_formula(&format!("={body}"), &owner, &sheet_case, &name_case)
             .map_err(|e| host_error(1004, &e))?;
+        let formula = if bind_names {
+            oxicells_core::editor::qualify_builtin_function_values(&self.workbook.defined_names, &owner, &formula)
+        } else {
+            oxicells_calc::lexer::formula_from_ooxml_with_builtin_values(&formula, &|wanted, explicit| {
+                let collision = self.workbook.defined_names.iter().any(|(held, _)| same_defined_name(held.rsplit('!').next().unwrap_or(held), wanted));
+                collision && (explicit || oxicells_core::editor::defined_name_formula(&self.workbook.defined_names, &owner, wanted).is_none())
+            })
+        }.map_err(|e| host_error(1004, &e))?;
         if bind_names { oxicells_calc::parser::parse(&formula).map_err(|e| host_error(1004, &e.to_string()))?; }
         Ok(formula.strip_prefix('=').unwrap_or(&formula).to_string())
     }
@@ -15352,6 +15363,7 @@ impl<'a> WorkbookHost<'a> {
                     oxicells_calc::Value::Utf16(units) => Value::from_utf16(units),
                     oxicells_calc::Value::Logical(state) => Value::Boolean(state),
                     oxicells_calc::Value::Blank => Value::Empty,
+                    oxicells_calc::Value::Lambda(_) => Value::Error(2015),
                     oxicells_calc::Value::Error(why) => Value::Error(spreadsheet_error_number(why.as_str())),
                 };
                 let values: Vec<Value> = cells.into_iter().map(element).collect();
@@ -15383,6 +15395,7 @@ impl<'a> WorkbookHost<'a> {
             Some(oxicells_calc::Value::Utf16(units)) => Ok(Value::from_utf16(units)),
             Some(oxicells_calc::Value::Logical(state)) => Ok(Value::Boolean(state)),
             Some(oxicells_calc::Value::Blank) => Ok(Value::Empty),
+            Some(oxicells_calc::Value::Lambda(_)) => Ok(Value::Error(2015)),
             Some(oxicells_calc::Value::Error(why)) => {
                 Ok(Value::Error(spreadsheet_error_number(why.as_str())))
             }
@@ -17289,6 +17302,17 @@ impl<'a> WorkbookHost<'a> {
     }
 
     /// The same as `.Formula2` shows it, `@` and all.
+    fn formula_with_builtin_values(&self, address: CellAddress, formula: &str, preserve_source: bool) -> Result<String, String> {
+        let names = &self.workbook.defined_names;
+        let sheet = &self.workbook.sheets[address.sheet].name;
+        if preserve_source { return oxicells_core::editor::qualify_builtin_function_values(names, sheet, formula); }
+        let qualify = |name: &str, explicit: bool| {
+            let collision = names.iter().any(|(held, _)| same_defined_name(held.rsplit('!').next().unwrap_or(held), name));
+            collision && (explicit || oxicells_core::editor::defined_name_formula(names, sheet, name).is_none())
+        };
+        oxicells_calc::lexer::formula_from_ooxml_with_builtin_values(formula, &qualify)
+    }
+
     fn cell_formula2(&self, address: CellAddress) -> Value {
         let Some(cell) = self
             .workbook
@@ -17305,7 +17329,7 @@ impl<'a> WorkbookHost<'a> {
             return Value::String(String::new());
         }
         if let Some(units) = cell.formula_units() {
-            let units = oxicells_calc::parser::transform_utf16_formula(units, oxicells_calc::lexer::formula_from_ooxml)
+            let units = oxicells_calc::parser::transform_utf16_formula(units, |formula| self.formula_with_builtin_values(address, formula, false))
                 .unwrap_or_else(|_| units.to_vec());
             let mut formula = Vec::with_capacity(units.len() + 1);
             formula.push(b'=' as u16);
@@ -17323,7 +17347,7 @@ impl<'a> WorkbookHost<'a> {
                 }
                 None => formula.to_string(),
             };
-            let formula = oxicells_calc::lexer::formula_from_ooxml(&formula).unwrap_or(formula);
+            let formula = self.formula_with_builtin_values(address, &formula, false).unwrap_or(formula);
             return Value::String(format!("={formula}"));
         }
         if let CellValue::Utf16(units) = &cell.value {
@@ -19587,6 +19611,7 @@ impl<'a> WorkbookHost<'a> {
         if placed.starts_with('=') && (oxicells_calc::parse(&placed).is_err() || formula_has_invalid_reference_argument(&placed)) {
             return Err(host_error(1004, format!("{placed:?} is not a formula")));
         }
+        let placed = self.formula_with_builtin_values(address, &placed, true)?;
         Ok(oxicells_calc::normalise_formula_ranges(&placed))
     }
 
@@ -23432,6 +23457,7 @@ impl<'a> WorkbookHost<'a> {
             oxicells_calc::Value::Utf16(units) => Value::from_utf16(units.clone()),
             oxicells_calc::Value::Logical(state) => Value::Boolean(*state),
             oxicells_calc::Value::Blank => Value::Empty,
+            oxicells_calc::Value::Lambda(_) => Value::Error(2015),
             oxicells_calc::Value::Error(why) => Value::Error(spreadsheet_error_number(why.as_str())),
         };
         match arg {
@@ -35907,6 +35933,7 @@ fn vba_of_calculation_value(value: &oxicells_calc::Value) -> Value {
         oxicells_calc::Value::Utf16(units) => Value::from_utf16(units.clone()),
         oxicells_calc::Value::Logical(value) => Value::Boolean(*value),
         oxicells_calc::Value::Blank => Value::Empty,
+        oxicells_calc::Value::Lambda(_) => Value::Error(2015),
         oxicells_calc::Value::Error(error) => Value::Error(spreadsheet_error_number(error.as_str())),
     }
 }
@@ -49083,6 +49110,35 @@ End Function
             Else
                 Ask=Application.Evaluate(expression)
             End If
+        End Function
+        Public Function FunctionProperties(ByVal expression As String) As String
+            Range("B1").Formula2="=" & expression
+            FunctionProperties=CStr(Range("B1").SavedAsArray) & "|" & Range("B1").Formula & "|" & Range("B1").Formula2
+        End Function
+        Public Sub SymbolContext(ByVal name As String, ByVal body As String)
+            Worksheets.Add.Name="Other"
+            Worksheets("Sheet1").Activate
+            Range("D1").Value2=1
+            Range("D2").Value2=2
+            Range("D3").Value2=3
+            If Len(name)>0 Then ThisWorkbook.Names.Add Name:=name, RefersTo:=body
+        End Sub
+        Public Function AliasProperties(ByVal mode As Long) As String
+            Dim named As Object, expression As String, before As String
+            SymbolContext "", ""
+            If mode=3 Then
+                Set named=ThisWorkbook.Names.Add(Name:="SUM", RefersTo:="=SUM")
+                expression="TYPE(SUM)"
+            Else
+                If mode=4 Then ThisWorkbook.Names.Add Name:="SUM", RefersTo:="=3"
+                If mode=5 Then ThisWorkbook.Names.Add Name:="Other!SUM", RefersTo:="=Sheet1!$D$1:$D$3"
+                Set named=ThisWorkbook.Names.Add(Name:="BuiltinAlias", RefersTo:="=SUM")
+                expression="TYPE(BuiltinAlias)"
+            End If
+            before=named.RefersTo
+            If mode=2 Or mode=5 Then ThisWorkbook.Names.Add Name:="SUM", RefersTo:="=3"
+            Range("B1").Formula2="=" & expression
+            AliasProperties=before & "|" & named.RefersTo & "|" & CStr(Range("B1").Value2) & "|" & CStr(Range("B1").SavedAsArray) & "|" & Range("B1").Formula & "|" & Range("B1").Formula2
         End Function"#).unwrap();
         let mut book = workbook();
         let mut host = WorkbookHost::new(&mut book, 0).unwrap();
@@ -49136,6 +49192,145 @@ End Function
             }
         }
         assert_eq!(checked, 186);
+        for (expression, lengths, values) in [
+            ("LAMBDA(x,x)", vec![], vec![Value::Error(2015)]),
+            ("SUM", vec![], vec![Value::Error(2015)]),
+            ("TAKE(LAMBDA(x,x),1)", vec![1], vec![Value::Error(2015)]),
+            ("CHOOSE({1;2},LAMBDA(x,x),1)", vec![2, 1], vec![Value::Error(2015), Value::Double(1.)]),
+            ("LET(fn,LAMBDA(x,x+1),fn)", vec![], vec![Value::Error(2015)]),
+            ("IFERROR(LAMBDA(x,x),0)", vec![], vec![Value::Error(2015)]),
+        ] {
+            let cell = execute_with_host(&module, "CellAnswer",
+                vec![Value::String(format!("={expression}"))], &mut host).unwrap();
+            assert_eq!(cell, Value::Error(2050), "stored function {expression}");
+            for worksheet in [false, true] {
+                let actual = execute_with_host(&module, "Ask",
+                    vec![Value::String(expression.to_string()), Value::Boolean(worksheet)], &mut host).unwrap();
+                if lengths.is_empty() {
+                    assert_eq!(actual, values[0], "function result worksheet={worksheet} {expression}");
+                } else {
+                    let Value::Array(answer) = actual else { panic!("expected function array: {expression}: {actual:?}"); };
+                    assert_eq!(answer.values, values);
+                    assert_eq!(answer.dimensions.iter().map(|dimension| dimension.length).collect::<Vec<_>>(), lengths);
+                    assert!(answer.dimensions.iter().all(|dimension| dimension.lower_bound == 1));
+                }
+            }
+        }
+        for (expression, expected_value, expected_properties) in [
+            ("TYPE(IF)", 128.0, "False|=TYPE(IF)|=TYPE(IF)"),
+            ("TYPE(_xleta.IF)", 128.0, "False|=TYPE(IF)|=TYPE(IF)"),
+            ("TYPE(IFERROR)", 128.0, "False|=TYPE(IFERROR)|=TYPE(IFERROR)"),
+            ("TYPE(_xleta.IFERROR)", 128.0, "False|=TYPE(IFERROR)|=TYPE(IFERROR)"),
+            ("TYPE(IFNA)", 128.0, "False|=TYPE(IFNA)|=TYPE(IFNA)"),
+            ("TYPE(_xleta.IFNA)", 128.0, "False|=TYPE(IFNA)|=TYPE(IFNA)"),
+            ("TYPE(IFS)", 128.0, "False|=TYPE(IFS)|=TYPE(IFS)"),
+            ("TYPE(_xleta.IFS)", 128.0, "False|=TYPE(IFS)|=TYPE(IFS)"),
+            ("TYPE(SWITCH)", 128.0, "False|=TYPE(SWITCH)|=TYPE(SWITCH)"),
+            ("TYPE(_xleta.SWITCH)", 128.0, "False|=TYPE(SWITCH)|=TYPE(SWITCH)"),
+            ("TYPE(CHOOSE)", 128.0, "False|=TYPE(CHOOSE)|=TYPE(CHOOSE)"),
+            ("TYPE(_xleta.CHOOSE)", 128.0, "False|=TYPE(CHOOSE)|=TYPE(CHOOSE)"),
+            ("TYPE(INDEX)", 128.0, "False|=TYPE(INDEX)|=TYPE(INDEX)"),
+            ("TYPE(_xleta.INDEX)", 128.0, "False|=TYPE(INDEX)|=TYPE(INDEX)"),
+            ("TYPE(OFFSET)", 128.0, "False|=TYPE(OFFSET)|=TYPE(OFFSET)"),
+            ("TYPE(_xleta.OFFSET)", 128.0, "False|=TYPE(OFFSET)|=TYPE(OFFSET)"),
+            ("TYPE(INDIRECT)", 128.0, "False|=TYPE(INDIRECT)|=TYPE(INDIRECT)"),
+            ("TYPE(_xleta.INDIRECT)", 128.0, "False|=TYPE(INDIRECT)|=TYPE(INDIRECT)"),
+            ("TYPE(ROW)", 128.0, "False|=TYPE(ROW)|=TYPE(ROW)"),
+            ("TYPE(_xleta.ROW)", 128.0, "False|=TYPE(ROW)|=TYPE(ROW)"),
+            ("TYPE(ROWS)", 128.0, "False|=TYPE(ROWS)|=TYPE(ROWS)"),
+            ("TYPE(_xleta.ROWS)", 128.0, "False|=TYPE(ROWS)|=TYPE(ROWS)"),
+            ("TYPE(COLUMN)", 128.0, "False|=TYPE(COLUMN)|=TYPE(COLUMN)"),
+            ("TYPE(_xleta.COLUMN)", 128.0, "False|=TYPE(COLUMN)|=TYPE(COLUMN)"),
+            ("TYPE(COLUMNS)", 128.0, "False|=TYPE(COLUMNS)|=TYPE(COLUMNS)"),
+            ("TYPE(_xleta.COLUMNS)", 128.0, "False|=TYPE(COLUMNS)|=TYPE(COLUMNS)"),
+            ("TYPE(CELL)", 128.0, "False|=TYPE(CELL)|=TYPE(CELL)"),
+            ("TYPE(_xleta.CELL)", 128.0, "False|=TYPE(CELL)|=TYPE(CELL)"),
+            ("TYPE(TYPE)", 128.0, "False|=TYPE(TYPE)|=TYPE(TYPE)"),
+            ("TYPE(_xleta.TYPE)", 128.0, "False|=TYPE(TYPE)|=TYPE(TYPE)"),
+            ("TYPE(SUM)", 128.0, "False|=TYPE(SUM)|=TYPE(SUM)"),
+            ("TYPE(_xleta.SUM)", 128.0, "False|=TYPE(SUM)|=TYPE(SUM)"),
+            ("TYPE(MAP)", 128.0, "False|=TYPE(MAP)|=TYPE(MAP)"),
+            ("TYPE(_xleta.MAP)", 128.0, "False|=TYPE(MAP)|=TYPE(MAP)"),
+            ("TYPE(REDUCE)", 128.0, "False|=TYPE(REDUCE)|=TYPE(REDUCE)"),
+            ("TYPE(_xleta.REDUCE)", 128.0, "False|=TYPE(REDUCE)|=TYPE(REDUCE)"),
+            ("TYPE(SCAN)", 128.0, "False|=TYPE(SCAN)|=TYPE(SCAN)"),
+            ("TYPE(_xleta.SCAN)", 128.0, "False|=TYPE(SCAN)|=TYPE(SCAN)"),
+            ("TYPE(BYROW)", 128.0, "False|=TYPE(BYROW)|=TYPE(BYROW)"),
+            ("TYPE(_xleta.BYROW)", 128.0, "False|=TYPE(BYROW)|=TYPE(BYROW)"),
+            ("TYPE(BYCOL)", 128.0, "False|=TYPE(BYCOL)|=TYPE(BYCOL)"),
+            ("TYPE(_xleta.BYCOL)", 128.0, "False|=TYPE(BYCOL)|=TYPE(BYCOL)"),
+            ("TYPE(MAKEARRAY)", 128.0, "False|=TYPE(MAKEARRAY)|=TYPE(MAKEARRAY)"),
+            ("TYPE(_xleta.MAKEARRAY)", 128.0, "False|=TYPE(MAKEARRAY)|=TYPE(MAKEARRAY)"),
+            ("TYPE(FILTER)", 128.0, "False|=TYPE(FILTER)|=TYPE(FILTER)"),
+            ("TYPE(_xleta.FILTER)", 128.0, "False|=TYPE(FILTER)|=TYPE(FILTER)"),
+            ("TYPE(XLOOKUP)", 128.0, "False|=TYPE(XLOOKUP)|=TYPE(XLOOKUP)"),
+            ("TYPE(_xleta.XLOOKUP)", 128.0, "False|=TYPE(XLOOKUP)|=TYPE(XLOOKUP)"),
+            ("TYPE(SEQUENCE)", 128.0, "False|=TYPE(SEQUENCE)|=TYPE(SEQUENCE)"),
+            ("TYPE(_xleta.SEQUENCE)", 128.0, "False|=TYPE(SEQUENCE)|=TYPE(SEQUENCE)"),
+            ("TYPE(RAND)", 128.0, "False|=TYPE(RAND)|=TYPE(RAND)"),
+            ("TYPE(_xleta.RAND)", 128.0, "False|=TYPE(RAND)|=TYPE(RAND)"),
+            ("TYPE(NOW)", 128.0, "False|=TYPE(NOW)|=TYPE(NOW)"),
+            ("TYPE(_xleta.NOW)", 128.0, "False|=TYPE(NOW)|=TYPE(NOW)"),
+            ("TYPE(ISOMITTED)", 128.0, "False|=TYPE(ISOMITTED)|=TYPE(ISOMITTED)"),
+            ("TYPE(_xleta.ISOMITTED)", 128.0, "False|=TYPE(ISOMITTED)|=TYPE(ISOMITTED)"),
+            ("TYPE(LAMBDA)", 16.0, "True|=TYPE(LAMBDA)|=TYPE(LAMBDA)"),
+            ("TYPE(_xleta.LAMBDA)", 16.0, "True|=TYPE(_xleta.LAMBDA)|=TYPE(_xleta.LAMBDA)"),
+            ("TYPE(LET)", 16.0, "True|=TYPE(LET)|=TYPE(LET)"),
+            ("TYPE(_xleta.LET)", 16.0, "True|=TYPE(_xleta.LET)|=TYPE(_xleta.LET)"),
+            ("TYPE(AND)", 128.0, "False|=TYPE(AND)|=TYPE(AND)"),
+            ("TYPE(_xleta.AND)", 128.0, "False|=TYPE(AND)|=TYPE(AND)"),
+            ("TYPE(OR)", 128.0, "False|=TYPE(OR)|=TYPE(OR)"),
+            ("TYPE(_xleta.OR)", 128.0, "False|=TYPE(OR)|=TYPE(OR)"),
+            ("TYPE(NOT)", 128.0, "False|=TYPE(NOT)|=TYPE(NOT)"),
+            ("TYPE(_xleta.NOT)", 128.0, "False|=TYPE(NOT)|=TYPE(NOT)"),
+            ("TYPE(TRUE)", 4.0, "False|=TYPE(TRUE)|=TYPE(TRUE)"),
+            ("TYPE(_xleta.TRUE)", 128.0, "False|=TYPE(TRUE)|=TYPE(TRUE)"),
+            ("TYPE(FALSE)", 4.0, "False|=TYPE(FALSE)|=TYPE(FALSE)"),
+            ("TYPE(_xleta.FALSE)", 128.0, "False|=TYPE(FALSE)|=TYPE(FALSE)"),
+            ("TYPE(LOG10)", 1.0, "False|=TYPE(LOG10)|=TYPE(LOG10)"),
+            ("TYPE(_xleta.LOG10)", 128.0, "False|=TYPE(LOG10)|=TYPE(LOG10)"),
+            ("TYPE(SUBTOTAL)", 128.0, "False|=TYPE(SUBTOTAL)|=TYPE(SUBTOTAL)"),
+            ("TYPE(_xleta.SUBTOTAL)", 128.0, "False|=TYPE(SUBTOTAL)|=TYPE(SUBTOTAL)"),
+            ("TYPE(AGGREGATE)", 128.0, "False|=TYPE(AGGREGATE)|=TYPE(AGGREGATE)"),
+            ("TYPE(_xleta.AGGREGATE)", 128.0, "False|=TYPE(AGGREGATE)|=TYPE(AGGREGATE)"),
+        ] {
+            let value = execute_with_host(&module, "CellAnswer", vec![Value::String(format!("={expression}"))], &mut host).unwrap();
+            assert_eq!(value, Value::Double(expected_value), "Native function availability {expression}");
+            let properties = execute_with_host(&module, "FunctionProperties", vec![Value::String(expression.to_string())], &mut host).unwrap();
+            assert_eq!(properties, Value::String(expected_properties.to_string()), "Native function properties {expression}");
+        }
+        drop(host);
+        for (name, body, expression, expected_value, expected_properties) in [
+            ("", "", "TYPE(SUM)", 128.0, "False|=TYPE(SUM)|=TYPE(SUM)"),
+            ("SUM", "=3", "TYPE(SUM)", 1.0, "False|=TYPE(SUM)|=TYPE(SUM)"),
+            ("SUM", "=Sheet1!$D$1:$D$3", "TYPE(SUM)", 64.0, "True|=TYPE(SUM)|=TYPE(SUM)"),
+            ("Sheet1!SUM", "=Sheet1!$D$1:$D$3", "TYPE(SUM)", 64.0, "True|=TYPE(SUM)|=TYPE(SUM)"),
+            ("Other!SUM", "=Sheet1!$D$1:$D$3", "TYPE(SUM)", 128.0, "False|=TYPE(_xleta.SUM)|=TYPE(_xleta.SUM)"),
+            ("Other!SUM", "=Sheet1!$D$1:$D$3", "TYPE(Other!SUM)", 64.0, "True|=TYPE(Other!SUM)|=TYPE(Other!SUM)"),
+            ("", "", "TYPE(Other!SUM)", 16.0, "True|=TYPE(Other!SUM)|=TYPE(Other!SUM)"),
+        ] {
+            let mut context = workbook();
+            let mut host = WorkbookHost::new(&mut context, 0).unwrap();
+            execute_with_host(&module, "SymbolContext", vec![Value::String(name.to_string()), Value::String(body.to_string())], &mut host).unwrap();
+            let value = execute_with_host(&module, "CellAnswer", vec![Value::String(format!("={expression}"))], &mut host).unwrap();
+            assert_eq!(value, Value::Double(expected_value), "Native symbol context {name} {expression}");
+            let properties = execute_with_host(&module, "FunctionProperties", vec![Value::String(expression.to_string())], &mut host).unwrap();
+            assert_eq!(properties, Value::String(expected_properties.to_string()), "Native symbol properties {name} {expression}");
+        }
+
+        for (mode, expected) in [
+            (1, "=SUM|=SUM|128|True|=TYPE(BuiltinAlias)|=TYPE(BuiltinAlias)"),
+            (2, "=SUM|=_xleta.SUM|128|True|=TYPE(BuiltinAlias)|=TYPE(BuiltinAlias)"),
+            (3, "=_xleta.SUM|=_xleta.SUM|128|True|=TYPE(SUM)|=TYPE(SUM)"),
+            (4, "=SUM|=SUM|1|True|=TYPE(BuiltinAlias)|=TYPE(BuiltinAlias)"),
+            (5, "=_xleta.SUM|=_xleta.SUM|128|True|=TYPE(BuiltinAlias)|=TYPE(BuiltinAlias)"),
+        ] {
+            let mut context = workbook();
+            let mut host = WorkbookHost::new(&mut context, 0).unwrap();
+            let actual = execute_with_host(&module, "AliasProperties", vec![Value::Integer(mode)], &mut host).unwrap();
+            assert_eq!(actual, Value::String(expected.to_string()), "Native builtin-valued name mode {mode}");
+        }
+
     }
 
     /// Measured in Excel 16.0 on a book of three sheets: `Type` is -4167 for
