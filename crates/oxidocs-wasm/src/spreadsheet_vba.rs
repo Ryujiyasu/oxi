@@ -30,6 +30,12 @@ mod regexp;
 #[path = "spreadsheet_vba_file_io.rs"]
 mod file_io;
 
+// Runtime-owned objects use the high half of the u64 handle space. A
+// narrowing cast would turn those handles into valid host slots on wasm32.
+fn host_object_index(handle: u64) -> usize {
+    usize::try_from(handle).unwrap_or(usize::MAX)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct CellAddress {
     sheet: usize,
@@ -4222,7 +4228,7 @@ impl<'a> WorkbookHost<'a> {
     /// `Rows(2).Cells(2).Value` reads B2. Only `Count` and `Item` follow the
     /// sense, and those are handled before anything gets here.
     fn range(&self, object: &ObjectRef) -> Option<CellRange> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Range(range)) => Some(*range),
             Some(HostObject::RangeCollection(range, _)) => Some(*range),
             _ => None,
@@ -4231,7 +4237,7 @@ impl<'a> WorkbookHost<'a> {
 
     /// The row-or-column sense a range object carries, if it has one.
     fn range_sense(&self, object: &ObjectRef) -> Option<RangeAxis> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::RangeCollection(_, axis)) => Some(*axis),
             _ => None,
         }
@@ -4251,7 +4257,7 @@ impl<'a> WorkbookHost<'a> {
         let Value::Object(object) = &produced else {
             return produced;
         };
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Range(range)) => {
                 let range = *range;
                 self.object(HostObject::RangeCollection(range, axis))
@@ -4261,21 +4267,21 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn range_font(&self, object: &ObjectRef) -> Option<CellRange> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::RangeFont(range)) => Some(*range),
             _ => None,
         }
     }
 
     fn range_interior(&self, object: &ObjectRef) -> Option<CellRange> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::RangeInterior(range)) => Some(*range),
             _ => None,
         }
     }
 
     fn range_borders(&self, object: &ObjectRef) -> Option<(CellRange, BorderSelection)> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::RangeBorders(range, selection)) => Some((*range, *selection)),
             _ => None,
         }
@@ -4291,14 +4297,14 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn range_collection(&self, object: &ObjectRef) -> Option<(CellRange, RangeAxis)> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::RangeCollection(range, axis)) => Some((*range, *axis)),
             _ => None,
         }
     }
 
     fn worksheet(&self, object: &ObjectRef) -> Option<usize> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Worksheet(sheet)) => Some(*sheet),
             _ => None,
         }
@@ -4306,14 +4312,14 @@ impl<'a> WorkbookHost<'a> {
 
     fn is_workbook(&self, object: &ObjectRef) -> bool {
         matches!(
-            self.objects.get(object.handle as usize),
+            self.objects.get(host_object_index(object.handle)),
             Some(HostObject::Workbook)
         )
     }
 
     fn is_worksheets(&self, object: &ObjectRef) -> bool {
         matches!(
-            self.objects.get(object.handle as usize),
+            self.objects.get(host_object_index(object.handle)),
             Some(HostObject::Worksheets)
         )
     }
@@ -4495,7 +4501,7 @@ impl<'a> WorkbookHost<'a> {
 
     /// The blocks a many-block range is made of.
     fn blocks(&self, object: &ObjectRef) -> Option<&[CellRange]> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Blocks(handle))
             | Some(HostObject::Areas(handle))
             | Some(HostObject::BlocksAxis(handle, _)) => self.blocks.get(*handle).map(Vec::as_slice),
@@ -5648,7 +5654,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn is_names(&self, object: &ObjectRef) -> bool {
-        matches!(self.objects.get(object.handle as usize), Some(HostObject::Names))
+        matches!(self.objects.get(host_object_index(object.handle)), Some(HostObject::Names))
     }
 
     fn name_can_be_multiple(names: &[(String, String)], sheet: &str, requested: &str) -> bool {
@@ -5702,7 +5708,7 @@ impl<'a> WorkbookHost<'a> {
 
     /// The text of the name a `Name` object was handed out for.
     fn held_name(&self, object: &ObjectRef) -> Option<&str> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::DefinedName(handle)) => {
                 self.name_handles.get(*handle).map(String::as_str)
             }
@@ -5881,14 +5887,14 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn style_index(&self, object: &ObjectRef) -> Option<usize> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Style(index)) => Some(*index),
             _ => None,
         }
     }
 
     fn is_styles(&self, object: &ObjectRef) -> bool {
-        matches!(self.objects.get(object.handle as usize), Some(HostObject::Styles))
+        matches!(self.objects.get(host_object_index(object.handle)), Some(HostObject::Styles))
     }
 
     /// The style a range wears: the one its cells all wear, or Nothing when
@@ -6107,14 +6113,14 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn link_id(&self, object: &ObjectRef) -> Option<u64> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Hyperlink(id)) => Some(*id),
             _ => None,
         }
     }
 
     fn hyperlink_scope(&self, object: &ObjectRef) -> Option<HyperlinkScope> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Hyperlinks(scope)) => Some(*scope),
             _ => None,
         }
@@ -6360,7 +6366,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn page_setup_sheet(&self, object: &ObjectRef) -> Option<usize> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::PageSetup(sheet)) => Some(*sheet),
             _ => None,
         }
@@ -6679,7 +6685,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn list_objects_sheet(&self, object: &ObjectRef) -> Option<usize> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::ListObjects(sheet)) => Some(*sheet),
             _ => None,
         }
@@ -6687,7 +6693,7 @@ impl<'a> WorkbookHost<'a> {
 
     /// The table handle an object speaks for, and which part of the table.
     fn table_part(&self, object: &ObjectRef) -> Option<(u64, TablePart)> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::ListObject(id)) => Some((*id, TablePart::Whole)),
             Some(HostObject::ListRows(id)) => Some((*id, TablePart::Rows)),
             Some(HostObject::ListRow(id, index)) => Some((*id, TablePart::Row(*index))),
@@ -8207,14 +8213,14 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn conditions_range(&self, object: &ObjectRef) -> Option<CellRange> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::FormatConditions(range)) => Some(*range),
             _ => None,
         }
     }
 
     fn condition_id(&self, object: &ObjectRef) -> Option<(u64, Option<StyleFace>)> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::FormatCondition(id, _)) => Some((*id, None)),
             Some(HostObject::ConditionFont(id)) => Some((*id, Some(StyleFace::Font))),
             Some(HostObject::ConditionInterior(id)) => Some((*id, Some(StyleFace::Interior))),
@@ -8223,7 +8229,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn condition_scope(&self, object: &ObjectRef) -> Option<Vec<CellRange>> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::FormatCondition(_, Some(scope))) => self.blocks.get(*scope).cloned(),
             _ => None,
         }
@@ -8236,7 +8242,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn scale_part(&self, object: &ObjectRef) -> Option<HostObject> {
-        match self.objects.get(object.handle as usize).copied() {
+        match self.objects.get(host_object_index(object.handle)).copied() {
             Some(part @ (HostObject::ColorScaleCriteria(_) | HostObject::ColorScaleCriterion(..) | HostObject::ColorScaleFormatColor(..) | HostObject::DataBarPoint(..) | HostObject::DataBarFormatColor(..) | HostObject::DataBarBorder(_) | HostObject::DataBarNegative(_) | HostObject::IconCriteria(_) | HostObject::IconCriterion(..) | HostObject::IconSets | HostObject::IconSet(_) | HostObject::CustomIconSet(_) | HostObject::Icon(..) | HostObject::CustomIcon(..))) => Some(part),
             _ => None,
         }
@@ -8802,7 +8808,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn display_format_of(&self, object: &ObjectRef) -> Option<(CellRange, Option<StyleFace>)> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::DisplayFormat(range)) => Some((*range, None)),
             Some(HostObject::DisplayFont(range)) => Some((*range, Some(StyleFace::Font))),
             Some(HostObject::DisplayInterior(range)) => Some((*range, Some(StyleFace::Interior))),
@@ -9991,14 +9997,14 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn validation_range(&self, object: &ObjectRef) -> Option<CellRange> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Validation(range)) => Some(*range),
             _ => None,
         }
     }
 
     fn validation_blocks(&self, object: &ObjectRef) -> Option<usize> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::ValidationBlocks(handle)) => Some(*handle),
             _ => None,
         }
@@ -10691,14 +10697,14 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn characters_of(&self, object: &ObjectRef) -> Option<(CellAddress, u32, Option<u32>)> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Characters(at, start, length)) => Some((*at, *start, *length)),
             _ => None,
         }
     }
 
     fn characters_font_of(&self, object: &ObjectRef) -> Option<(CellAddress, u32, Option<u32>)> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::CharactersFont(at, start, length)) => Some((*at, *start, *length)),
             _ => None,
         }
@@ -11125,14 +11131,14 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn comment_cell(&self, object: &ObjectRef) -> Option<CellAddress> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Comment(at)) => Some(*at),
             _ => None,
         }
     }
 
     fn threaded_comment_index(&self, object: &ObjectRef) -> Option<usize> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::ThreadedComment(index)) => Some(*index),
             _ => None,
         }
@@ -11189,7 +11195,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn threaded_comments_sheet(&self, object: &ObjectRef) -> Option<usize> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::ThreadedComments(sheet)) => Some(*sheet),
             _ => None,
         }
@@ -11398,7 +11404,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn comments_sheet(&self, object: &ObjectRef) -> Option<usize> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Comments(sheet)) => Some(*sheet),
             _ => None,
         }
@@ -11913,20 +11919,20 @@ impl<'a> WorkbookHost<'a> {
 
     fn is_window(&self, object: &ObjectRef) -> bool {
         matches!(
-            self.objects.get(object.handle as usize),
+            self.objects.get(host_object_index(object.handle)),
             Some(HostObject::Window)
         )
     }
 
     fn is_application(&self, object: &ObjectRef) -> bool {
         matches!(
-            self.objects.get(object.handle as usize),
+            self.objects.get(host_object_index(object.handle)),
             Some(HostObject::Application)
         )
     }
 
     fn is_workbooks(&self, object: &ObjectRef) -> bool {
-        matches!(self.objects.get(object.handle as usize), Some(HostObject::Workbooks))
+        matches!(self.objects.get(host_object_index(object.handle)), Some(HostObject::Workbooks))
     }
 
     /// `Workbooks`, `Workbooks(1)`, `Workbooks("Book1")`: there is one, and
@@ -11955,14 +11961,14 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn outline_sheet(&self, object: &ObjectRef) -> Option<usize> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Outline(sheet)) => Some(*sheet),
             _ => None,
         }
     }
 
     fn tab_sheet(&self, object: &ObjectRef) -> Option<usize> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Tab(sheet)) => Some(*sheet),
             _ => None,
         }
@@ -13315,7 +13321,7 @@ impl<'a> WorkbookHost<'a> {
 
     /// Whether the object's worksheet has been deleted out from under it.
     fn gone(&self, object: &ObjectRef) -> bool {
-        matches!(self.objects.get(object.handle as usize), Some(HostObject::Gone))
+        matches!(self.objects.get(host_object_index(object.handle)), Some(HostObject::Gone))
     }
 
     /// Every place a sheet is named by its position, brought up to date
@@ -13674,14 +13680,14 @@ impl<'a> WorkbookHost<'a> {
 
     fn is_worksheet_function(&self, object: &ObjectRef) -> bool {
         matches!(
-            self.objects.get(object.handle as usize),
+            self.objects.get(host_object_index(object.handle)),
             Some(HostObject::WorksheetFunction)
         )
     }
 
     fn is_debug_console(&self, object: &ObjectRef) -> bool {
         matches!(
-            self.objects.get(object.handle as usize),
+            self.objects.get(host_object_index(object.handle)),
             Some(HostObject::DebugConsole)
         )
     }
@@ -24509,8 +24515,21 @@ impl Host for WorkbookHost<'_> {
         }
     }
 
+    fn property_assignment_value(&self, _receiver: Option<&ObjectRef>, name: &str, value: &Value, by_reference: bool) -> Option<Value> {
+        if !name.eq_ignore_ascii_case("iconset") { return None; }
+        // Excel's VARIANT setter ignores a by-reference argument. Ordinary
+        // assignment and value expressions preserve the supplied variant.
+        // Even an invalid receiver rejects the member before coercing that
+        // variant, and the receiver expression must run only once.
+        Some(if by_reference { Value::Empty } else { value.clone() })
+    }
+
+    fn default_member_error(&self, receiver: &ObjectRef) -> Option<i64> {
+        matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::IconSet(_))).then_some(450)
+    }
+
     fn automation_invocation_allowed(&self, receiver: &ObjectRef, name: &str, kind: u8) -> bool {
-        if self.gone(receiver) || self.objects.get(receiver.handle as usize).is_none() { return true; }
+        if self.gone(receiver) || self.objects.get(host_object_index(receiver.handle)).is_none() { return true; }
         let Some(flags) = builtin_compilation_references().library.member_invocation_flags(&receiver.kind, name) else { return true; };
         // Excel permits its methods through PROPERTYGET as well as METHOD.
         // A property-only member does not accept METHOD, or PUTREF without
@@ -24963,7 +24982,7 @@ impl Host for WorkbookHost<'_> {
                 };
             }
             if name.eq_ignore_ascii_case("borders") {
-                let replace = match self.objects.get(receiver.handle as usize) {
+                let replace = match self.objects.get(host_object_index(receiver.handle)) {
                     Some(HostObject::FindFormat) => Some(false),
                     Some(HostObject::ReplaceFormat) => Some(true),
                     _ => None,
@@ -24979,8 +24998,8 @@ impl Host for WorkbookHost<'_> {
                     };
                 }
             }
-            if matches!(self.objects.get(receiver.handle as usize), Some(HostObject::FindFormat))
-                || matches!(self.objects.get(receiver.handle as usize), Some(HostObject::ReplaceFormat))
+            if matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::FindFormat))
+                || matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::ReplaceFormat))
             {
                 if !name.eq_ignore_ascii_case("clear") {
                     // Other CellFormat methods fall through to ordinary host dispatch.
@@ -24988,7 +25007,7 @@ impl Host for WorkbookHost<'_> {
                     if !args.is_empty() {
                         return Err(host_error(450, "CellFormat.Clear takes no arguments"));
                     }
-                    if matches!(self.objects.get(receiver.handle as usize), Some(HostObject::FindFormat)) {
+                    if matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::FindFormat)) {
                         self.find_format_bold = None;
                         self.find_format_italic = None;
                         self.find_format_strikethrough = None;
@@ -25069,7 +25088,7 @@ impl Host for WorkbookHost<'_> {
                 return Err(host_error(424, "the object's worksheet has been deleted"));
             }
             if let Some(HostObject::RangeBorders(range, BorderSelection::All)) =
-                self.objects.get(receiver.handle as usize).copied()
+                self.objects.get(host_object_index(receiver.handle)).copied()
             {
                 if name.is_empty() || ["item", "_default"].iter().any(|member| name.eq_ignore_ascii_case(member)) {
                     return match args {
@@ -25079,7 +25098,7 @@ impl Host for WorkbookHost<'_> {
                 }
             }
             if let Some(HostObject::FormatBorders(replace)) =
-                self.objects.get(receiver.handle as usize).copied()
+                self.objects.get(host_object_index(receiver.handle)).copied()
             {
                 if name.is_empty() || ["item", "_default"].iter().any(|member| name.eq_ignore_ascii_case(member)) {
                     return match args {
@@ -25101,7 +25120,7 @@ impl Host for WorkbookHost<'_> {
                 return self.call(None, name, args);
             }
             if let Some(object @ (HostObject::RegExp(_) | HostObject::RegExpMatches(_) | HostObject::RegExpMatch(..) | HostObject::RegExpSubMatches(..))) =
-                self.objects.get(receiver.handle as usize).copied()
+                self.objects.get(host_object_index(receiver.handle)).copied()
             {
                 return self.regexp_member(object, name, args);
             }
@@ -25114,21 +25133,21 @@ impl Host for WorkbookHost<'_> {
             if let Some(part) = self.drawing_part(receiver) {
                 return self.drawing_call(part, name, args);
             }
-            if let Some(HostObject::Sort(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+            if let Some(HostObject::Sort(sheet)) = self.objects.get(host_object_index(receiver.handle)).copied() {
                 return self.sort_object_call(sheet, name, args).map(Some);
             }
-            if let Some(HostObject::SheetFilter(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+            if let Some(HostObject::SheetFilter(sheet)) = self.objects.get(host_object_index(receiver.handle)).copied() {
                 return self.sheet_filter_member(sheet, name, args);
             }
             if let Some(object @ (HostObject::SheetFilters(_) | HostObject::FilterColumn(_, _))) =
-                self.objects.get(receiver.handle as usize).copied()
+                self.objects.get(host_object_index(receiver.handle)).copied()
             {
                 return self.filter_column_member(object, name, args);
             }
-            if let Some(HostObject::SheetNames(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+            if let Some(HostObject::SheetNames(sheet)) = self.objects.get(host_object_index(receiver.handle)).copied() {
                 return self.sheet_names_member(sheet, name, args);
             }
-            if let Some(HostObject::SortFields(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+            if let Some(HostObject::SortFields(sheet)) = self.objects.get(host_object_index(receiver.handle)).copied() {
                 return self.sort_fields_call(sheet, name, args).map(Some);
             }
             if self.is_workbooks(receiver) {
@@ -25552,7 +25571,7 @@ impl Host for WorkbookHost<'_> {
                 }
                 return Ok(None);
             }
-            if let Some(HostObject::ThreadedReplies(parent)) = self.objects.get(receiver.handle as usize).copied() {
+            if let Some(HostObject::ThreadedReplies(parent)) = self.objects.get(host_object_index(receiver.handle)).copied() {
                 if name.eq_ignore_ascii_case("count") {
                     return Ok(Some(Value::Integer(self.threaded_replies(parent).len() as i64)));
                 }
@@ -25584,10 +25603,10 @@ impl Host for WorkbookHost<'_> {
                 }
                 return Ok(None);
             }
-            if let Some(HostObject::Blocks(handle)) = self.objects.get(receiver.handle as usize) {
+            if let Some(HostObject::Blocks(handle)) = self.objects.get(host_object_index(receiver.handle)) {
                 return self.blocks_member(*handle, name, args);
             }
-            if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(receiver.handle as usize).copied() {
+            if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(host_object_index(receiver.handle)).copied() {
                 let first = self.blocks[handle][0];
                 if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("item") {
                     if name.eq_ignore_ascii_case("count") && args.is_empty() {
@@ -25600,7 +25619,7 @@ impl Host for WorkbookHost<'_> {
                 }
                 return self.blocks_member(handle, name, args);
             }
-            if let Some(HostObject::Areas(handle)) = self.objects.get(receiver.handle as usize) {
+            if let Some(HostObject::Areas(handle)) = self.objects.get(host_object_index(receiver.handle)) {
                 let handle = *handle;
                 let areas = self.blocks[handle].clone();
                 if name.eq_ignore_ascii_case("count") {
@@ -25939,7 +25958,7 @@ impl Host for WorkbookHost<'_> {
             if self.is_worksheets(receiver) && name.eq_ignore_ascii_case("add") {
                 return self.add_worksheet(args).map(Some);
             }
-            if let Some(HostObject::SheetGroup(group)) = self.objects.get(receiver.handle as usize).copied() {
+            if let Some(HostObject::SheetGroup(group)) = self.objects.get(host_object_index(receiver.handle)).copied() {
                 let sheets = self.sheet_groups.get(group).cloned().unwrap_or_default();
                 if name.eq_ignore_ascii_case("select") {
                     if let Some(first) = sheets.first() {
@@ -25970,7 +25989,7 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("item") {
                 if let Some(collection @ (HostObject::Worksheets | HostObject::Sheets | HostObject::Charts)) =
-                    self.objects.get(receiver.handle as usize).copied()
+                    self.objects.get(host_object_index(receiver.handle)).copied()
                 {
                     let [value] = args else {
                         return Err("Sheets.Item expects one sheet name or index".to_string());
@@ -26537,7 +26556,7 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("savecopyas") && receiver.is_some_and(|receiver|self.is_workbook(receiver)) {
             self.save_copy_as(args, files)
         } else if name.eq_ignore_ascii_case("add") {
-            let sheet = receiver.and_then(|receiver| match self.objects.get(receiver.handle as usize).copied() {
+            let sheet = receiver.and_then(|receiver| match self.objects.get(host_object_index(receiver.handle)).copied() {
                 Some(HostObject::Drawing(shapes::DrawingPart::OleObjects(sheet)))
                 | Some(HostObject::Drawing(shapes::DrawingPart::OleObjectsSnapshot(sheet, _))) => Some(sheet),
                 _ => None,
@@ -26552,7 +26571,7 @@ impl Host for WorkbookHost<'_> {
             let args=normalize_named_arguments(args, argument_names, &["Filename"], name)?;
             self.save_copy_as(&args, files)
         } else if name.eq_ignore_ascii_case("add") {
-            let sheet = receiver.and_then(|receiver| match self.objects.get(receiver.handle as usize).copied() {
+            let sheet = receiver.and_then(|receiver| match self.objects.get(host_object_index(receiver.handle)).copied() {
                 Some(HostObject::Drawing(shapes::DrawingPart::OleObjects(sheet)))
                 | Some(HostObject::Drawing(shapes::DrawingPart::OleObjectsSnapshot(sheet, _))) => Some(sheet),
                 _ => None,
@@ -26619,24 +26638,24 @@ impl Host for WorkbookHost<'_> {
             // Three collections answer to Add, and they name their arguments
             // differently.
             if receiver.is_some_and(|receiver| {
-                matches!(self.objects.get(receiver.handle as usize), Some(HostObject::SortFields(_)))
+                matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::SortFields(_)))
             }) {
                 Some(&["Key", "SortOn", "Order", "CustomOrder", "DataOption"][..])
             } else if receiver.is_some_and(|receiver| {
                 matches!(
-                    self.objects.get(receiver.handle as usize),
+                    self.objects.get(host_object_index(receiver.handle)),
                     Some(HostObject::Drawing(shapes::DrawingPart::ChartObjects(_)))
                 )
             }) {
                 Some(&["Left", "Top", "Width", "Height"][..])
             } else if receiver.is_some_and(|receiver| {
                 matches!(
-                    self.objects.get(receiver.handle as usize),
+                    self.objects.get(host_object_index(receiver.handle)),
                     Some(HostObject::Drawing(shapes::DrawingPart::OleObjects(_) | shapes::DrawingPart::OleObjectsSnapshot(..)))
                 )
             }) {
                 Some(&["ClassType", "Filename", "Link", "DisplayAsIcon", "IconFileName", "IconIndex", "IconLabel", "Left", "Top", "Width", "Height"][..])
-            } else if receiver.is_some_and(|receiver| self.is_names(receiver) || matches!(self.objects.get(receiver.handle as usize), Some(HostObject::SheetNames(_)))) {
+            } else if receiver.is_some_and(|receiver| self.is_names(receiver) || matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::SheetNames(_)))) {
                 Some(&["Name", "RefersTo", "Visible", "MacroType", "ShortcutKey", "Category", "NameLocal", "RefersToLocal", "CategoryLocal", "RefersToR1C1", "RefersToR1C1Local"][..])
             } else if receiver.is_some_and(|receiver| self.hyperlink_scope(receiver).is_some()) {
                 Some(&["Anchor", "Address", "SubAddress", "ScreenTip", "TextToDisplay"][..])
@@ -26767,7 +26786,7 @@ impl Host for WorkbookHost<'_> {
             Some(&["Rowcol", "Type", "Date", "Step", "Stop", "Trend"][..])
         } else if name.eq_ignore_ascii_case("add2")
             && receiver.is_some_and(|receiver| {
-                matches!(self.objects.get(receiver.handle as usize), Some(HostObject::SortFields(_)))
+                matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::SortFields(_)))
             })
         {
             Some(&["Key", "SortOn", "Order", "CustomOrder", "DataOption"][..])
@@ -26793,7 +26812,7 @@ impl Host for WorkbookHost<'_> {
             && receiver.is_some_and(|receiver| {
                 self.threaded_comments_sheet(receiver).is_some()
                     || matches!(
-                        self.objects.get(receiver.handle as usize),
+                        self.objects.get(host_object_index(receiver.handle)),
                         Some(HostObject::ThreadedReplies(_))
                     )
             })
@@ -26868,7 +26887,7 @@ impl Host for WorkbookHost<'_> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
         }
-        match self.objects.get(receiver.handle as usize).copied() {
+        match self.objects.get(host_object_index(receiver.handle)).copied() {
             Some(HostObject::WordDocument(id)) => {
                 let Some(shape) = self.shapes.iter().find(|shape| shape.id == id) else {
                     return Err(host_error(424, "the embedded Word document is no longer available"));
@@ -26899,7 +26918,7 @@ impl Host for WorkbookHost<'_> {
             _ => {}
         }
         if let Some(collection @ (HostObject::Worksheets | HostObject::Sheets | HostObject::Charts)) =
-            self.objects.get(receiver.handle as usize).copied()
+            self.objects.get(host_object_index(receiver.handle)).copied()
         {
             return Ok(match name.to_ascii_lowercase().as_str() {
                 "count" => Some(Value::Integer(self.collection_sheet_indices(collection).len() as i64)),
@@ -26911,14 +26930,14 @@ impl Host for WorkbookHost<'_> {
         // Every object Excel hands out says it was made by Excel: measured,
         // Creator is 1480803660 ("XCEL") of the Application, a sheet, a range
         // and a Font alike.
-        if name.eq_ignore_ascii_case("creator") && self.objects.get(receiver.handle as usize).is_some() {
+        if name.eq_ignore_ascii_case("creator") && self.objects.get(host_object_index(receiver.handle)).is_some() {
             return Ok(Some(Value::Integer(1_480_803_660)));
         }
         // The collections a sheet or the book keeps answer it as Parent, and
         // every Excel object answers the Application: measured, Outline,
         // Comments, Hyperlinks and Shapes have the worksheet for Parent,
         // Worksheets and Names the workbook.
-        match self.objects.get(receiver.handle as usize).copied() {
+        match self.objects.get(host_object_index(receiver.handle)).copied() {
             Some(HostObject::Outline(sheet) | HostObject::Comments(sheet) | HostObject::ThreadedComments(sheet)) if name.eq_ignore_ascii_case("parent") => {
                 return Ok(Some(self.object(HostObject::Worksheet(sheet))));
             }
@@ -26961,7 +26980,7 @@ impl Host for WorkbookHost<'_> {
             _ => {}
         }
         if let Some(object @ (HostObject::RegExp(_) | HostObject::RegExpMatches(_) | HostObject::RegExpMatch(..) | HostObject::RegExpSubMatches(..))) =
-            self.objects.get(receiver.handle as usize).copied()
+            self.objects.get(host_object_index(receiver.handle)).copied()
         {
             return self.regexp_member(object, name, &[]);
         }
@@ -26972,18 +26991,18 @@ impl Host for WorkbookHost<'_> {
             }
             return Ok(self.tab_member(sheet, name));
         }
-        if let Some(HostObject::SheetFilter(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::SheetFilter(sheet)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             return self.sheet_filter_member(sheet, name, &[]);
         }
         if let Some(object @ (HostObject::SheetFilters(_) | HostObject::FilterColumn(_, _))) =
-            self.objects.get(receiver.handle as usize).copied()
+            self.objects.get(host_object_index(receiver.handle)).copied()
         {
             return self.filter_column_member(object, name, &[]);
         }
-        if let Some(HostObject::SheetNames(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::SheetNames(sheet)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             return self.sheet_names_member(sheet, name, &[]);
         }
-        if let Some(HostObject::Sort(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::Sort(sheet)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             let state = self.sorts.get(&sheet).cloned().unwrap_or_default();
             return Ok(match name.to_ascii_lowercase().as_str() {
                 "sortfields" => Some(self.object(HostObject::SortFields(sheet))),
@@ -26999,7 +27018,7 @@ impl Host for WorkbookHost<'_> {
                 _ => None,
             });
         }
-        if let Some(HostObject::SortFields(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::SortFields(sheet)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             return Ok(match name.to_ascii_lowercase().as_str() {
                 "count" => Some(Value::Integer(
                     self.sorts.get(&sheet).map_or(0, |state| state.fields.len() as i64),
@@ -27010,7 +27029,7 @@ impl Host for WorkbookHost<'_> {
         // A sort field: measured, a values field added descending answers
         // Order 2, Priority 1, SortOn 0, DataOption 0, Key its range, Parent
         // the SortFields, and SortOnValue 1004.
-        if let Some(HostObject::SortField(sheet, at)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::SortField(sheet, at)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             let state = self.sorts.get(&sheet).cloned().unwrap_or_default();
             let Some(&(_, descending)) = state.fields.get(at - 1) else {
                 return Err(host_error(1004, "the sort field has been cleared"));
@@ -27055,10 +27074,10 @@ impl Host for WorkbookHost<'_> {
         {
             return Ok(Some(Value::String("Microsoft Excel".to_string())));
         }
-        if let Some(HostObject::Blocks(handle)) = self.objects.get(receiver.handle as usize) {
+        if let Some(HostObject::Blocks(handle)) = self.objects.get(host_object_index(receiver.handle)) {
             return self.blocks_member(*handle, name, &[]);
         }
-        if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             if name.eq_ignore_ascii_case("count") {
                 let first = self.blocks[handle][0];
                 return Ok(Some(Value::Integer(i64::from(match axis {
@@ -27069,12 +27088,12 @@ impl Host for WorkbookHost<'_> {
             return self.blocks_member(handle, name, &[]);
         }
         if let Some(HostObject::BlocksStyle(handle, face)) =
-            self.objects.get(receiver.handle as usize)
+            self.objects.get(host_object_index(receiver.handle))
         {
             let (handle, face) = (*handle, *face);
             return self.get_from_every_block(handle, Some(face), name);
         }
-        if let Some(HostObject::Areas(handle)) = self.objects.get(receiver.handle as usize) {
+        if let Some(HostObject::Areas(handle)) = self.objects.get(host_object_index(receiver.handle)) {
             if name.eq_ignore_ascii_case("count") {
                 return Ok(Some(Value::Integer(self.blocks[*handle].len() as i64)));
             }
@@ -27094,7 +27113,7 @@ impl Host for WorkbookHost<'_> {
         if let Some(index) = self.threaded_comment_index(receiver) {
             return self.threaded_comment_member(index, name, &[]);
         }
-        if let Some(HostObject::ThreadedAuthor(index)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::ThreadedAuthor(index)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             return Ok(match name.to_ascii_lowercase().as_str() {
                 "name" => Some(Value::String(self.threaded_notes.get(index).map_or_else(String::new, |note| note.author_name.clone()))),
                 "id" => Some(Value::String(String::new())),
@@ -27125,7 +27144,7 @@ impl Host for WorkbookHost<'_> {
         // What `Protect` allowed: measured, after `Protect AllowFiltering:=
         // True` the sheet's Protection says AllowFiltering True and
         // AllowInsertingRows False.
-        if let Some(HostObject::SheetProtection(sheet)) = self.objects.get(receiver.handle as usize) {
+        if let Some(HostObject::SheetProtection(sheet)) = self.objects.get(host_object_index(receiver.handle)) {
             let held = self.protected.get(*sheet).cloned().flatten();
             let allowed = |pick: fn(&Protection) -> bool| Value::Boolean(held.as_ref().is_some_and(pick));
             let lower = name.to_ascii_lowercase();
@@ -27165,7 +27184,7 @@ impl Host for WorkbookHost<'_> {
         if let Some(scope) = self.hyperlink_scope(receiver) {
             return self.hyperlinks_member(scope, name, &[]);
         }
-        if let Some(HostObject::StyleFont(index)) = self.objects.get(receiver.handle as usize) {
+        if let Some(HostObject::StyleFont(index)) = self.objects.get(host_object_index(receiver.handle)) {
             let index = *index;
             return self.style_font_member(index, name);
         }
@@ -27198,7 +27217,7 @@ impl Host for WorkbookHost<'_> {
             }
             return Ok(None);
         }
-        if let Some(HostObject::ThreadedReplies(parent)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::ThreadedReplies(parent)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             if name.eq_ignore_ascii_case("count") {
                 return Ok(Some(Value::Integer(self.threaded_replies(parent).len() as i64)));
             }
@@ -27311,7 +27330,7 @@ impl Host for WorkbookHost<'_> {
             }
             return Ok(None);
         }
-        match self.objects.get(receiver.handle as usize) {
+        match self.objects.get(host_object_index(receiver.handle)) {
             Some(HostObject::FindFormat) if name.eq_ignore_ascii_case("font") => {
                 return Ok(Some(self.object(HostObject::FindFormatFont)));
             }
@@ -28445,7 +28464,7 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::Boolean(self.saved)));
             }
         }
-        if let Some(HostObject::SheetGroup(group)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::SheetGroup(group)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             if name.eq_ignore_ascii_case("count") {
                 let count = self.sheet_groups.get(group).map_or(0, Vec::len);
                 return Ok(Some(Value::Integer(count as i64)));
@@ -28456,7 +28475,7 @@ impl Host for WorkbookHost<'_> {
                 return self.add_worksheet(&[]).map(Some);
             }
             if name.eq_ignore_ascii_case("count") {
-                return Ok(Some(Value::Integer(self.collection_sheet_indices(*self.objects.get(receiver.handle as usize).unwrap()).len() as i64)));
+                return Ok(Some(Value::Integer(self.collection_sheet_indices(*self.objects.get(host_object_index(receiver.handle)).unwrap()).len() as i64)));
             }
             return Ok(None);
         }
@@ -29175,6 +29194,9 @@ impl Host for WorkbookHost<'_> {
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
         if name.eq_ignore_ascii_case("iconset") && self.condition_id(receiver).is_some() {
             if let Value::Object(object) = &value { return Ok(self.set_from_object(receiver, name, object)?.unwrap_or(false)); }
+            if let Some((id, None)) = self.condition_id(receiver) {
+                if self.conditions[self.condition_index(id)?].kind == 6 { return Ok(true); }
+            }
         }
         if self.is_workbook(receiver) && name.eq_ignore_ascii_case("colors") {
             self.set_workbook_colors(&value)?;
@@ -29206,7 +29228,7 @@ impl Host for WorkbookHost<'_> {
         {
             return Err(host_error(1004, "Application-defined or object-defined error"));
         }
-        match self.objects.get(receiver.handle as usize).copied() {
+        match self.objects.get(host_object_index(receiver.handle)).copied() {
             Some(HostObject::FormatBorder(replace, selection)) => {
                 let borders = if replace {
                     &mut self.replace_format_borders
@@ -29781,13 +29803,13 @@ impl Host for WorkbookHost<'_> {
             }
             _ => {}
         }
-        if let Some(HostObject::RegExp(index)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::RegExp(index)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             return self.set_regexp_member(index, name, &value);
         }
         if let Some(sheet) = self.tab_sheet(receiver) {
             return self.set_tab_member(sheet, name, &value);
         }
-        if let Some(HostObject::Sort(sheet)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::Sort(sheet)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             let state = self.sorts.entry(sheet).or_default();
             match name.to_ascii_lowercase().as_str() {
                 "header" => state.header = any_whole_number(&value).unwrap_or(0),
@@ -30057,7 +30079,7 @@ impl Host for WorkbookHost<'_> {
                 }
             }
         }
-        match self.objects.get(receiver.handle as usize) {
+        match self.objects.get(host_object_index(receiver.handle)) {
             Some(HostObject::Blocks(handle)) => {
                 let handle = *handle;
                 return self.set_on_every_block(handle, None, name, value);
@@ -31065,7 +31087,14 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("iconset") {
             if let Some((id, None)) = self.condition_id(receiver) {
                 if self.user_functions.borrow().running.is_some() { return Err(host_error(1004, "a function called from a cell cannot change the sheet")); }
-                let Some(HostObject::IconSet(target)) = self.objects.get(object.handle as usize).copied() else { return Err(host_error(13, "IconSet requires an icon set object")); };
+                let target = match self.objects.get(host_object_index(object.handle)).copied() {
+                    Some(HostObject::IconSet(target)) => target,
+                    Some(HostObject::Icon(_, index)) => index,
+                    Some(HostObject::IconSets | HostObject::RangeFont(_) | HostObject::RangeInterior(_)) => 1,
+                    _ if self.range(object).is_some() || self.worksheet(object).is_some() => 1,
+                    Some(_) => return Err(host_error(13, "IconSet requires an icon set object")),
+                    None => return Ok(Some(true)),
+                };
                 let index = self.condition_index(id)?;
                 let condition = &self.conditions[index];
                 if condition.kind != 6 { return Err(host_error(1004, "not an icon set condition")); }
@@ -31132,16 +31161,16 @@ impl Host for WorkbookHost<'_> {
             let count = icon_criteria(&self.conditions[self.condition_index(id)?])?.len();
             return Ok(Some((1..=count as u8).map(|index| self.object(HostObject::CustomIcon(id, index))).collect()));
         }
-        if let Some(object) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(object) = self.objects.get(host_object_index(receiver.handle)).copied() {
             if let Some(items) = self.regexp_items(object) {
                 return Ok(Some(items));
             }
         }
-        if let Some(HostObject::SheetGroup(group)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::SheetGroup(group)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             let sheets = self.sheet_groups.get(group).cloned().unwrap_or_default();
             return Ok(Some(sheets.into_iter().map(|sheet| self.object(HostObject::Worksheet(sheet))).collect()));
         }
-        if let Some(HostObject::Drawing(part @ (shapes::DrawingPart::OleObjects(_) | shapes::DrawingPart::OleObjectsSnapshot(..)))) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::Drawing(part @ (shapes::DrawingPart::OleObjects(_) | shapes::DrawingPart::OleObjectsSnapshot(..)))) = self.objects.get(host_object_index(receiver.handle)).copied() {
             let ids: Vec<u64> = self.ole_objects_for_part(part).into_iter()
                 .filter(|id| self.shape(*id).is_ok_and(|shape| shape.group_children.is_empty()))
                 .collect();
@@ -31152,7 +31181,7 @@ impl Host for WorkbookHost<'_> {
         }
         if self.is_worksheets(receiver) {
             let mut worksheets = Vec::with_capacity(self.workbook.sheets.len());
-            for sheet in self.collection_sheet_indices(*self.objects.get(receiver.handle as usize).unwrap()) {
+            for sheet in self.collection_sheet_indices(*self.objects.get(host_object_index(receiver.handle)).unwrap()) {
                 worksheets.push(self.object(HostObject::Worksheet(sheet)));
             }
             return Ok(Some(worksheets));
@@ -31162,7 +31191,7 @@ impl Host for WorkbookHost<'_> {
         // cell that two blocks both name: `For Each` over `A1:A2,A2:A3` gives
         // A1 A2 A2 A3. `Areas` hands over the blocks themselves instead, in
         // the same order.
-        if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             let areas = self.blocks[handle].clone();
             let mut items = Vec::new();
             for block in areas {
@@ -31179,7 +31208,7 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some(areas) = self.blocks(receiver).map(<[CellRange]>::to_vec) {
             let holding_areas =
-                matches!(self.objects.get(receiver.handle as usize), Some(HostObject::Areas(_)));
+                matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::Areas(_)));
             if holding_areas {
                 let mut items = Vec::with_capacity(areas.len());
                 for block in areas {
@@ -31268,7 +31297,7 @@ impl Host for WorkbookHost<'_> {
                 .collect();
             return Ok(Some(items));
         }
-        if let Some(HostObject::ThreadedReplies(parent)) = self.objects.get(receiver.handle as usize).copied() {
+        if let Some(HostObject::ThreadedReplies(parent)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             let items = self.threaded_replies(parent).into_iter()
                 .map(|index| self.object(HostObject::ThreadedComment(index)))
                 .collect();
@@ -38825,7 +38854,7 @@ fn execute_workbook_action_in_session(
                 if let Some(previous)=session.as_ref() {
                     if previous.documents.iter().any(|old|old.name.eq_ignore_ascii_case(&document.name) && old.sheet_index==document.sheet_index && old.base_type.rsplit('.').next().unwrap_or_default().eq_ignore_ascii_case(document.base_type.rsplit('.').next().unwrap_or_default())) {
                         if let Some(object)=previous.host.document_objects.get(&document.name.to_ascii_lowercase()) {
-                            if let Some(HostObject::Worksheet(old_index))=previous.host.objects.get(object.handle as usize) {
+                            if let Some(HostObject::Worksheet(old_index))=previous.host.objects.get(host_object_index(object.handle)) {
                                 let old=previous_workbook.as_ref().expect("loaded workbook");
                                 target=old.sheets.get(*old_index).and_then(|held|held.origin_id)
                                     .and_then(|origin|workbook.sheets.iter().position(|held|held.origin_id==Some(origin))).unwrap_or(*old_index);
@@ -38892,7 +38921,7 @@ fn execute_workbook_action_in_session(
                 let order:BTreeMap<usize,usize>=documents.iter().filter_map(|document| {
                     let current=document.sheet_index?;
                     let object=host.document_objects.get(&document.name.to_ascii_lowercase())?;
-                    match host.objects.get(object.handle as usize)? {
+                    match host.objects.get(host_object_index(object.handle))? {
                         HostObject::Worksheet(previous)=>Some((*previous,current)),
                         _=>None,
                     }
@@ -46641,6 +46670,655 @@ End Function
     }
 
     #[test]
+    fn iconset_variant_values_match_native_assignment_paths() {
+        let source = r#"Attribute VB_Name = "IconDriver"
+Option Explicit
+Public iconTrace As String
+Public Function IconPayload(ByVal kind As Long) As Variant
+ iconTrace=iconTrace & "R"
+ Select Case kind
+ Case 0:Set IconPayload=ThisWorkbook.IconSets(18)
+ Case 1:Set IconPayload=Nothing
+ Case 2:Set IconPayload=Range("D1")
+ Case 3:Set IconPayload=ActiveSheet
+ Case 4:IconPayload=18
+ Case 5:IconPayload="18"
+ Case 6:IconPayload=Empty
+ Case 7:IconPayload=Null
+ Case 8:IconPayload=True
+ Case 9:IconPayload=CVErr(2007)
+ Case 10:IconPayload=Array(18)
+ Case 11:Dim values As New Collection:Set IconPayload=values
+ End Select
+End Function
+Public Function IconAssignmentProbe(ByVal invocation As Long,ByVal kind As Long,ByVal initial As Long) As Variant
+ On Error Resume Next
+ Range("A1:A5").Value2=1:Range("D1").Value2=18
+ Range("A1:A5").FormatConditions.Delete
+ Dim rule As Object
+ Set rule=Range("A1:A5").FormatConditions.AddIconSetCondition
+ rule.IconSet=ThisWorkbook.IconSets(initial)
+ iconTrace="":Err.Clear
+ Select Case invocation
+ Case 0:Set rule.IconSet=IconPayload(kind)
+ Case 1:CallByName rule,"IconSet",VbSet,IconPayload(kind)
+ Case 2:rule.IconSet=IconPayload(kind)
+ Case 3:CallByName rule,"IconSet",VbLet,IconPayload(kind)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ IconAssignmentProbe=Array(n,d,s,hc,rule.IconSet.ID,rule.IconCriteria.Count,iconTrace)
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let cases = [
+            (4, 0, 0, 438, 4, 3),
+            (4, 0, 1, 438, 4, 3),
+            (4, 0, 2, 438, 4, 3),
+            (4, 0, 3, 438, 4, 3),
+            (4, 0, 4, 424, 4, 3),
+            (4, 0, 5, 424, 4, 3),
+            (4, 0, 6, 424, 4, 3),
+            (4, 0, 7, 424, 4, 3),
+            (4, 0, 8, 424, 4, 3),
+            (4, 0, 9, 424, 4, 3),
+            (4, 0, 10, 424, 4, 3),
+            (4, 0, 11, 438, 4, 3),
+            (4, 1, 0, 438, 4, 3),
+            (4, 1, 1, 438, 4, 3),
+            (4, 1, 2, 438, 4, 3),
+            (4, 1, 3, 438, 4, 3),
+            (4, 1, 4, 438, 4, 3),
+            (4, 1, 5, 438, 4, 3),
+            (4, 1, 6, 438, 4, 3),
+            (4, 1, 7, 438, 4, 3),
+            (4, 1, 8, 438, 4, 3),
+            (4, 1, 9, 438, 4, 3),
+            (4, 1, 10, 438, 4, 3),
+            (4, 1, 11, 438, 4, 3),
+            (4, 2, 0, 0, 18, 3),
+            (4, 2, 1, 0, 4, 3),
+            (4, 2, 2, 0, 1, 3),
+            (4, 2, 3, 0, 1, 3),
+            (4, 2, 4, 0, 4, 3),
+            (4, 2, 5, 0, 4, 3),
+            (4, 2, 6, 0, 4, 3),
+            (4, 2, 7, 0, 4, 3),
+            (4, 2, 8, 0, 4, 3),
+            (4, 2, 9, 0, 4, 3),
+            (4, 2, 10, 0, 4, 3),
+            (4, 2, 11, 0, 4, 3),
+            (4, 3, 0, 0, 18, 3),
+            (4, 3, 1, 0, 4, 3),
+            (4, 3, 2, 0, 1, 3),
+            (4, 3, 3, 0, 1, 3),
+            (4, 3, 4, 0, 4, 3),
+            (4, 3, 5, 0, 4, 3),
+            (4, 3, 6, 0, 4, 3),
+            (4, 3, 7, 0, 4, 3),
+            (4, 3, 8, 0, 4, 3),
+            (4, 3, 9, 0, 4, 3),
+            (4, 3, 10, 0, 4, 3),
+            (4, 3, 11, 0, 4, 3),
+            (15, 0, 0, 438, 15, 5),
+            (15, 0, 1, 438, 15, 5),
+            (15, 0, 2, 438, 15, 5),
+            (15, 0, 3, 438, 15, 5),
+            (15, 0, 4, 424, 15, 5),
+            (15, 0, 5, 424, 15, 5),
+            (15, 0, 6, 424, 15, 5),
+            (15, 0, 7, 424, 15, 5),
+            (15, 0, 8, 424, 15, 5),
+            (15, 0, 9, 424, 15, 5),
+            (15, 0, 10, 424, 15, 5),
+            (15, 0, 11, 438, 15, 5),
+            (15, 1, 0, 438, 15, 5),
+            (15, 1, 1, 438, 15, 5),
+            (15, 1, 2, 438, 15, 5),
+            (15, 1, 3, 438, 15, 5),
+            (15, 1, 4, 438, 15, 5),
+            (15, 1, 5, 438, 15, 5),
+            (15, 1, 6, 438, 15, 5),
+            (15, 1, 7, 438, 15, 5),
+            (15, 1, 8, 438, 15, 5),
+            (15, 1, 9, 438, 15, 5),
+            (15, 1, 10, 438, 15, 5),
+            (15, 1, 11, 438, 15, 5),
+            (15, 2, 0, 0, 18, 3),
+            (15, 2, 1, 0, 15, 5),
+            (15, 2, 2, 0, 1, 3),
+            (15, 2, 3, 0, 1, 3),
+            (15, 2, 4, 0, 15, 5),
+            (15, 2, 5, 0, 15, 5),
+            (15, 2, 6, 0, 15, 5),
+            (15, 2, 7, 0, 15, 5),
+            (15, 2, 8, 0, 15, 5),
+            (15, 2, 9, 0, 15, 5),
+            (15, 2, 10, 0, 15, 5),
+            (15, 2, 11, 0, 15, 5),
+            (15, 3, 0, 0, 18, 3),
+            (15, 3, 1, 0, 15, 5),
+            (15, 3, 2, 0, 1, 3),
+            (15, 3, 3, 0, 1, 3),
+            (15, 3, 4, 0, 15, 5),
+            (15, 3, 5, 0, 15, 5),
+            (15, 3, 6, 0, 15, 5),
+            (15, 3, 7, 0, 15, 5),
+            (15, 3, 8, 0, 15, 5),
+            (15, 3, 9, 0, 15, 5),
+            (15, 3, 10, 0, 15, 5),
+            (15, 3, 11, 0, 15, 5),
+        ];
+        let mut failures = Vec::new();
+        for (initial, invocation, kind, number, id, count) in cases {
+            let (description, error_source, help) = match number {
+                0 => ("", "", 0),
+                424 => ("オブジェクトが必要です。", "VBAProject", 1000424),
+                438 => ("オブジェクトは、このプロパティまたはメソッドをサポートしていません。", "VBAProject", 1000438),
+                _ => unreachable!(),
+            };
+            let expected = vec![Value::Integer(number), Value::String(description.into()),
+                Value::String(error_source.into()), Value::Integer(help), Value::Integer(id), Value::Integer(count), Value::String("R".into())];
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("IconDriver.IconAssignmentProbe", vec![Value::Integer(invocation), Value::Integer(kind), Value::Integer(initial)]).unwrap();
+            match actual {
+                Value::Array(answer) if answer.values == expected => {}
+                other => failures.push(format!("initial={initial} invocation={invocation} kind={kind}: {other:?} != {expected:?}")),
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn iconset_argument_storage_matches_native_automation() {
+        let source = r#"Attribute VB_Name = "IconStorageDriver"
+Option Explicit
+Public Function ObjectPayload(ByVal kind As Long) As Object
+ Select Case kind
+ Case 0:Set ObjectPayload=ThisWorkbook.IconSets(18)
+ Case 1:Set ObjectPayload=Nothing
+ Case 2:Set ObjectPayload=Range("D1")
+ Case 3:Set ObjectPayload=ActiveSheet
+ Case 4:Dim values As New Collection:Set ObjectPayload=values
+ End Select
+End Function
+Public Function VariantPayload(ByVal kind As Long) As Variant
+ Set VariantPayload=ObjectPayload(kind)
+End Function
+Public Function StorageProbe(ByVal mode As Long,ByVal kind As Long,ByVal initial As Long) As Variant
+ On Error Resume Next
+ Range("A1:A5").Value2=1:Range("D1").Value2=18
+ Range("A1:A5").FormatConditions.Delete
+ Dim rule As Object,obj As Object,boxed As Variant,typed As IconSet
+ Set rule=Range("A1:A5").FormatConditions.AddIconSetCondition
+ rule.IconSet=ThisWorkbook.IconSets(initial)
+ Set obj=ObjectPayload(kind):Set boxed=obj
+ If kind<2 Then Set typed=obj
+ Err.Clear
+ Select Case mode
+ Case 0:rule.IconSet=obj
+ Case 1:rule.IconSet=boxed
+ Case 2:CallByName rule,"IconSet",VbLet,obj
+ Case 3:CallByName rule,"IconSet",VbLet,boxed
+ Case 4:CallByName rule,"IconSet",VbLet,(obj)
+ Case 5:CallByName rule,"IconSet",VbLet,(boxed)
+ Case 6:CallByName rule,"IconSet",VbLet,ObjectPayload(kind)
+ Case 7:CallByName rule,"IconSet",VbLet,VariantPayload(kind)
+ Case 8:CallByName rule,"IconSet",VbLet,ThisWorkbook.IconSets(18)
+ Case 9:CallByName rule,"IconSet",VbLet,typed
+ Case 10:rule.IconSet=typed
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ StorageProbe=Array(n,d,s,hc,rule.IconSet.ID,rule.IconCriteria.Count)
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let cases = [
+            (4, 0, 0, 0, 18, 3),
+            (4, 0, 1, 0, 4, 3),
+            (4, 0, 2, 0, 1, 3),
+            (4, 0, 3, 0, 1, 3),
+            (4, 0, 4, 0, 4, 3),
+            (4, 1, 0, 0, 18, 3),
+            (4, 1, 1, 0, 4, 3),
+            (4, 1, 2, 0, 1, 3),
+            (4, 1, 3, 0, 1, 3),
+            (4, 1, 4, 0, 4, 3),
+            (4, 2, 0, 0, 4, 3),
+            (4, 2, 1, 0, 4, 3),
+            (4, 2, 2, 0, 4, 3),
+            (4, 2, 3, 0, 4, 3),
+            (4, 2, 4, 0, 4, 3),
+            (4, 3, 0, 0, 4, 3),
+            (4, 3, 1, 0, 4, 3),
+            (4, 3, 2, 0, 4, 3),
+            (4, 3, 3, 0, 4, 3),
+            (4, 3, 4, 0, 4, 3),
+            (4, 4, 0, 450, 4, 3),
+            (4, 4, 1, 91, 4, 3),
+            (4, 4, 2, 0, 4, 3),
+            (4, 4, 3, 438, 4, 3),
+            (4, 4, 4, 450, 4, 3),
+            (4, 5, 0, 450, 4, 3),
+            (4, 5, 1, 91, 4, 3),
+            (4, 5, 2, 0, 4, 3),
+            (4, 5, 3, 438, 4, 3),
+            (4, 5, 4, 450, 4, 3),
+            (4, 6, 0, 0, 18, 3),
+            (4, 6, 1, 0, 4, 3),
+            (4, 6, 2, 0, 1, 3),
+            (4, 6, 3, 0, 1, 3),
+            (4, 6, 4, 0, 4, 3),
+            (4, 7, 0, 0, 18, 3),
+            (4, 7, 1, 0, 4, 3),
+            (4, 7, 2, 0, 1, 3),
+            (4, 7, 3, 0, 1, 3),
+            (4, 7, 4, 0, 4, 3),
+            (4, 8, 0, 0, 18, 3),
+            (4, 9, 0, 0, 4, 3),
+            (4, 9, 1, 0, 4, 3),
+            (4, 10, 0, 0, 18, 3),
+            (4, 10, 1, 0, 4, 3),
+            (15, 0, 0, 0, 18, 3),
+            (15, 0, 1, 0, 15, 5),
+            (15, 0, 2, 0, 1, 3),
+            (15, 0, 3, 0, 1, 3),
+            (15, 0, 4, 0, 15, 5),
+            (15, 1, 0, 0, 18, 3),
+            (15, 1, 1, 0, 15, 5),
+            (15, 1, 2, 0, 1, 3),
+            (15, 1, 3, 0, 1, 3),
+            (15, 1, 4, 0, 15, 5),
+            (15, 2, 0, 0, 15, 5),
+            (15, 2, 1, 0, 15, 5),
+            (15, 2, 2, 0, 15, 5),
+            (15, 2, 3, 0, 15, 5),
+            (15, 2, 4, 0, 15, 5),
+            (15, 3, 0, 0, 15, 5),
+            (15, 3, 1, 0, 15, 5),
+            (15, 3, 2, 0, 15, 5),
+            (15, 3, 3, 0, 15, 5),
+            (15, 3, 4, 0, 15, 5),
+            (15, 4, 0, 450, 15, 5),
+            (15, 4, 1, 91, 15, 5),
+            (15, 4, 2, 0, 15, 5),
+            (15, 4, 3, 438, 15, 5),
+            (15, 4, 4, 450, 15, 5),
+            (15, 5, 0, 450, 15, 5),
+            (15, 5, 1, 91, 15, 5),
+            (15, 5, 2, 0, 15, 5),
+            (15, 5, 3, 438, 15, 5),
+            (15, 5, 4, 450, 15, 5),
+            (15, 6, 0, 0, 18, 3),
+            (15, 6, 1, 0, 15, 5),
+            (15, 6, 2, 0, 1, 3),
+            (15, 6, 3, 0, 1, 3),
+            (15, 6, 4, 0, 15, 5),
+            (15, 7, 0, 0, 18, 3),
+            (15, 7, 1, 0, 15, 5),
+            (15, 7, 2, 0, 1, 3),
+            (15, 7, 3, 0, 1, 3),
+            (15, 7, 4, 0, 15, 5),
+            (15, 8, 0, 0, 18, 3),
+            (15, 9, 0, 0, 15, 5),
+            (15, 9, 1, 0, 15, 5),
+            (15, 10, 0, 0, 18, 3),
+            (15, 10, 1, 0, 15, 5),
+        ];
+        let mut failures = Vec::new();
+        for (initial, invocation, kind, number, id, count) in cases {
+            let (description, error_source, help) = match number {
+                0 => ("", "", 0),
+                91 => ("オブジェクト変数または With ブロック変数が設定されていません。", "VBAProject", 1000091),
+                438 => ("オブジェクトは、このプロパティまたはメソッドをサポートしていません。", "VBAProject", 1000438),
+                450 => ("引数の数が一致していません。または不正なプロパティを指定しています。", "VBAProject", 1000450),
+                _ => unreachable!(),
+            };
+            let expected = vec![Value::Integer(number), Value::String(description.into()),
+                Value::String(error_source.into()), Value::Integer(help), Value::Integer(id), Value::Integer(count)];
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("IconStorageDriver.StorageProbe", vec![Value::Integer(invocation), Value::Integer(kind), Value::Integer(initial)]).unwrap();
+            match actual {
+                Value::Array(answer) if answer.values == expected => {}
+                other => failures.push(format!("initial={initial} invocation={invocation} kind={kind}: {other:?} != {expected:?}")),
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn iconset_ranges_and_sheet_objects_match_native_variants() {
+        let source = r#"Attribute VB_Name = "IconStorageDriver"
+Option Explicit
+Public Function ObjectPayload(ByVal kind As Long) As Object
+ Select Case kind
+ Case 0:Set ObjectPayload=Range("E7")
+ Case 1:Set ObjectPayload=Range("G4:I8")
+ Case 2:Set ObjectPayload=Worksheets(2)
+ Case 3:Set ObjectPayload=Range("D1").Font
+ End Select
+End Function
+Public Function VariantPayload(ByVal kind As Long) As Variant
+ Set VariantPayload=ObjectPayload(kind)
+End Function
+Public Function StorageProbe(ByVal mode As Long,ByVal kind As Long,ByVal initial As Long) As Variant
+ On Error Resume Next
+ Range("A1:A5").Value2=1:Range("D1").Value2=18
+ Range("A1:A5").FormatConditions.Delete
+ Dim rule As Object,obj As Object,boxed As Variant,typed As IconSet
+ Set rule=Range("A1:A5").FormatConditions.AddIconSetCondition
+ rule.IconSet=ThisWorkbook.IconSets(initial)
+ Set obj=ObjectPayload(kind):Set boxed=obj
+ If kind<2 Then Set typed=obj
+ Err.Clear
+ Select Case mode
+ Case 0:rule.IconSet=obj
+ Case 1:rule.IconSet=boxed
+ Case 2:CallByName rule,"IconSet",VbLet,obj
+ Case 3:CallByName rule,"IconSet",VbLet,boxed
+ Case 4:CallByName rule,"IconSet",VbLet,(obj)
+ Case 5:CallByName rule,"IconSet",VbLet,(boxed)
+ Case 6:CallByName rule,"IconSet",VbLet,ObjectPayload(kind)
+ Case 7:CallByName rule,"IconSet",VbLet,VariantPayload(kind)
+ Case 8:CallByName rule,"IconSet",VbLet,ThisWorkbook.IconSets(18)
+ Case 9:CallByName rule,"IconSet",VbLet,typed
+ Case 10:rule.IconSet=typed
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ StorageProbe=Array(n,d,s,hc,rule.IconSet.ID,rule.IconCriteria.Count)
+End Function
+Public Function ScalarProbe(ByVal mode As Long) As Variant
+ On Error Resume Next
+ Dim obj As Object,result As Variant,n As Long,d As String,s As String,h As Long
+ Set obj=ThisWorkbook.IconSets(18):Err.Clear
+ Select Case mode
+ Case 0:result=VarType(obj)
+ Case 1:result=CStr(obj)
+ Case 2:result=obj
+ End Select
+ n=Err.Number:d=Err.Description:s=Err.Source:h=Err.HelpContext:Err.Clear
+ ScalarProbe=Array(n,d,s,h,result)
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let cases = [
+            (4, 0, 0, 1, 3),
+            (4, 0, 1, 1, 3),
+            (4, 0, 2, 1, 3),
+            (4, 0, 3, 1, 3),
+            (4, 6, 0, 1, 3),
+            (4, 6, 1, 1, 3),
+            (4, 6, 2, 1, 3),
+            (4, 6, 3, 1, 3),
+            (15, 0, 0, 1, 3),
+            (15, 0, 1, 1, 3),
+            (15, 0, 2, 1, 3),
+            (15, 0, 3, 1, 3),
+            (15, 6, 0, 1, 3),
+            (15, 6, 1, 1, 3),
+            (15, 6, 2, 1, 3),
+            (15, 6, 3, 1, 3),
+        ];
+        for (initial, invocation, kind, id, count) in cases {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.add_worksheet(&[]).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("IconStorageDriver.StorageProbe", vec![Value::Integer(invocation), Value::Integer(kind), Value::Integer(initial)]).unwrap();
+            let Value::Array(answer) = actual else { panic!("expected IconSet variant result"); };
+            assert_eq!(answer.values, vec![Value::Integer(0), Value::String(String::new()), Value::String(String::new()),
+                Value::Integer(0), Value::Integer(id), Value::Integer(count)], "initial={initial} invocation={invocation} kind={kind}");
+        }
+        let scalar_cases = [
+            (0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(9)]),
+            (1, vec![Value::Integer(450), Value::String("引数の数が一致していません。または不正なプロパティを指定しています。".into()), Value::String("VBAProject".into()), Value::Integer(1000450), Value::Empty]),
+            (2, vec![Value::Integer(450), Value::String("引数の数が一致していません。または不正なプロパティを指定しています。".into()), Value::String("VBAProject".into()), Value::Integer(1000450), Value::Empty]),
+        ];
+        for (invocation, expected) in scalar_cases {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("IconStorageDriver.ScalarProbe", vec![Value::Integer(invocation)]).unwrap();
+            let Value::Array(answer) = actual else { panic!("expected IconSet scalar result"); };
+            assert_eq!(answer.values, expected, "scalar invocation={invocation}");
+        }
+    }
+
+    #[test]
+    fn iconset_dispatch_objects_and_scalar_reads_match_native() {
+        let source = r#"Attribute VB_Name = "IconStorageDriver"
+Option Explicit
+Public Function ObjectPayload(ByVal kind As Long) As Object
+ Select Case kind
+ Case 0:Set ObjectPayload=Range("D1").Font
+ Case 1:Set ObjectPayload=Range("D1").Interior
+ Case 2:Set ObjectPayload=ThisWorkbook.IconSets
+ Case 3:Set ObjectPayload=ThisWorkbook.IconSets(15)(2)
+ End Select
+End Function
+Public Function VariantPayload(ByVal kind As Long) As Variant
+ Set VariantPayload=ObjectPayload(kind)
+End Function
+Public Function StorageProbe(ByVal mode As Long,ByVal kind As Long,ByVal initial As Long) As Variant
+ On Error Resume Next
+ Range("A1:A5").Value2=1:Range("D1").Value2=18
+ Range("A1:A5").FormatConditions.Delete
+ Dim rule As Object,obj As Object,boxed As Variant,typed As IconSet
+ Set rule=Range("A1:A5").FormatConditions.AddIconSetCondition
+ rule.IconSet=ThisWorkbook.IconSets(initial)
+ Set obj=ObjectPayload(kind):Set boxed=obj
+ If kind<2 Then Set typed=obj
+ Err.Clear
+ Select Case mode
+ Case 0:rule.IconSet=obj
+ Case 1:rule.IconSet=boxed
+ Case 2:CallByName rule,"IconSet",VbLet,obj
+ Case 3:CallByName rule,"IconSet",VbLet,boxed
+ Case 4:CallByName rule,"IconSet",VbLet,(obj)
+ Case 5:CallByName rule,"IconSet",VbLet,(boxed)
+ Case 6:CallByName rule,"IconSet",VbLet,ObjectPayload(kind)
+ Case 7:CallByName rule,"IconSet",VbLet,VariantPayload(kind)
+ Case 8:CallByName rule,"IconSet",VbLet,ThisWorkbook.IconSets(18)
+ Case 9:CallByName rule,"IconSet",VbLet,typed
+ Case 10:rule.IconSet=typed
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ StorageProbe=Array(n,d,s,hc,rule.IconSet.ID,rule.IconCriteria.Count)
+End Function
+Public Function ScalarProbe(ByVal mode As Long) As Variant
+ On Error Resume Next
+ Dim obj As Object,result As Variant,n As Long,d As String,s As String,h As Long
+ Set obj=ThisWorkbook.IconSets(18):Err.Clear
+ Select Case mode
+ Case 0:result=VarType(obj)
+ Case 1:result=CStr(obj)
+ Case 2:result=obj
+ End Select
+ n=Err.Number:d=Err.Description:s=Err.Source:h=Err.HelpContext:Err.Clear
+ ScalarProbe=Array(n,d,s,h,result)
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let cases = [
+            (4, 0, 0, 1, 3),
+            (4, 0, 1, 1, 3),
+            (4, 0, 2, 1, 3),
+            (4, 0, 3, 2, 3),
+            (4, 6, 0, 1, 3),
+            (4, 6, 1, 1, 3),
+            (4, 6, 2, 1, 3),
+            (4, 6, 3, 2, 3),
+            (15, 0, 0, 1, 3),
+            (15, 0, 1, 1, 3),
+            (15, 0, 2, 1, 3),
+            (15, 0, 3, 2, 3),
+            (15, 6, 0, 1, 3),
+            (15, 6, 1, 1, 3),
+            (15, 6, 2, 1, 3),
+            (15, 6, 3, 2, 3),
+        ];
+        for (initial, invocation, kind, id, count) in cases {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.add_worksheet(&[]).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("IconStorageDriver.StorageProbe", vec![Value::Integer(invocation), Value::Integer(kind), Value::Integer(initial)]).unwrap();
+            let Value::Array(answer) = actual else { panic!("expected IconSet variant result"); };
+            assert_eq!(answer.values, vec![Value::Integer(0), Value::String(String::new()), Value::String(String::new()),
+                Value::Integer(0), Value::Integer(id), Value::Integer(count)], "initial={initial} invocation={invocation} kind={kind}");
+        }
+        let scalar_cases = [
+            (0, vec![Value::Integer(0), Value::String("".into()), Value::String("".into()), Value::Integer(0), Value::Integer(9)]),
+            (1, vec![Value::Integer(450), Value::String("引数の数が一致していません。または不正なプロパティを指定しています。".into()), Value::String("VBAProject".into()), Value::Integer(1000450), Value::Empty]),
+            (2, vec![Value::Integer(450), Value::String("引数の数が一致していません。または不正なプロパティを指定しています。".into()), Value::String("VBAProject".into()), Value::Integer(1000450), Value::Empty]),
+        ];
+        for (invocation, expected) in scalar_cases {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("IconStorageDriver.ScalarProbe", vec![Value::Integer(invocation)]).unwrap();
+            let Value::Array(answer) = actual else { panic!("expected IconSet scalar result"); };
+            assert_eq!(answer.values, expected, "scalar invocation={invocation}");
+        }
+    }
+
+    #[test]
+    fn iconset_receiver_evaluation_matches_native_assignment_order() {
+        let source = r#"Attribute VB_Name = "IconStorageDriver"
+Option Explicit
+Public receiverTrace As String
+Public currentRule As Object
+Public Function ReceiverTarget(ByVal kind As Long) As Object
+ receiverTrace=receiverTrace & "L"
+ Select Case kind
+ Case 0:Set ReceiverTarget=currentRule
+ Case 1:Set ReceiverTarget=Range("D1")
+ Case 2:Set ReceiverTarget=ActiveSheet
+ End Select
+End Function
+Public Function ReceiverValue(ByVal mode As Long) As Variant
+ receiverTrace=receiverTrace & "R"
+ Select Case mode
+ Case 0:Set ReceiverValue=ThisWorkbook.IconSets(18)
+ Case 1:Set ReceiverValue=Nothing
+ Case 2:ReceiverValue=42
+ End Select
+End Function
+Public Function StorageProbe(ByVal mode As Long,ByVal kind As Long,ByVal initial As Long) As Variant
+ On Error Resume Next
+ Range("A1:A5").Value2=1
+ Range("A1:A5").FormatConditions.Delete
+ Set currentRule=Range("A1:A5").FormatConditions.AddIconSetCondition
+ currentRule.IconSet=ThisWorkbook.IconSets(initial)
+ receiverTrace="":Err.Clear
+ If mode<3 Then
+ ReceiverTarget(kind).IconSet=ReceiverValue(mode)
+ Else
+ With ReceiverTarget(kind)
+ .IconSet=ReceiverValue(mode-3)
+ End With
+ End If
+ Dim n As Long,d As String,s As String,h As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:h=Err.HelpContext:Err.Clear
+ StorageProbe=Array(n,d,s,h,currentRule.IconSet.ID,receiverTrace)
+End Function
+"#;
+        let (module, classes) = oxivba_core::parse_project(source).unwrap();
+        let cases = [
+            (4, 0, 0, 0, 18, "RL"),
+            (4, 0, 1, 438, 4, "RL"),
+            (4, 0, 2, 438, 4, "RL"),
+            (4, 1, 0, 0, 4, "RL"),
+            (4, 1, 1, 438, 4, "RL"),
+            (4, 1, 2, 438, 4, "RL"),
+            (4, 2, 0, 0, 4, "RL"),
+            (4, 2, 1, 438, 4, "RL"),
+            (4, 2, 2, 438, 4, "RL"),
+            (4, 3, 0, 0, 18, "LR"),
+            (4, 3, 1, 438, 4, "LR"),
+            (4, 3, 2, 438, 4, "LR"),
+            (4, 4, 0, 0, 4, "LR"),
+            (4, 4, 1, 438, 4, "LR"),
+            (4, 4, 2, 438, 4, "LR"),
+            (4, 5, 0, 0, 4, "LR"),
+            (4, 5, 1, 438, 4, "LR"),
+            (4, 5, 2, 438, 4, "LR"),
+            (15, 0, 0, 0, 18, "RL"),
+            (15, 0, 1, 438, 15, "RL"),
+            (15, 0, 2, 438, 15, "RL"),
+            (15, 1, 0, 0, 15, "RL"),
+            (15, 1, 1, 438, 15, "RL"),
+            (15, 1, 2, 438, 15, "RL"),
+            (15, 2, 0, 0, 15, "RL"),
+            (15, 2, 1, 438, 15, "RL"),
+            (15, 2, 2, 438, 15, "RL"),
+            (15, 3, 0, 0, 18, "LR"),
+            (15, 3, 1, 438, 15, "LR"),
+            (15, 3, 2, 438, 15, "LR"),
+            (15, 4, 0, 0, 15, "LR"),
+            (15, 4, 1, 438, 15, "LR"),
+            (15, 4, 2, 438, 15, "LR"),
+            (15, 5, 0, 0, 15, "LR"),
+            (15, 5, 1, 438, 15, "LR"),
+            (15, 5, 2, 438, 15, "LR"),
+        ];
+        for (initial, invocation, kind, number, id, trace) in cases {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.add_worksheet(&[]).unwrap();
+            host.error_language = ErrorLanguage::Japanese;
+            let actual = Runtime::new(&module).with_classes(&classes).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .call("IconStorageDriver.StorageProbe", vec![Value::Integer(invocation), Value::Integer(kind), Value::Integer(initial)]).unwrap();
+            let expected = vec![Value::Integer(number),
+                Value::String(if number == 0 { "" } else { "オブジェクトは、このプロパティまたはメソッドをサポートしていません。" }.into()),
+                Value::String(if number == 0 { "" } else { "VBAProject" }.into()),
+                Value::Integer(if number == 0 { 0 } else { 1_000_438 }),
+                Value::Integer(id), Value::String(trace.into())];
+            let Value::Array(answer) = actual else { panic!("expected IconSet receiver evaluation result"); };
+            assert_eq!(answer.values, expected, "initial={initial} invocation={invocation} kind={kind}");
+        }
+    }
+
+    #[test]
+    fn internal_object_handles_do_not_alias_host_objects() {
+        let mut book = workbook();
+        let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+        let cell = CellRange { sheet: 0, start_row: 1, start_column: 0, end_row: 1, end_column: 0 };
+        for part in [HostObject::Workbook, HostObject::Worksheet(0), HostObject::Range(cell),
+            HostObject::RangeFont(cell), HostObject::IconSet(18)] {
+            let Value::Object(original) = host.object(part) else { unreachable!(); };
+            for high in [1_u64 << 32, 1_u64 << 63] {
+                let foreign = ObjectRef::new(high | original.handle, "Collection");
+                assert!(!host.is_workbook(&foreign));
+                assert_eq!(host.worksheet(&foreign), None);
+                assert!(host.range(&foreign).is_none());
+                assert!(host.range_font(&foreign).is_none());
+                assert_eq!(host.default_member_error(&foreign), None);
+            }
+        }
+    }
+
+    #[test]
     fn iconset_reference_invocations_match_native_set_and_let() {
         let module = parse_module(r#"Public Function IconSetReferenceProbe(ByVal invocation As Long,ByVal missing As Boolean) As Variant
  On Error Resume Next
@@ -46665,7 +47343,7 @@ End Function
  IconSetReferenceProbe=Array(n,d,s,hc,rule.IconSet.ID)
 End Function
 "#).unwrap();
-        for (invocation, missing) in [(0, false), (0, true), (1, false), (1, true), (2, false)] {
+        for (invocation, missing) in [(0, false), (0, true), (1, false), (1, true), (2, false), (2, true), (3, false), (3, true)] {
             let mut book = workbook();
             let mut host = WorkbookHost::new(&mut book, 0).unwrap();
             host.error_language = ErrorLanguage::Japanese;
@@ -46677,7 +47355,7 @@ End Function
                 Value::String(if rejected { "オブジェクトは、このプロパティまたはメソッドをサポートしていません。" } else { "" }.into()),
                 Value::String(if rejected { "VBAProject" } else { "" }.into()),
                 Value::Integer(if rejected { 1_000_438 } else { 0 }),
-                Value::Integer(if rejected { 4 } else { 18 })];
+                Value::Integer(if invocation == 2 && !missing { 18 } else { 4 })];
             let Value::Array(answer) = actual else { panic!("expected IconSet invocation results"); };
             assert_eq!(answer.values, expected, "invocation={invocation} missing={missing}");
         }

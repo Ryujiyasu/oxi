@@ -236,6 +236,22 @@ pub trait Host {
         None
     }
 
+    /// A VARIANT-valued host setter can inspect an object or Nothing without
+    /// first reading its default member. Automation also distinguishes a
+    /// reference to a variable from a value expression. Return the value the
+    /// setter should receive, or None for ordinary VBA value conversion.
+    /// A missing receiver only queries whether this name needs that handling;
+    /// the runtime checks again after resolving the actual host receiver.
+    fn property_assignment_value(&self, _receiver: Option<&ObjectRef>, _name: &str, _value: &Value, _by_reference: bool) -> Option<Value> {
+        None
+    }
+
+    /// An indexed default member cannot supply a scalar without its indices.
+    /// Type queries may still inspect the object without reading that member.
+    fn default_member_error(&self, _receiver: &ObjectRef) -> Option<i64> {
+        None
+    }
+
     /// Bind Automation getter indices separately from the host's ordinary
     /// dotted syntax, which can also index the array a property returns.
     fn prepare_automation_get(&self, _receiver: &ObjectRef, _name: &str, _args: &[Value]) -> Result<Option<(String, Vec<Value>)>, String> {
@@ -3949,6 +3965,29 @@ impl<'a> Runtime<'a> {
             } => {
                 let evaluated=self.prepare_named_setter(target,frame,false)?;
                 let value = self.eval_expr(value, frame)?;
+                let variant_member = match target {
+                    Expr::Member { object, name, span: at, .. }
+                        if self.source_class_name(object, frame).is_none()
+                            && self.host.as_deref().is_some_and(|host| host.property_assignment_value(None, name, &value, false).is_some()) =>
+                    {
+                        Some((self.eval_object(object, frame, at.line)?, name))
+                    }
+                    Expr::WithMember(name, _) => match frame.with_objects.last() {
+                        Some(WithSubject::Object { receiver, .. }) => Some((receiver.clone(), name)),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some((receiver, name)) = variant_member {
+                    if !self.instance_handles_member(&receiver, name) {
+                        if let Some(prepared) = self.host.as_deref().and_then(|host| host.property_assignment_value(Some(&receiver), name, &value, false)) {
+                            if self.host_set(&receiver, name, prepared, span.line)? {
+                                return Ok(Flow::Continue);
+                            }
+                            return Err(no_such_member(format!("{}.{} has no setter", receiver.kind, name), Some(span.line)));
+                        }
+                    }
+                }
                 if matches!(value, Value::Nothing) {
                     let member = match target {
                         Expr::Member { object, name, .. }
@@ -8461,6 +8500,11 @@ impl<'a> Runtime<'a> {
             );
             for value in &args {
                 if let Value::Object(object) = value {
+                    if !asks_about {
+                        if let Some(number) = self.host.as_deref().and_then(|host| host.default_member_error(object)) {
+                            return Err(language_error(number, "the default member requires arguments", line.unwrap_or(0)));
+                        }
+                    }
                     if !asks_about && matches!(object.kind.as_str(), "Collection" | "Dictionary") {
                         return Err(error(
                             RuntimeErrorKind::ArgumentCount,
@@ -8738,6 +8782,15 @@ impl<'a> Runtime<'a> {
                 let (value, indices) = rest.split_last().expect("assignment value checked above");
                 let mut value = value.clone();
                 if kind == 4 {
+                    if indices.is_empty() {
+                        let by_reference = source.and_then(|(_, values, _)| values.last())
+                            .is_some_and(|argument| argument.reference.borrow().is_some());
+                        if let Some(prepared) = self.host.as_deref().and_then(|host| host.property_assignment_value(Some(receiver), &member, &value, by_reference)) {
+                            return if self.host_set(receiver, &member, prepared, at)? {
+                                Ok(Value::Empty)
+                            } else { Err(missing()) };
+                        }
+                    }
                     if indices.is_empty() {
                         if let Some(number) = self.host.as_deref().and_then(|host| host.property_assignment_error(Some(receiver), &member, &value)) {
                             return Err(language_error(number, format!("invalid value for property {member}"), at));
@@ -9080,6 +9133,9 @@ impl<'a> Runtime<'a> {
                 Some(line),
             )),
             Value::Object(receiver) => self.host_get(&receiver, "Value", line)?.ok_or_else(|| {
+                if let Some(number) = self.host.as_deref().and_then(|host| host.default_member_error(&receiver)) {
+                    return language_error(number, "the default member requires arguments", line);
+                }
                 no_such_member(
                     format!("{} has no default scalar Value property", receiver.kind),
                     Some(line),

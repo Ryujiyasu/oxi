@@ -1992,5 +1992,90 @@ const conditionDirty = wasm.run_spreadsheet_vba_with_outcome(wasm.parse_spreadsh
 if (conditionDirty.error || conditionDirty.result?.value !== 'True|False|False|False|False' || !conditionDirty.workbook_changed) {
     failures.push({case: 'conditional_format_dirty', phase: 'runtime', result: conditionDirty.result, error: conditionDirty.error, changed: conditionDirty.workbook_changed});
 }
+
+// Frozen Excel VARIANT/Automation results also run against the wasm32 host.
+{
+    const controls = [
+        {source: String.raw`Public Function IconSetReferenceProbe(ByVal invocation As Long,ByVal missing As Boolean) As Variant
+ On Error Resume Next
+ Range("A1:A3").Value2=1
+ Range("A1:A3").FormatConditions.Delete
+ Dim rule As Object,icons As Object
+ Set rule=Range("A1:A3").FormatConditions.AddIconSetCondition
+ If missing Then
+ Set icons=Nothing
+ Else
+ Set icons=ThisWorkbook.IconSets(18)
+ End If
+ Err.Clear
+ Select Case invocation
+ Case 0:Set rule.IconSet=icons
+ Case 1:CallByName rule,"IconSet",VbSet,icons
+ Case 2:rule.IconSet=icons
+ Case 3:CallByName rule,"IconSet",VbLet,icons
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ IconSetReferenceProbe=Array(n,d,s,hc,rule.IconSet.ID)
+End Function
+`, entry: "IconSetReferenceProbe", cases: [{"args": [0, false], "expected": [438, "オブジェクトは、このプロパティまたはメソッドをサポートしていません。", "VBAProject", 1000438, 4], "id": 4, "count": 3}, {"args": [0, true], "expected": [438, "オブジェクトは、このプロパティまたはメソッドをサポートしていません。", "VBAProject", 1000438, 4], "id": 4, "count": 3}, {"args": [1, false], "expected": [438, "オブジェクトは、このプロパティまたはメソッドをサポートしていません。", "VBAProject", 1000438, 4], "id": 4, "count": 3}, {"args": [1, true], "expected": [438, "オブジェクトは、このプロパティまたはメソッドをサポートしていません。", "VBAProject", 1000438, 4], "id": 4, "count": 3}, {"args": [2, false], "expected": [0, "", "", 0, 18], "id": 18, "count": 3}, {"args": [2, true], "expected": [0, "", "", 0, 4], "id": 4, "count": 3}, {"args": [3, false], "expected": [0, "", "", 0, 4], "id": 4, "count": 3}, {"args": [3, true], "expected": [0, "", "", 0, 4], "id": 4, "count": 3}]},
+        {source: String.raw`Attribute VB_Name = "IconDriver"
+Option Explicit
+Public iconTrace As String
+Public Function IconPayload(ByVal kind As Long) As Variant
+ iconTrace=iconTrace & "R"
+ Select Case kind
+ Case 0:Set IconPayload=ThisWorkbook.IconSets(18)
+ Case 1:Set IconPayload=Nothing
+ Case 2:Set IconPayload=Range("D1")
+ Case 3:Set IconPayload=ActiveSheet
+ Case 4:IconPayload=18
+ Case 5:IconPayload="18"
+ Case 6:IconPayload=Empty
+ Case 7:IconPayload=Null
+ Case 8:IconPayload=True
+ Case 9:IconPayload=CVErr(2007)
+ Case 10:IconPayload=Array(18)
+ Case 11:Dim values As New Collection:Set IconPayload=values
+ End Select
+End Function
+Public Function IconAssignmentProbe(ByVal invocation As Long,ByVal kind As Long,ByVal initial As Long) As Variant
+ On Error Resume Next
+ Range("A1:A5").Value2=1:Range("D1").Value2=18
+ Range("A1:A5").FormatConditions.Delete
+ Dim rule As Object
+ Set rule=Range("A1:A5").FormatConditions.AddIconSetCondition
+ rule.IconSet=ThisWorkbook.IconSets(initial)
+ iconTrace="":Err.Clear
+ Select Case invocation
+ Case 0:Set rule.IconSet=IconPayload(kind)
+ Case 1:CallByName rule,"IconSet",VbSet,IconPayload(kind)
+ Case 2:rule.IconSet=IconPayload(kind)
+ Case 3:CallByName rule,"IconSet",VbLet,IconPayload(kind)
+ End Select
+ Dim n As Long,d As String,s As String,hc As Long
+ n=Err.Number:d=Err.Description:s=Err.Source:hc=Err.HelpContext:Err.Clear
+ IconAssignmentProbe=Array(n,d,s,hc,rule.IconSet.ID,rule.IconCriteria.Count,iconTrace)
+End Function
+`, entry: "IconDriver.IconAssignmentProbe", cases: [{"args": [2, 0, 4], "expected": [0, "", "", 0, 18, 3, "R"], "id": 18, "count": 3}, {"args": [2, 1, 4], "expected": [0, "", "", 0, 4, 3, "R"], "id": 4, "count": 3}, {"args": [2, 11, 4], "expected": [0, "", "", 0, 4, 3, "R"], "id": 4, "count": 3}, {"args": [3, 0, 4], "expected": [0, "", "", 0, 18, 3, "R"], "id": 18, "count": 3}, {"args": [3, 1, 4], "expected": [0, "", "", 0, 4, 3, "R"], "id": 4, "count": 3}, {"args": [3, 11, 4], "expected": [0, "", "", 0, 4, 3, "R"], "id": 4, "count": 3}, {"args": [2, 0, 15], "expected": [0, "", "", 0, 18, 3, "R"], "id": 18, "count": 3}, {"args": [2, 1, 15], "expected": [0, "", "", 0, 15, 5, "R"], "id": 15, "count": 5}, {"args": [2, 11, 15], "expected": [0, "", "", 0, 15, 5, "R"], "id": 15, "count": 5}, {"args": [3, 0, 15], "expected": [0, "", "", 0, 18, 3, "R"], "id": 18, "count": 3}, {"args": [3, 1, 15], "expected": [0, "", "", 0, 15, 5, "R"], "id": 15, "count": 5}, {"args": [3, 11, 15], "expected": [0, "", "", 0, 15, 5, "R"], "id": 15, "count": 5}]},
+    ];
+    const readIcons = `Public Function ReadIcons() As Variant
+Dim rule As Object
+Set rule=Range("A1").FormatConditions(1)
+ReadIcons=Array(rule.IconSet.ID,rule.IconCriteria.Count)
+End Function`;
+    const values = outcome => outcome.result.value.values.map(value => ['empty','null'].includes(value.type) ? null : value.value);
+    for (const control of controls) for (const item of control.cases) {
+        const label = `IconSet ${control.entry} ${item.args}`;
+        const outcome = wasm.run_spreadsheet_vba_with_outcome(wasm.parse_spreadsheet(original), control.source, control.entry, item.args, 0, undefined, {errorLanguage: 'ja-JP'});
+        assert.equal(outcome.error, undefined, label);
+        assert.deepEqual(values(outcome), item.expected, label);
+        const saved = wasm.edit_xlsx_from_workbook(original, outcome.workbook);
+        const reopened = wasm.run_spreadsheet_vba_with_outcome(wasm.parse_spreadsheet(saved), readIcons, 'ReadIcons', [], 0);
+        assert.equal(reopened.error, undefined, label + ' saved');
+        assert.deepEqual(values(reopened), [item.id,item.count], label + ' saved');
+    }
+}
+
 assert.deepEqual(failures, [], 'Excel saves validation and inherited row/column formatting');
-console.log(JSON.stringify({passed: true, native_structural_save_cases: 4, native_existing_validation_cases: 1, new_sheet_save_cases: 1, save_copy_band_cases: 1, native_band_intersections: 6, native_clear_intersections: 7, native_sheet_format_clears: 3, native_sheet_format_cross: 1, native_relative_validation_cases: 3, native_validation_shift_cases: 10, native_validation_two_bounds: 4, native_validation_value_cases: 1, native_validation_cross_sheet: 1, multi_validation_cases: 15, multi_validation_shift_cases: 5, workbook_json_roundtrip: true}));
+console.log(JSON.stringify({passed: true, native_iconset_variant_cases: 20, native_structural_save_cases: 4, native_existing_validation_cases: 1, new_sheet_save_cases: 1, save_copy_band_cases: 1, native_band_intersections: 6, native_clear_intersections: 7, native_sheet_format_clears: 3, native_sheet_format_cross: 1, native_relative_validation_cases: 3, native_validation_shift_cases: 10, native_validation_two_bounds: 4, native_validation_value_cases: 1, native_validation_cross_sheet: 1, multi_validation_cases: 15, multi_validation_shift_cases: 5, workbook_json_roundtrip: true}));

@@ -528,7 +528,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     pub(super) fn drawing_part(&self, object: &ObjectRef) -> Option<DrawingPart> {
-        match self.objects.get(object.handle as usize) {
+        match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Drawing(part)) => Some(*part),
             _ => None,
         }
