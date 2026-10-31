@@ -4975,9 +4975,47 @@ impl<'a> TableFitLayouter<'a> {
                                         // s982_cell → 0 hits in default (byte-identical).
                                         // S1252: a structured inline oMath run -> a U+F8FD{index}
                                         // atomic fragment of the maths ADVANCE, drawn at step 5.
-                                        // OXI_FORMCHECKBOX: the cell character loop has no object
-                                        // fragment for the square yet; leave it out of cells.
+                                        // OXI_CELL_FORMCHECKBOX (2026-10-31, default ON, opt-out _DISABLE):
+                                        // a FORMCHECKBOX in a cell is a U+F8FC atomic fragment of the
+                                        // body's advance (side 1.15fs - 2.28, + 1pt each side), drawn
+                                        // as the stroked square at emit. en/forms__006c06b0's
+                                        // «Copy of Project Plan attached» / «I declare…» boxes.
                                         if run.style.form_checkbox.is_some() {
+                                            if std::env::var_os("OXI_CELL_FORMCHECKBOX_DISABLE").is_some() {
+                                                continue;
+                                            }
+                                            let ow = (1.15 * font_size - 2.28).max(1.0) + 2.0;
+                                            let ew = cell_float_wrap.as_ref().map_or_else(|| if is_first_line {
+                                                first_line_wrap_w
+                                            } else {
+                                                wrap_w
+                                            }, |wrap| wrap.frame(lines.len(), wrap_w, first_line_wrap_w, p_indent_left, p_first_line_indent).width);
+                                            if line_x + ow > ew && !current_line.is_empty() {
+                                                lines.push(std::mem::take(&mut current_line));
+                                                line_x = 0.0;
+                                                current_line_chars.clear();
+                                                is_first_line = false;
+                                            }
+                                            current_line.push((
+                                                "\u{F8FC}".to_string(),
+                                                font_size,
+                                                ow,
+                                                bold,
+                                                run.style.italic,
+                                                false,
+                                                None,
+                                                false,
+                                                font_family.clone(),
+                                                None,
+                                                None,
+                                                0.0,
+                                                100.0,
+                                                std::mem::take(&mut s993_lrpb_pending),
+                                                run.style.font_family_east_asia.clone(),
+                                                run.ruby.is_some(),
+                                                cell_run_style.clone(),
+                                            ));
+                                            line_x += ow;
                                             continue;
                                         }
                                         if s982_cell {
@@ -9393,6 +9431,34 @@ impl<'a> TableFitLayouter<'a> {
                                                         continue;
                                                     }
                                                 }
+                                            }
+                                            // OXI_CELL_FORMCHECKBOX: the square, bottom at the text
+                                            // baseline + 0.218fs - 1.16 as in the body.
+                                            if text == "\u{F8FC}" {
+                                                let side = (1.15 * *fs - 2.28).max(1.0);
+                                                let base_x = cell_x + pad_l + line_indent + align_offset + rx;
+                                                let asc = self.registry.default_metrics().win_ascent * *fs;
+                                                let baseline = content_h + cell_text_y_off + asc;
+                                                let bottom = baseline + 0.218 * *fs - 1.16;
+                                                let mut e = LayoutElement::new(
+                                                    base_x + 1.0,
+                                                    bottom - side,
+                                                    side,
+                                                    side,
+                                                    LayoutContent::BoxRect {
+                                                        fill: None,
+                                                        stroke_color: Some("#000000".to_string()),
+                                                        stroke_width: 0.72,
+                                                        corner_radius: 0.0,
+                                                    },
+                                                );
+                                                e.paragraph_index = block_idx;
+                                                e.cell_paragraph_index = Some(cell_para_counter);
+                                                e.cell_row_index = Some(row_idx);
+                                                e.cell_col_index = Some(cell_idx);
+                                                cell_elements.push(e);
+                                                rx += adj_w;
+                                                continue;
                                             }
                                             // S1252: a U+F8FD{index} cell fragment draws the
                                             // registered maths at the fragment position, its
