@@ -1395,12 +1395,14 @@ impl OoxmlParser {
         // first-seen order), then any author surfaced by comments or tracked
         // changes. Color index = position in this Vec.
         let authors = build_author_palette(&people, &all_comments, &pages);
+        let unsupported = self.unsupported_census();
 
         let mut document = Document {
             pages,
             styles,
             metadata,
             comments: all_comments,
+            unsupported,
             people,
             authors,
             adjust_line_height_in_table,
@@ -1605,6 +1607,22 @@ impl OoxmlParser {
             }
         }
         blocks
+    }
+
+    /// Content in the story parts that the renderer does not draw.
+    fn unsupported_census(&mut self) -> Vec<crate::ir::UnsupportedContent> {
+        let mut names: Vec<String> = self
+            .archive
+            .file_names()
+            .filter(|n| super::unsupported::is_story_part(n))
+            .map(str::to_string)
+            .collect();
+        names.sort();
+        let parts: Vec<(String, String)> = names
+            .into_iter()
+            .filter_map(|n| self.read_part(&n).ok().map(|xml| (n, xml)))
+            .collect();
+        super::unsupported::census(parts.iter().map(|(n, x)| (n.as_str(), x.as_str())))
     }
 
     fn read_part(&mut self, name: &str) -> Result<String, ParseError> {

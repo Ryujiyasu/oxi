@@ -13,6 +13,10 @@ pub struct Document {
     /// Comments referenced in the document
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
+    /// Content in the package that the renderer does not draw. Empty means
+    /// nothing known to Oxi was dropped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported: Vec<UnsupportedContent>,
     /// Authors known to the document (from `word/people.xml`, MS-DOCX w15).
     /// Seeds the renderer's author-color palette (attack-matrix row R-02).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -415,6 +419,21 @@ pub enum Block {
     Math(crate::ir::math::MathBlock),
     /// Placeholder for unsupported content (SmartArt, Chart, etc.)
     UnsupportedElement(UnsupportedElement),
+}
+
+/// Content the package carries that Oxi parses past without drawing it, found
+/// by a static scan of the story parts (see `parser::unsupported`). A caller
+/// that must not return a document with missing content checks this list and
+/// hands the file to another engine instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnsupportedContent {
+    /// What was dropped: "chart", "smartart", "ink", "altChunk", "subDoc",
+    /// "ole-without-preview", or "graphic:<uri>" for any other DrawingML
+    /// graphic type.
+    pub kind: String,
+    /// The package part it sits in, e.g. "word/document.xml".
+    pub part: String,
+    pub count: usize,
 }
 
 /// Represents an unsupported OOXML element that was skipped during parsing

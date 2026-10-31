@@ -9,6 +9,7 @@ pub mod omml;
 pub mod relationships;
 mod styles;
 pub mod theme;
+mod unsupported;
 
 use crate::ir::Document;
 use thiserror::Error;

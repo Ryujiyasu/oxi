@@ -20,9 +20,12 @@ fn main() {
 
     match args.get(1).map(|s| s.as_str()) {
         Some("docx-to-pdf") => {
-            let input = args.get(2).expect("Usage: oxi docx-to-pdf <input.docx> <output.pdf>");
-            let output = args.get(3).expect("Usage: oxi docx-to-pdf <input.docx> <output.pdf>");
-            docx_to_pdf(input, output);
+            let usage = "Usage: oxi docx-to-pdf [--strict] <input.docx> <output.pdf>";
+            let strict = args[2..].iter().any(|a| a == "--strict");
+            let paths: Vec<&String> = args[2..].iter().filter(|a| *a != "--strict").collect();
+            let input = paths.first().expect(usage);
+            let output = paths.get(1).expect(usage);
+            docx_to_pdf(input, output, strict);
         }
         Some("fonts-index") => {
             // Instrument for the font resolver: report what the machine
@@ -126,7 +129,9 @@ fn main() {
             eprintln!("Oxi CLI - Document processing toolkit");
             eprintln!();
             eprintln!("Usage:");
-            eprintln!("  oxi docx-to-pdf <input.docx> <output.pdf>");
+            eprintln!("  oxi docx-to-pdf [--strict] <input.docx> <output.pdf>");
+            eprintln!("      --strict: write nothing and exit {EXIT_UNSUPPORTED} when the document holds");
+            eprintln!("                content Oxi does not draw (listed as JSON on stderr)");
             eprintln!("  oxi vba-analyze <input.xlsm>");
             eprintln!("  oxi vba-safety <input.xlsm>");
             eprintln!("  oxi vba-seal <input.xlsm> <key.pk8> [note]");
@@ -138,13 +143,29 @@ fn main() {
     }
 }
 
-fn docx_to_pdf(input: &str, output: &str) {
+/// `docx-to-pdf --strict` exit status when the document holds content Oxi does
+/// not draw. Distinct from usage errors (1) and panics (101), so a caller can
+/// tell "use another engine" from "this file is broken".
+const EXIT_UNSUPPORTED: i32 = 3;
+
+fn docx_to_pdf(input: &str, output: &str, strict: bool) {
     let data = fs::read(input).expect("Failed to read input file");
     let doc = oxidocs_core::parse_docx(&data).expect("Failed to parse docx");
 
     eprintln!("Parsed: {} section(s), {} blocks total",
         doc.pages.len(),
         doc.pages.iter().map(|p| p.blocks.len()).sum::<usize>());
+
+    if !doc.unsupported.is_empty() {
+        if strict {
+            // Checked before layout, so a caller falling back loses no time.
+            eprintln!("{}", serde_json::json!({ "unsupported": doc.unsupported }));
+            std::process::exit(EXIT_UNSUPPORTED);
+        }
+        for u in &doc.unsupported {
+            eprintln!("Warning: {} x{} in {} is not drawn - the PDF is missing it", u.kind, u.count, u.part);
+        }
+    }
 
     let pdf_doc = doc_to_pdf(&doc);
     let pdf_bytes = oxipdf_core::write_pdf(&pdf_doc);
