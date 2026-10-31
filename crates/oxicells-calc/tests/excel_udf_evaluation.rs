@@ -561,3 +561,510 @@ fn legacy_array_lifted_callbacks_resume_through_the_core_bridge() {
         assert_eq!(actual, expected.to_vec());
     }
 }
+
+#[test]
+fn legacy_array_let_reference_dependencies_and_cycles_match_native_excel() {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_user_function_hook(None);
+            oxicells_calc::engine::set_user_function_wait_for_dependencies(false);
+            oxicells_calc::engine::set_user_function_full_rebuild(false);
+        }
+    }
+    let _restore = Restore;
+    let cases = [
+        ("LET(r,A1:O3,5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,A1:O3,ISREF(r))",1u32,3u32,[(0,vec![Value::Logical(true),Value::Logical(true),Value::Logical(true)]),(0,vec![Value::Logical(true),Value::Logical(true),Value::Logical(true)]),(0,vec![Value::Logical(true),Value::Logical(true),Value::Logical(true)]),(0,vec![Value::Logical(true),Value::Logical(true),Value::Logical(true)])]),
+        ("LET(r,A1:O3,ROWS(r))",1u32,3u32,[(0,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)]),(0,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)]),(0,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)]),(0,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)])]),
+        ("LET(r,A1:O3,COLUMNS(r))",1u32,3u32,[(0,vec![Value::Number(15.0),Value::Number(15.0),Value::Number(15.0)]),(0,vec![Value::Number(15.0),Value::Number(15.0),Value::Number(15.0)]),(0,vec![Value::Number(15.0),Value::Number(15.0),Value::Number(15.0)]),(0,vec![Value::Number(15.0),Value::Number(15.0),Value::Number(15.0)])]),
+        ("LET(r,A1:O3,INDEX(r,1,4))",1u32,3u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),A1:O3,D1:D3),5)",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,CHOOSE(SelectionTick(1),A1:O3,D1:D3),5)",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,INDEX(A1:O3,0,0),5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,OFFSET(A1,0,0,3,15),5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,INDIRECT(\"A1:O3\"),5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SelectionTick(5),5)",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SUM(M1:M3),5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,M1:M3,SUM(r))",1u32,3u32,[(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,A1:O3,SUM(INDEX(r,1,13)))",1u32,3u32,[(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,A1:O3,LET(r,D1:D3,SUM(r)))",1u32,3u32,[(0,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(0,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(0,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(0,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)])]),
+        ("LET(r,A1:O3,LET(r,r,INDEX(r,{1;2;3},4)))",1u32,3u32,[(0,vec![Value::Number(1.0),Value::Number(2.0),Value::Number(3.0)]),(0,vec![Value::Number(1.0),Value::Number(2.0),Value::Number(3.0)]),(0,vec![Value::Number(1.0),Value::Number(2.0),Value::Number(3.0)]),(0,vec![Value::Number(1.0),Value::Number(2.0),Value::Number(3.0)])]),
+        ("LET(r,SelectionTick(SUM(M1:M3)),5)",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SUM(M1:M3)+SelectionTick(5),5)",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(FALSE,SelectionTick(5),SUM(M1:M3)),5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(TRUE,SelectionTick(5),SUM(M1:M3)),5)",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(FALSE,SelectionTick(SUM(M1:M3)),1),5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(TRUE,1,SelectionTick(SUM(M1:M3))),5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SelectionTick(5)/0,5)",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,1/0,5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SUM(M1:M3),SelectionTick(5))",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SUM(M1:M3),ISREF(r))",1u32,3u32,[(0,vec![Value::Logical(false),Value::Logical(false),Value::Logical(false)]),(0,vec![Value::Logical(false),Value::Logical(false),Value::Logical(false)]),(0,vec![Value::Logical(false),Value::Logical(false),Value::Logical(false)]),(0,vec![Value::Logical(false),Value::Logical(false),Value::Logical(false)])]),
+        ("LET(r,SUM(M1:M3),N(r))",1u32,3u32,[(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,SUM(M1:M3),LET(r,5,r))",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SelectionTick(5),LET(r,6,r))",1u32,3u32,[(1,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(2,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(3,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(4,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:M3,D1:D3),ROWS(r))",1u32,3u32,[(1,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)]),(2,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)]),(3,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)]),(4,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)])]),
+        ("LET(r,INDEX(A1:O3,SelectionTick(1),0),5)",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,OFFSET(A1,SelectionTick(0),0,3,15),5)",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("SUM(M1:M3)+1",1u32,3u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,SUM(M1:M3),r+1)",1u32,3u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,SUM(M1:M3),r-r+5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SUM(M1:M3),TYPE(r))",1u32,3u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,SUM(M1:M3),IF(FALSE,r,5))",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SUM(M1:M3),ISNUMBER(r))",1u32,3u32,[(0,vec![Value::Logical(true),Value::Logical(true),Value::Logical(true)]),(0,vec![Value::Logical(true),Value::Logical(true),Value::Logical(true)]),(0,vec![Value::Logical(true),Value::Logical(true),Value::Logical(true)]),(0,vec![Value::Logical(true),Value::Logical(true),Value::Logical(true)])]),
+        ("LET(r,SUM(M1:M3),r*0+5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,M1:M3,INDEX(r,1,1))",1u32,3u32,[(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,M1:M3,INDEX(r,3,1))",1u32,3u32,[(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,IF(SelectionTick(1),A1:O3,D1:D3),INDEX(r,1,4))",1u32,3u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(0),A1:O3,D1:D3),INDEX(r,1,1))",1u32,3u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,A1:O3,s,r,INDEX(s,1,4))",1u32,3u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,A1:O3,s,SUM(r),INDEX(r,1,4))",1u32,3u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,A1:O3,s,INDEX(r,1,4),s)",1u32,3u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,A1:O3,s,INDEX(r,1,13),5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,A1:O3,s,INDEX(r,1,13),N(s))",1u32,3u32,[(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,A1:O3,ROWS(INDEX(r,0,13)))",1u32,3u32,[(0,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)]),(0,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)]),(0,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)]),(0,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)])]),
+        ("LET(r,A1:O3,ISREF(INDEX(r,1,13)))",1u32,3u32,[(0,vec![Value::Logical(true),Value::Logical(true),Value::Logical(true)]),(0,vec![Value::Logical(true),Value::Logical(true),Value::Logical(true)]),(0,vec![Value::Logical(true),Value::Logical(true),Value::Logical(true)]),(0,vec![Value::Logical(true),Value::Logical(true),Value::Logical(true)])]),
+        ("LET(r,A1:O3,LET(r,D1:D3,SUM(r))+SelectionTick(5))",1u32,3u32,[(1,vec![Value::Number(11.0),Value::Number(11.0),Value::Number(11.0)]),(2,vec![Value::Number(11.0),Value::Number(11.0),Value::Number(11.0)]),(3,vec![Value::Number(11.0),Value::Number(11.0),Value::Number(11.0)]),(4,vec![Value::Number(11.0),Value::Number(11.0),Value::Number(11.0)])]),
+        ("LET(r,SUM(M1:M3),SelectionTick(5)+{1;2;3})",1u32,3u32,[(1,vec![Value::Number(6.0),Value::Number(7.0),Value::Number(8.0)]),(1,vec![Value::Number(6.0),Value::Number(7.0),Value::Number(8.0)]),(1,vec![Value::Number(6.0),Value::Number(7.0),Value::Number(8.0)]),(1,vec![Value::Number(6.0),Value::Number(7.0),Value::Number(8.0)])]),
+        ("LET(r,SelectionTick(SUM(M1:M3)),r*0+5)",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,M1:M3,IF(FALSE,SUM(r),5))",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,M1:M3,IF(TRUE,SUM(r),5))",1u32,3u32,[(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,IF(TRUE,M1:M3,D1:D3),5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SUM(M1),SelectionTick(5))",1u32,1u32,[(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)])]),
+        ("LET(r,SelectionTick(SUM(M1)),5)",1u32,1u32,[(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)])]),
+        ("SUM(M1)+1",1u32,1u32,[(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)])]),
+        ("LET(r,M1,5)",1u32,1u32,[(0,vec![Value::Number(5.0)]),(0,vec![Value::Number(5.0)]),(0,vec![Value::Number(5.0)]),(0,vec![Value::Number(5.0)])]),
+        ("LET(r,M1,SelectionTick(5))",1u32,1u32,[(1,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(3,vec![Value::Number(5.0)]),(4,vec![Value::Number(5.0)])]),
+        ("LET(r,M1,SUM(r))",1u32,1u32,[(0,vec![Value::Number(0.0)]),(0,vec![Value::Number(0.0)]),(0,vec![Value::Number(0.0)]),(0,vec![Value::Number(0.0)])]),
+        ("LET(r,M1,ROWS(r))",1u32,1u32,[(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)])]),
+        ("LET(r,A1:O3,INDEX(r,1,4))",1u32,1u32,[(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)])]),
+        ("LET(r,SUM(M1:M3),SelectionTick(5))",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SelectionTick(SUM(M1:M3)),5)",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("SUM(M1:M3)+1",1u32,3u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,M1:M3,5)",1u32,3u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,M1:M3,SelectionTick(5))",1u32,3u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,M1:M3,SUM(r))",1u32,3u32,[(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,M1:M3,ROWS(r))",1u32,3u32,[(0,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)]),(0,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)]),(0,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)]),(0,vec![Value::Number(3.0),Value::Number(3.0),Value::Number(3.0)])]),
+        ("LET(r,A1:O3,INDEX(r,1,4))",1u32,3u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,SUM(M1:O1),SelectionTick(5))",3u32,1u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SelectionTick(SUM(M1:O1)),5)",3u32,1u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("SUM(M1:O1)+1",3u32,1u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,M1:O1,5)",3u32,1u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,M1:O1,SelectionTick(5))",3u32,1u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,M1:O1,SUM(r))",3u32,1u32,[(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,M1:O1,ROWS(r))",3u32,1u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,A1:O3,INDEX(r,1,4))",3u32,1u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,SUM(M1:N2),SelectionTick(5))",2u32,2u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SelectionTick(SUM(M1:N2)),5)",2u32,2u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("SUM(M1:N2)+1",2u32,2u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,M1:N2,5)",2u32,2u32,[(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(0,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,M1:N2,SelectionTick(5))",2u32,2u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,M1:N2,SUM(r))",2u32,2u32,[(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(0,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,M1:N2,ROWS(r))",2u32,2u32,[(0,vec![Value::Number(2.0),Value::Number(2.0),Value::Number(2.0),Value::Number(2.0)]),(0,vec![Value::Number(2.0),Value::Number(2.0),Value::Number(2.0),Value::Number(2.0)]),(0,vec![Value::Number(2.0),Value::Number(2.0),Value::Number(2.0),Value::Number(2.0)]),(0,vec![Value::Number(2.0),Value::Number(2.0),Value::Number(2.0),Value::Number(2.0)])]),
+        ("LET(r,A1:O3,INDEX(r,1,4))",2u32,2u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(0),M1,D1),SUM(r))",1u32,1u32,[(1,vec![Value::Number(1.0)]),(2,vec![Value::Number(1.0)]),(3,vec![Value::Number(1.0)]),(4,vec![Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1,D1),SUM(r))",1u32,1u32,[(1,vec![Value::Number(0.0)]),(2,vec![Value::Number(0.0)]),(3,vec![Value::Number(0.0)]),(6,vec![Value::Number(0.0)])]),
+        ("SUM(IF(SelectionTick(0),M1,D1))",1u32,1u32,[(1,vec![Value::Number(1.0)]),(2,vec![Value::Number(1.0)]),(3,vec![Value::Number(1.0)]),(4,vec![Value::Number(1.0)])]),
+        ("SUM(IF(SelectionTick(1),M1,D1))",1u32,1u32,[(1,vec![Value::Number(0.0)]),(2,vec![Value::Number(0.0)]),(3,vec![Value::Number(0.0)]),(6,vec![Value::Number(0.0)])]),
+        ("LET(r,IF(SelectionTick(0),M1:M3,D1),SUM(r))",1u32,3u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:M3,D1),SUM(r))",1u32,3u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(3,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(6,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("SUM(IF(SelectionTick(0),M1:M3,D1))",1u32,3u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("SUM(IF(SelectionTick(1),M1:M3,D1))",1u32,3u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(3,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(6,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,IF(SelectionTick(0),M1:O1,D1),SUM(r))",3u32,1u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:O1,D1),SUM(r))",3u32,1u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(3,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(6,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("SUM(IF(SelectionTick(0),M1:O1,D1))",3u32,1u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("SUM(IF(SelectionTick(1),M1:O1,D1))",3u32,1u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(3,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(6,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,IF(SelectionTick(0),M1:N2,D1),SUM(r))",2u32,2u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:N2,D1),SUM(r))",2u32,2u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(3,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(6,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("SUM(IF(SelectionTick(0),M1:N2,D1))",2u32,2u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("SUM(IF(SelectionTick(1),M1:N2,D1))",2u32,2u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(3,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(6,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+    ];
+    let mut mismatches = Vec::new();
+    for (formula, width, height, stages) in cases {
+        for version in [1u8, 2] {
+            let count = Rc::new(RefCell::new(0u32));
+            let counted = count.clone();
+            set_user_function_hook(Some(Box::new(move |name, args, _| {
+                if !name.eq_ignore_ascii_case("SelectionTick") { return None; }
+                *counted.borrow_mut() += 1;
+                let value = match args.first() {
+                    Some(UserArg::Value(value)) => value.clone(),
+                    Some(UserArg::Cells { values, .. }) => values.first().cloned().unwrap_or(Value::Blank),
+                    Some(UserArg::Block(block)) => block.cells.first().cloned().unwrap_or(Value::Blank),
+                    _ => Value::Blank,
+                };
+                Some(Arg::Value(value))
+            })));
+            let mut held = book();
+            held.set_compatibility_version(version);
+            for (address, value) in [("D1", 1.), ("D2", 2.), ("D3", 3.)] {
+                held.set_value("S", address, Value::Number(value)).unwrap();
+            }
+            let mut wanted = Vec::new();
+            for row in 0..height { for col in 0..width {
+                let coord = (12 + col, row);
+                let address = oxicells_calc::CellRef::new(coord.0, coord.1).to_a1();
+                held.set_array_member("S", &address, formula, (col, row)).unwrap();
+                wanted.push(("S".to_string(), coord));
+            }}
+            let mut reverse = wanted.clone(); reverse.reverse();
+            held.set_calculation_order(&reverse);
+            for (stage, (expected_calls, expected_values)) in stages.iter().enumerate() {
+                held.set_chain_probes(stage != 0);
+                oxicells_calc::engine::set_user_function_wait_for_dependencies(true);
+                oxicells_calc::engine::set_user_function_full_rebuild(stage == 3);
+                match stage {
+                    0 => { held.recalculate_array_entry(&wanted); }
+                    1 | 2 => { held.recalculate_these(&wanted); }
+                    _ => { held.recalculate(); }
+                }
+                let values: Vec<_> = wanted.iter().map(|(_, coord)|
+                    held.value("S", &oxicells_calc::CellRef::new(coord.0, coord.1).to_a1())).collect();
+                let calls = *count.borrow();
+                if values != *expected_values || calls != *expected_calls {
+                    mismatches.push(format!("{formula}, {width}x{height}, version {version}, stage {stage}: calls {calls} != {expected_calls}, {values:?} != {expected_values:?}"));
+                }
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{} Native stage mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+}
+
+#[test]
+fn index_selector_return_and_fallback_storage_match_native_excel() {
+    for (formula, expected) in [
+        ("SUM(INDEX(D1:D3,N({1;2;3}),1))",true),
+        ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3})),1))",true),
+        ("SUM(INDEX(D1:D3,N(ROW(A1:A3)),1))",true),
+        ("SUM(INDEX(D1:D3,N(TRANSPOSE({1,2,3})),1))",true),
+        ("SUM(INDEX(D1:D3,IF(1,N({1;2;3})),1))",true),
+        ("SUM(INDEX(D1:D3,IF(1,N(ROW(A1:A3))),1))",true),
+        ("SUM(INDEX(D1:D3,IFERROR({1;2;3},0),1))",true),
+        ("SUM(INDEX(D1:D3,ABS({1;2;3}),1))",true),
+        ("SUM(INDEX(D1:D3,INT({1;2;3}),1))",true),
+        ("SUM(INDEX(D1:D3,--{1;2;3},1))",true),
+        ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))+0,1))",true),
+        ("SUM(INDEX(D1:D3,N(D1:D3),1))",false),
+        ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))*1,1))",true),
+        ("LET(n,N(IF(1,{1;2;3})),SUM(INDEX(D1:D3,n,1)))",true),
+        ("SUM(INDEX(D1:D3,N(IFERROR({1;2;3},0)),1))",true),
+        ("SUM(INDEX(D1:D3,N(CHOOSE(1,{1;2;3})),1))",true),
+        ("SUM(INDEX(D1:D3,N({1;2;3})+ROW(A1:A3)*0,1))",true),
+        ("SUMPRODUCT(INDEX(D1:D3,N(IF(1,{1;2;3})),1))",true),
+        ("SUM(INDEX(D1:D3,N(INDEX(D1:D3,0,1)),1))",false),
+        ("SUM(INDEX(D1:D3,N(INDEX({1;2;3},0,1)),1))",true),
+        ("SUM(INDEX(D1:D3,N(IF(1,D1:D3)),1))",false),
+        ("SUM(INDEX(D1:D3,N(CHOOSE(1,D1:D3)),1))",false),
+        ("LET(n,{1;2;3},SUM(INDEX(D1:D3,N(n),1)))",true),
+        ("LET(n,D1:D3,SUM(INDEX(D1:D3,N(n),1)))",false),
+        ("SUM(INDEX(D1:D3,N(OFFSET(D1,0,0,3,1)),1))",false),
+        ("SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\")),1))",false),
+        ("SUM(INDEX(D1:D3,N(D1:D3+0),1))",true),
+        ("SUM(INDEX(D1:D3,N(IFERROR(D1:D3,0)),1))",true),
+        ("SUM(INDEX(D1:D3,N(TAKE(D1:D3,3)),1))",true),
+        ("SUM(INDEX(D1:D3,N(TAKE({1;2;3},3)),1))",true),
+        ("SUM(INDEX(D1:D3,N(DROP(D1:D3,1)),1))",true),
+        ("SUM(INDEX(D1:D3,N(DROP({0;1;2;3},1)),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1;2;3})),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,D1,D1:D3)),1))",false),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1:D3)),1))",false),
+        ("SUM(INDEX(D1:D3,N(LET(r,D1:D3,r)),1))",false),
+        ("SUM(INDEX(D1:D3,N(LET(r,{1;2;3},r)),1))",true),
+        ("SUM(INDEX(D1:D3,N(IF(1,TAKE(D1:D3,3))),1))",true),
+        ("SUM(INDEX(D1:D3,N(IFERROR(TAKE(D1:D3,3),0)),1))",true),
+        ("SUM(INDEX(D1:D3,N(TOROW(D1:D3)),1))",true),
+        ("SUM(INDEX(D1:D3,N(FILTER(D1:D3,D1:D3>0)),1))",true),
+        ("SUM(INDEX(D1:D3,N(CHOOSECOLS(D1:D3,1)),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},{1;2;3},{1;2;3})),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1,2,3},{1,2,3})),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1})),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1},{2})),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},{1},{2})),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1)),1))",false),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1,{2})),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1,{2;3})),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},D1,{2})),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},D1,{2;3})),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,D1,D1:D3,{2;3})),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(9,D1,D1:D3,{2;3})),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1},D1:D3)),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},{1},D1:D3)),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1:D3+0)),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},IF(1,D1:D3))),1))",false),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},IFERROR(D1:D3,0))),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},TAKE(D1:D3,3))),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},DROP(D1:D3,0))),1))",true),
+        ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},LET(r,D1:D3,r))),1))",false),
+    ] {
+        assert_eq!(oxicells_calc::lexer::requires_array_storage(formula, &|_| false), expected, "{formula}");
+    }
+}
+
+#[test]
+fn legacy_array_conditional_cycles_match_native_calculation_scopes() {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_user_function_hook(None);
+            oxicells_calc::engine::set_user_function_wait_for_dependencies(false);
+            oxicells_calc::engine::set_user_function_full_rebuild(false);
+            oxicells_calc::engine::set_user_function_full_calculation(false);
+        }
+    }
+    let _restore = Restore;
+    let cases = [
+        ("LET(r,IF(SelectionTick(0),M1,D1),SUM(r))",1u32,1u32,0u32,[(1,vec![Value::Number(1.0)]),(2,vec![Value::Number(1.0)]),(3,vec![Value::Number(1.0)]),(4,vec![Value::Number(1.0)]),(5,vec![Value::Number(1.0)]),(6,vec![Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1,D1),SUM(r))",1u32,1u32,0u32,[(1,vec![Value::Number(0.0)]),(2,vec![Value::Number(0.0)]),(5,vec![Value::Number(0.0)]),(8,vec![Value::Number(0.0)]),(11,vec![Value::Number(0.0)]),(14,vec![Value::Number(0.0)])]),
+        ("SUM(IF(SelectionTick(0),M1,D1))",1u32,1u32,0u32,[(1,vec![Value::Number(1.0)]),(2,vec![Value::Number(1.0)]),(3,vec![Value::Number(1.0)]),(4,vec![Value::Number(1.0)]),(5,vec![Value::Number(1.0)]),(6,vec![Value::Number(1.0)])]),
+        ("SUM(IF(SelectionTick(1),M1,D1))",1u32,1u32,0u32,[(1,vec![Value::Number(0.0)]),(2,vec![Value::Number(0.0)]),(5,vec![Value::Number(0.0)]),(8,vec![Value::Number(0.0)]),(11,vec![Value::Number(0.0)]),(14,vec![Value::Number(0.0)])]),
+        ("LET(r,SUM(M1),SelectionTick(5))",1u32,1u32,0u32,[(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)])]),
+        ("SUM(M1)+1",1u32,1u32,0u32,[(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)]),(0,vec![Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(0),M1:M3,D1),SUM(r))",1u32,3u32,0u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:M3,D1),SUM(r))",1u32,3u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("SUM(IF(SelectionTick(0),M1:M3,D1))",1u32,3u32,0u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("SUM(IF(SelectionTick(1),M1:M3,D1))",1u32,3u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,SUM(M1:M3),SelectionTick(5))",1u32,3u32,0u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("SUM(M1:M3)+1",1u32,3u32,0u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(0),M1:O1,D1),SUM(r))",3u32,1u32,0u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:O1,D1),SUM(r))",3u32,1u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("SUM(IF(SelectionTick(0),M1:O1,D1))",3u32,1u32,0u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("SUM(IF(SelectionTick(1),M1:O1,D1))",3u32,1u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,SUM(M1:O1),SelectionTick(5))",3u32,1u32,0u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("SUM(M1:O1)+1",3u32,1u32,0u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(0),M1:N2,D1),SUM(r))",2u32,2u32,0u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:N2,D1),SUM(r))",2u32,2u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("SUM(IF(SelectionTick(0),M1:N2,D1))",2u32,2u32,0u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("SUM(IF(SelectionTick(1),M1:N2,D1))",2u32,2u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,SUM(M1:N2),SelectionTick(5))",2u32,2u32,0u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("SUM(M1:N2)+1",2u32,2u32,0u32,[(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(0,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1,M1),SUM(r))",1u32,1u32,0u32,[(1,vec![Value::Number(0.0)]),(2,vec![Value::Number(0.0)]),(5,vec![Value::Number(0.0)]),(8,vec![Value::Number(0.0)]),(11,vec![Value::Number(0.0)]),(14,vec![Value::Number(0.0)])]),
+        ("LET(r,CHOOSE(SelectionTick(1),M1,D1),SUM(r))",1u32,1u32,0u32,[(1,vec![Value::Number(0.0)]),(2,vec![Value::Number(0.0)]),(5,vec![Value::Number(0.0)]),(8,vec![Value::Number(0.0)]),(11,vec![Value::Number(0.0)]),(14,vec![Value::Number(0.0)])]),
+        ("LET(r,CHOOSE(SelectionTick(2),M1,D1),SUM(r))",1u32,1u32,0u32,[(1,vec![Value::Number(1.0)]),(2,vec![Value::Number(1.0)]),(3,vec![Value::Number(1.0)]),(4,vec![Value::Number(1.0)]),(5,vec![Value::Number(1.0)]),(6,vec![Value::Number(1.0)])]),
+        ("SUM(IF(SelectionTick(1),M1,D1))+SelectionTick(5)",1u32,1u32,0u32,[(2,vec![Value::Number(5.0)]),(3,vec![Value::Number(5.0)]),(6,vec![Value::Number(5.0)]),(9,vec![Value::Number(5.0)]),(12,vec![Value::Number(5.0)]),(15,vec![Value::Number(5.0)])]),
+        ("SUM(IF(SelectionTick(0),M1,D1))+SelectionTick(5)",1u32,1u32,0u32,[(2,vec![Value::Number(6.0)]),(4,vec![Value::Number(6.0)]),(6,vec![Value::Number(6.0)]),(8,vec![Value::Number(6.0)]),(10,vec![Value::Number(6.0)]),(12,vec![Value::Number(6.0)])]),
+        ("LET(r,SUM(M1),IF(SelectionTick(0),5,5))",1u32,1u32,0u32,[(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)]),(1,vec![Value::Number(5.0)])]),
+        ("LET(r,SUM(M1),IF(SelectionTick(1),M1,D1))",1u32,1u32,0u32,[(1,vec![Value::Number(0.0)]),(1,vec![Value::Number(0.0)]),(1,vec![Value::Number(0.0)]),(1,vec![Value::Number(0.0)]),(1,vec![Value::Number(0.0)]),(1,vec![Value::Number(0.0)])]),
+        ("LET(r,IF(SelectionTick(0),SUM(M1),1),5)",1u32,1u32,0u32,[(1,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(3,vec![Value::Number(5.0)]),(4,vec![Value::Number(5.0)]),(5,vec![Value::Number(5.0)]),(6,vec![Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(1),SUM(M1),1),5)",1u32,1u32,0u32,[(1,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(5,vec![Value::Number(5.0)]),(8,vec![Value::Number(5.0)]),(11,vec![Value::Number(5.0)]),(14,vec![Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1,D1),SUM(r)+SelectionTick(5))",1u32,1u32,0u32,[(2,vec![Value::Number(5.0)]),(3,vec![Value::Number(5.0)]),(6,vec![Value::Number(5.0)]),(9,vec![Value::Number(5.0)]),(12,vec![Value::Number(5.0)]),(15,vec![Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:M3,M1:M3),SUM(r))",1u32,3u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,CHOOSE(SelectionTick(1),M1:M3,D1),SUM(r))",1u32,3u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,CHOOSE(SelectionTick(2),M1:M3,D1),SUM(r))",1u32,3u32,0u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("SUM(IF(SelectionTick(1),M1:M3,D1))+SelectionTick(5)",1u32,3u32,0u32,[(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(6,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(9,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(12,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(15,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("SUM(IF(SelectionTick(0),M1:M3,D1))+SelectionTick(5)",1u32,3u32,0u32,[(2,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(4,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(6,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(8,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(10,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(12,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)])]),
+        ("LET(r,SUM(M1:M3),IF(SelectionTick(0),5,5))",1u32,3u32,0u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SUM(M1:M3),IF(SelectionTick(1),M1:M3,D1))",1u32,3u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,IF(SelectionTick(0),SUM(M1:M3),1),5)",1u32,3u32,0u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(5,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(6,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(1),SUM(M1:M3),1),5)",1u32,3u32,0u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(5,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(8,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(11,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(14,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:M3,D1),SUM(r)+SelectionTick(5))",1u32,3u32,0u32,[(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(6,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(9,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(12,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(15,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:O1,M1:O1),SUM(r))",3u32,1u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,CHOOSE(SelectionTick(1),M1:O1,D1),SUM(r))",3u32,1u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,CHOOSE(SelectionTick(2),M1:O1,D1),SUM(r))",3u32,1u32,0u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("SUM(IF(SelectionTick(1),M1:O1,D1))+SelectionTick(5)",3u32,1u32,0u32,[(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(6,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(9,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(12,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(15,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("SUM(IF(SelectionTick(0),M1:O1,D1))+SelectionTick(5)",3u32,1u32,0u32,[(2,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(4,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(6,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(8,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(10,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(12,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)])]),
+        ("LET(r,SUM(M1:O1),IF(SelectionTick(0),5,5))",3u32,1u32,0u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SUM(M1:O1),IF(SelectionTick(1),M1:O1,D1))",3u32,1u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,IF(SelectionTick(0),SUM(M1:O1),1),5)",3u32,1u32,0u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(5,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(6,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(1),SUM(M1:O1),1),5)",3u32,1u32,0u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(5,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(8,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(11,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(14,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:O1,D1),SUM(r)+SelectionTick(5))",3u32,1u32,0u32,[(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(6,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(9,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(12,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(15,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:N2,M1:N2),SUM(r))",2u32,2u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,CHOOSE(SelectionTick(1),M1:N2,D1),SUM(r))",2u32,2u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,CHOOSE(SelectionTick(2),M1:N2,D1),SUM(r))",2u32,2u32,0u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("SUM(IF(SelectionTick(1),M1:N2,D1))+SelectionTick(5)",2u32,2u32,0u32,[(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(6,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(9,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(12,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(15,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("SUM(IF(SelectionTick(0),M1:N2,D1))+SelectionTick(5)",2u32,2u32,0u32,[(2,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(4,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(6,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(8,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(10,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)]),(12,vec![Value::Number(6.0),Value::Number(6.0),Value::Number(6.0),Value::Number(6.0)])]),
+        ("LET(r,SUM(M1:N2),IF(SelectionTick(0),5,5))",2u32,2u32,0u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,SUM(M1:N2),IF(SelectionTick(1),M1:N2,D1))",2u32,2u32,0u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,IF(SelectionTick(0),SUM(M1:N2),1),5)",2u32,2u32,0u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(4,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(5,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(6,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(1),SUM(M1:N2),1),5)",2u32,2u32,0u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(5,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(8,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(11,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(14,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(1),M1:N2,D1),SUM(r)+SelectionTick(5))",2u32,2u32,0u32,[(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(3,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(6,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(9,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(12,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(15,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(0),T10,D1),SUM(r))",1u32,1u32,1u32,[(1,vec![Value::Number(1.0)]),(2,vec![Value::Number(1.0)]),(3,vec![Value::Number(1.0)]),(4,vec![Value::Number(1.0)]),(5,vec![Value::Number(1.0)]),(6,vec![Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),T10,D1),SUM(r))",1u32,1u32,1u32,[(1,vec![Value::Number(0.0)]),(2,vec![Value::Number(0.0)]),(5,vec![Value::Number(0.0)]),(8,vec![Value::Number(0.0)]),(11,vec![Value::Number(0.0)]),(14,vec![Value::Number(0.0)])]),
+        ("LET(r,SUM(T10),SelectionTick(5))",1u32,1u32,1u32,[(1,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(0),T10,D1),SUM(r))",1u32,1u32,2u32,[(1,vec![Value::Number(1.0)]),(2,vec![Value::Number(1.0)]),(3,vec![Value::Number(1.0)]),(4,vec![Value::Number(1.0)]),(5,vec![Value::Number(1.0)]),(6,vec![Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),T10,D1),SUM(r))",1u32,1u32,2u32,[(1,vec![Value::Number(0.0)]),(2,vec![Value::Number(0.0)]),(5,vec![Value::Number(0.0)]),(8,vec![Value::Number(0.0)]),(11,vec![Value::Number(0.0)]),(14,vec![Value::Number(0.0)])]),
+        ("LET(r,SUM(T10),SelectionTick(5))",1u32,1u32,2u32,[(1,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(0),T10,D1),SUM(r))",1u32,1u32,4u32,[(1,vec![Value::Number(1.0)]),(2,vec![Value::Number(1.0)]),(3,vec![Value::Number(1.0)]),(4,vec![Value::Number(1.0)]),(5,vec![Value::Number(1.0)]),(6,vec![Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),T10,D1),SUM(r))",1u32,1u32,4u32,[(1,vec![Value::Number(0.0)]),(2,vec![Value::Number(0.0)]),(5,vec![Value::Number(0.0)]),(8,vec![Value::Number(0.0)]),(11,vec![Value::Number(0.0)]),(14,vec![Value::Number(0.0)])]),
+        ("LET(r,SUM(T10),SelectionTick(5))",1u32,1u32,4u32,[(1,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(0),T10,D1),SUM(r))",1u32,1u32,8u32,[(1,vec![Value::Number(1.0)]),(2,vec![Value::Number(1.0)]),(3,vec![Value::Number(1.0)]),(4,vec![Value::Number(1.0)]),(5,vec![Value::Number(1.0)]),(6,vec![Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),T10,D1),SUM(r))",1u32,1u32,8u32,[(1,vec![Value::Number(0.0)]),(2,vec![Value::Number(0.0)]),(5,vec![Value::Number(0.0)]),(8,vec![Value::Number(0.0)]),(11,vec![Value::Number(0.0)]),(14,vec![Value::Number(0.0)])]),
+        ("LET(r,SUM(T10),SelectionTick(5))",1u32,1u32,8u32,[(1,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)]),(2,vec![Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(0),T10,D1),SUM(r))",1u32,3u32,1u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),T10,D1),SUM(r))",1u32,3u32,1u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,SUM(T10),SelectionTick(5))",1u32,3u32,1u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(0),T10,D1),SUM(r))",1u32,3u32,2u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),T10,D1),SUM(r))",1u32,3u32,2u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,SUM(T10),SelectionTick(5))",1u32,3u32,2u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(0),T10,D1),SUM(r))",1u32,3u32,4u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),T10,D1),SUM(r))",1u32,3u32,4u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,SUM(T10),SelectionTick(5))",1u32,3u32,4u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+        ("LET(r,IF(SelectionTick(0),T10,D1),SUM(r))",1u32,3u32,8u32,[(1,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(2,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(3,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(4,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(5,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)]),(6,vec![Value::Number(1.0),Value::Number(1.0),Value::Number(1.0)])]),
+        ("LET(r,IF(SelectionTick(1),T10,D1),SUM(r))",1u32,3u32,8u32,[(1,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(2,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(5,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(8,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(11,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)]),(14,vec![Value::Number(0.0),Value::Number(0.0),Value::Number(0.0)])]),
+        ("LET(r,SUM(T10),SelectionTick(5))",1u32,3u32,8u32,[(1,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)]),(2,vec![Value::Number(5.0),Value::Number(5.0),Value::Number(5.0)])]),
+    ];
+    let mut mismatches = Vec::new();
+    for (formula, width, height, chain, stages) in cases {
+        for version in [1u8, 2] { for dirty in [false, true] {
+            let count = Rc::new(RefCell::new(0u32));
+            let counted = count.clone();
+            set_user_function_hook(Some(Box::new(move |name, args, _| {
+                if !name.eq_ignore_ascii_case("SelectionTick") { return None; }
+                *counted.borrow_mut() += 1;
+                let value = match args.first() {
+                    Some(UserArg::Value(value)) => value.clone(),
+                    Some(UserArg::Cells { values, .. }) => values.first().cloned().unwrap_or(Value::Blank),
+                    Some(UserArg::Block(block)) => block.cells.first().cloned().unwrap_or(Value::Blank),
+                    _ => Value::Blank,
+                };
+                Some(Arg::Value(value))
+            })));
+            oxicells_calc::engine::set_user_function_wait_for_dependencies(false);
+            oxicells_calc::engine::set_user_function_full_rebuild(false);
+            oxicells_calc::engine::set_user_function_full_calculation(false);
+            let mut held = book(); held.set_compatibility_version(version);
+            for (address, value) in [("D1", 1.), ("D2", 2.), ("D3", 3.)] {
+                held.set_value("S", address, Value::Number(value)).unwrap();
+            }
+            let mut external = Vec::new();
+            for link in 0..chain {
+                let address = format!("T{}", 10 + link);
+                let source = if link + 1 < chain { format!("T{}", 11 + link) } else { "M1".to_string() };
+                held.set_formula("S", &address, &source).unwrap();
+                external.push(("S".to_string(), (19, 9 + link)));
+            }
+            if !external.is_empty() { held.recalculate_these(&external); }
+            let mut wanted = Vec::new();
+            for row in 0..height { for col in 0..width {
+                let coord = (12 + col, row);
+                let address = oxicells_calc::CellRef::new(coord.0, coord.1).to_a1();
+                held.set_array_member("S", &address, formula, (col, row)).unwrap();
+                wanted.push(("S".to_string(), coord));
+            }}
+            let mut reverse = wanted.clone(); reverse.reverse();
+            held.set_calculation_order(&reverse);
+            let all: Vec<_> = wanted.iter().chain(external.iter()).cloned().collect();
+            for (stage, (expected_calls, expected_values)) in stages.iter().enumerate() {
+                held.set_chain_probes(stage != 0);
+                oxicells_calc::engine::set_user_function_wait_for_dependencies(true);
+                oxicells_calc::engine::set_user_function_full_calculation(stage >= 3);
+                oxicells_calc::engine::set_user_function_full_rebuild(stage >= 4);
+                match stage {
+                    0 => { held.recalculate_array_entry(&wanted); }
+                    1 => { held.recalculate_these(&wanted); }
+                    2 if dirty => { held.recalculate_dirty(&all, None); }
+                    _ => { held.recalculate(); }
+                }
+                let values: Vec<_> = wanted.iter().map(|(_, coord)|
+                    held.value("S", &oxicells_calc::CellRef::new(coord.0, coord.1).to_a1())).collect();
+                let calls = *count.borrow();
+                if values != *expected_values || calls != *expected_calls {
+                    mismatches.push(format!("{formula}, {width}x{height}, chain {chain}, version {version}, dirty {dirty}, stage {stage}: calls {calls} != {expected_calls}, {values:?} != {expected_values:?}"));
+                }
+            }
+        }}
+    }
+    assert!(mismatches.is_empty(), "{} Native calculation-scope mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+}
+
+#[test]
+fn conditional_legacy_array_cycles_resume_through_the_core_bridge() {
+    use oxicells_core::ir::{Cell, CellValue, Row, Spill};
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_user_function_hook(None);
+            oxicells_calc::engine::set_user_function_wait_for_dependencies(false);
+            oxicells_calc::engine::set_user_function_full_rebuild(false);
+            oxicells_calc::engine::set_user_function_full_calculation(false);
+        }
+    }
+    let _restore = Restore;
+    let cases = [
+        ("LET(r,IF(SelectionTick(0),M1,D1),SUM(r))",1u32,1u32,[(1,vec![1.0]),(2,vec![1.0]),(3,vec![1.0]),(4,vec![1.0]),(5,vec![1.0]),(6,vec![1.0])]),
+        ("LET(r,IF(SelectionTick(1),M1,D1),SUM(r))",1u32,1u32,[(1,vec![0.0]),(2,vec![0.0]),(5,vec![0.0]),(8,vec![0.0]),(11,vec![0.0]),(14,vec![0.0])]),
+        ("LET(r,SUM(M1),SelectionTick(5))",1u32,1u32,[(1,vec![5.0]),(1,vec![5.0]),(1,vec![5.0]),(1,vec![5.0]),(1,vec![5.0]),(1,vec![5.0])]),
+        ("LET(r,IF(SelectionTick(0),M1:M3,D1),SUM(r))",1u32,3u32,[(1,vec![1.0,1.0,1.0]),(2,vec![1.0,1.0,1.0]),(3,vec![1.0,1.0,1.0]),(4,vec![1.0,1.0,1.0]),(5,vec![1.0,1.0,1.0]),(6,vec![1.0,1.0,1.0])]),
+        ("LET(r,IF(SelectionTick(1),M1:M3,D1),SUM(r))",1u32,3u32,[(1,vec![0.0,0.0,0.0]),(2,vec![0.0,0.0,0.0]),(5,vec![0.0,0.0,0.0]),(8,vec![0.0,0.0,0.0]),(11,vec![0.0,0.0,0.0]),(14,vec![0.0,0.0,0.0])]),
+        ("LET(r,SUM(M1:M3),SelectionTick(5))",1u32,3u32,[(1,vec![5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0])]),
+        ("LET(r,IF(SelectionTick(0),M1:O1,D1),SUM(r))",3u32,1u32,[(1,vec![1.0,1.0,1.0]),(2,vec![1.0,1.0,1.0]),(3,vec![1.0,1.0,1.0]),(4,vec![1.0,1.0,1.0]),(5,vec![1.0,1.0,1.0]),(6,vec![1.0,1.0,1.0])]),
+        ("LET(r,IF(SelectionTick(1),M1:O1,D1),SUM(r))",3u32,1u32,[(1,vec![0.0,0.0,0.0]),(2,vec![0.0,0.0,0.0]),(5,vec![0.0,0.0,0.0]),(8,vec![0.0,0.0,0.0]),(11,vec![0.0,0.0,0.0]),(14,vec![0.0,0.0,0.0])]),
+        ("LET(r,SUM(M1:O1),SelectionTick(5))",3u32,1u32,[(1,vec![5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0])]),
+        ("LET(r,IF(SelectionTick(0),M1:N2,D1),SUM(r))",2u32,2u32,[(1,vec![1.0,1.0,1.0,1.0]),(2,vec![1.0,1.0,1.0,1.0]),(3,vec![1.0,1.0,1.0,1.0]),(4,vec![1.0,1.0,1.0,1.0]),(5,vec![1.0,1.0,1.0,1.0]),(6,vec![1.0,1.0,1.0,1.0])]),
+        ("LET(r,IF(SelectionTick(1),M1:N2,D1),SUM(r))",2u32,2u32,[(1,vec![0.0,0.0,0.0,0.0]),(2,vec![0.0,0.0,0.0,0.0]),(5,vec![0.0,0.0,0.0,0.0]),(8,vec![0.0,0.0,0.0,0.0]),(11,vec![0.0,0.0,0.0,0.0]),(14,vec![0.0,0.0,0.0,0.0])]),
+        ("LET(r,SUM(M1:N2),SelectionTick(5))",2u32,2u32,[(1,vec![5.0,5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0,5.0]),(1,vec![5.0,5.0,5.0,5.0])]),
+        ("SUM(IF(SelectionTick(1),M1,D1))+SelectionTick(5)",1u32,1u32,[(2,vec![5.0]),(3,vec![5.0]),(6,vec![5.0]),(9,vec![5.0]),(12,vec![5.0]),(15,vec![5.0])]),
+        ("SUM(IF(SelectionTick(1),M1:M3,D1))+SelectionTick(5)",1u32,3u32,[(2,vec![5.0,5.0,5.0]),(3,vec![5.0,5.0,5.0]),(6,vec![5.0,5.0,5.0]),(9,vec![5.0,5.0,5.0]),(12,vec![5.0,5.0,5.0]),(15,vec![5.0,5.0,5.0])]),
+        ("SUM(IF(SelectionTick(1),M1:O1,D1))+SelectionTick(5)",3u32,1u32,[(2,vec![5.0,5.0,5.0]),(3,vec![5.0,5.0,5.0]),(6,vec![5.0,5.0,5.0]),(9,vec![5.0,5.0,5.0]),(12,vec![5.0,5.0,5.0]),(15,vec![5.0,5.0,5.0])]),
+        ("SUM(IF(SelectionTick(1),M1:N2,D1))+SelectionTick(5)",2u32,2u32,[(2,vec![5.0,5.0,5.0,5.0]),(3,vec![5.0,5.0,5.0,5.0]),(6,vec![5.0,5.0,5.0,5.0]),(9,vec![5.0,5.0,5.0,5.0]),(12,vec![5.0,5.0,5.0,5.0]),(15,vec![5.0,5.0,5.0,5.0])]),
+    ];
+    let mut mismatches = Vec::new();
+    for (formula, width, height, stages) in cases {
+        for version in [1u8, 2] {
+            let mut held = oxicells_core::parse_xlsx(include_bytes!("../../oxicells-core/tests/fixtures/hidden_rows_cols.xlsx")).unwrap();
+            held.sheets.truncate(1); held.sheets[0].name = "S".into();
+            held.sheets[0].rows.clear(); held.sheets[0].cached_spills = None;
+            held.defined_names.clear(); held.external_books.clear();
+            held.recalculation = Default::default();
+            held.calculation.compatibility_version = version;
+            let mut wanted = Vec::new();
+            for row in 1..=height.max(3) {
+                let mut cells = vec![Cell { col: 3, value: CellValue::Number(row as f64), formula: None,
+                    array_block: None, style: Default::default(), formula_utf16: None, runs: Vec::new(), spill: Spill::Scalar }];
+                if row <= height { for col in 0..width {
+                    cells.push(Cell { col: 12 + col, value: CellValue::Empty, formula: Some(formula.into()),
+                        array_block: Some((1,12,height,12+width-1)), style: Default::default(),
+                        formula_utf16: None, runs: Vec::new(), spill: Spill::Scalar });
+                    wanted.push(("S".to_string(), (12 + col, row - 1)));
+                }}
+                held.sheets[0].rows.push(Row { index: row, height: None, custom_height: false, style_font: None,
+                    thick_top: false, thick_bottom: false, hidden: false, cells });
+            }
+            let mut calls = 0u32;
+            for (stage, (expected_calls, expected_values)) in stages.iter().enumerate() {
+                let mut reverse = wanted.clone(); reverse.reverse(); held.recalculation.order = reverse;
+                let baseline = held.clone();
+                let answers = Rc::new(RefCell::new(std::collections::BTreeMap::<String, Value>::new()));
+                let mut complete = false;
+                oxicells_calc::engine::set_user_function_wait_for_dependencies(true);
+                oxicells_calc::engine::set_user_function_full_calculation(stage >= 3);
+                oxicells_calc::engine::set_user_function_full_rebuild(stage >= 4);
+                for _ in 0..32 {
+                    held = baseline.clone();
+                    let queued = Rc::new(RefCell::new(std::collections::BTreeMap::<String, Value>::new()));
+                    let queue = queued.clone(); let cached = answers.clone();
+                    set_user_function_hook(Some(Box::new(move |name, args, caller| {
+                        let context = oxicells_calc::engine::user_function_call_context();
+                        let key = format!("{name}|{args:?}|{caller:?}|{context:?}");
+                        if let Some(value) = cached.borrow().get(&key) { return Some(Arg::Value(value.clone())); }
+                        let value = match args.first() {
+                            Some(UserArg::Value(value)) => value.clone(),
+                            Some(UserArg::Cells { values, .. }) => values.first().cloned().unwrap_or(Value::Blank),
+                            Some(UserArg::Block(block)) => block.cells.first().cloned().unwrap_or(Value::Blank),
+                            _ => Value::Blank,
+                        };
+                        queue.borrow_mut().insert(key, value);
+                        defer_user_function(); Some(Arg::Value(Value::Error(ExcelError::Value)))
+                    })));
+                    match stage {
+                        0 => { oxicells_core::formula::evaluate_workbook_formula_array_entry(&mut held, &wanted, None); }
+                        1 => { oxicells_core::formula::evaluate_workbook_formula_subset(&mut held, &wanted, false, None); }
+                        _ => { oxicells_core::formula::evaluate_workbook_formulas(&mut held); }
+                    }
+                    set_user_function_hook(None);
+                    if queued.borrow().is_empty() { complete = true; break; }
+                    for (key, value) in std::mem::take(&mut *queued.borrow_mut()) {
+                        assert!(answers.borrow_mut().insert(key, value).is_none()); calls += 1;
+                    }
+                }
+                let values: Vec<_> = wanted.iter().map(|(_, (col, row))|
+                    held.sheets[0].rows.iter().find(|r| r.index == row + 1).unwrap().cells.iter().find(|cell| cell.col == *col).unwrap().value.clone()).collect();
+                let expected: Vec<_> = expected_values.iter().map(|v| CellValue::Number(*v)).collect();
+                let same = values.iter().zip(&expected).all(|(a,b)| matches!((a,b), (CellValue::Number(a),CellValue::Number(b)) if a==b));
+                if !complete || calls != *expected_calls || !same {
+                    mismatches.push(format!("{formula}, {width}x{height}, version {version}, stage {stage}: complete {complete}, calls {calls} != {expected_calls}, {values:?} != {expected:?}"));
+                }
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{} Native async/core mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+}

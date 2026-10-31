@@ -176,14 +176,24 @@ impl Expr {
     }
 
     fn reference_reads(&self, aliases: &[(String, ReferenceReads)]) -> ReferenceReads {
+        self.reference_reads_in(aliases, false)
+    }
+
+    /// Dependencies that must precede selecting a conditional result. A
+    /// branch's cells are discovered separately after its selector runs.
+    pub(crate) fn required_value_references(&self) -> Vec<Reference> {
+        self.reference_reads_in(&[], true).values
+    }
+
+    fn reference_reads_in(&self, aliases: &[(String, ReferenceReads)], required: bool) -> ReferenceReads {
         let append = ReferenceReads::append;
         match self {
             Expr::Ref(reference) => ReferenceReads { values: vec![reference.clone()], addresses: Vec::new() },
             Expr::Name(label) => aliases.iter().rev().find(|(held, _)| held.eq_ignore_ascii_case(label)).map(|(_, reads)| reads.clone()).unwrap_or_default(),
-            Expr::Unary { operand, .. } => ReferenceReads::value(operand.reference_reads(aliases).values),
+            Expr::Unary { operand, .. } => ReferenceReads::value(operand.reference_reads_in(aliases, required).values),
             Expr::Binary { lhs, rhs, .. } => {
-                let mut values = lhs.reference_reads(aliases).values;
-                append(&mut values, &rhs.reference_reads(aliases).values);
+                let mut values = lhs.reference_reads_in(aliases, required).values;
+                append(&mut values, &rhs.reference_reads_in(aliases, required).values);
                 ReferenceReads::value(values)
             },
             Expr::Function { name, args } if name == "LET" && args.len() >= 3 && args.len() % 2 == 1 => {
@@ -193,12 +203,12 @@ impl Expr {
                     let Expr::Name(label) = &pair[0] else { return ReferenceReads::value(self.references()); };
                     // The initializer still sees the outer binding. Shadow it
                     // only after both dependency views have been collected.
-                    let bound = pair[1].reference_reads(&scope);
-                    append(&mut result.values, &bound.values);
+                    let bound = pair[1].reference_reads_in(&scope, required);
+                    append(&mut result.values, &bound.addresses);
                     append(&mut result.addresses, &bound.addresses);
                     scope.push((label.clone(), bound));
                 }
-                let body = args.last().unwrap().reference_reads(&scope);
+                let body = args.last().unwrap().reference_reads_in(&scope, required);
                 append(&mut result.values, &body.values);
                 append(&mut result.addresses, &body.addresses);
                 result
@@ -211,23 +221,39 @@ impl Expr {
                             let mut result = ReferenceReads::default();
                             for (label, value) in body[..body.len()-1].iter().zip(&args[1..]) {
                                 let Expr::Name(label) = label else { return ReferenceReads::value(self.references()); };
-                                let bound = value.reference_reads(aliases);
+                                let bound = value.reference_reads_in(aliases, required);
                                 append(&mut result.values, &bound.values);
                                 append(&mut result.addresses, &bound.addresses);
                                 scope.push((label.clone(), bound));
                             }
-                            let body = body.last().unwrap().reference_reads(&scope);
+                            let body = body.last().unwrap().reference_reads_in(&scope, required);
                             append(&mut result.values, &body.values);
                             append(&mut result.addresses, &body.addresses);
                             return result;
                         }
                     }
                 }
-                let reads: Vec<_> = args.iter().map(|arg| arg.reference_reads(aliases)).collect();
+                let reads: Vec<_> = args.iter().map(|arg| arg.reference_reads_in(aliases, required)).collect();
+                if required && matches!(name.as_str(), "IF" | "CHOOSE" | "IFERROR" | "IFNA") {
+                    return ReferenceReads::value(reads.first().map(|read| read.values.clone()).unwrap_or_default());
+                }
                 let mut values = Vec::new();
                 for read in &reads { append(&mut values, &read.values); }
                 if name == "INDEX" {
-                    if let Some(selected) = Self::indexed_references(args) {
+                    let selected = Self::indexed_references(args).or_else(|| {
+                        if !matches!(args.first(), Some(Expr::Name(_))) { return None; }
+                        let read = &reads[0];
+                        let sources: Vec<_> = read.values.iter().filter(|source| !read.addresses.contains(source)).collect();
+                        if sources.is_empty() { return None; }
+                        let mut selected = read.addresses.clone();
+                        for source in sources {
+                            let mut selected_args = args.clone();
+                            selected_args[0] = Expr::Ref(source.clone());
+                            append(&mut selected, &Self::indexed_references(&selected_args)?);
+                        }
+                        Some(selected)
+                    });
+                    if let Some(selected) = selected {
                         values = selected;
                         for read in reads.iter().skip(1) { append(&mut values, &read.values); }
                     }
@@ -280,6 +306,13 @@ impl Expr {
         let mut found = self.value_references();
         self.visit(&mut |node| {
             if let Expr::Function { name, args } = node {
+                // An unused LET reference still invalidates its consumer when
+                // the referenced cells change, without ordering their values.
+                if name == "LET" && args.len() >= 3 && args.len() % 2 == 1 {
+                    for pair in args[..args.len() - 1].chunks_exact(2) {
+                        ReferenceReads::append(&mut found, &pair[1].references());
+                    }
+                }
                 if let Some(at) = Self::metadata_reference_argument(name, args) {
                     found.extend(args[at].references());
                 }
@@ -313,6 +346,10 @@ impl Expr {
     }
 
     fn walk_values(&self, found: &mut Vec<Reference>) {
+        if matches!(self, Expr::Function { name, .. } if name == "LET") {
+            ReferenceReads::append(found, &self.reference_reads(&[]).values);
+            return;
+        }
         match self {
             Expr::Ref(reference) => found.push(reference.clone()),
             Expr::Unary { operand, .. } => operand.walk_values(found),

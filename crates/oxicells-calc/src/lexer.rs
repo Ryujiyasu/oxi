@@ -762,7 +762,8 @@ fn qualify_name_formula_mode(
             let key = crate::case_fold::name_key(name);
             let binder = owner.is_none() && frames.last().is_some_and(|f| f.arg + 1 < f.total
                 && (f.function == "LAMBDA" || (f.function == "LET" && f.arg % 2 == 0)));
-            let lexical = owner.is_none().then(|| frames.iter().rev().find_map(|f| f.locals.get(&key).cloned())).flatten();
+            let lexical = (owner.is_none() && !(calls && normalized_builtin_call(name).is_some()))
+                .then(|| frames.iter().rev().find_map(|f| f.locals.get(&key).cloned())).flatten();
             if binder {
                 let plain = name.strip_prefix("_xlpm.").unwrap_or(name);
                 let printed = if ooxml { format!("_xlpm.{plain}") } else { plain.to_string() };
@@ -928,6 +929,8 @@ fn modern_value_array(node: &AtNode) -> bool {
                 "ROW" | "COLUMN" => first.is_some_and(modern_result_is_multiple),
                 "INDEX" => (first.is_some_and(modern_value_array) && may_answer_a_block(name, args))
                     || args.iter().skip(1).take(2).flatten().any(modern_result_is_multiple),
+                "XLOOKUP" => first.is_some_and(modern_result_is_multiple)
+                    || args.iter().skip(2).take(2).flatten().any(modern_value_array),
                 "OFFSET" | "INDIRECT" | "TRIMRANGE" => false,
                 _ if returns_value_array(name) => true,
                 _ => args.iter().enumerate().any(|(index, arg)|
@@ -4011,6 +4014,41 @@ mod shift_tests {
     }
 
     #[test]
+    fn native_builtin_call_names_are_separate_from_let_and_lambda_parameters() {
+        let mut mismatches = Vec::new();
+        for (input, stored, shown) in [
+            ("=LET(n,2,N(n))","=_xlfn.LET(_xlpm.n,2,N(_xlpm.n))","=LET(n,2,N(n))"),
+            ("=LET(n,2,n(n))","=_xlfn.LET(_xlpm.n,2,N(_xlpm.n))","=LET(n,2,N(n))"),
+            ("=LET(N,2,N(N))","=_xlfn.LET(_xlpm.N,2,N(_xlpm.N))","=LET(N,2,N(N))"),
+            ("=LET(N,2,n(N))","=_xlfn.LET(_xlpm.N,2,N(_xlpm.N))","=LET(N,2,N(N))"),
+            ("=LET(n,LAMBDA(x,x+3),N(2))","=_xlfn.LET(_xlpm.n,_xlfn.LAMBDA(_xlpm.x,_xlpm.x+3),N(2))","=LET(n,LAMBDA(x,x+3),N(2))"),
+            ("=LET(n,LAMBDA(x,x+3),n(2))","=_xlfn.LET(_xlpm.n,_xlfn.LAMBDA(_xlpm.x,_xlpm.x+3),N(2))","=LET(n,LAMBDA(x,x+3),N(2))"),
+            ("=LET(N,LAMBDA(x,x+3),N(2))","=_xlfn.LET(_xlpm.N,_xlfn.LAMBDA(_xlpm.x,_xlpm.x+3),N(2))","=LET(N,LAMBDA(x,x+3),N(2))"),
+            ("=LET(SEQUENCE,100,SUM(SEQUENCE(2)))","=_xlfn.LET(_xlpm.SEQUENCE,100,SUM(_xlfn.SEQUENCE(2)))","=LET(SEQUENCE,100,SUM(SEQUENCE(2)))"),
+            ("=LET(SEQUENCE,LAMBDA(x,x+3),SEQUENCE(2))","=_xlfn.LET(_xlpm.SEQUENCE,_xlfn.LAMBDA(_xlpm.x,_xlpm.x+3),_xlfn.SEQUENCE(2))","=LET(SEQUENCE,LAMBDA(x,x+3),SEQUENCE(2))"),
+            ("=LET(sequence,LAMBDA(x,x+3),SEQUENCE(2))","=_xlfn.LET(_xlpm.sequence,_xlfn.LAMBDA(_xlpm.x,_xlpm.x+3),_xlfn.SEQUENCE(2))","=LET(sequence,LAMBDA(x,x+3),SEQUENCE(2))"),
+            ("=LET(sequence,LAMBDA(x,x+3),sequence(2))","=_xlfn.LET(_xlpm.sequence,_xlfn.LAMBDA(_xlpm.x,_xlpm.x+3),_xlfn.SEQUENCE(2))","=LET(sequence,LAMBDA(x,x+3),SEQUENCE(2))"),
+            ("=LAMBDA(n,N(n))(2)","=_xlfn.LAMBDA(_xlpm.n,N(_xlpm.n))(2)","=LAMBDA(n,N(n))(2)"),
+            ("=LAMBDA(N,N(N))(2)","=_xlfn.LAMBDA(_xlpm.N,N(_xlpm.N))(2)","=LAMBDA(N,N(N))(2)"),
+            ("=LAMBDA(n,n(2))(LAMBDA(x,x+3))","=_xlfn.LAMBDA(_xlpm.n,N(2))(_xlfn.LAMBDA(_xlpm.x,_xlpm.x+3))","=LAMBDA(n,N(2))(LAMBDA(x,x+3))"),
+            ("=LET(n,D1:D3,SUM(INDEX(D1:D3,N(n),1)))","=_xlfn.LET(_xlpm.n,D1:D3,SUM(INDEX(D1:D3,N(_xlpm.n),1)))","=LET(n,D1:D3,SUM(INDEX(D1:D3,N(n),1)))"),
+            ("=LET(n,{1;2;3},SUM(INDEX(D1:D3,N(n),1)))","=_xlfn.LET(_xlpm.n,{1;2;3},SUM(INDEX(D1:D3,N(_xlpm.n),1)))","=LET(n,{1;2;3},SUM(INDEX(D1:D3,N(n),1)))"),
+            ("=LET(len,\"abc\",LEN(len))","=_xlfn.LET(_xlpm.len,\"abc\",LEN(_xlpm.len))","=LET(len,\"abc\",LEN(len))"),
+            ("=LET(sum,4,SUM(sum))","=_xlfn.LET(_xlpm.sum,4,SUM(_xlpm.sum))","=LET(sum,4,SUM(sum))"),
+            ("=LET(sum,LAMBDA(x,x+3),SUM(2))","=_xlfn.LET(_xlpm.sum,_xlfn.LAMBDA(_xlpm.x,_xlpm.x+3),SUM(2))","=LET(sum,LAMBDA(x,x+3),SUM(2))"),
+            ("=LET(SeQuEnCe,LAMBDA(x,x+3),SeQuEnCe(2))","=_xlfn.LET(_xlpm.SeQuEnCe,_xlfn.LAMBDA(_xlpm.x,_xlpm.x+3),_xlfn.SEQUENCE(2))","=LET(SeQuEnCe,LAMBDA(x,x+3),SEQUENCE(2))"),
+            ("=LET(fn,LAMBDA(x,x+3),fn(2))","=_xlfn.LET(_xlpm.fn,_xlfn.LAMBDA(_xlpm.x,_xlpm.x+3),_xlpm.fn(2))","=LET(fn,LAMBDA(x,x+3),fn(2))"),
+            ("=LAMBDA(fn,fn(2))(LAMBDA(x,x+3))","=_xlfn.LAMBDA(_xlpm.fn,_xlpm.fn(2))(_xlfn.LAMBDA(_xlpm.x,_xlpm.x+3))","=LAMBDA(fn,fn(2))(LAMBDA(x,x+3))"),
+        ] {
+            let actual = super::name_formula_to_ooxml(input).unwrap();
+            if actual != stored { mismatches.push(format!("store {input}: {actual} != {stored}")); }
+            let actual = super::formula_from_ooxml(stored).unwrap();
+            if actual != shown { mismatches.push(format!("show {stored}: {actual} != {shown}")); }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
     fn future_functions_keep_storage_namespaces_and_lexical_bindings() {
         for (shown, xml) in [
             ("=SEQUENCE(0)", "=_xlfn.SEQUENCE(0)"),
@@ -4019,7 +4057,7 @@ mod shift_tests {
             ("=XLOOKUP(1,A1:A3,B1:B3)", "=_xlfn.XLOOKUP(1,A1:A3,B1:B3)"),
             ("=RANK.AVG(1,A1:A3)", "=_xlfn.RANK.AVG(1,A1:A3)"),
             ("=SUMIF(A1:A3,1,B1:B3)", "=SUMIF(A1:A3,1,B1:B3)"),
-            ("=LET(SEQUENCE,LAMBDA(x,x),SEQUENCE(2))", "=_xlfn.LET(_xlpm.SEQUENCE,_xlfn.LAMBDA(_xlpm.x,_xlpm.x),_xlpm.SEQUENCE(2))"),
+            ("=LET(SEQUENCE,LAMBDA(x,x),SEQUENCE(2))", "=_xlfn.LET(_xlpm.SEQUENCE,_xlfn.LAMBDA(_xlpm.x,_xlpm.x),_xlfn.SEQUENCE(2))"),
             ("=CUSTOM(\"SEQUENCE(1)\")", "=CUSTOM(\"SEQUENCE(1)\")"),
         ] {
             assert_eq!(super::name_formula_to_ooxml(shown).unwrap(), xml);

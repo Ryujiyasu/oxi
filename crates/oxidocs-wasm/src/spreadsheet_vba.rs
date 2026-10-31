@@ -59562,6 +59562,26 @@ End Function"#;
     }
 
     #[test]
+    fn unused_let_binding_still_invalidates_native_control_1317() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../tests/fixtures/vba/udf_value_readiness.json")).unwrap();
+        let group = fixture["groups"].as_array().unwrap().iter().find(|group| group["source"] == "udf_argument_readiness.bas").unwrap();
+        let case = group["cases"].as_array().unwrap().iter().find(|case| case["id"] == 1317).unwrap();
+        let step = &case["steps"][0];
+        for version in [1u8, 2] {
+            let mut book = oxicells_core::parse_xlsx(include_bytes!("../../../tests/fixtures/vba/udf_argument_readiness.xlsm")).unwrap();
+            book.calculation.compatibility_version = version;
+            let mut session = None;
+            let args = step["arguments"].as_array().unwrap().iter().map(|v| Value::Integer(v.as_i64().unwrap())).collect();
+            let outcome = execute_workbook_action_in_session(book,
+                include_str!("../../../tests/fixtures/vba/udf_argument_readiness.bas"),
+                Some("FlowCase"), args, 0, failure_context(), &mut session).unwrap();
+            assert!(outcome.error.is_none(), "version {version}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap(),
+                serde_json::json!({"type":"string","value":step["expected"]}), "Native control1317, version {version}");
+        }
+    }
+
+    #[test]
     fn dirty_scalar_udf_dependency_matches_native_excel_control_1200() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../tests/fixtures/vba/udf_value_readiness.json")).unwrap();
         let group = fixture["groups"].as_array().unwrap().iter().find(|group| group["source"] == "udf_control_flow.bas").unwrap();
@@ -62124,6 +62144,66 @@ End Function
             ("SUM(INDEX(D1:D3,VALUE(IF(1,{\"1\";\"2\";\"3\"})),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
             ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3})),{1;1;1}))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:6|5:6|5:6|repeat:0:A2:1:3:1:1|5:6|5:6|5:6|full:0:A2:1:3:1:1|5:6|5:6|5:6"),
             ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))+{0;0;0},1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:6|5:6|5:6|repeat:0:A2:1:3:1:1|5:6|5:6|5:6|full:0:A2:1:3:1:1|5:6|5:6|5:6"),
+            ("LET(r,A1:O3,5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,A1:O3,ISREF(r))", "set:0~0:A2:1:3:1:1|11:True|11:True|11:True|entry:0:A2:1:3:1:1|11:True|11:True|11:True|repeat:0:A2:1:3:1:1|11:True|11:True|11:True|full:0:A2:1:3:1:1|11:True|11:True|11:True"),
+            ("LET(r,A1:O3,ROWS(r))", "set:0~0:A2:1:3:1:1|5:3|5:3|5:3|entry:0:A2:1:3:1:1|5:3|5:3|5:3|repeat:0:A2:1:3:1:1|5:3|5:3|5:3|full:0:A2:1:3:1:1|5:3|5:3|5:3"),
+            ("LET(r,A1:O3,COLUMNS(r))", "set:0~0:A2:1:3:1:1|5:15|5:15|5:15|entry:0:A2:1:3:1:1|5:15|5:15|5:15|repeat:0:A2:1:3:1:1|5:15|5:15|5:15|full:0:A2:1:3:1:1|5:15|5:15|5:15"),
+            ("LET(r,A1:O3,INDEX(r,1,4))", "set:0~0:A2:1:3:1:1|5:1|5:1|5:1|entry:0:A2:1:3:1:1|5:1|5:1|5:1|repeat:0:A2:1:3:1:1|5:1|5:1|5:1|full:0:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("LET(r,IF(SelectionTick(1),A1:O3,D1:D3),5)", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:2:A2:1:3:1:1|5:5|5:5|5:5|repeat:3:A2:1:3:1:1|5:5|5:5|5:5|full:4:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,CHOOSE(SelectionTick(1),A1:O3,D1:D3),5)", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:2:A2:1:3:1:1|5:5|5:5|5:5|repeat:3:A2:1:3:1:1|5:5|5:5|5:5|full:4:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,INDEX(A1:O3,0,0),5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,OFFSET(A1,0,0,3,15),5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,INDIRECT(\"A1:O3\"),5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,SelectionTick(5),5)", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:2:A2:1:3:1:1|5:5|5:5|5:5|repeat:3:A2:1:3:1:1|5:5|5:5|5:5|full:4:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,SUM(M1:M3),5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,M1:M3,SUM(r))", "set:0~0:A2:1:3:1:1|5:0|5:0|5:0|entry:0:A2:1:3:1:1|5:0|5:0|5:0|repeat:0:A2:1:3:1:1|5:0|5:0|5:0|full:0:A2:1:3:1:1|5:0|5:0|5:0"),
+            ("LET(r,A1:O3,SUM(INDEX(r,1,13)))", "set:0~0:A2:1:3:1:1|5:0|5:0|5:0|entry:0:A2:1:3:1:1|5:0|5:0|5:0|repeat:0:A2:1:3:1:1|5:0|5:0|5:0|full:0:A2:1:3:1:1|5:0|5:0|5:0"),
+            ("LET(r,A1:O3,LET(r,D1:D3,SUM(r)))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:6|5:6|5:6|repeat:0:A2:1:3:1:1|5:6|5:6|5:6|full:0:A2:1:3:1:1|5:6|5:6|5:6"),
+            ("LET(r,A1:O3,LET(r,r,INDEX(r,{1;2;3},4)))", "set:0~0:A2:1:3:1:1|5:1|5:2|5:3|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("LET(r,SelectionTick(SUM(M1:M3)),5)", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:1:A2:1:3:1:1|5:5|5:5|5:5|repeat:1:A2:1:3:1:1|5:5|5:5|5:5|full:1:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,SUM(M1:M3)+SelectionTick(5),5)", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:1:A2:1:3:1:1|5:5|5:5|5:5|repeat:1:A2:1:3:1:1|5:5|5:5|5:5|full:1:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,IF(FALSE,SelectionTick(5),SUM(M1:M3)),5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,IF(TRUE,SelectionTick(5),SUM(M1:M3)),5)", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:2:A2:1:3:1:1|5:5|5:5|5:5|repeat:3:A2:1:3:1:1|5:5|5:5|5:5|full:4:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,IF(FALSE,SelectionTick(SUM(M1:M3)),1),5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,IF(TRUE,1,SelectionTick(SUM(M1:M3))),5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,SelectionTick(5)/0,5)", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:2:A2:1:3:1:1|5:5|5:5|5:5|repeat:3:A2:1:3:1:1|5:5|5:5|5:5|full:4:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,1/0,5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,SUM(M1:M3),SelectionTick(5))", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:1:A2:1:3:1:1|5:5|5:5|5:5|repeat:1:A2:1:3:1:1|5:5|5:5|5:5|full:1:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,SUM(M1:M3),ISREF(r))", "set:0~0:A2:1:3:1:1|11:False|11:False|11:False|entry:0:A2:1:3:1:1|11:False|11:False|11:False|repeat:0:A2:1:3:1:1|11:False|11:False|11:False|full:0:A2:1:3:1:1|11:False|11:False|11:False"),
+            ("LET(r,SUM(M1:M3),N(r))", "set:0~0:A2:1:3:1:1|5:0|5:0|5:0|entry:0:A2:1:3:1:1|5:0|5:0|5:0|repeat:0:A2:1:3:1:1|5:0|5:0|5:0|full:0:A2:1:3:1:1|5:0|5:0|5:0"),
+            ("LET(r,SUM(M1:M3),LET(r,5,r))", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,SelectionTick(5),LET(r,6,r))", "set:1~1:A2:1:3:1:1|5:6|5:6|5:6|entry:2:A2:1:3:1:1|5:6|5:6|5:6|repeat:3:A2:1:3:1:1|5:6|5:6|5:6|full:4:A2:1:3:1:1|5:6|5:6|5:6"),
+            ("LET(r,IF(SelectionTick(1),M1:M3,D1:D3),ROWS(r))", "set:1~1:A2:1:3:1:1|5:3|5:3|5:3|entry:2:A2:1:3:1:1|5:3|5:3|5:3|repeat:3:A2:1:3:1:1|5:3|5:3|5:3|full:4:A2:1:3:1:1|5:3|5:3|5:3"),
+            ("LET(r,INDEX(A1:O3,SelectionTick(1),0),5)", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:2:A2:1:3:1:1|5:5|5:5|5:5|repeat:3:A2:1:3:1:1|5:5|5:5|5:5|full:4:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,OFFSET(A1,SelectionTick(0),0,3,15),5)", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:2:A2:1:3:1:1|5:5|5:5|5:5|repeat:3:A2:1:3:1:1|5:5|5:5|5:5|full:4:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("SUM(M1:M3)+1", "set:0~0:A2:1:3:1:1|5:1|5:1|5:1|entry:0:A2:1:3:1:1|5:1|5:1|5:1|repeat:0:A2:1:3:1:1|5:1|5:1|5:1|full:0:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("LET(r,SUM(M1:M3),r+1)", "set:0~0:A2:1:3:1:1|5:1|5:1|5:1|entry:0:A2:1:3:1:1|5:1|5:1|5:1|repeat:0:A2:1:3:1:1|5:1|5:1|5:1|full:0:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("LET(r,SUM(M1:M3),r-r+5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,SUM(M1:M3),TYPE(r))", "set:0~0:A2:1:3:1:1|5:1|5:1|5:1|entry:0:A2:1:3:1:1|5:1|5:1|5:1|repeat:0:A2:1:3:1:1|5:1|5:1|5:1|full:0:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("LET(r,SUM(M1:M3),IF(FALSE,r,5))", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,SUM(M1:M3),ISNUMBER(r))", "set:0~0:A2:1:3:1:1|11:True|11:True|11:True|entry:0:A2:1:3:1:1|11:True|11:True|11:True|repeat:0:A2:1:3:1:1|11:True|11:True|11:True|full:0:A2:1:3:1:1|11:True|11:True|11:True"),
+            ("LET(r,SUM(M1:M3),r*0+5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,M1:M3,INDEX(r,1,1))", "set:0~0:A2:1:3:1:1|5:0|5:0|5:0|entry:0:A2:1:3:1:1|5:0|5:0|5:0|repeat:0:A2:1:3:1:1|5:0|5:0|5:0|full:0:A2:1:3:1:1|5:0|5:0|5:0"),
+            ("LET(r,M1:M3,INDEX(r,3,1))", "set:0~0:A2:1:3:1:1|5:0|5:0|5:0|entry:0:A2:1:3:1:1|5:0|5:0|5:0|repeat:0:A2:1:3:1:1|5:0|5:0|5:0|full:0:A2:1:3:1:1|5:0|5:0|5:0"),
+            ("LET(r,IF(SelectionTick(1),A1:O3,D1:D3),INDEX(r,1,4))", "set:1~1:A2:1:3:1:1|5:1|5:1|5:1|entry:2:A2:1:3:1:1|5:1|5:1|5:1|repeat:3:A2:1:3:1:1|5:1|5:1|5:1|full:4:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("LET(r,IF(SelectionTick(0),A1:O3,D1:D3),INDEX(r,1,1))", "set:1~1:A2:1:3:1:1|5:1|5:1|5:1|entry:2:A2:1:3:1:1|5:1|5:1|5:1|repeat:3:A2:1:3:1:1|5:1|5:1|5:1|full:4:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("LET(r,A1:O3,s,r,INDEX(s,1,4))", "set:0~0:A2:1:3:1:1|5:1|5:1|5:1|entry:0:A2:1:3:1:1|5:1|5:1|5:1|repeat:0:A2:1:3:1:1|5:1|5:1|5:1|full:0:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("LET(r,A1:O3,s,SUM(r),INDEX(r,1,4))", "set:0~0:A2:1:3:1:1|5:1|5:1|5:1|entry:0:A2:1:3:1:1|5:1|5:1|5:1|repeat:0:A2:1:3:1:1|5:1|5:1|5:1|full:0:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("LET(r,A1:O3,s,INDEX(r,1,4),s)", "set:0~0:A2:1:3:1:1|5:1|5:1|5:1|entry:0:A2:1:3:1:1|5:1|5:1|5:1|repeat:0:A2:1:3:1:1|5:1|5:1|5:1|full:0:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("LET(r,A1:O3,s,INDEX(r,1,13),5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,A1:O3,s,INDEX(r,1,13),N(s))", "set:0~0:A2:1:3:1:1|5:0|5:0|5:0|entry:0:A2:1:3:1:1|5:0|5:0|5:0|repeat:0:A2:1:3:1:1|5:0|5:0|5:0|full:0:A2:1:3:1:1|5:0|5:0|5:0"),
+            ("LET(r,A1:O3,ROWS(INDEX(r,0,13)))", "set:0~0:A2:1:3:1:1|5:3|5:3|5:3|entry:0:A2:1:3:1:1|5:3|5:3|5:3|repeat:0:A2:1:3:1:1|5:3|5:3|5:3|full:0:A2:1:3:1:1|5:3|5:3|5:3"),
+            ("LET(r,A1:O3,ISREF(INDEX(r,1,13)))", "set:0~0:A2:1:3:1:1|11:True|11:True|11:True|entry:0:A2:1:3:1:1|11:True|11:True|11:True|repeat:0:A2:1:3:1:1|11:True|11:True|11:True|full:0:A2:1:3:1:1|11:True|11:True|11:True"),
+            ("LET(r,A1:O3,LET(r,D1:D3,SUM(r))+SelectionTick(5))", "set:1~1:A2:1:3:1:1|5:11|5:11|5:11|entry:2:A2:1:3:1:1|5:11|5:11|5:11|repeat:3:A2:1:3:1:1|5:11|5:11|5:11|full:4:A2:1:3:1:1|5:11|5:11|5:11"),
+            ("LET(r,SUM(M1:M3),SelectionTick(5)+{1;2;3})", "set:1~1:A2:1:3:1:1|5:6|5:7|5:8|entry:1:A2:1:3:1:1|5:6|5:7|5:8|repeat:1:A2:1:3:1:1|5:6|5:7|5:8|full:1:A2:1:3:1:1|5:6|5:7|5:8"),
+            ("LET(r,SelectionTick(SUM(M1:M3)),r*0+5)", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:1:A2:1:3:1:1|5:5|5:5|5:5|repeat:1:A2:1:3:1:1|5:5|5:5|5:5|full:1:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,M1:M3,IF(FALSE,SUM(r),5))", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,M1:M3,IF(TRUE,SUM(r),5))", "set:0~0:A2:1:3:1:1|5:0|5:0|5:0|entry:0:A2:1:3:1:1|5:0|5:0|5:0|repeat:0:A2:1:3:1:1|5:0|5:0|5:0|full:0:A2:1:3:1:1|5:0|5:0|5:0"),
+            ("LET(r,IF(TRUE,M1:M3,D1:D3),5)", "set:0~0:A2:1:3:1:1|5:5|5:5|5:5|entry:0:A2:1:3:1:1|5:5|5:5|5:5|repeat:0:A2:1:3:1:1|5:5|5:5|5:5|full:0:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,IF(SelectionTick(0),M1:M3,D1),SUM(r))", "set:1~1:A2:1:3:1:1|5:1|5:1|5:1|entry:2:A2:1:3:1:1|5:1|5:1|5:1|repeat:3:A2:1:3:1:1|5:1|5:1|5:1|full:4:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("LET(r,IF(SelectionTick(1),M1:M3,D1),SUM(r))", "set:1~1:A2:1:3:1:1|5:0|5:0|5:0|entry:2:A2:1:3:1:1|5:0|5:0|5:0|repeat:3:A2:1:3:1:1|5:0|5:0|5:0|full:6:A2:1:3:1:1|5:0|5:0|5:0"),
+            ("SUM(IF(SelectionTick(0),M1:M3,D1))", "set:1~1:A2:1:3:1:1|5:1|5:1|5:1|entry:2:A2:1:3:1:1|5:1|5:1|5:1|repeat:3:A2:1:3:1:1|5:1|5:1|5:1|full:4:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("SUM(IF(SelectionTick(1),M1:M3,D1))", "set:1~1:A2:1:3:1:1|5:0|5:0|5:0|entry:2:A2:1:3:1:1|5:0|5:0|5:0|repeat:3:A2:1:3:1:1|5:0|5:0|5:0|full:6:A2:1:3:1:1|5:0|5:0|5:0"),
         ] {
             for version in [1u8, 2] {
                 let mut book = workbook();
@@ -62146,6 +62226,104 @@ End Function
             }
         }
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+
+    #[test]
+    fn native_saved_array_return_and_fallback_provenance_matches_excel() {
+        let source = format!("{}{}", include_str!("../../../tests/fixtures/vba/worksheet_index_contexts.bas"), r#"
+Public Function SavedArrayProbe(ByVal expression As String) As String
+ Dim previous As Long
+ previous=Application.Calculation
+ Application.Calculation=xlCalculationManual
+ Driver
+ Range("M1:Q10").ClearContents
+ Range("M1").Formula2="=" & expression
+ Range("M1").Calculate
+ SavedArrayProbe=CStr(Range("M1").SavedAsArray) & "|" & ArrayReport(Range("M1").Value2) & "|" & Range("M1").Formula & "|" & Range("M1").Formula2
+ Range("M1:Q10").ClearContents
+ Application.Calculation=previous
+End Function
+"#);
+        let mut mismatches = Vec::new();
+        for (formula, expected) in [
+            ("SUM(INDEX(D1:D3,N({1;2;3}),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N({1;2;3}),1))|=SUM(INDEX(D1:D3,N({1;2;3}),1))"),
+            ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3})),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(IF(1,{1;2;3})),1))|=SUM(INDEX(D1:D3,N(IF(1,{1;2;3})),1))"),
+            ("SUM(INDEX(D1:D3,N(ROW(A1:A3)),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(ROW(A1:A3)),1))|=SUM(INDEX(D1:D3,N(ROW(A1:A3)),1))"),
+            ("SUM(INDEX(D1:D3,N(TRANSPOSE({1,2,3})),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(TRANSPOSE({1,2,3})),1))|=SUM(INDEX(D1:D3,N(TRANSPOSE({1,2,3})),1))"),
+            ("SUM(INDEX(D1:D3,IF(1,N({1;2;3})),1))", "True|V|5:6|=SUM(INDEX(D1:D3,IF(1,N({1;2;3})),1))|=SUM(INDEX(D1:D3,IF(1,N({1;2;3})),1))"),
+            ("SUM(INDEX(D1:D3,IF(1,N(ROW(A1:A3))),1))", "True|V|5:6|=SUM(INDEX(D1:D3,IF(1,N(ROW(A1:A3))),1))|=SUM(INDEX(D1:D3,IF(1,N(ROW(A1:A3))),1))"),
+            ("SUM(INDEX(D1:D3,IFERROR({1;2;3},0),1))", "True|V|5:6|=SUM(INDEX(D1:D3,IFERROR({1;2;3},0),1))|=SUM(INDEX(D1:D3,IFERROR({1;2;3},0),1))"),
+            ("SUM(INDEX(D1:D3,ABS({1;2;3}),1))", "True|V|5:6|=SUM(INDEX(D1:D3,ABS({1;2;3}),1))|=SUM(INDEX(D1:D3,ABS({1;2;3}),1))"),
+            ("SUM(INDEX(D1:D3,INT({1;2;3}),1))", "True|V|5:6|=SUM(INDEX(D1:D3,INT({1;2;3}),1))|=SUM(INDEX(D1:D3,INT({1;2;3}),1))"),
+            ("SUM(INDEX(D1:D3,--{1;2;3},1))", "True|V|5:6|=SUM(INDEX(D1:D3,--{1;2;3},1))|=SUM(INDEX(D1:D3,--{1;2;3},1))"),
+            ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))+0,1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))+0,1))|=SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))+0,1))"),
+            ("SUM(INDEX(D1:D3,N(D1:D3),1))", "False|V|5:1|=SUM(INDEX(D1:D3,N(D1:D3),1))|=SUM(INDEX(D1:D3,N(D1:D3),1))"),
+            ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))*1,1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))*1,1))|=SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))*1,1))"),
+            ("LET(n,N(IF(1,{1;2;3})),SUM(INDEX(D1:D3,n,1)))", "True|V|5:6|=LET(n,N(IF(1,{1;2;3})),SUM(INDEX(D1:D3,n,1)))|=LET(n,N(IF(1,{1;2;3})),SUM(INDEX(D1:D3,n,1)))"),
+            ("SUM(INDEX(D1:D3,N(IFERROR({1;2;3},0)),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(IFERROR({1;2;3},0)),1))|=SUM(INDEX(D1:D3,N(IFERROR({1;2;3},0)),1))"),
+            ("SUM(INDEX(D1:D3,N(CHOOSE(1,{1;2;3})),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(CHOOSE(1,{1;2;3})),1))|=SUM(INDEX(D1:D3,N(CHOOSE(1,{1;2;3})),1))"),
+            ("SUM(INDEX(D1:D3,N({1;2;3})+ROW(A1:A3)*0,1))", "True|V|5:6|=SUM(INDEX(D1:D3,N({1;2;3})+ROW(A1:A3)*0,1))|=SUM(INDEX(D1:D3,N({1;2;3})+ROW(A1:A3)*0,1))"),
+            ("SUMPRODUCT(INDEX(D1:D3,N(IF(1,{1;2;3})),1))", "True|V|5:6|=SUMPRODUCT(INDEX(D1:D3,N(IF(1,{1;2;3})),1))|=SUMPRODUCT(INDEX(D1:D3,N(IF(1,{1;2;3})),1))"),
+            ("SUM(INDEX(D1:D3,N(INDEX(D1:D3,0,1)),1))", "False|V|5:1|=SUM(INDEX(D1:D3,N(INDEX(D1:D3,0,1)),1))|=SUM(INDEX(D1:D3,N(INDEX(D1:D3,0,1)),1))"),
+            ("SUM(INDEX(D1:D3,N(INDEX({1;2;3},0,1)),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(INDEX({1;2;3},0,1)),1))|=SUM(INDEX(D1:D3,N(INDEX({1;2;3},0,1)),1))"),
+            ("SUM(INDEX(D1:D3,N(IF(1,D1:D3)),1))", "False|V|5:1|=SUM(INDEX(D1:D3,N(IF(1,D1:D3)),1))|=SUM(INDEX(D1:D3,N(IF(1,D1:D3)),1))"),
+            ("SUM(INDEX(D1:D3,N(CHOOSE(1,D1:D3)),1))", "False|V|5:1|=SUM(INDEX(D1:D3,N(CHOOSE(1,D1:D3)),1))|=SUM(INDEX(D1:D3,N(CHOOSE(1,D1:D3)),1))"),
+            ("LET(n,{1;2;3},SUM(INDEX(D1:D3,N(n),1)))", "True|V|5:6|=LET(n,{1;2;3},SUM(INDEX(D1:D3,N(n),1)))|=LET(n,{1;2;3},SUM(INDEX(D1:D3,N(n),1)))"),
+            ("LET(n,D1:D3,SUM(INDEX(D1:D3,N(n),1)))", "False|V|5:1|=LET(n,D1:D3,SUM(INDEX(D1:D3,N(n),1)))|=LET(n,D1:D3,SUM(INDEX(D1:D3,N(n),1)))"),
+            ("SUM(INDEX(D1:D3,N(OFFSET(D1,0,0,3,1)),1))", "False|V|5:1|=SUM(INDEX(D1:D3,N(OFFSET(D1,0,0,3,1)),1))|=SUM(INDEX(D1:D3,N(OFFSET(D1,0,0,3,1)),1))"),
+            ("SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\")),1))", "False|V|5:1|=SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\")),1))|=SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\")),1))"),
+            ("SUM(INDEX(D1:D3,N(D1:D3+0),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(D1:D3+0),1))|=SUM(INDEX(D1:D3,N(D1:D3+0),1))"),
+            ("SUM(INDEX(D1:D3,N(IFERROR(D1:D3,0)),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(IFERROR(D1:D3,0)),1))|=SUM(INDEX(D1:D3,N(IFERROR(D1:D3,0)),1))"),
+            ("SUM(INDEX(D1:D3,N(TAKE(D1:D3,3)),1))", "True|V|5:1|=SUM(INDEX(D1:D3,N(TAKE(D1:D3,3)),1))|=SUM(INDEX(D1:D3,N(TAKE(D1:D3,3)),1))"),
+            ("SUM(INDEX(D1:D3,N(TAKE({1;2;3},3)),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(TAKE({1;2;3},3)),1))|=SUM(INDEX(D1:D3,N(TAKE({1;2;3},3)),1))"),
+            ("SUM(INDEX(D1:D3,N(DROP(D1:D3,1)),1))", "True|V|5:2|=SUM(INDEX(D1:D3,N(DROP(D1:D3,1)),1))|=SUM(INDEX(D1:D3,N(DROP(D1:D3,1)),1))"),
+            ("SUM(INDEX(D1:D3,N(DROP({0;1;2;3},1)),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(DROP({0;1;2;3},1)),1))|=SUM(INDEX(D1:D3,N(DROP({0;1;2;3},1)),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1;2;3})),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1;2;3})),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1;2;3})),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,D1,D1:D3)),1))", "False|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,D1,D1:D3)),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,D1,D1:D3)),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1:D3)),1))", "False|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1:D3)),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1:D3)),1))"),
+            ("SUM(INDEX(D1:D3,N(LET(r,D1:D3,r)),1))", "False|V|5:1|=SUM(INDEX(D1:D3,N(LET(r,D1:D3,r)),1))|=SUM(INDEX(D1:D3,N(LET(r,D1:D3,r)),1))"),
+            ("SUM(INDEX(D1:D3,N(LET(r,{1;2;3},r)),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(LET(r,{1;2;3},r)),1))|=SUM(INDEX(D1:D3,N(LET(r,{1;2;3},r)),1))"),
+            ("SUM(INDEX(D1:D3,N(IF(1,TAKE(D1:D3,3))),1))", "True|V|5:1|=SUM(INDEX(D1:D3,N(IF(1,TAKE(D1:D3,3))),1))|=SUM(INDEX(D1:D3,N(IF(1,TAKE(D1:D3,3))),1))"),
+            ("SUM(INDEX(D1:D3,N(IFERROR(TAKE(D1:D3,3),0)),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(IFERROR(TAKE(D1:D3,3),0)),1))|=SUM(INDEX(D1:D3,N(IFERROR(TAKE(D1:D3,3),0)),1))"),
+            ("SUM(INDEX(D1:D3,N(TOROW(D1:D3)),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(TOROW(D1:D3)),1))|=SUM(INDEX(D1:D3,N(TOROW(D1:D3)),1))"),
+            ("SUM(INDEX(D1:D3,N(FILTER(D1:D3,D1:D3>0)),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(FILTER(D1:D3,D1:D3>0)),1))|=SUM(INDEX(D1:D3,N(FILTER(D1:D3,D1:D3>0)),1))"),
+            ("SUM(INDEX(D1:D3,N(CHOOSECOLS(D1:D3,1)),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(CHOOSECOLS(D1:D3,1)),1))|=SUM(INDEX(D1:D3,N(CHOOSECOLS(D1:D3,1)),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},{1;2;3},{1;2;3})),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},{1;2;3},{1;2;3})),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},{1;2;3},{1;2;3})),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1,2,3},{1,2,3})),1))", "True|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1,2,3},{1,2,3})),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1,2,3},{1,2,3})),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1})),1))", "True|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1})),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1})),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1},{2})),1))", "True|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1},{2})),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1},{2})),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},{1},{2})),1))", "True|V|5:2|=SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},{1},{2})),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},{1},{2})),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1)),1))", "False|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1)),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1)),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1,{2})),1))", "True|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1,{2})),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1,{2})),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1,{2;3})),1))", "True|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1,{2;3})),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1,{2;3})),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},D1,{2})),1))", "True|V|5:2|=SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},D1,{2})),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},D1,{2})),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},D1,{2;3})),1))", "True|V|5:5|=SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},D1,{2;3})),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},D1,{2;3})),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,D1,D1:D3,{2;3})),1))", "True|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,D1,D1:D3,{2;3})),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,D1,D1:D3,{2;3})),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(9,D1,D1:D3,{2;3})),1))", "True|V|5:5|=SUM(INDEX(D1:D3,N(XLOOKUP(9,D1,D1:D3,{2;3})),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(9,D1,D1:D3,{2;3})),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1},D1:D3)),1))", "True|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1},D1:D3)),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},{1},D1:D3)),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},{1},D1:D3)),1))", "True|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},{1},D1:D3)),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(9,{1},{1},D1:D3)),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1:D3+0)),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1:D3+0)),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},D1:D3+0)),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},IF(1,D1:D3))),1))", "False|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},IF(1,D1:D3))),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},IF(1,D1:D3))),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},IFERROR(D1:D3,0))),1))", "True|V|5:6|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},IFERROR(D1:D3,0))),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},IFERROR(D1:D3,0))),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},TAKE(D1:D3,3))),1))", "True|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},TAKE(D1:D3,3))),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},TAKE(D1:D3,3))),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},DROP(D1:D3,0))),1))", "True|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},DROP(D1:D3,0))),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},DROP(D1:D3,0))),1))"),
+            ("SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},LET(r,D1:D3,r))),1))", "False|V|5:1|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},LET(r,D1:D3,r))),1))|=SUM(INDEX(D1:D3,N(XLOOKUP(1,{1},LET(r,D1:D3,r))),1))"),
+        ] {
+            for version in [1u8, 2] {
+                let mut book = workbook(); book.calculation.compatibility_version = version;
+                let mut session = None;
+                let outcome = execute_workbook_action_in_session(book, &source, Some("SavedArrayProbe"),
+                    vec![Value::String(formula.into())], 0, failure_context(), &mut session).unwrap();
+                if let Some(error) = outcome.error {
+                    mismatches.push(format!("{formula}, version {version}: {}", error.message)); continue;
+                }
+                let actual = serde_json::to_value(&outcome.result).unwrap();
+                let expected = serde_json::json!({"type":"string","value":expected});
+                if actual != expected { mismatches.push(format!("{formula}, version {version}: {actual} != {expected}")); }
+            }
+        }
+        assert!(mismatches.is_empty(), "{} Native stored-array mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
     }
 
     #[test]

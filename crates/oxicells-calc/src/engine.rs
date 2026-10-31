@@ -119,6 +119,8 @@ enum Extent<'a> {
     ReachedBy(&'a [(String, (u32, u32))]),
     /// Only these, and nothing they lead to.
     JustThese(&'a [(String, (u32, u32))]),
+    /// Dirty workbook/sheet work, with dependency repair across the pass.
+    DirtyThese(&'a [(String, (u32, u32))]),
 }
 
 /// Which cell is being worked out, when that is known. `ROW()` with no
@@ -580,7 +582,11 @@ struct ArrayGroup {
 enum ArrayResult {
     Shared(std::rc::Rc<Arg>),
     Lifted { occurrence_start: u64 },
+    Deferred { reads: Vec<FormulaCell>, occurrence_end: u64 },
 }
+
+#[derive(Clone, Copy)]
+enum CircularPass { Repair, Confirm }
 
 #[derive(Debug, Clone, Default)]
 pub struct Workbook {
@@ -589,6 +595,8 @@ pub struct Workbook {
     read_history: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<UserReadHistory>>>>,
     prepared_spills: BTreeMap<FormulaCell, Arg>,
     array_groups: BTreeMap<FormulaCell, ArrayGroup>,
+    conditional_array_groups: BTreeSet<FormulaCell>,
+    array_retry_prefix: BTreeMap<FormulaCell, u64>,
     array_results: BTreeMap<FormulaCell, ArrayResult>,
     array_context: std::cell::Cell<Option<ArrayGroup>>,
     array_materialization: std::cell::Cell<u32>,
@@ -1143,7 +1151,7 @@ impl Workbook {
     pub fn recalculate_dirty_with_dynamic_reference_wait(&mut self, wanted: &[(String, (u32, u32))], sheet_scope: Option<&str>, wait: bool) -> RecalcReport {
         let layout = self.spill_blocks();
         let previous = self.dynamic_reference_wait.replace(wait);
-        let report = self.work_out(Extent::JustThese(wanted));
+        let report = self.work_out(Extent::DirtyThese(wanted));
         self.dynamic_reference_wait.set(previous);
         self.settle_changed_spills(layout, report, sheet_scope)
     }
@@ -1196,7 +1204,7 @@ impl Workbook {
                 }
                 break;
             }
-            let next = self.work_out(Extent::JustThese(&reached));
+            let next = self.work_out(Extent::DirtyThese(&reached));
             let visited: BTreeSet<_> = next.calculated.iter().cloned().collect();
             report.calculated.retain(|cell| !visited.contains(cell));
             report.calculated.extend(next.calculated);
@@ -1236,13 +1244,24 @@ impl Workbook {
     /// The whole of it, or some part.
     fn work_out(&mut self, extent: Extent<'_>) -> RecalcReport {
         *self.read_history.get_mut() = None;
+        self.provisional_value.set(false);
+        self.value_deferred.set(false);
         self.prepared_spills.clear();
         self.array_results.clear();
+        self.array_retry_prefix.clear();
         self.array_context.set(None);
         self.array_materialization.set(0);
         self.array_lifted.set(false);
         self.array_projection.set(None);
         self.array_groups = self.collect_array_groups();
+        self.conditional_array_groups = self.array_groups.keys().filter(|(sheet, anchor)| {
+            self.expr_at(sheet, anchor).is_some_and(|expr| {
+                let resolved = self.dependency_expression(&expr, sheet, Some(*anchor));
+                let ordered = self.ordering_expression(&resolved, sheet, Some(*anchor));
+                let required = ordered.required_value_references();
+                ordered.value_references().iter().any(|reference| !required.contains(reference))
+            })
+        }).cloned().collect();
         self.scalar_replay_exclusions.clear();
         if !self.now_pinned {
             if let Some(moment) = Workbook::read_the_clock() {
@@ -1253,6 +1272,14 @@ impl Workbook {
             crate::datetime::set_this_year(today.year);
         }
         let keys = self.formula_keys();
+        let conditional_values_before: BTreeMap<_, _> = if self.conditional_array_groups.is_empty() { BTreeMap::new() } else {
+            keys.iter().filter_map(|(sheet, coord)| {
+                let (dx, dy) = self.share_at(sheet, coord)?;
+                let anchor = (coord.0.checked_sub(dx)?, coord.1.checked_sub(dy)?);
+                self.conditional_array_groups.contains(&(sheet.clone(), anchor))
+                    .then(|| ((sheet.clone(), *coord), self.value_at(sheet, coord.0, coord.1)))
+            }).collect()
+        };
         *self.formula_values_before_pass.borrow_mut() = if self.dynamic_reference_wait.get() || user_function_wait_for_dynamic_lookups() {
             keys.iter().map(|(sheet, coord)| ((sheet.clone(), *coord), self.value_at(sheet, coord.0, coord.1))).collect()
         } else { BTreeMap::new() };
@@ -1267,6 +1294,11 @@ impl Workbook {
         for (i, (sheet, coord)) in keys.iter().enumerate() {
             at.entry(sheet.as_str()).or_default().insert(*coord, i);
         }
+        let range_members: Option<BTreeSet<usize>> = match extent {
+            Extent::JustThese(wanted) | Extent::DirtyThese(wanted) => Some(wanted.iter().filter_map(|(sheet, coord)|
+                at.get(sheet.as_str()).and_then(|held| held.get(coord)).copied()).collect()),
+            _ => None,
+        };
 
         // Edge dep -> dependent, plus in-degree, for Kahn's algorithm.
         let mut dependents: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); keys.len()];
@@ -1277,12 +1309,26 @@ impl Workbook {
         let mut reads_itself = BTreeSet::new();
         for (i, (sheet, coord)) in keys.iter().enumerate() {
             self.each_dependency(sheet, coord, &at, true, &mut |j| {
+                // Explicit range calculation reads cells outside its boundary
+                // from their caches; an external cycle cannot block the range.
+                if matches!(extent, Extent::JustThese(_)) && range_members.as_ref().is_some_and(|selected| !selected.contains(&j)) { return; }
                 if j == i {
                     reads_itself.insert(i);
                 } else if dependents[j].insert(i) {
                     indegree[i] += 1;
                 }
             });
+            // A legacy array with a required self-value is already circular,
+            // including a one-cell array. Conditional references still need
+            // their selectors evaluated before their actual edges are known.
+            let required_self = reads_itself.contains(&i) && self.share_at(sheet, coord).is_some()
+                && self.expr_at(sheet, coord).is_some_and(|expr| {
+                    let resolved = self.dependency_expression(&expr, sheet, Some(*coord));
+                    self.ordering_expression(&resolved, sheet, Some(*coord)).required_value_references().iter().any(|reference|
+                        reference.book.is_none() && crate::case_fold::name_key(reference.sheet.as_deref().unwrap_or(sheet)) == crate::case_fold::name_key(sheet)
+                            && reference.range.contains(coord.0, coord.1))
+                });
+            if required_self && dependents[i].insert(i) { indegree[i] += 1; }
         }
 
         let mut queue: VecDeque<usize> = (0..keys.len()).filter(|&i| indegree[i] == 0).collect();
@@ -1298,6 +1344,9 @@ impl Workbook {
         }
 
         let emitted: BTreeSet<usize> = order.iter().copied().collect();
+        if self.array_entry {
+            order.extend((0..keys.len()).filter(|i| !emitted.contains(i) && self.share_at(&keys[*i].0, &keys[*i].1).is_some()));
+        }
 
         match extent {
             Extent::Everything => {}
@@ -1311,14 +1360,8 @@ impl Workbook {
                 order.retain(|i| reached.contains(i));
             }
             // Just these, wherever they fall in the order.
-            Extent::JustThese(wanted) => {
-                let asked: BTreeSet<usize> = wanted
-                    .iter()
-                    .filter_map(|(sheet, coord)| {
-                        at.get(sheet.as_str()).and_then(|held| held.get(coord)).copied()
-                    })
-                    .collect();
-                order.retain(|i| asked.contains(i));
+            Extent::JustThese(_) | Extent::DirtyThese(_) => {
+                order.retain(|i| range_members.as_ref().is_some_and(|asked| asked.contains(i)));
             }
         }
 
@@ -1334,10 +1377,12 @@ impl Workbook {
 
 
         *self.pass_cells.borrow_mut() = order.iter().map(|&i| keys[i].clone()).collect();
-        let chain = self.chain_probes && !self.calculation_order.is_empty();
+        let chain = (self.chain_probes && !self.calculation_order.is_empty())
+            || (!self.array_entry && !self.conditional_array_groups.is_empty());
         let mut accepted = Vec::new();
         let mut dependency_order_repairs = BTreeSet::new();
         let mut temporary_value_dependencies = false;
+        let mut runtime_circular = BTreeSet::new();
         if chain {
             let selected: BTreeSet<usize> = order.iter().copied().collect();
             let mut requirements = vec![BTreeSet::new(); keys.len()];
@@ -1418,6 +1463,7 @@ impl Workbook {
             let mut waiting = BTreeSet::new();
             let mut held_back = BTreeSet::new();
             let mut deferred = false;
+            let mut circular_passes = BTreeMap::new();
             // A deterministic array can discover its new footprint before
             // publishing values. Cells gained or lost by that footprint are
             // probed against Empty, then evaluated after publication. This
@@ -1554,7 +1600,39 @@ impl Workbook {
                     let view: BTreeSet<_> = requirements[*i].union(&read_cells[*i]).filter(|j| completed.contains(j)).copied().collect();
                     requirements[*i].is_subset(&completed) || attempted.get(i) != Some(&view)
                 }));
-                let Some(mut i) = candidate else { break; };
+                let mut cycle_retry = None;
+                if candidate.is_none() && !deferred && !matches!(extent, Extent::JustThese(_)) {
+                    let circular = Self::circular_members(&requirements, &remaining);
+                    for &member in &circular {
+                        let (sheet, coord) = &keys[member];
+                        let Some((dx, dy)) = self.share_at(sheet, coord) else { continue; };
+                        let anchor = (coord.0.saturating_sub(dx), coord.1.saturating_sub(dy));
+                        let key = (sheet.clone(), anchor);
+                        let Some(ArrayResult::Deferred { occurrence_end, .. }) = self.array_results.get(&key) else { continue; };
+                        let next = match circular_passes.get(&key) {
+                            None => CircularPass::Repair,
+                            Some(CircularPass::Repair) => CircularPass::Confirm,
+                            Some(CircularPass::Confirm) => continue,
+                        };
+                        let prefix = *occurrence_end;
+                        circular_passes.insert(key.clone(), next);
+                        self.array_retry_prefix.insert(key.clone(), prefix);
+                        self.array_results.remove(&key);
+                        // Rebuild this group's discovered edges. A selector can
+                        // choose a noncircular reference on the next attempt.
+                        for &j in &remaining {
+                            let (target, at) = &keys[j];
+                            if target != sheet { continue; }
+                            let Some((x, y)) = self.share_at(target, at) else { continue; };
+                            if (at.0.saturating_sub(x), at.1.saturating_sub(y)) != anchor { continue; }
+                            requirements[j] = direct_requirements[j].clone();
+                            read_cells[j].clear(); attempted.remove(&j);
+                        }
+                        cycle_retry = Some(member);
+                        break;
+                    }
+                }
+                let Some(mut i) = candidate.or(cycle_retry) else { break; };
                 // In a forced pass, resume an earlier chain consumer after
                 // its queued precedent commits before dispatching callbacks
                 // farther down that chain. Those independent calls otherwise
@@ -1583,7 +1661,7 @@ impl Workbook {
                         }) { i = j; break; }
                     } else { walking.extend(requirements[j].iter().copied()); }
                 }
-                let ready = requirements[i].is_subset(&completed);
+                let ready = cycle_retry == Some(i) || requirements[i].is_subset(&completed);
                 let (sheet, coord) = &keys[i];
                 if ready {
                     let value = self.calculate_cell(sheet, coord, reads_itself.contains(&i));
@@ -1595,7 +1673,7 @@ impl Workbook {
                         let observed = USER_FORMULA_READS.with(|held| std::mem::take(&mut *held.borrow_mut()));
                         for (read_sheet, read_coord) in observed {
                             if let Some(&j) = at.get(read_sheet.as_str()).and_then(|cells| cells.get(&read_coord)) {
-                                if j != i && remaining.contains(&j) { let discovered = requirements[i].insert(j); temporary_value_dependencies |= discovered && !self.callback_answer_observed.get(); }
+                                if (j != i || self.share_at(sheet, coord).is_some()) && remaining.contains(&j) { let discovered = requirements[i].insert(j); temporary_value_dependencies |= discovered && !self.callback_answer_observed.get(); }
                             }
                         }
                         if !requirements[i].is_subset(&completed) {
@@ -1645,6 +1723,7 @@ impl Workbook {
                 // Queue independent callbacks against the same uncommitted view.
                 USER_FUNCTION_PENDING.with(|pending| pending.set(false));
             }
+            if !deferred { runtime_circular = Self::circular_members(&requirements, &remaining); }
             USER_FUNCTION_PENDING.with(|pending| pending.set(deferred));
             self.unready_cells.borrow_mut().clear();
         } else {
@@ -1656,6 +1735,12 @@ impl Workbook {
             }
         }
         if !user_function_pending() { report.calculated = accepted.iter().map(|&i|keys[i].clone()).collect(); }
+        if !conditional_values_before.is_empty() {
+            let completed: BTreeSet<_> = accepted.iter().map(|&i| keys[i].clone()).collect();
+            for ((sheet, coord), value) in conditional_values_before {
+                if !completed.contains(&(sheet.clone(), coord)) { self.store_cached(&sheet, &coord, value); }
+            }
+        }
 
         self.pass_cells.borrow_mut().clear();
         self.scalar_replay_exclusions.clear();
@@ -1697,16 +1782,13 @@ impl Workbook {
             return report;
         }
         for (i, (sheet, coord)) in keys.iter().enumerate() {
-            if reads_itself.contains(&i) {
+            if reads_itself.contains(&i) || runtime_circular.contains(&i) || !emitted.contains(&i) {
                 report
                     .circular
                     .push(format!("{}!{}", sheet, CellRef::new(coord.0, coord.1).to_a1()));
             }
-            if !emitted.contains(&i) {
-                report.calculated.push((sheet.clone(), *coord));
-                report
-                    .circular
-                    .push(format!("{}!{}", sheet, CellRef::new(coord.0, coord.1).to_a1()));
+            if !emitted.contains(&i) || runtime_circular.contains(&i) {
+                if !emitted.contains(&i) { report.calculated.push((sheet.clone(), *coord)); }
                 self.keep_or_zero(sheet, coord);
             }
         }
@@ -1720,11 +1802,17 @@ impl Workbook {
         clear_user_function_reads();
         self.callback_answer_observed.set(false);
         self.provisional_value.set(false); self.value_deferred.set(false);
+        if !self.array_entry {
+            if let Some((dx, dy)) = self.share_at(sheet, coord) {
+                let anchor = (coord.0.saturating_sub(dx), coord.1.saturating_sub(dy));
+                self.provisional_value.set(self.conditional_array_groups.contains(&(sheet.to_string(), anchor)));
+            }
+        }
             // A formula naming its own cell is worked out all the same, and is
             // circular only if it really read itself: measured,
             // `=IF(D1>0,5,G1)` in G1 is 5 and `=CELL("address",L1)` $L$1,
             // while `=E1` in E1 is 0.
-            if reads_itself {
+            if reads_itself && !self.array_entry {
                 if let Some(expr) = self.expr_at(sheet, coord) {
                     *self.watched.borrow_mut() = Some((sheet.to_string(), *coord));
                     self.watched_read.set(false);
@@ -1768,6 +1856,46 @@ impl Workbook {
             value
     }
 
+    /// Actual cycles in the unfinished dependency graph. A dependent blocked
+    /// by a cycle is not itself circular. Both walks use explicit stacks.
+    fn circular_members(requirements: &[BTreeSet<usize>], remaining: &BTreeSet<usize>) -> BTreeSet<usize> {
+        if remaining.is_empty() { return BTreeSet::new(); }
+        let mut reverse = vec![Vec::new(); requirements.len()];
+        for &consumer in remaining {
+            for &producer in &requirements[consumer] {
+                if remaining.contains(&producer) { reverse[producer].push(consumer); }
+            }
+        }
+        let mut visited = vec![false; requirements.len()];
+        let mut order = Vec::with_capacity(remaining.len());
+        for &root in remaining {
+            let mut walking = vec![(root, false)];
+            while let Some((node, finish)) = walking.pop() {
+                if finish { order.push(node); }
+                else if !visited[node] {
+                    visited[node] = true;
+                    walking.push((node, true));
+                    walking.extend(requirements[node].iter().filter(|next| remaining.contains(next)).map(|&next| (next, false)));
+                }
+            }
+        }
+        visited.fill(false);
+        let mut circular = BTreeSet::new();
+        for root in order.into_iter().rev() {
+            if visited[root] { continue; }
+            let mut component = Vec::new();
+            let mut walking = vec![root];
+            while let Some(node) = walking.pop() {
+                if visited[node] { continue; }
+                visited[node] = true;
+                component.push(node);
+                walking.extend(reverse[node].iter().copied());
+            }
+            if component.len() > 1 || requirements[root].contains(&root) { circular.extend(component); }
+        }
+        circular
+    }
+
     fn collect_array_groups(&self) -> BTreeMap<FormulaCell, ArrayGroup> {
         let mut groups: BTreeMap<FormulaCell, (ArrayGroup, u64, bool)> = BTreeMap::new();
         for (sheet, held) in &self.sheets {
@@ -1799,13 +1927,28 @@ impl Workbook {
         let projected_start = match self.array_results.get(&key) {
             Some(ArrayResult::Shared(answer)) => return formula_result(element_of(answer.as_ref(), offset)),
             Some(ArrayResult::Lifted { occurrence_start }) => Some(*occurrence_start),
+            Some(ArrayResult::Deferred { reads, .. }) => {
+                if reads.iter().any(|cell| self.unready_cells.borrow().contains(cell)) {
+                    record_user_function_reads(reads.clone());
+                    self.value_deferred.set(true);
+                    return Value::Error(ExcelError::Value);
+                }
+                None
+            }
             None => None,
         };
         let previous = self.array_context.replace(Some(group));
         let previous_projection = self.array_projection.replace(projected_start.map(|_| offset));
         let previous_lifted = self.array_lifted.replace(false);
         if let Some(start) = projected_start { USER_FUNCTION_OCCURRENCE.with(|held| held.set(start)); }
+        else if let Some(start) = self.array_retry_prefix.get(&key) { USER_FUNCTION_OCCURRENCE.with(|held| held.set(*start)); }
         let mut worked = self.eval_arg(expr, sheet, 0, Some(if projected_start.is_some() { coord } else { anchor }));
+        if self.conditional_array_groups.contains(&key) && !self.array_entry { self.require_ready_value(&worked); }
+        if projected_start.is_none() && !user_function_pending() && self.value_deferred.get() {
+            let reads = USER_FORMULA_READS.with(|held| held.borrow().iter().cloned().collect::<Vec<_>>());
+            let occurrence_end = USER_FUNCTION_OCCURRENCE.with(std::cell::Cell::get);
+            if !reads.is_empty() { self.array_results.insert(key.clone(), ArrayResult::Deferred { reads, occurrence_end }); }
+        }
         if projected_start.is_none() && !user_function_pending() && !self.value_deferred.get() {
             if self.array_lifted.get() {
                 // Reserve probe occurrences even when another member is first.
@@ -2051,7 +2194,11 @@ impl Workbook {
             return;
         };
         let expr = self.dependency_expression(&expr, sheet, Some(*coord));
-        let references = if contents_only { self.ordering_expression(&expr, sheet, Some(*coord)).value_references() } else { expr.invalidation_references() };
+        let references = if contents_only {
+            let ordered = self.ordering_expression(&expr, sheet, Some(*coord));
+            if self.share_at(sheet, coord).is_some() { ordered.required_value_references() }
+            else { ordered.value_references() }
+        } else { expr.invalidation_references() };
         for reference in &references {
             let target = reference.sheet.as_deref().unwrap_or(sheet);
             let Some(formulas) = at.get(target) else {
@@ -2432,12 +2579,19 @@ impl Workbook {
     }
 
     fn require_ready_reference(&self, sheet: &str, range: &RangeRef) -> bool {
-        if self.unready_reference(sheet, range) { self.value_deferred.set(true); }
+        if self.unready_reference(sheet, range) {
+            let reads: Vec<_> = self.unready_cells.borrow().iter()
+                .filter(|(target, coord)| self.reference_waits_for_formula(sheet, range, target, *coord)).cloned().collect();
+            record_user_function_reads(reads);
+            self.value_deferred.set(true);
+        }
         !self.value_deferred.get()
     }
 
     fn require_ready_value(&self, argument: &Arg) -> bool {
-        if self.unready_argument(argument) { self.value_deferred.set(true); }
+        if let Arg::Range(block) = argument {
+            if let Some((sheet, range)) = block.cell_reference() { return self.require_ready_reference(&sheet, &range); }
+        }
         !self.value_deferred.get()
     }
 
@@ -3113,18 +3267,18 @@ impl Workbook {
                         named_lambdas += 1;
                     }
                     let value = if let Some((sheet, range)) = self.stored_reference(&pair[1], sheet, depth + 1, at) {
-                        // LET still waits for a binding's precedents even when
-                        // its final expression does not consume that binding.
-                        // Deferring its cell reads must not run a UDF early.
-                        if !self.reference_context.get() && !self.require_ready_reference(&sheet, &range) {
-                            answer = Some(Arg::Value(Value::Error(ExcelError::Value)));
-                            break;
-                        }
                         LocalBinding::Reference { sheet, range }
                     } else {
+                        let previous_reference = self.reference_context.replace(self.reference_context.get() || pair[1].can_return_reference());
                         let value = self.eval_arg_inner(&pair[1], sheet, depth + 1, skip, at);
-                        if !self.reference_context.get() && !self.require_ready_value(&value) { answer = Some(Arg::Value(Value::Error(ExcelError::Value))); break; }
-                        LocalBinding::Value(value)
+                        self.reference_context.set(previous_reference);
+                        let reference = match &value { Arg::Range(block) => block.cell_reference(), _ => None };
+                        if let Some((sheet, range)) = reference {
+                            LocalBinding::Reference { sheet, range }
+                        } else {
+                            if !self.reference_context.get() && !self.require_ready_value(&value) { answer = Some(Arg::Value(Value::Error(ExcelError::Value))); break; }
+                            LocalBinding::Value(value)
+                        }
                     };
                     self.let_scope.borrow_mut().push((label.clone(), value));
                     bound += 1;
@@ -3143,7 +3297,8 @@ impl Workbook {
             // A LAMBDA nobody calls is #CALC!: measured, `=LAMBDA(x,x)`.
             Expr::Function { name, .. } if name == "LAMBDA" => Arg::Value(Value::Error(ExcelError::Calc)),
             // A LAMBDA a LET named, called by that name.
-            Expr::Function { name, args } if self.named_lambda(name, sheet, at).is_some() => {
+            Expr::Function { name, args } if crate::lexer::normalized_builtin_call(name).is_none()
+                && self.named_lambda(name, sheet, at).is_some() => {
                 let lambda = self.named_lambda(name, sheet, at).expect("just asked");
                 let values = args
                     .iter()
@@ -3437,7 +3592,8 @@ impl Workbook {
                             if let Some(formula) = self.expr_at(sheet, &coord) {
                                 let formula = if user_function_wait_for_dynamic_lookups() { formula } else { omit_xlookup_return_arrays(&formula) };
                                 let ordered_formula = self.ordering_expression(&self.dependency_expression(&formula, sheet, Some(coord)), sheet, Some(coord));
-                                let references = ordered_formula.value_references();
+                                let references = if self.share_at(sheet, &coord).is_some() { ordered_formula.required_value_references() }
+                                    else { ordered_formula.value_references() };
                                 unready_formula_values.extend(self.unready_cells.borrow().iter().filter(|(target, (col, row))| {
                                     references.iter().any(|reference| {
                                         self.reference_waits_for_formula(reference.sheet.as_deref().unwrap_or(sheet), &reference.range, target, (*col, *row))
@@ -6224,6 +6380,47 @@ mod tests {
         assert_eq!(report.circular.len(), 2);
         assert!(report.circular.contains(&"Sheet1!A1".to_string()));
         assert_eq!(wb.value("Sheet1", "A1"), Value::Number(0.0));
+    }
+
+    #[test]
+    fn native_builtin_functions_take_precedence_over_named_lambdas() {
+        let mut mismatches = Vec::new();
+        for (formula, expected) in [
+            ("=LET(n,2,N(n))", 2.0),
+            ("=LET(n,2,n(n))", 2.0),
+            ("=LET(N,2,N(N))", 2.0),
+            ("=LET(N,2,n(N))", 2.0),
+            ("=LET(n,LAMBDA(x,x+3),N(2))", 2.0),
+            ("=LET(n,LAMBDA(x,x+3),n(2))", 2.0),
+            ("=LET(N,LAMBDA(x,x+3),N(2))", 2.0),
+            ("=LET(SEQUENCE,100,SUM(SEQUENCE(2)))", 3.0),
+            ("=LET(SEQUENCE,LAMBDA(x,x+3),SEQUENCE(2))", 1.0),
+            ("=LET(sequence,LAMBDA(x,x+3),SEQUENCE(2))", 1.0),
+            ("=LET(sequence,LAMBDA(x,x+3),sequence(2))", 1.0),
+            ("=LAMBDA(n,N(n))(2)", 2.0),
+            ("=LAMBDA(N,N(N))(2)", 2.0),
+            ("=LAMBDA(n,n(2))(LAMBDA(x,x+3))", 2.0),
+            ("=LET(n,D1:D3,SUM(INDEX(D1:D3,N(n),1)))", 1.0),
+            ("=LET(n,{1;2;3},SUM(INDEX(D1:D3,N(n),1)))", 6.0),
+            ("=LET(len,\"abc\",LEN(len))", 3.0),
+            ("=LET(sum,4,SUM(sum))", 4.0),
+            ("=LET(sum,LAMBDA(x,x+3),SUM(2))", 2.0),
+            ("=LET(SeQuEnCe,LAMBDA(x,x+3),SeQuEnCe(2))", 1.0),
+            ("=LET(fn,LAMBDA(x,x+3),fn(2))", 5.0),
+        ] {
+            let mut wb = book();
+            for (cell, value) in [("D1", 1.0), ("D2", 2.0), ("D3", 3.0)] {
+                wb.set_value("Sheet1", cell, Value::Number(value)).unwrap();
+            }
+            wb.set_formula("Sheet1", "M1", formula).unwrap();
+            wb.set_dynamic("Sheet1", "M1").unwrap();
+            wb.recalculate();
+            let actual = wb.value("Sheet1", "M1");
+            if actual != Value::Number(expected) {
+                mismatches.push(format!("{formula}: {actual:?} != {expected}"));
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
     #[test]
