@@ -2823,7 +2823,7 @@ impl Workbook {
                             value.as_ref().clone()
                         },
                         LocalBinding::Reference { sheet, range } => self.reference_arg(&sheet, &range, skip),
-                        LocalBinding::Omitted => Arg::Value(Value::Logical(false)),
+                        LocalBinding::Omitted => Arg::Value(Value::Number(0.0)),
                     };
                 }
                 match self.name_bound(name, sheet, at) {
@@ -3377,9 +3377,7 @@ impl Workbook {
             // Outside a LAMBDA nothing is left out: measured, ISOMITTED(1)
             // is FALSE.
             Expr::Function { name, args } if name == "ISOMITTED" && args.len() == 1 => {
-                let left_out = matches!(&args[0], Expr::Name(label)
-                    if self.let_scope.borrow().iter().rev().find(|(held, _)| held.eq_ignore_ascii_case(label))
-                        .is_some_and(|(_, binding)| matches!(binding, LocalBinding::Omitted)));
+                let left_out = self.is_omitted_binding(&args[0]);
                 Arg::Value(Value::Logical(left_out))
             }
             Expr::Function { name, args } if name == "LET" => {
@@ -3399,7 +3397,9 @@ impl Workbook {
                         answer = Some(Arg::Value(Value::Error(ExcelError::Value)));
                         break;
                     };
-                    let value = if let Some((sheet, range)) = self.stored_reference(&pair[1], sheet, depth + 1, at) {
+                    let value = if self.is_omitted_binding(&pair[1]) {
+                        LocalBinding::Omitted
+                    } else if let Some((sheet, range)) = self.stored_reference(&pair[1], sheet, depth + 1, at) {
                         LocalBinding::Reference { sheet, range }
                     } else {
                         let previous_reference = self.reference_context.replace(self.reference_context.get() || pair[1].can_return_reference());
@@ -3410,7 +3410,8 @@ impl Workbook {
                             LocalBinding::Reference { sheet, range }
                         } else {
                             if !self.reference_context.get() && !self.projecting_array_values() && !self.require_ready_value(&value) { answer = Some(Arg::Value(Value::Error(ExcelError::Value))); break; }
-                            LocalBinding::from_arg(value)
+                            if matches!(value, Arg::Value(Value::Blank)) { LocalBinding::Omitted }
+                            else { LocalBinding::from_arg(value) }
                         }
                     };
                     self.let_scope.borrow_mut().push((label.clone(), value));
@@ -4202,20 +4203,23 @@ impl Workbook {
             }
         };
         let rows: Vec<usize> = (first_row..fields.height).filter(|row| keep.get(*row).copied().unwrap_or(false)).collect();
+        // A factory's captured state belongs to this invocation, shared by
+        // every group and total. Resolve local/defined names before dispatch.
+        let function = self.eval_arg_inner(&args[2], sheet, depth + 1, skip, at);
+        let percentage = matches!(&function, Arg::Value(Value::Lambda(lambda))
+            if matches!(&lambda.definition, functions::LambdaDefinition::Builtin(name) if name == "PERCENTOF"));
         let aggregate = |picked: &[usize], column: usize| -> Value {
             let cells: Vec<Value> = picked.iter().map(|row| values.at(column, *row)).collect();
             let block = Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: cells.len(), cells });
-            match &args[2] {
-                Expr::Name(function) if function.eq_ignore_ascii_case("PERCENTOF") => {
-                    let all: Vec<Value> = rows.iter().map(|row| values.at(column, *row)).collect();
-                    let all = Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: all.len(), cells: all });
-                    crate::functions::call("PERCENTOF", &[block, all])
-                }
-                Expr::Name(function) => crate::functions::call(&function.to_uppercase(), &[block]),
-                lambda => match self.call_lambda(lambda, vec![block], sheet, depth, skip, at) {
+            if percentage {
+                let all: Vec<Value> = rows.iter().map(|row| values.at(column, *row)).collect();
+                let all = Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: all.len(), cells: all });
+                crate::functions::call("PERCENTOF", &[block, all])
+            } else {
+                match self.call_lambda_value(&function, vec![block], sheet, depth, skip, at) {
                     Arg::Value(value) => value,
                     Arg::Range(range) => range.cells.first().cloned().unwrap_or(Value::Blank),
-                },
+                }
             }
         };
         let key_of = |row: usize| -> Vec<Value> { (0..fields.width).map(|col| fields.at(col, row)).collect() };
@@ -4373,6 +4377,9 @@ impl Workbook {
                 if col_sort < 0 { o.reverse() } else { o }
             });
         }
+        let function = self.eval_arg_inner(&args[3], sheet, depth + 1, skip, at);
+        let percentage = matches!(&function, Arg::Value(Value::Lambda(lambda))
+            if matches!(&lambda.definition, functions::LambdaDefinition::Builtin(name) if name == "PERCENTOF"));
         let blank = || Value::Text(String::new());
         let aggregate = |picked: &[usize], relative: &[usize], column: usize| -> Value {
             if picked.is_empty() {
@@ -4382,15 +4389,13 @@ impl Workbook {
                 let cells: Vec<Value> = members.iter().map(|row| values.at(column, *row)).collect();
                 Arg::Range(RangeData {origin: crate::functions::BlockOrigin::Array,  width: 1, height: cells.len(), cells })
             };
-            match &args[3] {
-                Expr::Name(function) if function.eq_ignore_ascii_case("PERCENTOF") => {
-                    crate::functions::call("PERCENTOF", &[range(picked), range(relative)])
-                }
-                Expr::Name(function) => crate::functions::call(&function.to_uppercase(), &[range(picked)]),
-                lambda => match self.call_lambda(lambda, vec![range(picked)], sheet, depth, skip, at) {
+            if percentage {
+                crate::functions::call("PERCENTOF", &[range(picked), range(relative)])
+            } else {
+                match self.call_lambda_value(&function, vec![range(picked)], sheet, depth, skip, at) {
                     Arg::Value(value) => value,
                     Arg::Range(range) => range.cells.first().cloned().unwrap_or(Value::Blank),
-                },
+                }
             }
         };
         // The columns in order: each key's rows, the total's (all of them).
@@ -4543,9 +4548,16 @@ impl Workbook {
         Some(self.eval_defined_name(&bound, sheet, depth, skip, at))
     }
 
+    fn is_omitted_binding(&self, expr: &Expr) -> bool {
+        matches!(expr, Expr::Name(label)
+            if self.let_scope.borrow().iter().rev().find(|(held, _)| held.eq_ignore_ascii_case(label))
+                .is_some_and(|(_, binding)| matches!(binding, LocalBinding::Omitted)))
+    }
+
     fn lambda_arguments(&self, args: &[Expr], sheet: &str, depth: u32, skip: Skip, at: At) -> Vec<Option<LocalBinding>> {
         args.iter().map(|expr| {
             if matches!(expr, Expr::Literal(Value::Blank)) { None }
+            else if self.is_omitted_binding(expr) { Some(LocalBinding::Omitted) }
             else if let Some((sheet, range)) = self.stored_reference(expr, sheet, depth + 1, at) {
                 Some(LocalBinding::Reference { sheet, range })
             }
@@ -4615,11 +4627,6 @@ impl Workbook {
 
     fn call_lambda_value(&self, lambda: &Arg, values: Vec<Arg>, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
         self.invoke_lambda(lambda, values.into_iter().map(|value| Some(LocalBinding::from_arg(value))).collect(), sheet, depth, skip, at)
-    }
-
-    fn call_lambda(&self, lambda: &Expr, values: Vec<Arg>, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
-        let lambda = self.eval_arg_inner(lambda, sheet, depth + 1, skip, at);
-        self.call_lambda_value(&lambda, values, sheet, depth, skip, at)
     }
 
     fn invoke_lambda(&self, value: &Arg, values: Vec<Option<LocalBinding>>, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
@@ -4693,6 +4700,9 @@ impl Workbook {
             .map(|expr| block_of(&self.eval_arg_inner(expr, sheet, depth + 1, skip, at)))
             .collect();
         let lambda = self.eval_arg_inner(lambda, sheet, depth + 1, skip, at);
+        // MAP validates its function argument before invoking any element;
+        // an error-valued expression is an invalid callable, not a result.
+        if name == "MAP" && !matches!(&lambda, Arg::Value(Value::Lambda(_))) { return bad(); }
         match name {
             "MAP" => {
                 let Some(first) = blocks.first() else {
@@ -7018,6 +7028,46 @@ mod tests {
             }
         }
         assert!(mismatches.is_empty(), "{} Native LAMBDA mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+    }
+
+    #[test]
+    fn native_grouped_callables_and_forwarded_omissions() {
+        // Excel 16.0/build 20527, two repeated runs: factories are evaluated
+        // once per helper invocation, and omitted arguments retain identity.
+        let cases = [
+            ("SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},LAMBDA(v,SUM(v)),0,0),2))", Value::Number(60.0), false),
+            ("LET(outputs,CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},LET(draw,RAND(),LAMBDA(v,draw)),0,0),2),MAX(outputs)-MIN(outputs))", Value::Number(0.0), false),
+            ("SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},LAMBDA(v,SUM(v)),0,0,,0),1,1))", Value::Number(100.0), false),
+            ("LET(outputs,DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},LET(draw,RAND(),LAMBDA(v,draw)),0,0,,0),1,1),MAX(outputs)-MIN(outputs))", Value::Number(0.0), false),
+            ("LAMBDA([x],LAMBDA([y],ISOMITTED(y))(x))()", Value::Logical(true), true),
+            ("LAMBDA([x],LET(y,x,ISOMITTED(y)))()", Value::Logical(true), true),
+            ("LAMBDA([x],TYPE(x))()", Value::Number(1.0), true),
+            ("LAMBDA(a,b,b)(1,)", Value::Number(0.0), true),
+            ("LAMBDA(a,b,TYPE(b))(1,)", Value::Number(1.0), true),
+            ("LAMBDA(a,[b],b)(1)", Value::Number(0.0), true),
+            ("LAMBDA(a,[b],TYPE(b))(1)", Value::Number(1.0), true),
+            ("LAMBDA([x],x)()", Value::Number(0.0), true),
+            ("LAMBDA([x],LAMBDA(y,ISOMITTED(y))(x))()", Value::Logical(true), true),
+            ("LET(x,,ISOMITTED(x))", Value::Logical(true), false),
+            ("LET(x,IF(TRUE,,),ISOMITTED(x))", Value::Logical(true), false),
+            ("SUM(MAP({1;2},1/0))", Value::Error(ExcelError::Value), false),
+            ("SUM(MAP({1;2},NA()))", Value::Error(ExcelError::Value), false),
+            ("SUM(MAP({1;2},2))", Value::Error(ExcelError::Value), false),
+            ("LET(g,LAMBDA(v,SUM(v)),SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},g,0,0),2)))", Value::Number(60.0), false),
+            ("LET(g,LAMBDA(v,SUM(v)),SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},g,0,0,,0),1,1)))", Value::Number(100.0), false),
+        ];
+        for version in [1, 2] {
+            for (formula, expected, saved_as_array) in &cases {
+                let mut wb = book();
+                wb.set_compatibility_version(version);
+                wb.set_formula("Sheet1", "M1", &format!("={formula}")).unwrap();
+                assert_eq!(crate::lexer::requires_array_storage(formula, &|_| false), *saved_as_array, "{formula}");
+                wb.set_dynamic("Sheet1", "M1").unwrap();
+                let report = wb.recalculate();
+                assert!(report.circular.is_empty(), "{formula}: {:?}", report.circular);
+                assert_eq!(wb.value("Sheet1", "M1"), *expected, "{formula}, version {version}");
+            }
+        }
     }
 
     #[test]
