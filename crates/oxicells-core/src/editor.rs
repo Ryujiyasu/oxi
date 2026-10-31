@@ -5749,6 +5749,7 @@ fn write_formula(
     let mut element = BytesStart::new("f");
     if let Some(reach) = reach {
         element.push_attribute(("t", "array"));
+        element.push_attribute(("aca", "1"));
         element.push_attribute(("ref", reach));
     }
     writer
@@ -5848,6 +5849,13 @@ pub fn named_formula_needs_intersection(names: &[(String, String)], sheet: &str,
     if requested.to_ascii_uppercase().starts_with("_XLETA.") && oxicells_calc::lexer::builtin_function_value(requested).is_some() { return false; }
     defined_name_formula(names, sheet, requested).map_or_else(|| oxicells_calc::lexer::builtin_function_value(requested).is_none(),
         oxicells_calc::lexer::named_formula_needs_intersection)
+}
+
+/// A computed or unresolved name carries value-array evaluation. A direct
+/// named cell range keeps reference semantics instead.
+pub fn named_formula_has_value_array_semantics(names: &[(String, String)], sheet: &str, requested: &str) -> bool {
+    defined_name_formula(names, sheet, requested).map_or_else(|| oxicells_calc::lexer::builtin_function_value(requested).is_none(),
+        oxicells_calc::lexer::named_formula_has_value_array_semantics)
 }
 
 /// Retain builtin function identity independently of later name lookup.
@@ -6159,7 +6167,7 @@ fn patch_dynamic_worksheet(xml: &str, arrays: &BTreeMap<(u32, u32), (u32, u32)>,
                     if let Some(at) = active {
                         if let Some(size) = arrays.get(&at) {
                             if !seen.insert(at) { return Err(XlsxError::InvalidData("multiple formulas for a dynamic anchor".into())); }
-                            tag = metadata_tag(&e, &[("t", Some("array".into())), ("ref", Some(dynamic_range(at, *size)?)), ("si", None)]);
+                            tag = metadata_tag(&e, &[("t", Some("array".into())), ("aca", Some("1".into())), ("ref", Some(dynamic_range(at, *size)?)), ("si", None)]);
                         }
                     }
                 }
@@ -12437,6 +12445,163 @@ mod tests {
             assert!(cell.array_block.is_none());
             assert!(matches!(cell.value, crate::ir::CellValue::Number(9.)));
         }
+    }
+
+    #[test]
+    fn native_bound_name_consumers_preserve_array_storage() {
+        // Independently repeated Excel controls for bare names, direct named
+        // references, named computations, bound closures and literal arrays.
+        let names: Vec<(String, String)> = vec![
+            ("OxiStorageRef".into(), "='Sheet1'!$D$1:$D$3".into()),
+            ("OxiStorageScalar".into(), "=7".into()),
+            ("OxiStorageArray".into(), "={1;2}".into()),
+            ("OxiStorageLambda".into(), "=LAMBDA(x,x)".into()),
+            ("OxiNameAbs".into(), "=ABS(1)".into()),
+            ("OxiNameArithmetic".into(), "=D1+0".into()),
+            ("OxiNameSum".into(), "=SUM(D1:D3)".into()),
+            ("OxiNameIfRef".into(), "=IF(TRUE,D1:D3,0)".into()),
+            ("OxiNameIndexRef".into(), "=INDEX(D1:D3,0)".into()),
+            ("OxiNameOffset".into(), "=OFFSET(D1,0,0,3,1)".into()),
+            ("OxiNameIndexArray".into(), "=INDEX({1;2},0)".into()),
+            ("OxiNameAlias".into(), "=OxiStorageRef".into()),
+        ];
+        let cases = [
+            ("LET(fn,SelectionTick,N(fn))", true),
+            ("LET(fn,SelectionTick,T(fn))", true),
+            ("LET(fn,SelectionTick,ERROR.TYPE(fn))", true),
+            ("LET(fn,SelectionTick,TYPE(INDEX(fn,1)))", true),
+            ("LET(fn,SelectionTick,ISERROR(INDEX(fn,1)))", true),
+            ("LET(fn,SelectionTick,SUM(BYROW({1;2},fn)))", true),
+            ("LET(fn,SelectionTick,SUM(SCAN(0,{1;2},fn)))", true),
+            ("LET(fn,SelectionTick,SUM(MAKEARRAY(2,1,fn)))", false),
+            ("LET(fn,SelectionTick,SUM(fn))", false),
+            ("LET(fn,NoSuchFunction,N(fn))", true),
+            ("LET(fn,NoSuchFunction,T(fn))", true),
+            ("LET(fn,NoSuchFunction,ERROR.TYPE(fn))", true),
+            ("LET(fn,NoSuchFunction,TYPE(INDEX(fn,1)))", true),
+            ("LET(fn,NoSuchFunction,ISERROR(INDEX(fn,1)))", true),
+            ("LET(fn,NoSuchFunction,SUM(BYROW({1;2},fn)))", true),
+            ("LET(fn,NoSuchFunction,SUM(SCAN(0,{1;2},fn)))", true),
+            ("LET(fn,NoSuchFunction,SUM(MAKEARRAY(2,1,fn)))", false),
+            ("LET(fn,NoSuchFunction,SUM(fn))", false),
+            ("LET(fn,SUM,N(fn))", false),
+            ("LET(fn,SUM,T(fn))", false),
+            ("LET(fn,SUM,ERROR.TYPE(fn))", false),
+            ("LET(fn,SUM,TYPE(INDEX(fn,1)))", false),
+            ("LET(fn,SUM,ISERROR(INDEX(fn,1)))", false),
+            ("LET(fn,SUM,SUM(BYROW({1;2},fn)))", false),
+            ("LET(fn,SUM,SUM(SCAN(0,{1;2},fn)))", false),
+            ("LET(fn,SUM,SUM(MAKEARRAY(2,1,fn)))", false),
+            ("LET(fn,SUM,SUM(fn))", false),
+            ("LET(fn,LAMBDA(x,x),N(fn))", false),
+            ("LET(fn,LAMBDA(x,x),T(fn))", false),
+            ("LET(fn,LAMBDA(x,x),ERROR.TYPE(fn))", false),
+            ("LET(fn,LAMBDA(x,x),TYPE(INDEX(fn,1)))", false),
+            ("LET(fn,LAMBDA(x,x),ISERROR(INDEX(fn,1)))", false),
+            ("LET(fn,LAMBDA(x,x),SUM(BYROW({1;2},fn)))", false),
+            ("LET(fn,LAMBDA(x,x),SUM(SCAN(0,{1;2},fn)))", false),
+            ("LET(fn,LAMBDA(x,x),SUM(MAKEARRAY(2,1,fn)))", false),
+            ("LET(fn,LAMBDA(x,x),SUM(fn))", false),
+            ("LET(fn,D1:D3,N(fn))", false),
+            ("LET(fn,D1:D3,T(fn))", false),
+            ("LET(fn,D1:D3,ERROR.TYPE(fn))", true),
+            ("LET(fn,D1:D3,TYPE(INDEX(fn,1)))", false),
+            ("LET(fn,D1:D3,ISERROR(INDEX(fn,1)))", false),
+            ("LET(fn,D1:D3,SUM(BYROW({1;2},fn)))", true),
+            ("LET(fn,D1:D3,SUM(SCAN(0,{1;2},fn)))", true),
+            ("LET(fn,D1:D3,SUM(MAKEARRAY(2,1,fn)))", false),
+            ("LET(fn,D1:D3,SUM(fn))", false),
+            ("LET(fn,{1;2},N(fn))", true),
+            ("LET(fn,{1;2},T(fn))", true),
+            ("LET(fn,{1;2},ERROR.TYPE(fn))", true),
+            ("LET(fn,{1;2},TYPE(INDEX(fn,1)))", true),
+            ("LET(fn,{1;2},ISERROR(INDEX(fn,1)))", true),
+            ("LET(fn,{1;2},SUM(BYROW({1;2},fn)))", true),
+            ("LET(fn,{1;2},SUM(SCAN(0,{1;2},fn)))", true),
+            ("LET(fn,{1;2},SUM(MAKEARRAY(2,1,fn)))", false),
+            ("LET(fn,{1;2},SUM(fn))", false),
+            ("LET(fn,1,N(fn))", false),
+            ("LET(fn,1,T(fn))", false),
+            ("LET(fn,1,ERROR.TYPE(fn))", false),
+            ("LET(fn,1,TYPE(INDEX(fn,1)))", false),
+            ("LET(fn,1,ISERROR(INDEX(fn,1)))", false),
+            ("LET(fn,1,SUM(BYROW({1;2},fn)))", false),
+            ("LET(fn,1,SUM(SCAN(0,{1;2},fn)))", false),
+            ("LET(fn,1,SUM(MAKEARRAY(2,1,fn)))", false),
+            ("LET(fn,1,SUM(fn))", false),
+            ("LET(fn,OxiStorageRef,N(fn))", false),
+            ("LET(fn,OxiStorageRef,T(fn))", false),
+            ("LET(fn,OxiStorageRef,ERROR.TYPE(fn))", true),
+            ("LET(fn,OxiStorageRef,TYPE(INDEX(fn,1)))", false),
+            ("LET(fn,OxiStorageRef,ISERROR(INDEX(fn,1)))", false),
+            ("LET(fn,OxiStorageRef,SUM(BYROW({1;2},fn)))", true),
+            ("LET(fn,OxiStorageRef,SUM(SCAN(0,{1;2},fn)))", true),
+            ("LET(fn,OxiStorageRef,SUM(MAKEARRAY(2,1,fn)))", false),
+            ("LET(fn,OxiStorageRef,SUM(fn))", false),
+            ("LET(fn,OxiStorageScalar,N(fn))", false),
+            ("LET(fn,OxiStorageScalar,T(fn))", false),
+            ("LET(fn,OxiStorageScalar,ERROR.TYPE(fn))", false),
+            ("LET(fn,OxiStorageScalar,TYPE(INDEX(fn,1)))", false),
+            ("LET(fn,OxiStorageScalar,ISERROR(INDEX(fn,1)))", false),
+            ("LET(fn,OxiStorageScalar,SUM(BYROW({1;2},fn)))", false),
+            ("LET(fn,OxiStorageScalar,SUM(SCAN(0,{1;2},fn)))", false),
+            ("LET(fn,OxiStorageScalar,SUM(MAKEARRAY(2,1,fn)))", false),
+            ("LET(fn,OxiStorageScalar,SUM(fn))", false),
+            ("LET(fn,OxiStorageArray,N(fn))", true),
+            ("LET(fn,OxiStorageArray,T(fn))", true),
+            ("LET(fn,OxiStorageArray,ERROR.TYPE(fn))", true),
+            ("LET(fn,OxiStorageArray,TYPE(INDEX(fn,1)))", true),
+            ("LET(fn,OxiStorageArray,ISERROR(INDEX(fn,1)))", true),
+            ("LET(fn,OxiStorageArray,SUM(BYROW({1;2},fn)))", true),
+            ("LET(fn,OxiStorageArray,SUM(SCAN(0,{1;2},fn)))", true),
+            ("LET(fn,OxiStorageArray,SUM(MAKEARRAY(2,1,fn)))", false),
+            ("LET(fn,OxiStorageArray,SUM(fn))", false),
+            ("LET(fn,OxiStorageLambda,N(fn))", true),
+            ("LET(fn,OxiStorageLambda,T(fn))", true),
+            ("LET(fn,OxiStorageLambda,ERROR.TYPE(fn))", true),
+            ("LET(fn,OxiStorageLambda,TYPE(INDEX(fn,1)))", true),
+            ("LET(fn,OxiStorageLambda,ISERROR(INDEX(fn,1)))", true),
+            ("LET(fn,OxiStorageLambda,SUM(BYROW({1;2},fn)))", true),
+            ("LET(fn,OxiStorageLambda,SUM(SCAN(0,{1;2},fn)))", true),
+            ("LET(fn,OxiStorageLambda,SUM(MAKEARRAY(2,1,fn)))", false),
+            ("LET(fn,OxiStorageLambda,SUM(fn))", false),
+            ("TYPE(INDEX({1;2},1))", true),
+            ("ISERROR(INDEX({1;2},1))", true),
+            ("TYPE(INDEX(D1:D3,1))", false),
+            ("ISERROR(INDEX(D1:D3,1))", false),
+            ("N(OxiNameAbs)", true),
+            ("T(OxiNameAbs)", true),
+            ("ERROR.TYPE(OxiNameAbs)", true),
+            ("N(OxiNameArithmetic)", true),
+            ("T(OxiNameArithmetic)", true),
+            ("ERROR.TYPE(OxiNameArithmetic)", true),
+            ("N(OxiNameSum)", true),
+            ("T(OxiNameSum)", true),
+            ("ERROR.TYPE(OxiNameSum)", true),
+            ("N(OxiNameIfRef)", true),
+            ("T(OxiNameIfRef)", true),
+            ("ERROR.TYPE(OxiNameIfRef)", true),
+            ("N(OxiNameIndexRef)", true),
+            ("T(OxiNameIndexRef)", true),
+            ("ERROR.TYPE(OxiNameIndexRef)", true),
+            ("N(OxiNameOffset)", true),
+            ("T(OxiNameOffset)", true),
+            ("ERROR.TYPE(OxiNameOffset)", true),
+            ("N(OxiNameIndexArray)", true),
+            ("T(OxiNameIndexArray)", true),
+            ("ERROR.TYPE(OxiNameIndexArray)", true),
+            ("N(OxiNameAlias)", true),
+            ("T(OxiNameAlias)", true),
+            ("ERROR.TYPE(OxiNameAlias)", true),
+        ];
+        let multiple = |name: &str| named_formula_needs_intersection(&names, "Sheet1", name);
+        let values = |name: &str| named_formula_has_value_array_semantics(&names, "Sheet1", name);
+        let mut mismatches = Vec::new();
+        for (formula, expected) in cases {
+            let actual = oxicells_calc::lexer::requires_array_storage_with_name_values(formula, &multiple, &values);
+            if actual != expected { mismatches.push(format!("{formula}: {actual} != {expected}")); }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
     #[test]

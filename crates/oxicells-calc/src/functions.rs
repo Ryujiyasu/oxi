@@ -117,8 +117,8 @@ pub enum Arg {
     Range(RangeData),
 }
 
-/// A worksheet function value. Its lexical bindings are private to evaluation;
-/// storing one in a cell produces #CALC!, while TYPE can still report 128.
+/// A worksheet callable or a symbolic reference to a host-provided function.
+/// The latter retains its call target until a value consumer reads it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LambdaValue {
     pub(crate) definition: LambdaDefinition,
@@ -134,6 +134,34 @@ pub(crate) enum LambdaDefinition {
         at: Option<(u32, u32)>,
     },
     Builtin(String),
+    External(String),
+}
+
+impl LambdaValue {
+    pub fn is_external_reference(&self) -> bool {
+        matches!(&self.definition, LambdaDefinition::External(_))
+    }
+}
+
+fn has_external_reference(arg: &Arg) -> bool {
+    let external = |value: &Value| matches!(value, Value::Lambda(function) if function.is_external_reference());
+    match arg {
+        Arg::Value(value) => external(value),
+        Arg::Range(block) => block.cells.iter().any(external),
+    }
+}
+
+pub(crate) fn consume_external_references(mut arg: Arg) -> Arg {
+    let consume = |value: &mut Value| {
+        if matches!(value, Value::Lambda(function) if function.is_external_reference()) {
+            *value = Value::Error(ExcelError::Name);
+        }
+    };
+    match &mut arg {
+        Arg::Value(value) => consume(value),
+        Arg::Range(block) => block.cells.iter_mut().for_each(consume),
+    }
+    arg
 }
 
 impl Arg {
@@ -424,7 +452,7 @@ fn one_at_a_time(name: &str) -> bool {
         // one piece of text
             | "LEN" | "LEFT" | "RIGHT" | "MID" | "LOWER" | "UPPER" | "TRIM"
             | "FIND" | "SEARCH" | "SUBSTITUTE" | "REPLACE" | "REPT" | "EXACT"
-            | "CHAR" | "CODE" | "UNICODE" | "TEXT" | "VALUE" | "PROPER" | "T"
+            | "CHAR" | "CODE" | "UNICODE" | "TEXT" | "VALUE" | "PROPER"
         // one date
             // (EDATE and EOMONTH take arrays so, but a block of cells is
             // #VALUE! -- the engine refuses that before it gets here)
@@ -433,7 +461,7 @@ fn one_at_a_time(name: &str) -> bool {
             | "YEAR"
         // one thing, tested
             | "ISBLANK" | "ISERR" | "ISERROR" | "ISLOGICAL" | "ISNA"
-            | "ISNUMBER" | "ISTEXT" | "NOT"
+            | "ISNUMBER" | "ISTEXT" | "NOT" | "ERROR.TYPE"
         // and the ones that pick between two answers, which is what makes
         // `IF(A1:A10>5, 1, 0)` a column of ten rather than one #VALUE!
             | "IF" | "IFERROR" | "IFNA" | "CHOOSE" | "IFS" | "SWITCH"
@@ -494,6 +522,15 @@ pub(crate) fn xlookup_axis(looked: (usize, usize), returned: (usize, usize)) -> 
 
 pub fn call_arg_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_language: bool) -> Arg {
     let name = plain(name);
+    if !matches!(name, "IFERROR" | "IFNA") && args.iter().any(has_external_reference) {
+        let values: Vec<_> = args.iter().cloned().map(consume_external_references).collect();
+        return call_arg_with_text_context(name, &values, version, dbcs_language);
+    }
+    if name == "TAKE" && (2..=3).contains(&args.len()) {
+        if let Some(Arg::Value(Value::Error(why))) = args.first() {
+            return Arg::Value(Value::Error(*why));
+        }
+    }
     if name == "XLOOKUP" && (3..=6).contains(&args.len())
         && matches!(&args[2], Arg::Range(_))
         && !matches!(&args[0], Arg::Range(block) if block.cells.len() > 1) {
@@ -733,7 +770,7 @@ pub fn call_arg_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_la
     // The shape of the answer comes from the arguments taken a cell at a time;
     // the ones read whole say nothing about it.
     let spread: Vec<bool> = (0..args.len())
-        .map(|at| taken_one_at_a_time(name, at) || (name == "N" && matches!(&args[at], Arg::Range(block) if block.is_array())))
+        .map(|at| taken_one_at_a_time(name, at) || (matches!(name, "N" | "T") && matches!(&args[at], Arg::Range(block) if block.is_array())))
         .collect();
     if spread.iter().any(|one| *one) {
         let sized = |pick: fn(&RangeData) -> usize| {
@@ -881,6 +918,19 @@ pub fn call_with_compatibility(name: &str, args: &[Arg], version: u8) -> Value {
 
 pub fn call_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_language: bool) -> Value {
     let name = plain(name);
+    // Like N, T consumes the first value of a reference, while a value array
+    // is mapped element by element by call_arg_with_text_context.
+    if name == "T" {
+        if let [Arg::Range(block)] = args {
+            if !block.is_array() {
+                return call_with_text_context(name, &[Arg::Value(block.cells.first().cloned().unwrap_or(Value::Blank))], version, dbcs_language);
+            }
+        }
+    }
+    if !matches!(name, "IFERROR" | "IFNA") && args.iter().any(has_external_reference) {
+        let values: Vec<_> = args.iter().cloned().map(consume_external_references).collect();
+        return call_with_text_context(name, &values, version, dbcs_language);
+    }
     if let Some(result) = crate::utf16::call(name, args, version) { return result.unwrap_or_else(Value::Error); }
     if let Some(result) = crate::utf16_extended::call(name, args, dbcs_language) { return result.unwrap_or_else(Value::Error); }
     match dispatch(name, args) {

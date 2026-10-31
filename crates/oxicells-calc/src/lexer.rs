@@ -912,6 +912,14 @@ pub fn legacy_formula(input: &str, multiple_name: &dyn Fn(&str) -> bool) -> Stri
 /// Whether a modern formula needs array evaluation in its saved file, even
 /// when today's result is a scalar or its spill is blocked.
 pub fn requires_array_storage(input: &str, multiple_name: &dyn Fn(&str) -> bool) -> bool {
+    requires_array_storage_with_name_values(input, multiple_name, &|_| false)
+}
+
+/// Include the value-array classification of workbook names. A name whose
+/// definition is a direct reference differs from a named computed expression,
+/// even when both currently describe the same cells.
+pub fn requires_array_storage_with_name_values(input: &str, multiple_name: &dyn Fn(&str) -> bool,
+    value_array_name: &dyn Fn(&str) -> bool) -> bool {
     let shown = formula_from_ooxml(input).unwrap_or_else(|_| input.to_string());
     if implied_intersections(&shown, multiple_name) != shown { return true; }
     // Formula and Formula2 can display identical text while retaining
@@ -922,9 +930,33 @@ pub fn requires_array_storage(input: &str, multiple_name: &dyn Fn(&str) -> bool)
     let mut reader = AtReader { tokens: &tokens, pos: 0, multi_name: multiple_name };
     let Some(mut node) = reader.expr() else { return false; };
     if reader.pos != tokens.len() { return false; }
+    mark_named_value_arrays(&mut node, value_array_name);
     bind_intersection_shapes(&mut node, &std::collections::BTreeMap::new());
     has_array_arithmetic(&node) || modern_value_array(&node) || has_array_index_arguments(&node)
-        || has_dynamic_type_arguments(&node)
+        || has_dynamic_evaluation_arguments(&node)
+}
+
+fn mark_named_value_arrays(node: &mut AtNode, value_array_name: &dyn Fn(&str) -> bool) {
+    match node {
+        AtNode::Symbol { name, array_value, .. } => *array_value = value_array_name(name),
+        AtNode::Operation(parts) | AtNode::Group(parts) =>
+            for part in parts { mark_named_value_arrays(part, value_array_name); },
+        AtNode::Call { args, .. } =>
+            for part in args.iter_mut().flatten() { mark_named_value_arrays(part, value_array_name); },
+        AtNode::Invoke { callee, args, .. } => {
+            mark_named_value_arrays(callee, value_array_name);
+            for part in args.iter_mut().flatten() { mark_named_value_arrays(part, value_array_name); }
+        },
+        AtNode::Written(part) => mark_named_value_arrays(part, value_array_name),
+        _ => {}
+    }
+}
+
+/// Named computations retain value-array evaluation even if their current
+/// value is scalar. Literal constants and direct references retain their kind.
+pub fn named_formula_has_value_array_semantics(input: &str) -> bool {
+    named_formula_needs_intersection(input)
+        && !matches!(crate::parser::parse(input), Ok(crate::ast::Expr::Ref(_)))
 }
 
 /// Whether using this defined-name formula needs implicit intersection.
@@ -979,7 +1011,8 @@ fn modern_value_array(node: &AtNode) -> bool {
         AtNode::Call { name, args, .. } => {
             let first = args.first().and_then(Option::as_ref);
             match name.as_str() {
-                "N" => first.is_some_and(modern_value_array),
+                "N" | "T" => first.is_some_and(modern_value_array),
+                "ERROR.TYPE" => first.is_some_and(modern_result_is_multiple),
                 "LET" => args.last().and_then(Option::as_ref).is_some_and(modern_value_array),
                 "IF" | "CHOOSE" => first.is_some_and(modern_result_is_multiple)
                     || args.iter().skip(1).flatten().any(modern_value_array),
@@ -1017,17 +1050,20 @@ fn has_array_index_arguments(node: &AtNode) -> bool {
 // TYPE itself is scalar, but a reference, named expression or reference-form
 // function in its argument still needs array evaluation. Intrinsic arrays
 // already retain their kind in legacy evaluation and do not set this bit.
-fn has_dynamic_type_arguments(node: &AtNode) -> bool {
+// BYROW and SCAN also retain array evaluation for a dynamic callable input.
+fn has_dynamic_evaluation_arguments(node: &AtNode) -> bool {
     match node {
         AtNode::Call { name, args, .. } => (name == "TYPE" && args.first().and_then(Option::as_ref)
             .is_some_and(|arg| modern_result_is_multiple(arg) && !is_value_array(arg)
                 && !matches!(arg, AtNode::Call { name, args, .. } if name == "INDEX"
                     && matches!(args.first().and_then(Option::as_ref), Some(AtNode::Plain { cell: false, .. })))) )
-            || args.iter().flatten().any(has_dynamic_type_arguments),
-        AtNode::Operation(parts) | AtNode::Group(parts) => parts.iter().any(has_dynamic_type_arguments),
-        AtNode::Written(operand) => has_dynamic_type_arguments(operand),
-        AtNode::Invoke { callee, args, .. } => has_dynamic_type_arguments(callee)
-            || args.iter().flatten().any(has_dynamic_type_arguments),
+            || (matches!(name.as_str(), "BYROW" | "SCAN")
+                && args.last().and_then(Option::as_ref).is_some_and(modern_result_is_multiple))
+            || args.iter().flatten().any(has_dynamic_evaluation_arguments),
+        AtNode::Operation(parts) | AtNode::Group(parts) => parts.iter().any(has_dynamic_evaluation_arguments),
+        AtNode::Written(operand) => has_dynamic_evaluation_arguments(operand),
+        AtNode::Invoke { callee, args, .. } => has_dynamic_evaluation_arguments(callee)
+            || args.iter().flatten().any(has_dynamic_evaluation_arguments),
         _ => false,
     }
 }
@@ -1312,6 +1348,7 @@ fn returns_value_array(name: &str) -> bool {
 // reference into a value array, unlike grouping the reference alone.
 fn index_uses_array_form(node: &AtNode) -> bool {
     match node {
+        AtNode::Symbol { array_value, .. } => *array_value,
         AtNode::Operation(_) => modern_result_is_multiple(node),
         AtNode::Group(parts) if parts.len() == 1 => index_uses_array_form(&parts[0]),
         _ => is_value_array(node),

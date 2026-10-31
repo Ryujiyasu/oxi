@@ -87,6 +87,14 @@ pub fn rename_sheet(workbook: &mut Workbook, old: &str, new: &str) {
         rename(&mut cell);
         (cell, oxicells_calc::rename_sheet_in_formula(&formula, old, new))
     }).collect();
+    state.metadata_cycles = std::mem::take(&mut state.metadata_cycles).into_iter().map(|(mut cell, formula)| {
+        rename(&mut cell);
+        (cell, oxicells_calc::rename_sheet_in_formula(&formula, old, new))
+    }).collect();
+    state.metadata_reference_cycles = std::mem::take(&mut state.metadata_reference_cycles).into_iter().map(|(mut cell, formula)| {
+        rename(&mut cell);
+        (cell, oxicells_calc::rename_sheet_in_formula(&formula, old, new))
+    }).collect();
 }
 
 /// Apply pending edit rectangles and discard marks on formulas that were removed.
@@ -99,6 +107,8 @@ pub fn prepare(workbook: &mut Workbook) {
     workbook.recalculation.volatile.retain(|cell| present.contains(cell));
     let sheets = &workbook.sheets;
     workbook.recalculation.nonvolatile.retain(|(cell, formula)| formula_at(sheets, cell) == Some(formula.as_str()));
+    workbook.recalculation.metadata_cycles.retain(|(cell, formula)| formula_at(sheets, cell) == Some(formula.as_str()));
+    workbook.recalculation.metadata_reference_cycles.retain(|(cell, formula)| formula_at(sheets, cell) == Some(formula.as_str()));
     if !workbook.recalculation.changed.is_empty() {
         let book = crate::formula::assemble_for_evaluation(&workbook.sheets, &workbook.defined_names, &workbook.external_books);
         let mut changes = workbook.recalculation.changed.iter().map(|(sheet, (left, top, right, bottom))| {
@@ -115,6 +125,24 @@ pub fn prepare(workbook: &mut Workbook) {
 
 pub(crate) fn remember_completed_calculation(workbook: &mut Workbook, report: &oxicells_calc::RecalcReport) {
     if report.deferred { return; }
+    let calculated: BTreeSet<_> = report.calculated.iter().collect();
+    let value_cycles: BTreeSet<_> = report.metadata_cycles.iter().collect();
+    let reference_cycles: BTreeSet<_> = report.metadata_reference_cycles.iter().collect();
+    // A selector can stop reading its own cell after an external edit.
+    workbook.recalculation.metadata_cycles.retain(|(cell, _)| !calculated.contains(cell) || value_cycles.contains(cell));
+    workbook.recalculation.metadata_reference_cycles.retain(|(cell, _)| !calculated.contains(cell) || reference_cycles.contains(cell));
+    for cell in &report.metadata_cycles {
+        if let Some(formula) = formula_at(&workbook.sheets, cell) {
+            workbook.recalculation.metadata_reference_cycles.retain(|(held, _)| held != cell);
+            workbook.recalculation.metadata_cycles.insert((cell.clone(), formula.to_string()));
+        }
+    }
+    for cell in &report.metadata_reference_cycles {
+        if let Some(formula) = formula_at(&workbook.sheets, cell) {
+            workbook.recalculation.metadata_cycles.retain(|(held, _)| held != cell);
+            workbook.recalculation.metadata_reference_cycles.insert((cell.clone(), formula.to_string()));
+        }
+    }
     // Defer consumers using only dependencies learned in this pass. Stable
     // ordering preserves independent formulas and siblings sharing a producer;
     // splicing each consumer separately would reverse those siblings.

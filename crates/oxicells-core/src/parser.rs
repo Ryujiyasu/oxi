@@ -336,6 +336,42 @@ fn parse_calculation(xml: &str) -> crate::ir::CalculationSettings {
     }
 }
 
+/// Saved array anchors Excel queues when opening in manual calculation mode.
+/// The array's aca flag is independent of calcCompleted and its cached value.
+fn pending_array_calculations(xml: &str) -> Result<Vec<(u32, u32)>, XlsxError> {
+    if !xml.contains("aca") { return Ok(Vec::new()); }
+    let mut reader = Reader::from_str(xml);
+    let mut path = Vec::<String>::new();
+    let mut active = None;
+    let mut pending = Vec::new();
+    loop {
+        let event = reader.read_event().map_err(XlsxError::Xml)?;
+        let empty = matches!(&event, Event::Empty(_));
+        match event {
+            Event::Start(e) | Event::Empty(e) => {
+                let name = local_name(e.name().as_ref());
+                if name == "c" && path.last().map(String::as_str) == Some("row")
+                    && path.iter().rev().nth(1).map(String::as_str) == Some("sheetData") {
+                    active = get_attr(&e, "r").and_then(|address| oxicells_calc::reference::parse_a1(&address))
+                        .map(|cell| (cell.col, cell.row));
+                } else if name == "f" && path.last().map(String::as_str) == Some("c")
+                    && get_attr(&e, "t").as_deref() == Some("array")
+                    && is_true(get_attr(&e, "aca").as_deref()) {
+                    if let Some(cell) = active { pending.push(cell); }
+                }
+                if !empty { path.push(name); } else if name == "c" { active = None; }
+            },
+            Event::End(e) => {
+                if local_name(e.name().as_ref()) == "c" { active = None; }
+                path.pop();
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(pending)
+}
+
 /// Workbook and sheet-local names, with their original per-name attributes.
 fn parse_defined_names(xml: &str) -> (Vec<(String, String)>, crate::ir::DefinedNameAttributes) {
     let sheets = parse_workbook_sheets(xml).unwrap_or_default();
@@ -5553,6 +5589,8 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
     }
 
     // 5. Parse each worksheet
+    let calculation = parse_calculation(&workbook_xml);
+    let mut recalculation = crate::ir::RecalculationState::default();
     let mut sheets = Vec::new();
     let chart_sources=crate::chart_edit::chart_part_names(&mut archive)?;
     for info in &sheet_infos {
@@ -5581,6 +5619,10 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                 let mut sheet =
                     parse_worksheet(&sheet_xml, &info.name, &shared_strings, &stylesheet, &theme)?;
                 restore_dynamic_arrays(&mut sheet, &sheet_xml, &dynamic)?;
+                if calculation.mode == crate::ir::CalculationMode::Manual {
+                    recalculation.dirty.extend(pending_array_calculations(&sheet_xml)?.into_iter()
+                        .map(|cell| (info.name.clone(), cell)));
+                }
                 restore_rich_errors(&mut sheet, &sheet_xml, &rich_errors)?;
                 sheet.kind=sheet_kinds.get(&info.r_id).copied().unwrap_or_default();
                 // What the sheet's own parts turn out to hold, which is only
@@ -5832,8 +5874,8 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         sheets,
         theme_colors: theme.colours.clone(),
         indexed_colors: theme.indexed.clone(),
-        recalculation: Default::default(),
-        calculation: parse_calculation(&workbook_xml),
+        recalculation,
+        calculation,
         default_style: resolve_cell_style(0, &stylesheet),
         defined_names,
         defined_name_attributes,
@@ -5844,6 +5886,19 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn saved_array_recalculation_is_driven_by_aca_not_cached_results() {
+        let xml = r#"<worksheet><extLst><c r="Z1"><f t="array" aca="1">1</f></c></extLst>
+            <sheetData><row r="1">
+            <c r="A1"><f t="array" aca="true" ref="A1">1</f><v>1</v></c>
+            <c r="B1"><f t="array" aca="0" ref="B1">1</f><v>1</v></c>
+            <c r="C1"><f t="array" ca="1" ref="C1">1</f><v>1</v></c>
+            <c r="D1"><f aca="1">1</f><v>1</v></c>
+            </row></sheetData></worksheet>"#;
+        assert_eq!(super::pending_array_calculations(xml).unwrap(), vec![(0, 0)]);
+        assert!(super::pending_array_calculations("<worksheet><sheetData/></worksheet>").unwrap().is_empty());
+    }
+
     #[test]
     fn physical_empty_cells_preserve_the_imported_used_extent() {
         let xml = r#"<worksheet><dimension ref="A1:Z100"/><sheetData>

@@ -3817,17 +3817,18 @@ impl<'a> WorkbookHost<'a> {
     fn automatic_calculation(&self) -> bool { matches!(self.calculation, -4105 | 2) }
 
     fn calculation_state(&mut self) -> i64 {
+        let pending = self.workbook.recalculation.pending();
         let held = self.user_functions.borrow();
         if held.running_key.is_some() {
             let active = held.calculation.as_ref().or_else(|| held.operations.iter().rev().find_map(|frame| frame.calculation.as_ref()));
             match active {
-                None if self.workbook.recalculation.pending() => 2,
+                None if pending => 2,
                 None => 0,
                 Some(UserCalculation::Cells { reason: CalculationReason::ManualEntry, .. }) if !self.automatic_calculation() => 2,
                 Some(_) => 1,
             }
         }
-        else if self.workbook.recalculation.pending() { 2 }
+        else if pending { 2 }
         else { 0 }
     }
 
@@ -3876,13 +3877,27 @@ impl<'a> WorkbookHost<'a> {
         }).collect();
         if cells.is_empty() { return; }
         let clear_dirty = self.automatic_calculation();
+        if clear_dirty {
+            for address in &writes.formulas {
+                if let Some(cell) = self.workbook.sheets.get_mut(address.sheet)
+                    .and_then(|sheet| sheet.rows.iter_mut().find(|row| row.index == address.row))
+                    .and_then(|row| row.cells.iter_mut().find(|cell| cell.col == address.column)) {
+                    cell.value = CellValue::Number(0.0);
+                }
+            }
+        }
+        let reason = if clear_dirty { CalculationReason::AutomaticEntry } else { CalculationReason::ManualEntry };
         self.user_functions.borrow_mut().calculation = Some(UserCalculation::Cells {
-            cells: cells.clone(), changed: false, clear_dirty, reason: CalculationReason::ManualEntry,
+            cells: cells.clone(), changed: false, clear_dirty, reason,
         });
-        oxicells_core::formula::evaluate_workbook_formula_entry(self.workbook, &cells, self.now);
+        if clear_dirty { oxicells_core::formula::evaluate_workbook_formula_automatic_entry(self.workbook, &cells, self.now); }
+        else { oxicells_core::formula::evaluate_workbook_formula_entry(self.workbook, &cells, self.now); }
         if clear_dirty {
             self.workbook.recalculation.changed.clear();
             self.workbook.recalculation.dirty.clear();
+            // Pending worksheet callbacks resume this entry calculation.
+            // Reading the entered cell must not start a second full pass.
+            self.wrote = false;
         } else {
             self.workbook.recalculation.dirty.extend(cells.iter().cloned());
         }
@@ -3898,6 +3913,17 @@ impl<'a> WorkbookHost<'a> {
             });
             oxicells_core::formula::evaluate_workbook_formula_subset(self.workbook, &cells, false, self.now);
         }
+    }
+
+    fn queue_metadata_cycles(&mut self, sheet: Option<usize>) {
+        let cells: Vec<_> = self.workbook.recalculation.metadata_cycles.iter()
+            .chain(self.workbook.recalculation.metadata_reference_cycles.iter()).filter_map(|(cell, formula)| {
+            let owner = self.workbook.sheets.iter().position(|held| same_sheet_name(&held.name, &cell.0))?;
+            if sheet.is_some_and(|sheet| sheet != owner) { return None; }
+            self.cell_here(owner, cell.1.1.saturating_add(1), cell.1.0)
+                .is_some_and(|held| held.formula.as_deref() == Some(formula.as_str())).then(|| cell.clone())
+        }).collect();
+        self.workbook.recalculation.dirty.extend(cells);
     }
 
     fn calculate_dirty(&mut self, sheet: Option<usize>) {
@@ -4010,6 +4036,7 @@ impl<'a> WorkbookHost<'a> {
         };
         let calculated = match reason {
             CalculationReason::ManualEntry => oxicells_core::formula::evaluate_workbook_formula_entry(self.workbook, &cells, self.now),
+            CalculationReason::AutomaticEntry => oxicells_core::formula::evaluate_workbook_formula_automatic_entry(self.workbook, &cells, self.now),
             CalculationReason::ArrayEntry => oxicells_core::formula::evaluate_workbook_formula_array_entry(self.workbook, &cells, self.now),
             CalculationReason::Calculate => oxicells_core::formula::evaluate_workbook_formula_subset(self.workbook, &cells, changed, self.now),
             CalculationReason::Dirty { sheet } => {
@@ -4357,6 +4384,7 @@ impl<'a> WorkbookHost<'a> {
     /// already worked out is handed back, and one not yet is noted for the
     /// runtime to work out -- the cell reads #VALUE! until then.
     fn lend_user_functions(&mut self) {
+        oxicells_calc::engine::set_user_function_names(&self.user_functions.borrow().names);
         let (address_only_arguments, variant_arguments): (Vec<(String, Vec<usize>)>, Vec<(String, Vec<usize>)>) = {
             let held = self.user_functions.borrow();
             (
@@ -4441,13 +4469,15 @@ impl<'a> WorkbookHost<'a> {
     /// members that read many cells' answers at once -- SpecialCells, Sort,
     /// AutoFilter, a copy.
     fn settle_book(&mut self) {
-        if self.wrote && self.calculation == -4105 {
+        if self.wrote && self.calculation == -4105 && self.user_functions.borrow().running.is_none() {
             self.recalculate();
         }
     }
 
     fn settle(&mut self, range: CellRange) {
-        if !self.wrote || self.calculation != -4105 || !self.holds_formula(range) {
+        // A worksheet callback reads the suspended calculation's read view.
+        // Starting another pass here would overwrite its entry mode and cache.
+        if !self.wrote || self.calculation != -4105 || self.user_functions.borrow().running.is_some() || !self.holds_formula(range) {
             return;
         }
         self.recalculate();
@@ -4890,7 +4920,7 @@ impl<'a> WorkbookHost<'a> {
                         oxicells_calc::Value::Utf16(text) => Value::from_utf16(text.clone()),
                         oxicells_calc::Value::Logical(state) => Value::Boolean(*state),
                         oxicells_calc::Value::Blank => Value::Empty,
-                        oxicells_calc::Value::Lambda(_) => Value::Error(2015),
+                        oxicells_calc::Value::Lambda(function) => Value::Error(if function.is_external_reference() { 2029 } else { 2015 }),
                         oxicells_calc::Value::Error(why) => {
                             Value::Error(spreadsheet_error_number(why.as_str()))
                         }
@@ -4933,7 +4963,7 @@ impl<'a> WorkbookHost<'a> {
             oxicells_calc::Value::Utf16(text) => Ok(Value::from_utf16(text)),
             oxicells_calc::Value::Logical(state) => Ok(Value::Boolean(state)),
             oxicells_calc::Value::Blank => Ok(Value::Empty),
-            oxicells_calc::Value::Lambda(_) => Ok(Value::Error(2015)),
+            oxicells_calc::Value::Lambda(function) => Ok(Value::Error(if function.is_external_reference() { 2029 } else { 2015 })),
         }
     }
 
@@ -6987,11 +7017,12 @@ impl<'a> WorkbookHost<'a> {
             return;
         };
         let multiple = |name: &str| oxicells_core::editor::named_formula_needs_intersection(&names, &sheet.name, name);
+        let value_array = |name: &str| oxicells_core::editor::named_formula_has_value_array_semantics(&names, &sheet.name, name);
         for row in sheet.rows.iter_mut().filter(|row| (range.start_row..=range.end_row).contains(&row.index)) {
             let row_number = row.index;
             for cell in row.cells.iter_mut().filter(|cell| (range.start_column..=range.end_column).contains(&cell.col) && written.contains(&(row_number, cell.col))) {
                 if let Some(formula) = cell.formula.as_deref().filter(|_| cell.array_block.is_none()) {
-                    cell.spill = if oxicells_calc::lexer::requires_array_storage(formula, &multiple) {
+                    cell.spill = if oxicells_calc::lexer::requires_array_storage_with_name_values(formula, &multiple, &value_array) {
                         oxicells_core::ir::Spill::Dynamic
                     } else { oxicells_core::ir::Spill::Scalar };
                 }
@@ -15363,7 +15394,7 @@ impl<'a> WorkbookHost<'a> {
                     oxicells_calc::Value::Utf16(units) => Value::from_utf16(units),
                     oxicells_calc::Value::Logical(state) => Value::Boolean(state),
                     oxicells_calc::Value::Blank => Value::Empty,
-                    oxicells_calc::Value::Lambda(_) => Value::Error(2015),
+                    oxicells_calc::Value::Lambda(function) => Value::Error(if function.is_external_reference() { 2029 } else { 2015 }),
                     oxicells_calc::Value::Error(why) => Value::Error(spreadsheet_error_number(why.as_str())),
                 };
                 let values: Vec<Value> = cells.into_iter().map(element).collect();
@@ -15395,7 +15426,7 @@ impl<'a> WorkbookHost<'a> {
             Some(oxicells_calc::Value::Utf16(units)) => Ok(Value::from_utf16(units)),
             Some(oxicells_calc::Value::Logical(state)) => Ok(Value::Boolean(state)),
             Some(oxicells_calc::Value::Blank) => Ok(Value::Empty),
-            Some(oxicells_calc::Value::Lambda(_)) => Ok(Value::Error(2015)),
+            Some(oxicells_calc::Value::Lambda(function)) => Ok(Value::Error(if function.is_external_reference() { 2029 } else { 2015 })),
             Some(oxicells_calc::Value::Error(why)) => {
                 Ok(Value::Error(spreadsheet_error_number(why.as_str())))
             }
@@ -15721,6 +15752,13 @@ impl<'a> WorkbookHost<'a> {
         let view = held.read_views.get(&held.running_key?)?;
         let sheet = self.workbook.sheets.get(address.sheet)?;
         let value = view.value(&sheet.name, address.column, address.row.saturating_sub(1));
+        // A worksheet function reading its own newly entered formula sees
+        // numeric zero before that formula has published its first result.
+        if held.running == Some(address) && self.cell_here(address.sheet, address.row, address.column).is_some_and(|cell|
+            cell.formula.is_some() && (matches!(value.as_ref(), Some(oxicells_calc::Value::Blank))
+                || (value.is_none() && matches!(cell.value, CellValue::Empty)))) {
+            return Some(Value::Double(0.0));
+        }
         value.as_ref().map(vba_of_calculation_value)
     }
 
@@ -23457,7 +23495,7 @@ impl<'a> WorkbookHost<'a> {
             oxicells_calc::Value::Utf16(units) => Value::from_utf16(units.clone()),
             oxicells_calc::Value::Logical(state) => Value::Boolean(*state),
             oxicells_calc::Value::Blank => Value::Empty,
-            oxicells_calc::Value::Lambda(_) => Value::Error(2015),
+            oxicells_calc::Value::Lambda(function) => Value::Error(if function.is_external_reference() { 2029 } else { 2015 }),
             oxicells_calc::Value::Error(why) => Value::Error(spreadsheet_error_number(why.as_str())),
         };
         match arg {
@@ -25284,6 +25322,7 @@ impl Host for WorkbookHost<'_> {
                 // of Excel, `r = ActiveSheet.Calculate` and
                 // `r = ActiveSheet.Activate` are both Booleans.
                 if name.eq_ignore_ascii_case("calculate") {
+                    self.queue_metadata_cycles(Some(sheet));
                     self.calculate_dirty(Some(sheet));
                     return Ok(Some(Value::Boolean(true)));
                 }
@@ -25702,6 +25741,7 @@ impl Host for WorkbookHost<'_> {
                 if force_full_calculation {
                     self.recalculate_all();
                 }
+                if start && !force_full_calculation { self.queue_metadata_cycles(None); }
                 if start && self.workbook.recalculation.pending() {
                     let palette_changed = self.workbook.recalculation.changed.iter().any(|(sheet, _)| sheet == "__palette__");
                     if palette_changed {
@@ -35933,7 +35973,7 @@ fn vba_of_calculation_value(value: &oxicells_calc::Value) -> Value {
         oxicells_calc::Value::Utf16(units) => Value::from_utf16(units.clone()),
         oxicells_calc::Value::Logical(value) => Value::Boolean(*value),
         oxicells_calc::Value::Blank => Value::Empty,
-        oxicells_calc::Value::Lambda(_) => Value::Error(2015),
+        oxicells_calc::Value::Lambda(function) => Value::Error(if function.is_external_reference() { 2029 } else { 2015 }),
         oxicells_calc::Value::Error(error) => Value::Error(spreadsheet_error_number(error.as_str())),
     }
 }
@@ -36474,7 +36514,7 @@ fn calculate_needs_lagging_scalar_indirect_probe(workbook: &Workbook, functions:
 #[derive(Clone)]
 enum UserCalculation { All, Cells { cells: Vec<(String, (u32, u32))>, changed: bool, clear_dirty: bool, reason: CalculationReason } }
 #[derive(Clone, Copy)]
-enum CalculationReason { Calculate, Dirty { sheet: Option<usize> }, ManualEntry, ArrayEntry }
+enum CalculationReason { Calculate, Dirty { sheet: Option<usize> }, ManualEntry, AutomaticEntry, ArrayEntry }
 struct UserOperation { formula_reads: FormulaReadObservations, answers: std::collections::HashMap<String, CachedUserAnswer>, calculation: Option<UserCalculation>, calculation_baseline: Option<CalculationBaseline>, evaluation_pass: usize, calculation_done: bool, wait_for_dependencies: bool, wait_for_dynamic_lookups: bool, provisional_dynamic_text_value: bool, provisional_zero_text_probe: bool, prioritize_dynamic_indirect_consumers: bool, provisional_text_probe_target: Option<oxicells_calc::FormulaCell>, distinct_provisional_calls: bool, full_rebuild: bool, full_calculation: bool, copy_saved: Option<bool>, text_columns_result: Option<Result<Value, String>>, spill_probe_layout: Option<oxicells_calc::engine::SpillProbeLayout> }
 
 #[derive(Clone)]
@@ -49090,6 +49130,828 @@ End Function
             result,
             Value::String("2|2|30|3|A1|True|True|big".to_string())
         );
+    }
+
+    #[test]
+    fn native_metadata_cycles_normal_calculation_matches_native() {
+        let source = format!("Attribute VB_Name = \"IndexDriver\"\n{}\n{}", include_str!("../../../tests/fixtures/vba/worksheet_index_contexts.bas"), r##"
+Public Function MetadataNormalTrace(ByVal expression As String) As String
+ Dim previous As Long
+ Dim current As Long
+ Dim result As String
+ Driver
+ Application.Calculation=xlCalculationManual
+ Range("M1:O6").ClearContents
+ Range("D1").Value2=1
+ ReferenceTrace "1",0
+ previous=CounterTick()
+ Range("M1").Formula2="=" & expression
+ current=CounterTick()
+ result=CStr(current-previous-1)
+ previous=CounterTick()
+ Range("M1").Calculate
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1)
+ previous=CounterTick()
+ Range("M1").Calculate
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1)
+ Range("D1").Value2=2
+ previous=CounterTick()
+ Range("M1").Calculate
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1)
+ previous=CounterTick()
+ ActiveSheet.Calculate
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1)
+ previous=CounterTick()
+ Application.Calculate
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1)
+ previous=CounterTick()
+ Application.CalculateFull
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1)
+ previous=CounterTick()
+ Application.CalculateFullRebuild
+ current=CounterTick()
+ MetadataNormalTrace=result & "|" & CStr(current-previous-1) & "|" & ScalarReport(Range("M1").Value2)
+End Function"##);
+        let cases = [
+            ("TYPE(SelectionTick(M1))", "1|1|1|1|3|3|3|3|5:1"),
+            ("TYPE(SelectionTick(M1))+SelectionTick(D1)", "2|1|1|1|3|3|3|3|5:2"),
+            ("SelectionTick(D1)+TYPE(SelectionTick(M1))", "2|2|2|2|6|6|6|6|5:2"),
+            ("TYPE(SelectionTick(M1+0))+SelectionTick(D1)", "2|0|0|0|0|0|0|0|5:2"),
+            ("TYPE(M1)+SelectionTick(D1)", "1|0|0|0|0|0|0|0|5:2"),
+            ("TYPE(DoubleTick(M1))", "1|1|1|1|3|3|3|3|5:1"),
+            ("TYPE(SelectionTick(M1))+TYPE(M1)", "1|1|1|1|3|3|3|3|5:2"),
+            ("TYPE(M1)+TYPE(SelectionTick(M1))", "1|0|0|0|0|0|0|0|5:2"),
+            ("SelectionTick(D1)+TYPE(M1)", "1|1|1|1|3|3|3|3|5:2"),
+            ("IF(D1=1,TYPE(M1),SelectionTick(D1))", "0|0|0|1|1|0|1|1|5:2"),
+            ("IF(D1=2,TYPE(M1),SelectionTick(D1))", "1|1|1|0|0|0|0|0|5:1"),
+            ("TYPE(IF(D1=1,M1,SelectionTick(D1)))", "0|0|0|1|1|0|1|1|5:1"),
+            ("TYPE(IF(FALSE,M1,SelectionTick(D1)))", "1|1|1|1|1|0|1|1|5:1"),
+            ("TYPE(IF(TRUE,M1,SelectionTick(D1)))", "0|0|0|0|0|0|0|0|5:1"),
+            ("LAMBDA(x,TYPE(x))(M1)", "0|0|0|0|0|0|0|0|5:1"),
+            ("LET(x,M1,TYPE(x))+SelectionTick(D1)", "1|0|0|0|0|0|0|0|5:2"),
+            ("IF(SelectionTick(D1)>0,TYPE(M1),0)", "1|1|1|1|3|3|3|3|5:1"),
+            ("TYPE(SelectionTick(IF(FALSE,M1,D1)))", "1|1|1|1|1|0|1|1|5:1"),
+            ("TYPE(SelectionTick(IF(TRUE,M1,D1)))", "1|1|1|1|3|3|3|3|5:1"),
+        ];
+        let mut mismatches = Vec::new();
+        for version in [1u8, 2] {
+            for (formula, expected) in &cases {
+                let mut book = workbook();book.calculation.compatibility_version = version;
+                let mut session = None;
+                let outcome = execute_workbook_action_in_session(book, &source,
+                    Some("IndexDriver.MetadataNormalTrace"), vec![Value::String((*formula).into())], 0, failure_context(), &mut session).unwrap();
+                if let Some(error) = outcome.error {
+                    mismatches.push(format!("{formula}, version{version}: {}", error.message));
+                } else {
+                    let actual = serde_json::to_value(&outcome.result).unwrap();
+                    if actual != serde_json::json!({"type":"string","value":expected}) {
+                        mismatches.push(format!("{formula}, version{version}: {actual} != {expected}"));
+                    }
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
+    fn native_automatic_metadata_entry_retains_zero_before_cycle_probes() {
+        let source = format!("Attribute VB_Name = \"IndexDriver\"\n{}\n{}", include_str!("../../../tests/fixtures/vba/worksheet_index_contexts.bas"), r##"
+Public Function AutomaticMetadataEntry(ByVal expression As String, ByVal priorValue As Variant) As String
+ Dim value As Variant
+ Dim calls As Long
+ Driver
+ Application.Calculation=xlCalculationManual
+ Range("M1:O6").ClearContents
+ ReferenceTrace "1",0
+ If Not IsEmpty(priorValue) Then Range("M1").Value2=priorValue
+ Application.Calculation=xlCalculationAutomatic
+ Range("M1").Formula2="=" & expression
+ value=Range("M1").Value2
+ calls=CounterTick()-1
+ AutomaticMetadataEntry=ScalarReport(value) & "|calls:" & CStr(calls) & "|state:" & CStr(Application.CalculationState)
+End Function
+"##);
+        // Repeated Native automatic-entry controls, including prior literal values.
+        let cases = [
+            ("TYPE(SelectionTick(M1))+CounterTick()", None, "5:0|calls:3|state:0"),
+            ("CounterTick()+TYPE(SelectionTick(M1))", None, "5:0|calls:6|state:0"),
+            ("TYPE(SelectionTick(M1+0))+CounterTick()", None, "5:0|calls:0|state:0"),
+            ("CounterTick()+TYPE(SelectionTick(M1+0))", None, "5:0|calls:3|state:0"),
+            ("TYPE(M1)", None, "5:0|calls:0|state:0"),
+            ("ISNUMBER(M1)", None, "5:0|calls:0|state:0"),
+            ("ISERROR(M1)", None, "5:0|calls:0|state:0"),
+            ("TYPE(M1+0)", None, "5:0|calls:0|state:0"),
+            ("M1+TYPE(M1)", None, "5:0|calls:0|state:0"),
+            ("TYPE(M1)+M1", None, "5:0|calls:0|state:0"),
+            ("LAMBDA(x,TYPE(x))(M1+0)", None, "5:0|calls:0|state:0"),
+            ("LAMBDA(x,1)(M1+0)", None, "5:0|calls:0|state:0"),
+            ("LAMBDA(x,1)(M1)", None, "5:1|calls:0|state:0"),
+            ("IF(FALSE,M1,1)", None, "5:1|calls:0|state:0"),
+            ("TYPE(IF(FALSE,M1,1))", None, "5:1|calls:0|state:0"),
+            ("TYPE(IF(TRUE,M1,1))", None, "5:0|calls:0|state:0"),
+            ("IF(TYPE(M1)=1,SelectionTick(2),0)", None, "5:0|calls:0|state:0"),
+            ("CounterTick()+TYPE(M1)", None, "5:0|calls:3|state:0"),
+            ("TYPE(M1)+CounterTick()", None, "5:0|calls:0|state:0"),
+            ("ISREF(M1)+CounterTick()", None, "5:2|calls:1|state:0"),
+            ("TYPE(SelectionTick(M1))+CounterTick()", Some(17i64), "5:0|calls:3|state:0"),
+            ("CounterTick()+TYPE(SelectionTick(M1))", Some(17i64), "5:0|calls:6|state:0"),
+            ("TYPE(SelectionTick(M1+0))+CounterTick()", Some(17i64), "5:0|calls:0|state:0"),
+            ("CounterTick()+TYPE(SelectionTick(M1+0))", Some(17i64), "5:0|calls:3|state:0"),
+        ];
+        let mut mismatches = Vec::new();
+        for version in [1u8, 2] {
+            for (formula, prior, expected) in &cases {
+                let mut book = workbook();book.calculation.compatibility_version = version;
+                let mut session = None;
+                let outcome = execute_workbook_action_in_session(book, &source,
+                    Some("IndexDriver.AutomaticMetadataEntry"), vec![Value::String((*formula).into()), prior.map(Value::Integer).unwrap_or(Value::Empty)], 0, failure_context(), &mut session).unwrap();
+                if let Some(error) = outcome.error {
+                    mismatches.push(format!("{formula}, version{version}: {}", error.message));
+                } else {
+                    let actual = serde_json::to_value(&outcome.result).unwrap();
+                    if actual != serde_json::json!({"type":"string","value":expected}) {
+                        mismatches.push(format!("{formula}, version{version}: {actual} != {expected}"));
+                    }
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
+    fn native_metadata_cycles_survive_xlsx_reopen_without_runtime_flags() {
+        let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let source = format!("Attribute VB_Name = \"IndexDriver\"\n{}\n{}", include_str!("../../../tests/fixtures/vba/worksheet_index_contexts.bas"), r##"
+Public Function EnterSavedMetadata(ByVal expression As String) As String
+ Driver
+ Application.Calculation=xlCalculationManual
+ Application.CalculateBeforeSave=False
+ Range("M1:O6").ClearContents
+ Range("D1").Value2=1
+ ReferenceTrace "1",0
+ Range("M1").Formula2="=" & expression
+ EnterSavedMetadata=ScalarReport(Range("M1").Value2) & "|entry:" & CStr(CounterTick()-1)
+End Function
+Public Function ReopenedMetadata(ByVal expression As String) As String
+ Dim result As String
+ Dim previous As Long
+ Dim current As Long
+ result=ScalarReport(Range("M1").Value2) & "|state:" & CStr(Application.CalculationState)
+ previous=CounterTick()
+ Range("M1").Calculate
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1) & "|" & ScalarReport(Range("M1").Value2)
+ Range("D1").Value2=2
+ previous=CounterTick()
+ Range("M1").Calculate
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1) & "|" & ScalarReport(Range("M1").Value2)
+ previous=CounterTick()
+ Application.CalculateFull
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1) & "|" & ScalarReport(Range("M1").Value2)
+ previous=CounterTick()
+ Application.CalculateFullRebuild
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1) & "|" & ScalarReport(Range("M1").Value2)
+ previous=CounterTick()
+ Range("M1").Formula2="=" & expression
+ current=CounterTick()
+ ReopenedMetadata=result & "|" & CStr(current-previous-1) & "|" & ScalarReport(Range("M1").Value2)
+End Function
+"##);
+        let cases = [
+            ("TYPE(M1)+SelectionTick(D1)", "5:2|entry:1", "5:2|state:2|0|5:2|0|5:2|0|5:2|0|5:2|1|5:3"),
+            ("TYPE(SelectionTick(M1+0))+SelectionTick(D1)", "5:2|entry:2", "5:2|state:2|0|5:2|0|5:2|0|5:2|0|5:2|2|5:3"),
+            ("TYPE(SelectionTick(M1))+SelectionTick(D1)", "5:2|entry:2", "5:2|state:2|1|5:2|1|5:2|3|5:2|3|5:2|2|5:3"),
+            ("SelectionTick(D1)+TYPE(SelectionTick(M1))", "5:2|entry:2", "5:2|state:2|2|5:2|2|5:2|6|5:2|6|5:2|2|5:3"),
+            ("ISNUMBER(SelectionTick(M1))+SelectionTick(D1)", "5:2|entry:2", "5:2|state:2|1|5:2|1|5:2|3|5:2|3|5:2|2|5:3"),
+            ("TYPE(SelectionTick(D1))", "5:1|entry:1", "5:1|state:2|1|5:1|1|5:1|1|5:1|1|5:1|1|5:1"),
+            ("SelectionTick(D1)+TYPE(M1)", "5:2|entry:1", "5:2|state:2|1|5:2|1|5:2|3|5:2|3|5:2|1|5:3"),
+            ("IF(D1=1,TYPE(M1),SelectionTick(D1))", "5:1|entry:0", "5:1|state:2|0|5:1|1|5:2|1|5:2|1|5:2|1|5:2"),
+            ("IF(D1=2,TYPE(M1),SelectionTick(D1))", "5:1|entry:1", "5:1|state:2|1|5:1|0|5:1|0|5:1|0|5:1|0|5:1"),
+            ("TYPE(IF(D1=1,M1,SelectionTick(D1)))", "5:1|entry:0", "5:1|state:2|0|5:1|1|5:1|1|5:1|1|5:1|1|5:1"),
+            ("TYPE(IF(FALSE,M1,SelectionTick(D1)))", "5:1|entry:1", "5:1|state:2|1|5:1|1|5:1|1|5:1|1|5:1|1|5:1"),
+            ("TYPE(IF(TRUE,M1,SelectionTick(D1)))", "5:1|entry:0", "5:1|state:2|0|5:1|0|5:1|0|5:1|0|5:1|0|5:1"),
+            ("LAMBDA(x,TYPE(x))(M1)", "5:1|entry:0", "5:1|state:2|0|5:1|0|5:1|0|5:1|0|5:1|0|5:1"),
+            ("LET(x,M1,TYPE(x))+SelectionTick(D1)", "5:2|entry:1", "5:2|state:2|0|5:2|0|5:2|0|5:2|0|5:2|1|5:3"),
+            ("TYPE(SelectionTick(M1))+TYPE(M1)", "5:2|entry:1", "5:2|state:2|1|5:2|1|5:2|3|5:2|3|5:2|1|5:2"),
+            ("TYPE(M1)+TYPE(SelectionTick(M1))", "5:2|entry:1", "5:2|state:2|0|5:2|0|5:2|0|5:2|0|5:2|1|5:2"),
+            ("IF(SelectionTick(D1)>0,TYPE(M1),0)", "5:1|entry:1", "5:1|state:2|1|5:1|1|5:1|3|5:1|3|5:1|1|5:1"),
+            ("TYPE(SelectionTick(IF(FALSE,M1,D1)))", "5:1|entry:1", "5:1|state:2|1|5:1|1|5:1|1|5:1|1|5:1|1|5:1"),
+            ("TYPE(SelectionTick(IF(TRUE,M1,D1)))", "5:1|entry:1", "5:1|state:2|1|5:1|1|5:1|3|5:1|3|5:1|1|5:1"),
+        ];
+        let mut mismatches = Vec::new();
+        for version in [1u8, 2] {
+            for (formula, entry_expected, reopened_expected) in &cases {
+                let mut book = oxicells_core::parse_xlsx_preserving_values(original).unwrap();
+                book.calculation.compatibility_version = version;
+                let mut session = None;
+                let entered = execute_workbook_action_in_session(book, &source,
+                    Some("IndexDriver.EnterSavedMetadata"), vec![Value::String((*formula).into())],
+                    0, failure_context(), &mut session).unwrap();
+                assert!(entered.error.is_none(), "{formula}: {:?}", entered.error.as_ref().map(|error| &error.message));
+                assert_eq!(serde_json::to_value(&entered.result).unwrap(), serde_json::json!({"type":"string","value":entry_expected}), "{formula}, version{version}: entry");
+                let mut editor = oxicells_core::XlsxEditor::new(original).unwrap();
+                editor.apply_workbook(&entered.workbook).unwrap();
+                let bytes = editor.save().unwrap();
+                let reopened = oxicells_core::parse_xlsx_preserving_values(&bytes).unwrap();
+                assert!(reopened.recalculation.metadata_cycles.is_empty());
+                assert!(reopened.recalculation.metadata_reference_cycles.is_empty());
+                let mut fresh_session = None;
+                let outcome = execute_workbook_action_in_session(reopened, &source,
+                    Some("IndexDriver.ReopenedMetadata"), vec![Value::String((*formula).into())],
+                    0, failure_context(), &mut fresh_session).unwrap();
+                if let Some(error) = outcome.error {
+                    mismatches.push(format!("{formula}, version{version}: {}", error.message));
+                } else {
+                    let actual = serde_json::to_value(&outcome.result).unwrap();
+                    if actual != serde_json::json!({"type":"string","value":reopened_expected}) {
+                        mismatches.push(format!("{formula}, version{version}: {actual} != {reopened_expected}"));
+                    }
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
+    fn native_metadata_cycles_retain_completed_results() {
+        // Repeated Native observer controls subtract CounterTick's own calls
+        // at each entry/range/full/rebuild boundary, including external edits.
+        let source = format!("Attribute VB_Name = \"IndexDriver\"\n{}\n{}", include_str!("../../../tests/fixtures/vba/worksheet_index_contexts.bas"), r##"
+Public Function MetadataCycleTrace(ByVal expression As String) As String
+ Dim previous As Long
+ Dim current As Long
+ Dim result As String
+ Driver
+ Application.Calculation=xlCalculationManual
+ Range("M1:O6").ClearContents
+ Range("D1").Value2=1
+ ReferenceTrace "1",0
+ previous=CounterTick()
+ Range("M1").Formula2="=" & expression
+ current=CounterTick()
+ result=CStr(current-previous-1)
+ previous=CounterTick()
+ Range("M1").Calculate
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1)
+ previous=CounterTick()
+ Range("M1").Calculate
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1)
+ Range("D1").Value2=2
+ previous=CounterTick()
+ Range("M1").Calculate
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1)
+ previous=CounterTick()
+ Application.CalculateFull
+ current=CounterTick()
+ result=result & "|" & CStr(current-previous-1)
+ previous=CounterTick()
+ Application.CalculateFullRebuild
+ current=CounterTick()
+ MetadataCycleTrace=result & "|" & CStr(current-previous-1) & "|" & ScalarReport(Range("M1").Value2)
+End Function"##);
+        let cases = [
+            ("TYPE(SelectionTick(M1+0))", "1|0|0|0|0|0|5:1"),
+            ("ISNUMBER(SelectionTick(M1+0))", "1|0|0|0|0|0|11:True"),
+            ("ISERROR(SelectionTick(M1+0))", "1|0|0|0|0|0|11:False"),
+            ("TYPE(SelectionTick(M1+D1))", "1|0|0|0|0|0|5:1"),
+            ("TYPE(SelectionTick(M1))", "1|1|1|1|3|3|5:1"),
+            ("TYPE(SelectionTick(D1))", "1|1|1|1|1|1|5:1"),
+            ("TYPE(SelectionTick(2))", "1|1|1|1|1|1|5:1"),
+            ("TYPE(SelectionTick(M1+0)+0)", "1|0|0|0|0|0|5:1"),
+            ("TYPE(SelectionTick(M1+0))+SelectionTick(D1)", "2|0|0|0|0|0|5:2"),
+            ("TYPE(SelectionTick(M1))+SelectionTick(D1)", "2|1|1|1|3|3|5:2"),
+            ("TYPE(M1+0)+SelectionTick(D1)", "1|0|0|0|0|0|5:2"),
+            ("TYPE(M1)+SelectionTick(D1)", "1|0|0|0|0|0|5:2"),
+            ("TYPE(M1+D1)+SelectionTick(D1)", "1|0|0|0|0|0|5:2"),
+            ("ISNUMBER(M1+0)+SelectionTick(D1)", "1|0|0|0|0|0|5:2"),
+            ("IF(TYPE(M1+0)=1,SelectionTick(D1),0)", "1|0|0|0|0|0|5:1"),
+            ("LAMBDA(x,TYPE(x))(M1+0)+SelectionTick(D1)", "1|0|0|0|0|0|5:2"),
+            ("TYPE(SelectionTick(M1+0))+TYPE(SelectionTick(D1))", "2|0|0|0|0|0|5:2"),
+            ("TYPE(SelectionTick(M1*0))+SelectionTick(D1)", "2|0|0|0|0|0|5:2"),
+            ("TYPE(SelectionTick(0+M1))+SelectionTick(D1)", "2|0|0|0|0|0|5:2"),
+            ("TYPE(SelectionTick(IF(TRUE,M1,0)))+SelectionTick(D1)", "2|1|1|1|3|3|5:2"),
+            ("SelectionTick(D1)+TYPE(SelectionTick(M1))", "2|2|2|2|6|6|5:2"),
+            ("TYPE(SelectionTick(M1))+CounterTick()", "2|1|1|1|3|3|5:4"),
+            ("CounterTick()+TYPE(SelectionTick(M1))", "2|2|2|2|6|6|5:3"),
+            ("TYPE(SelectionTick(M1))+SelectionTick(D1)+SelectionTick(2)", "3|1|1|1|3|3|5:4"),
+            ("SelectionTick(D1)+TYPE(SelectionTick(M1))+SelectionTick(2)", "3|2|2|2|6|6|5:4"),
+            ("TYPE(SelectionTick(M1))+TYPE(SelectionTick(M1))", "2|1|1|1|3|3|5:2"),
+            ("TYPE(SelectionTick(M1))+TYPE(M1)", "1|1|1|1|3|3|5:2"),
+            ("TYPE(M1)+TYPE(SelectionTick(M1))", "1|0|0|0|0|0|5:2"),
+            ("IF(TRUE,TYPE(SelectionTick(M1)),TYPE(M1))", "1|1|1|1|3|3|5:1"),
+            ("TYPE(SelectionTick(M1)+0)", "1|1|1|1|3|3|5:1"),
+            ("TYPE(SelectionTick(IF(TRUE,M1,0))+0)+SelectionTick(D1)", "2|1|1|1|3|3|5:2"),
+            ("TYPE(SelectionTick(IF(TRUE,M1+0,0)))+SelectionTick(D1)", "2|0|0|0|0|0|5:2"),
+            ("TYPE(SelectionTick(M1:M2))", "1|1|1|1|3|3|5:64"),
+            ("TYPE(SelectionTick(M1:M2))+SelectionTick(D1)", "2|1|1|1|3|3|5:65"),
+            ("TYPE(SelectionTick(L1:N2))+SelectionTick(D1)", "2|1|1|1|3|3|5:65"),
+            ("ISNUMBER(SelectionTick(M1))+SelectionTick(D1)", "2|1|1|1|3|3|5:2"),
+            ("ISERROR(SelectionTick(M1))+SelectionTick(D1)", "2|1|1|1|3|3|5:1"),
+            ("TYPE(SelectionTick(INDEX(M1,1)))+SelectionTick(D1)", "2|1|1|1|3|3|5:2"),
+            ("TYPE(SelectionTick(M1))+M1", "1|1|1|1|3|3|5:1"),
+            ("TYPE(DoubleTick(M1))", "1|1|1|1|3|3|5:1"),
+            ("TYPE(DoubleTick(M1+0))", "1|0|0|0|0|0|5:1"),
+            ("TYPE(DoubleTick(M1))+SelectionTick(D1)", "2|1|1|1|3|3|5:2"),
+            ("TYPE(SelectionTick(IF(M1,M1,D1)))+SelectionTick(D1)", "2|0|0|0|0|0|5:2"),
+            ("TYPE(SelectionTick(IF(M1=0,M1,D1)))+SelectionTick(D1)", "2|0|0|0|0|0|5:2"),
+            ("TYPE(M1)+M1", "0|0|0|0|0|0|5:1"),
+            ("M1+TYPE(M1)", "0|0|0|0|0|0|5:1"),
+            ("TYPE(M1:M2)+SelectionTick(D1)", "1|1|1|1|1|1|5:66"),
+        ];
+        let mut mismatches = Vec::new();
+        for version in [1u8, 2] {
+            for (formula, expected) in &cases {
+                let mut book = workbook();book.calculation.compatibility_version = version;
+                let mut session = None;
+                let outcome = execute_workbook_action_in_session(book, &source,
+                    Some("IndexDriver.MetadataCycleTrace"), vec![Value::String((*formula).into())], 0, failure_context(), &mut session).unwrap();
+                if let Some(error) = outcome.error {
+                    mismatches.push(format!("{formula}, version{version}: {}", error.message));
+                } else {
+                    let actual = serde_json::to_value(&outcome.result).unwrap();
+                    if actual != serde_json::json!({"type":"string","value":expected}) {
+                        mismatches.push(format!("{formula}, version{version}: {actual} != {expected}"));
+                    }
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
+    fn native_callable_origins_and_metadata_consumption_match_vba() {
+        let source = format!("Attribute VB_Name = \"IndexDriver\"\n{}\n{}", include_str!("../../../tests/fixtures/vba/worksheet_index_contexts.bas"), r##"
+Public Function CurrentBindingProperties(ByVal expression As String) As String
+    Dim failure As Long
+    Driver
+    Range("M1:O6").ClearContents
+    Application.Calculation = xlCalculationManual
+    On Error Resume Next
+    Err.Clear
+    Range("M1").Formula2 = "=" & expression
+    failure = Err.Number
+    On Error GoTo 0
+    If failure <> 0 Then
+        CurrentBindingProperties = "SETERR:" & CStr(failure)
+    Else
+        CurrentBindingProperties = CStr(Range("M1").SavedAsArray) & "|V|" & ScalarReport(Range("M1").Value2) & "|" & Range("M1").Formula & "|" & Range("M1").Formula2
+    End If
+End Function
+Public Function CurrentBindingTrace(ByVal expression As String, ByVal mode As Long) As String
+    Driver
+    Range("M1:O6").ClearContents
+    Application.Calculation = xlCalculationManual
+    On Error Resume Next
+    Range("M1").Formula2 = "=" & expression
+    Range("M1").Calculate
+    Err.Clear
+    On Error GoTo 0
+    CurrentBindingTrace = ReferenceTrace(expression, mode)
+End Function
+Public Function CurrentBindingWarm(ByVal expression As String) As String
+    Dim report As String
+    Driver
+    Range("M1:O6").ClearContents
+    Application.Calculation = xlCalculationManual
+    Range("M1").Formula2 = "=" & expression
+    Range("M1").Calculate
+    report = ScalarReport(Range("M1").Value2)
+    Range("M1").Calculate
+    report = report & "|" & ScalarReport(Range("M1").Value2)
+    Application.CalculateFullRebuild
+    report = report & "|" & ScalarReport(Range("M1").Value2)
+    Range("M1").Calculate
+    CurrentBindingWarm = report & "|" & ScalarReport(Range("M1").Value2)
+End Function
+"##);
+        // Fresh independently repeated Excel observations, one installed
+        // Excel16/build20527. Evaluate starts with the measured cached M1;
+        // its direct-cell and callback contexts must not be conflated.
+        let cases = [
+            ("TYPE(SelectionTick)", "True|V|5:16|=TYPE(SelectionTick)|=TYPE(SelectionTick)", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("TYPE(DoubleTick)", "True|V|5:16|=TYPE(DoubleTick)|=TYPE(DoubleTick)", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("SUM(MAP({1;2;3},SelectionTick))", "False|V|E:3|=SUM(MAP({1;2;3},SelectionTick))|=SUM(MAP({1;2;3},SelectionTick))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(SelectionTick)", "True|V|5:2|=LAMBDA(fn,fn(2))(SelectionTick)|=LAMBDA(fn,fn(2))(SelectionTick)", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("TYPE(_xleta.SelectionTick)", "True|V|5:16|=TYPE(_xleta.SelectionTick)|=TYPE(_xleta.SelectionTick)", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},LAMBDA(v,SUM(v)),0,0),2))", "False|V|5:60|=SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},LAMBDA(v,SUM(v)),0,0),2))|=SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},LAMBDA(v,SUM(v)),0,0),2))", ["0|V|5:60|calls:0", "0|V|5:60|calls:0", "0|V|5:60|calls:0"], None),
+            ("SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},LET(draw,SelectionTick(7),LAMBDA(v,draw)),0,0),2))", "False|V|5:14|=SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},LET(draw,SelectionTick(7),LAMBDA(v,draw)),0,0),2))|=SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},LET(draw,SelectionTick(7),LAMBDA(v,draw)),0,0),2))", ["0|V|5:14|calls:2", "0|V|5:14|calls:1", "0|V|5:14|calls:2"], None),
+            ("LET(outputs,CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},LET(draw,RAND(),LAMBDA(v,draw)),0,0),2),MAX(outputs)-MIN(outputs))", "False|V|5:0|=LET(outputs,CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},LET(draw,RAND(),LAMBDA(v,draw)),0,0),2),MAX(outputs)-MIN(outputs))|=LET(outputs,CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},LET(draw,RAND(),LAMBDA(v,draw)),0,0),2),MAX(outputs)-MIN(outputs))", ["0|V|5:0|calls:0", "0|V|5:0|calls:0", "0|V|5:0|calls:0"], None),
+            ("SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},LAMBDA(v,SUM(v)),0,0,,0),1,1))", "False|V|5:100|=SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},LAMBDA(v,SUM(v)),0,0,,0),1,1))|=SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},LAMBDA(v,SUM(v)),0,0,,0),1,1))", ["0|V|5:100|calls:0", "0|V|5:100|calls:0", "0|V|5:100|calls:0"], None),
+            ("SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},LET(draw,SelectionTick(7),LAMBDA(v,draw)),0,0,,0),1,1))", "False|V|5:28|=SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},LET(draw,SelectionTick(7),LAMBDA(v,draw)),0,0,,0),1,1))|=SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},LET(draw,SelectionTick(7),LAMBDA(v,draw)),0,0,,0),1,1))", ["0|V|5:28|calls:2", "0|V|5:28|calls:1", "0|V|5:28|calls:2"], None),
+            ("LET(outputs,DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},LET(draw,RAND(),LAMBDA(v,draw)),0,0,,0),1,1),MAX(outputs)-MIN(outputs))", "False|V|5:0|=LET(outputs,DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},LET(draw,RAND(),LAMBDA(v,draw)),0,0,,0),1,1),MAX(outputs)-MIN(outputs))|=LET(outputs,DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},LET(draw,RAND(),LAMBDA(v,draw)),0,0,,0),1,1),MAX(outputs)-MIN(outputs))", ["0|V|5:0|calls:0", "0|V|5:0|calls:0", "0|V|5:0|calls:0"], None),
+            ("LAMBDA([x],LAMBDA([y],ISOMITTED(y))(x))()", "True|V|11:True|=LAMBDA([x],LAMBDA([y],ISOMITTED(y))(x))()|=LAMBDA([x],LAMBDA([y],ISOMITTED(y))(x))()", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LAMBDA([x],LET(y,x,ISOMITTED(y)))()", "True|V|11:True|=LAMBDA([x],LET(y,x,ISOMITTED(y)))()|=LAMBDA([x],LET(y,x,ISOMITTED(y)))()", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LAMBDA([x],TYPE(x))()", "True|V|5:1|=LAMBDA([x],TYPE(x))()|=LAMBDA([x],TYPE(x))()", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(x,TYPE(x))(M1+0)", "True|V|5:1|=LAMBDA(x,TYPE(x))(M1+0)|=LAMBDA(x,TYPE(x))(M1+0)", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], Some("5:1|5:1|5:1|5:1")),
+            ("LAMBDA(x,ISNUMBER(x))(M1+0)", "True|V|11:True|=LAMBDA(x,ISNUMBER(x))(M1+0)|=LAMBDA(x,ISNUMBER(x))(M1+0)", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], Some("11:True|11:True|11:True|11:True")),
+            ("LAMBDA(x,ISERROR(x))(M1+0)", "True|V|11:False|=LAMBDA(x,ISERROR(x))(M1+0)|=LAMBDA(x,ISERROR(x))(M1+0)", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("LAMBDA(x,ISTEXT(x))(M1+0)", "True|V|11:False|=LAMBDA(x,ISTEXT(x))(M1+0)|=LAMBDA(x,ISTEXT(x))(M1+0)", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("LAMBDA(x,x)(M1+0)", "True|V|5:0|=LAMBDA(x,x)(M1+0)|=LAMBDA(x,x)(M1+0)", ["0|V|5:0|calls:0", "0|V|5:0|calls:0", "0|V|5:0|calls:0"], Some("5:0|5:0|5:0|5:0")),
+            ("TYPE(M1+0)", "False|V|5:1|=TYPE(M1+0)|=TYPE(M1+0)", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], Some("5:1|5:1|5:1|5:1")),
+            ("ISNUMBER(M1+0)", "False|V|11:True|=ISNUMBER(M1+0)|=ISNUMBER(M1+0)", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], Some("11:True|11:True|11:True|11:True")),
+            ("ISERROR(M1+0)", "False|V|11:False|=ISERROR(M1+0)|=ISERROR(M1+0)", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("ISTEXT(M1+0)", "False|V|11:False|=ISTEXT(M1+0)|=ISTEXT(M1+0)", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("LAMBDA(x,1)(M1+0)", "True|V|5:1|=LAMBDA(x,1)(M1+0)|=LAMBDA(x,1)(M1+0)", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], Some("5:1|5:1|5:1|5:1")),
+            ("LAMBDA(a,b,b)(1,)", "True|V|5:0|=LAMBDA(a,b,b)(1,)|=LAMBDA(a,b,b)(1,)", ["0|V|5:0|calls:0", "0|V|5:0|calls:0", "0|V|5:0|calls:0"], None),
+            ("LAMBDA(a,b,TYPE(b))(1,)", "True|V|5:1|=LAMBDA(a,b,TYPE(b))(1,)|=LAMBDA(a,b,TYPE(b))(1,)", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(a,[b],b)(1)", "True|V|5:0|=LAMBDA(a,[b],b)(1)|=LAMBDA(a,[b],b)(1)", ["0|V|5:0|calls:0", "0|V|5:0|calls:0", "0|V|5:0|calls:0"], None),
+            ("LAMBDA(a,[b],TYPE(b))(1)", "True|V|5:1|=LAMBDA(a,[b],TYPE(b))(1)|=LAMBDA(a,[b],TYPE(b))(1)", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA([x],x)()", "True|V|5:0|=LAMBDA([x],x)()|=LAMBDA([x],x)()", ["0|V|5:0|calls:0", "0|V|5:0|calls:0", "0|V|5:0|calls:0"], None),
+            ("LAMBDA([x],LAMBDA(y,ISOMITTED(y))(x))()", "True|V|11:True|=LAMBDA([x],LAMBDA(y,ISOMITTED(y))(x))()|=LAMBDA([x],LAMBDA(y,ISOMITTED(y))(x))()", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LET(x,,ISOMITTED(x))", "False|V|11:True|=LET(x,,ISOMITTED(x))|=LET(x,,ISOMITTED(x))", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LET(x,IF(TRUE,,),ISOMITTED(x))", "False|V|11:True|=LET(x,IF(TRUE,,),ISOMITTED(x))|=LET(x,IF(TRUE,,),ISOMITTED(x))", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LET(fn,SelectionTick,fn(2))", "True|V|5:2|=LET(fn,SelectionTick,fn(2))|=LET(fn,SelectionTick,fn(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,LET(g,fn,g(2)))(SelectionTick)", "True|V|5:2|=LAMBDA(fn,LET(g,fn,g(2)))(SelectionTick)|=LAMBDA(fn,LET(g,fn,g(2)))(SelectionTick)", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(IFERROR(SelectionTick,0))", "True|V|E:3|=LAMBDA(fn,fn(2))(IFERROR(SelectionTick,0))|=LAMBDA(fn,fn(2))(IFERROR(SelectionTick,0))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LAMBDA(fn,ISERROR(fn))(SelectionTick)", "True|V|11:True|=LAMBDA(fn,ISERROR(fn))(SelectionTick)|=LAMBDA(fn,ISERROR(fn))(SelectionTick)", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(NoSuchFunction)", "True|V|E:5|=LAMBDA(fn,fn(2))(NoSuchFunction)|=LAMBDA(fn,fn(2))(NoSuchFunction)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("SUM(MAP({1;2},1/0))", "False|V|E:3|=SUM(MAP({1;2},1/0))|=SUM(MAP({1;2},1/0))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("SUM(MAP({1;2},NA()))", "False|V|E:3|=SUM(MAP({1;2},NA()))|=SUM(MAP({1;2},NA()))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("SUM(MAP({1;2},NoSuchFunction))", "False|V|E:3|=SUM(MAP({1;2},NoSuchFunction))|=SUM(MAP({1;2},NoSuchFunction))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("SUM(MAP({1;2},2))", "False|V|E:3|=SUM(MAP({1;2},2))|=SUM(MAP({1;2},2))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(g,LAMBDA(v,SUM(v)),SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},g,0,0),2)))", "False|V|5:60|=LET(g,LAMBDA(v,SUM(v)),SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},g,0,0),2)))|=LET(g,LAMBDA(v,SUM(v)),SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},g,0,0),2)))", ["0|V|5:60|calls:0", "0|V|5:60|calls:0", "0|V|5:60|calls:0"], None),
+            ("LET(g,LAMBDA(v,SUM(v)),SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},g,0,0,,0),1,1)))", "False|V|5:100|=LET(g,LAMBDA(v,SUM(v)),SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},g,0,0,,0),1,1)))|=LET(g,LAMBDA(v,SUM(v)),SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},g,0,0,,0),1,1)))", ["0|V|5:100|calls:0", "0|V|5:100|calls:0", "0|V|5:100|calls:0"], None),
+            ("TYPE(M1)", "False|V|5:1|=TYPE(M1)|=TYPE(M1)", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], Some("5:1|5:1|5:1|5:1")),
+            ("ISNUMBER(M1)", "False|V|11:True|=ISNUMBER(M1)|=ISNUMBER(M1)", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:True|calls:0"], Some("11:True|11:True|11:True|11:True")),
+            ("ISERROR(M1)", "False|V|11:False|=ISERROR(M1)|=ISERROR(M1)", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("ISBLANK(M1)", "False|V|11:False|=ISBLANK(M1)|=ISBLANK(M1)", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("TYPE(IF(M1,1,\"a\"))", "False|V|5:2|=TYPE(IF(M1,1,\"a\"))|=TYPE(IF(M1,1,\"a\"))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:2|calls:0"], Some("5:2|5:2|5:2|5:2")),
+            ("TYPE(M1/M1)", "False|V|5:16|=TYPE(M1/M1)|=TYPE(M1/M1)", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:16|calls:0"], Some("5:16|5:16|5:16|5:16")),
+            ("LAMBDA(x,TYPE(x))(IF(M1,1,\"a\"))", "True|V|5:2|=LAMBDA(x,TYPE(x))(IF(M1,1,\"a\"))|=LAMBDA(x,TYPE(x))(IF(M1,1,\"a\"))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:2|calls:0"], Some("5:2|5:2|5:2|5:2")),
+            ("LAMBDA(x,1)(IF(M1,1,\"a\"))", "True|V|5:1|=LAMBDA(x,1)(IF(M1,1,\"a\"))|=LAMBDA(x,1)(IF(M1,1,\"a\"))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(x,TYPE(x))(M1/M1)", "True|V|5:16|=LAMBDA(x,TYPE(x))(M1/M1)|=LAMBDA(x,TYPE(x))(M1/M1)", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:16|calls:0"], Some("5:16|5:16|5:16|5:16")),
+            ("SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},PERCENTOF,0,0),2))", "False|V|5:1|=SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},PERCENTOF,0,0),2))|=SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},PERCENTOF,0,0),2))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},PERCENTOF,0,0,,0),1,1))", "False|V|5:2|=SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},PERCENTOF,0,0,,0),1,1))|=SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},PERCENTOF,0,0,,0),1,1))", ["0|V|5:2|calls:0", "0|V|5:2|calls:0", "0|V|5:2|calls:0"], None),
+            ("LET(g,PERCENTOF,SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},g,0,0),2)))", "False|V|5:1|=LET(g,PERCENTOF,SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},g,0,0),2)))|=LET(g,PERCENTOF,SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},g,0,0),2)))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LET(g,PERCENTOF,SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},g,0,0,,0),1,1)))", "False|V|5:2|=LET(g,PERCENTOF,SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},g,0,0,,0),1,1)))|=LET(g,PERCENTOF,SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},g,0,0,,0),1,1)))", ["0|V|5:2|calls:0", "0|V|5:2|calls:0", "0|V|5:2|calls:0"], None),
+            ("LET(PERCENTOF,LAMBDA(v,SUM(v)),SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},PERCENTOF,0,0),2)))", "False|V|5:60|=LET(PERCENTOF,LAMBDA(v,SUM(v)),SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},PERCENTOF,0,0),2)))|=LET(PERCENTOF,LAMBDA(v,SUM(v)),SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},PERCENTOF,0,0),2)))", ["0|V|5:60|calls:0", "0|V|5:60|calls:0", "0|V|5:60|calls:0"], None),
+            ("LET(PERCENTOF,LAMBDA(v,SUM(v)),SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},PERCENTOF,0,0,,0),1,1)))", "False|V|5:100|=LET(PERCENTOF,LAMBDA(v,SUM(v)),SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},PERCENTOF,0,0,,0),1,1)))|=LET(PERCENTOF,LAMBDA(v,SUM(v)),SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},PERCENTOF,0,0,,0),1,1)))", ["0|V|5:100|calls:0", "0|V|5:100|calls:0", "0|V|5:100|calls:0"], None),
+            ("LET(g,SUM,SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},g,0,0),2)))", "False|V|5:60|=LET(g,SUM,SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},g,0,0),2)))|=LET(g,SUM,SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},g,0,0),2)))", ["0|V|5:60|calls:0", "0|V|5:60|calls:0", "0|V|5:60|calls:0"], None),
+            ("LET(g,SUM,SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},g,0,0,,0),1,1)))", "False|V|5:100|=LET(g,SUM,SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},g,0,0,,0),1,1)))|=LET(g,SUM,SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},g,0,0,,0),1,1)))", ["0|V|5:100|calls:0", "0|V|5:100|calls:0", "0|V|5:100|calls:0"], None),
+            ("SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},_xleta.PERCENTOF,0,0),2))", "False|V|5:1|=SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},PERCENTOF,0,0),2))|=SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},PERCENTOF,0,0),2))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},_xleta.PERCENTOF,0,0,,0),1,1))", "False|V|5:2|=SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},PERCENTOF,0,0,,0),1,1))|=SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},PERCENTOF,0,0,,0),1,1))", ["0|V|5:2|calls:0", "0|V|5:2|calls:0", "0|V|5:2|calls:0"], None),
+            ("LET(SelectionTick,SelectionTick,SelectionTick(2))", "True|V|5:2|=LET(SelectionTick,SelectionTick,SelectionTick(2))|=LET(SelectionTick,SelectionTick,SelectionTick(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,SelectionTick,SelectionTick,99,fn(2))", "True|V|5:2|=LET(fn,SelectionTick,SelectionTick,99,fn(2))|=LET(fn,SelectionTick,SelectionTick,99,fn(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,SelectionTick,TYPE(fn))", "True|V|5:16|=LET(fn,SelectionTick,TYPE(fn))|=LET(fn,SelectionTick,TYPE(fn))", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("LET(fn,SelectionTick,ISERROR(fn))", "True|V|11:True|=LET(fn,SelectionTick,ISERROR(fn))|=LET(fn,SelectionTick,ISERROR(fn))", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LET(fn,SelectionTick,IFERROR(fn,0))", "True|V|E:3|=LET(fn,SelectionTick,IFERROR(fn,0))|=LET(fn,SelectionTick,IFERROR(fn,0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,g,fn,g(2))", "True|V|5:2|=LET(fn,SelectionTick,g,fn,g(2))|=LET(fn,SelectionTick,g,fn,g(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,SelectionTick,LAMBDA(x,fn(x))(2))", "True|V|5:2|=LET(fn,SelectionTick,LAMBDA(x,fn(x))(2))|=LET(fn,SelectionTick,LAMBDA(x,fn(x))(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(D1))(SelectionTick)", "True|V|5:1|=LAMBDA(fn,fn(D1))(SelectionTick)|=LAMBDA(fn,fn(D1))(SelectionTick)", ["0|V|5:1|calls:2", "0|V|5:1|calls:2", "0|V|5:1|calls:2"], None),
+            ("LAMBDA(fn,fn(SelectionTick(2)))(SelectionTick)", "True|V|5:2|=LAMBDA(fn,fn(SelectionTick(2)))(SelectionTick)|=LAMBDA(fn,fn(SelectionTick(2)))(SelectionTick)", ["0|V|5:2|calls:4", "0|V|5:2|calls:4", "0|V|5:2|calls:4"], None),
+            ("LET(fn,NoSuchFunction,fn(2))", "True|V|E:5|=LET(fn,NoSuchFunction,fn(2))|=LET(fn,NoSuchFunction,fn(2))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(IF(TRUE,SelectionTick,0))", "True|V|5:2|=LAMBDA(fn,fn(2))(IF(TRUE,SelectionTick,0))|=LAMBDA(fn,fn(2))(IF(TRUE,SelectionTick,0))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick))", "True|V|5:2|=LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick))|=LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(IFNA(SelectionTick,0))", "True|V|E:5|=LAMBDA(fn,fn(2))(IFNA(SelectionTick,0))|=LAMBDA(fn,fn(2))(IFNA(SelectionTick,0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(+SelectionTick)", "True|V|E:5|=LAMBDA(fn,fn(2))(+SelectionTick)|=LAMBDA(fn,fn(2))(+SelectionTick)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(INDEX(SelectionTick,1))", "True|V|E:5|=LAMBDA(fn,fn(2))(INDEX(SelectionTick,1))|=LAMBDA(fn,fn(2))(INDEX(SelectionTick,1))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(LAMBDA(x,x)(SelectionTick))", "True|V|5:2|=LAMBDA(fn,fn(2))(LAMBDA(x,x)(SelectionTick))|=LAMBDA(fn,fn(2))(LAMBDA(x,x)(SelectionTick))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,SelectionTick,LAMBDA(g,g(2))(fn))", "True|V|5:2|=LET(fn,SelectionTick,LAMBDA(g,g(2))(fn))|=LET(fn,SelectionTick,LAMBDA(g,g(2))(fn))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,DoubleTick,fn(2))", "True|V|5:2|=LET(fn,DoubleTick,fn(2))|=LET(fn,DoubleTick,fn(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(_xleta.SelectionTick)", "True|V|E:5|=LAMBDA(fn,fn(2))(_xleta.SelectionTick)|=LAMBDA(fn,fn(2))(_xleta.SelectionTick)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,IndexDriver.SelectionTick,fn(2))", "True|V|5:2|=LET(fn,IndexDriver.SelectionTick,fn(2))|=LET(fn,IndexDriver.SelectionTick,fn(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(IF(FALSE,0,SelectionTick))", "True|V|5:2|=LAMBDA(fn,fn(2))(IF(FALSE,0,SelectionTick))|=LAMBDA(fn,fn(2))(IF(FALSE,0,SelectionTick))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,NoSuchFunction))", "True|V|5:2|=LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,NoSuchFunction))|=LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,NoSuchFunction))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("TYPE(LAMBDA(x,x)(SelectionTick))", "True|V|5:16|=TYPE(LAMBDA(x,x)(SelectionTick))|=TYPE(LAMBDA(x,x)(SelectionTick))", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("ISERROR(LAMBDA(x,x)(SelectionTick))", "True|V|11:True|=ISERROR(LAMBDA(x,x)(SelectionTick))|=ISERROR(LAMBDA(x,x)(SelectionTick))", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("SUM(MAP({1;2},LAMBDA(x,x)(SelectionTick)))", "False|V|E:3|=SUM(MAP({1;2},LAMBDA(x,x)(SelectionTick)))|=SUM(MAP({1;2},LAMBDA(x,x)(SelectionTick)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,IF(TRUE,fn,0)(2))", "True|V|5:2|=LET(fn,SelectionTick,IF(TRUE,fn,0)(2))|=LET(fn,SelectionTick,IF(TRUE,fn,0)(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,LAMBDA(x,fn(x)))(SelectionTick)(2)", "True|V|5:2|=LAMBDA(fn,LAMBDA(x,fn(x)))(SelectionTick)(2)|=LAMBDA(fn,LAMBDA(x,fn(x)))(SelectionTick)(2)", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("ISTEXT(M1)", "False|V|11:False|=ISTEXT(M1)|=ISTEXT(M1)", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("ISLOGICAL(M1)", "False|V|11:False|=ISLOGICAL(M1)|=ISLOGICAL(M1)", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("ISERR(M1)", "False|V|11:False|=ISERR(M1)|=ISERR(M1)", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("ISNA(M1)", "False|V|11:False|=ISNA(M1)|=ISNA(M1)", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("LAMBDA(x,ISBLANK(x))(M1+0)", "True|V|11:False|=LAMBDA(x,ISBLANK(x))(M1+0)|=LAMBDA(x,ISBLANK(x))(M1+0)", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("LAMBDA(x,ISLOGICAL(x))(M1+0)", "True|V|11:False|=LAMBDA(x,ISLOGICAL(x))(M1+0)|=LAMBDA(x,ISLOGICAL(x))(M1+0)", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("TYPE(IF(TRUE,M1,0))", "False|V|5:1|=TYPE(IF(TRUE,M1,0))|=TYPE(IF(TRUE,M1,0))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], Some("5:1|5:1|5:1|5:1")),
+            ("ISNUMBER(IF(TRUE,M1,0))", "False|V|11:True|=ISNUMBER(IF(TRUE,M1,0))|=ISNUMBER(IF(TRUE,M1,0))", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:True|calls:0"], Some("11:True|11:True|11:True|11:True")),
+            ("ISBLANK(IF(TRUE,M1,0))", "False|V|11:False|=ISBLANK(IF(TRUE,M1,0))|=ISBLANK(IF(TRUE,M1,0))", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("ISNUMBER(IF(TRUE,,0))", "False|V|11:False|=ISNUMBER(IF(TRUE,,0))|=ISNUMBER(IF(TRUE,,0))", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], Some("11:False|11:False|11:False|11:False")),
+            ("TYPE(LAMBDA(x,x)(M1))", "True|V|5:1|=TYPE(LAMBDA(x,x)(M1))|=TYPE(LAMBDA(x,x)(M1))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], Some("5:1|5:1|5:1|5:1")),
+            ("TYPE(SUM(M1))", "False|V|5:1|=TYPE(SUM(M1))|=TYPE(SUM(M1))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], Some("5:1|5:1|5:1|5:1")),
+            ("TYPE(SelectionTick(M1+0))", "True|V|5:1|=TYPE(SelectionTick(M1+0))|=TYPE(SelectionTick(M1+0))", ["0|V|5:1|calls:2", "0|V|5:1|calls:1", "0|V|5:1|calls:1"], Some("5:1|5:1|5:1|5:1")),
+            ("ISNUMBER(SelectionTick(M1+0))", "True|V|11:True|=ISNUMBER(SelectionTick(M1+0))|=ISNUMBER(SelectionTick(M1+0))", ["0|V|11:True|calls:2", "0|V|11:True|calls:1", "0|V|11:True|calls:1"], Some("11:True|11:True|11:True|11:True")),
+            ("SelectionTick", "True|V|E:5|=SelectionTick|=SelectionTick", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,fn)", "True|V|E:3|=LET(fn,SelectionTick,fn)|=LET(fn,SelectionTick,fn)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LAMBDA(fn,fn)(SelectionTick)", "True|V|E:3|=LAMBDA(fn,fn)(SelectionTick)|=LAMBDA(fn,fn)(SelectionTick)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("IFERROR(SelectionTick,0)", "True|V|5:0|=IFERROR(SelectionTick,0)|=IFERROR(SelectionTick,0)", ["0|V|5:0|calls:0", "0|V|5:0|calls:0", "0|V|5:0|calls:0"], None),
+            ("IFNA(SelectionTick,0)", "True|V|E:5|=IFNA(SelectionTick,0)|=IFNA(SelectionTick,0)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,IFNA(fn,0))", "True|V|E:3|=LET(fn,SelectionTick,IFNA(fn,0))|=LET(fn,SelectionTick,IFNA(fn,0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,N(fn))", "True|V|E:5|=LET(fn,SelectionTick,N(fn))|=LET(fn,SelectionTick,N(fn))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,T(fn))", "True|V|E:5|=LET(fn,SelectionTick,T(fn))|=LET(fn,SelectionTick,T(fn))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,SUM(fn))", "False|V|E:5|=LET(fn,SelectionTick,SUM(fn))|=LET(fn,SelectionTick,SUM(fn))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,fn+0)", "True|V|E:3|=LET(fn,SelectionTick,fn+0)|=LET(fn,SelectionTick,fn+0)", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,+fn)", "True|V|E:3|=LET(fn,SelectionTick,+fn)|=LET(fn,SelectionTick,+fn)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,IF(TRUE,fn,0))", "True|V|E:3|=LET(fn,SelectionTick,IF(TRUE,fn,0))|=LET(fn,SelectionTick,IF(TRUE,fn,0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,CHOOSE(1,fn))", "True|V|E:3|=LET(fn,SelectionTick,CHOOSE(1,fn))|=LET(fn,SelectionTick,CHOOSE(1,fn))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,ISREF(fn))", "False|V|11:False|=LET(fn,SelectionTick,ISREF(fn))|=LET(fn,SelectionTick,ISREF(fn))", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], None),
+            ("LET(fn,SelectionTick,IFERROR(fn,0)(2))", "SETERR:1004", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "1004|V|0:|calls:0"], None),
+            ("LET(fn,SelectionTick,IFNA(fn,0)(2))", "SETERR:1004", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "1004|V|0:|calls:0"], None),
+            ("LET(fn,SelectionTick,LAMBDA(x,x)(fn))", "True|V|E:3|=LET(fn,SelectionTick,LAMBDA(x,x)(fn))|=LET(fn,SelectionTick,LAMBDA(x,x)(fn))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,TYPE(IFERROR(fn,0)))", "True|V|5:16|=LET(fn,SelectionTick,TYPE(IFERROR(fn,0)))|=LET(fn,SelectionTick,TYPE(IFERROR(fn,0)))", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("LET(fn,SelectionTick,ISERROR(IFERROR(fn,0)))", "True|V|11:True|=LET(fn,SelectionTick,ISERROR(IFERROR(fn,0)))|=LET(fn,SelectionTick,ISERROR(IFERROR(fn,0)))", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LET(fn,SelectionTick,ISOMITTED(fn))", "False|V|11:False|=LET(fn,SelectionTick,ISOMITTED(fn))|=LET(fn,SelectionTick,ISOMITTED(fn))", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], None),
+            ("LET(fn,SelectionTick,IFERROR(fn(2),0))", "True|V|5:2|=LET(fn,SelectionTick,IFERROR(fn(2),0))|=LET(fn,SelectionTick,IFERROR(fn(2),0))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,NoSuchFunction,IFERROR(fn,0))", "True|V|5:0|=LET(fn,NoSuchFunction,IFERROR(fn,0))|=LET(fn,NoSuchFunction,IFERROR(fn,0))", ["0|V|5:0|calls:0", "0|V|5:0|calls:0", "0|V|5:0|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(IFERROR(NoSuchFunction,0))", "True|V|E:3|=LAMBDA(fn,fn(2))(IFERROR(NoSuchFunction,0))|=LAMBDA(fn,fn(2))(IFERROR(NoSuchFunction,0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,INDEX(fn,1)(2))", "True|V|E:5|=LET(fn,SelectionTick,INDEX(fn,1)(2))|=LET(fn,SelectionTick,INDEX(fn,1)(2))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,TYPE(INDEX(fn,1)))", "True|V|5:16|=LET(fn,SelectionTick,TYPE(INDEX(fn,1)))|=LET(fn,SelectionTick,TYPE(INDEX(fn,1)))", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("LET(fn,SelectionTick,TYPE(+fn))", "True|V|5:16|=LET(fn,SelectionTick,TYPE(+fn))|=LET(fn,SelectionTick,TYPE(+fn))", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("LET(fn,SelectionTick,TYPE(IFNA(fn,0)))", "True|V|5:16|=LET(fn,SelectionTick,TYPE(IFNA(fn,0)))|=LET(fn,SelectionTick,TYPE(IFNA(fn,0)))", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("LET(fn,SelectionTick,TYPE(CHOOSE({1},fn)))", "True|V|5:64|=LET(fn,SelectionTick,TYPE(CHOOSE({1},fn)))|=LET(fn,SelectionTick,TYPE(CHOOSE({1},fn)))", ["0|V|5:64|calls:0", "0|V|5:64|calls:0", "0|V|5:64|calls:0"], None),
+            ("LET(fn,SelectionTick,TYPE(TAKE(fn,1)))", "False|V|5:16|=LET(fn,SelectionTick,TYPE(TAKE(fn,1)))|=LET(fn,SelectionTick,TYPE(TAKE(fn,1)))", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("LAMBDA(fn,fn)(IF(TRUE,SelectionTick,0))", "True|V|E:3|=LAMBDA(fn,fn)(IF(TRUE,SelectionTick,0))|=LAMBDA(fn,fn)(IF(TRUE,SelectionTick,0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,IFERROR(LAMBDA(x,x)(fn),0))", "True|V|E:3|=LET(fn,SelectionTick,IFERROR(LAMBDA(x,x)(fn),0))|=LET(fn,SelectionTick,IFERROR(LAMBDA(x,x)(fn),0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,ISNUMBER(fn))", "True|V|11:False|=LET(fn,SelectionTick,ISNUMBER(fn))|=LET(fn,SelectionTick,ISNUMBER(fn))", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], None),
+            ("LET(SelectionTick,99,SelectionTick(2))", "True|V|E:3|=LET(SelectionTick,99,SelectionTick(2))|=LET(SelectionTick,99,SelectionTick(2))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(SelectionTick,LAMBDA(x,99),SelectionTick(2))", "True|V|5:99|=LET(SelectionTick,LAMBDA(x,99),SelectionTick(2))|=LET(SelectionTick,LAMBDA(x,99),SelectionTick(2))", ["0|V|5:99|calls:0", "0|V|5:99|calls:0", "0|V|5:99|calls:0"], None),
+            ("LAMBDA(SelectionTick,SelectionTick(2))(99)", "True|V|E:3|=LAMBDA(SelectionTick,SelectionTick(2))(99)|=LAMBDA(SelectionTick,SelectionTick(2))(99)", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LAMBDA(SelectionTick,SelectionTick(2))(LAMBDA(x,99))", "True|V|5:99|=LAMBDA(SelectionTick,SelectionTick(2))(LAMBDA(x,99))|=LAMBDA(SelectionTick,SelectionTick(2))(LAMBDA(x,99))", ["0|V|5:99|calls:0", "0|V|5:99|calls:0", "0|V|5:99|calls:0"], None),
+            ("LET(fn,SelectionTick,LET(SelectionTick,LAMBDA(x,99),fn(2)))", "True|V|5:2|=LET(fn,SelectionTick,LET(SelectionTick,LAMBDA(x,99),fn(2)))|=LET(fn,SelectionTick,LET(SelectionTick,LAMBDA(x,99),fn(2)))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,SelectionTick,LET(SelectionTick,LAMBDA(x,99),SelectionTick(2)))", "True|V|5:99|=LET(fn,SelectionTick,LET(SelectionTick,LAMBDA(x,99),SelectionTick(2)))|=LET(fn,SelectionTick,LET(SelectionTick,LAMBDA(x,99),SelectionTick(2)))", ["0|V|5:99|calls:0", "0|V|5:99|calls:0", "0|V|5:99|calls:0"], None),
+            ("IndexDriver.SelectionTick(2)", "True|V|5:2|=IndexDriver.SelectionTick(2)|=IndexDriver.SelectionTick(2)", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,SelectionTick,IndexDriver.SelectionTick,99,fn(2))", "SETERR:1004", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "1004|V|0:|calls:0"], None),
+            ("LET(fn,SelectionTick,LAMBDA(SelectionTick,fn(2))(99))", "True|V|5:2|=LET(fn,SelectionTick,LAMBDA(SelectionTick,fn(2))(99))|=LET(fn,SelectionTick,LAMBDA(SelectionTick,fn(2))(99))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,SelectionTick,LAMBDA(fn,fn(2))(LAMBDA(x,99)))", "True|V|5:99|=LET(fn,SelectionTick,LAMBDA(fn,fn(2))(LAMBDA(x,99)))|=LET(fn,SelectionTick,LAMBDA(fn,fn(2))(LAMBDA(x,99)))", ["0|V|5:99|calls:0", "0|V|5:99|calls:0", "0|V|5:99|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(IFNA(LAMBDA(x,x)(SelectionTick),0))", "True|V|5:2|=LAMBDA(fn,fn(2))(IFNA(LAMBDA(x,x)(SelectionTick),0))|=LAMBDA(fn,fn(2))(IFNA(LAMBDA(x,x)(SelectionTick),0))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(CHOOSE(1,IF(TRUE,SelectionTick,0)))", "True|V|5:2|=LAMBDA(fn,fn(2))(CHOOSE(1,IF(TRUE,SelectionTick,0)))|=LAMBDA(fn,fn(2))(CHOOSE(1,IF(TRUE,SelectionTick,0)))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,SelectionTick,ISERROR(IF(TRUE,fn,0)))", "True|V|11:True|=LET(fn,SelectionTick,ISERROR(IF(TRUE,fn,0)))|=LET(fn,SelectionTick,ISERROR(IF(TRUE,fn,0)))", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LET(fn,SelectionTick,ISERROR(INDEX(fn,1)))", "True|V|11:True|=LET(fn,SelectionTick,ISERROR(INDEX(fn,1)))|=LET(fn,SelectionTick,ISERROR(INDEX(fn,1)))", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LET(fn,SelectionTick,ISERROR(CHOOSE({1},fn)))", "True|V|11:True|=LET(fn,SelectionTick,ISERROR(CHOOSE({1},fn)))|=LET(fn,SelectionTick,ISERROR(CHOOSE({1},fn)))", ["0|A1:1:1|11:True|calls:0", "0|A1:1:1|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LET(fn,SelectionTick,LAMBDA(g,g(2))(+fn))", "True|V|5:2|=LET(fn,SelectionTick,LAMBDA(g,g(2))(+fn))|=LET(fn,SelectionTick,LAMBDA(g,g(2))(+fn))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,SelectionTick,LAMBDA(g,g(2))(CHOOSE({1},fn)))", "True|V|E:5|=LET(fn,SelectionTick,LAMBDA(g,g(2))(CHOOSE({1},fn)))|=LET(fn,SelectionTick,LAMBDA(g,g(2))(CHOOSE({1},fn)))", ["0|A1:1:1|E:5|calls:0", "0|A1:1:1|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,LAMBDA(g,g(2))(TAKE(fn,1)))", "True|V|E:5|=LET(fn,SelectionTick,LAMBDA(g,g(2))(TAKE(fn,1)))|=LET(fn,SelectionTick,LAMBDA(g,g(2))(TAKE(fn,1)))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,LAMBDA(g,g(2))(IFERROR(fn,0)))", "True|V|5:2|=LET(fn,SelectionTick,LAMBDA(g,g(2))(IFERROR(fn,0)))|=LET(fn,SelectionTick,LAMBDA(g,g(2))(IFERROR(fn,0)))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,SelectionTick,LAMBDA(g,g(2))(IFNA(fn,0)))", "True|V|5:2|=LET(fn,SelectionTick,LAMBDA(g,g(2))(IFNA(fn,0)))|=LET(fn,SelectionTick,LAMBDA(g,g(2))(IFNA(fn,0)))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(IFERROR(1/0,SelectionTick))", "True|V|5:2|=LAMBDA(fn,fn(2))(IFERROR(1/0,SelectionTick))|=LAMBDA(fn,fn(2))(IFERROR(1/0,SelectionTick))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(IFNA(NA(),SelectionTick))", "True|V|5:2|=LAMBDA(fn,fn(2))(IFNA(NA(),SelectionTick))|=LAMBDA(fn,fn(2))(IFNA(NA(),SelectionTick))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(fn,SelectionTick,SelectionTick(fn))", "True|V|E:5|=LET(fn,SelectionTick,SelectionTick(fn))|=LET(fn,SelectionTick,SelectionTick(fn))", ["0|V|E:5|calls:2", "0|V|E:5|calls:2", "0|V|E:5|calls:2"], None),
+            ("LAMBDA(fn,SelectionTick(fn))(SelectionTick)", "True|V|E:5|=LAMBDA(fn,SelectionTick(fn))(SelectionTick)|=LAMBDA(fn,SelectionTick(fn))(SelectionTick)", ["0|V|E:5|calls:2", "0|V|E:5|calls:2", "0|V|E:5|calls:2"], None),
+            ("LET(fn,SelectionTick,DoubleTick(fn))", "True|V|E:3|=LET(fn,SelectionTick,DoubleTick(fn))|=LET(fn,SelectionTick,DoubleTick(fn))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,TYPE(SelectionTick(fn)))", "True|V|5:16|=LET(fn,SelectionTick,TYPE(SelectionTick(fn)))|=LET(fn,SelectionTick,TYPE(SelectionTick(fn)))", ["0|V|5:16|calls:2", "0|V|5:16|calls:2", "0|V|5:16|calls:2"], None),
+            ("LET(fn,SelectionTick,SUM(CHOOSE({1},fn)))", "False|V|E:5|=LET(fn,SelectionTick,SUM(CHOOSE({1},fn)))|=LET(fn,SelectionTick,SUM(CHOOSE({1},fn)))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,SUM(MAP({1;2},fn)))", "False|V|E:3|=LET(fn,SelectionTick,SUM(MAP({1;2},fn)))|=LET(fn,SelectionTick,SUM(MAP({1;2},fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,SUM(BYROW({1;2},fn)))", "True|V|E:3|=LET(fn,SelectionTick,SUM(BYROW({1;2},fn)))|=LET(fn,SelectionTick,SUM(BYROW({1;2},fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,ISERROR(+fn))", "True|V|11:True|=LET(fn,SelectionTick,ISERROR(+fn))|=LET(fn,SelectionTick,ISERROR(+fn))", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LET(fn,SelectionTick,IFERROR(+fn,0))", "True|V|E:3|=LET(fn,SelectionTick,IFERROR(+fn,0))|=LET(fn,SelectionTick,IFERROR(+fn,0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(IFS(TRUE,SelectionTick))", "True|V|E:5|=LAMBDA(fn,fn(2))(IFS(TRUE,SelectionTick))|=LAMBDA(fn,fn(2))(IFS(TRUE,SelectionTick))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(SWITCH(1,1,SelectionTick))", "True|V|E:5|=LAMBDA(fn,fn(2))(SWITCH(1,1,SelectionTick))|=LAMBDA(fn,fn(2))(SWITCH(1,1,SelectionTick))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,IFS(TRUE,fn))", "True|V|E:5|=LET(fn,SelectionTick,IFS(TRUE,fn))|=LET(fn,SelectionTick,IFS(TRUE,fn))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,SWITCH(1,1,fn))", "True|V|E:5|=LET(fn,SelectionTick,SWITCH(1,1,fn))|=LET(fn,SelectionTick,SWITCH(1,1,fn))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},fn,0,0),2)))", "False|V|E:5|=LET(fn,SelectionTick,SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},fn,0,0),2)))|=LET(fn,SelectionTick,SUM(CHOOSECOLS(GROUPBY({1;1;2},{10;20;30},fn,0,0),2)))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},fn,0,0,,0),1,1)))", "False|V|E:5|=LET(fn,SelectionTick,SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},fn,0,0,,0),1,1)))|=LET(fn,SelectionTick,SUM(DROP(PIVOTBY({1;1;2;2},{1;2;1;2},{10;20;30;40},fn,0,0,,0),1,1)))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SelectionTick,REDUCE(0,{1;2},fn))", "True|V|E:3|=LET(fn,SelectionTick,REDUCE(0,{1;2},fn))|=LET(fn,SelectionTick,REDUCE(0,{1;2},fn))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,SUM(SCAN(0,{1;2},fn)))", "True|V|E:3|=LET(fn,SelectionTick,SUM(SCAN(0,{1;2},fn)))|=LET(fn,SelectionTick,SUM(SCAN(0,{1;2},fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,SUM(MAKEARRAY(2,1,fn)))", "False|V|E:3|=LET(fn,SelectionTick,SUM(MAKEARRAY(2,1,fn)))|=LET(fn,SelectionTick,SUM(MAKEARRAY(2,1,fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,ERROR.TYPE(fn))", "True|V|5:5|=LET(fn,SelectionTick,ERROR.TYPE(fn))|=LET(fn,SelectionTick,ERROR.TYPE(fn))", ["0|V|5:5|calls:0", "0|V|5:5|calls:0", "0|V|5:5|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(IFERROR(SelectionTick,LAMBDA(x,99)))", "True|V|5:99|=LAMBDA(fn,fn(2))(IFERROR(SelectionTick,LAMBDA(x,99)))|=LAMBDA(fn,fn(2))(IFERROR(SelectionTick,LAMBDA(x,99)))", ["0|V|5:99|calls:0", "0|V|5:99|calls:0", "0|V|5:99|calls:0"], None),
+            ("LET(fn,SelectionTick,IFERROR(fn,LAMBDA(x,99)))", "True|V|E:3|=LET(fn,SelectionTick,IFERROR(fn,LAMBDA(x,99)))|=LET(fn,SelectionTick,IFERROR(fn,LAMBDA(x,99)))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SelectionTick,COUNT(fn))", "False|V|5:0|=LET(fn,SelectionTick,COUNT(fn))|=LET(fn,SelectionTick,COUNT(fn))", ["0|V|5:0|calls:0", "0|V|5:0|calls:0", "0|V|5:0|calls:0"], None),
+            ("LET(fn,SelectionTick,COUNTA(fn))", "False|V|5:1|=LET(fn,SelectionTick,COUNTA(fn))|=LET(fn,SelectionTick,COUNTA(fn))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(XLOOKUP(1,1,SelectionTick))", "True|V|E:5|=LAMBDA(fn,fn(2))(XLOOKUP(1,1,SelectionTick))|=LAMBDA(fn,fn(2))(XLOOKUP(1,1,SelectionTick))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(IFERROR(IF(TRUE,SelectionTick,0),LAMBDA(x,99)))", "True|V|5:2|=LAMBDA(fn,fn(2))(IFERROR(IF(TRUE,SelectionTick,0),LAMBDA(x,99)))|=LAMBDA(fn,fn(2))(IFERROR(IF(TRUE,SelectionTick,0),LAMBDA(x,99)))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(a.b,1,a.b)", "SETERR:1004", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "1004|V|0:|calls:0"], None),
+            ("LAMBDA(a.b,a.b)(1)", "SETERR:1004", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "1004|V|0:|calls:0"], None),
+            ("LET(IndexDriver.NoSuch,99,IndexDriver.NoSuch)", "SETERR:1004", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "1004|V|0:|calls:0"], None),
+            ("LET(IndexDriver.SelectionTick,99,IndexDriver.SelectionTick)", "SETERR:1004", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "1004|V|0:|calls:0"], None),
+            ("IF(TRUE,SelectionTick,0)", "True|V|E:3|=IF(TRUE,SelectionTick,0)|=IF(TRUE,SelectionTick,0)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("CHOOSE(1,SelectionTick)", "True|V|E:3|=CHOOSE(1,SelectionTick)|=CHOOSE(1,SelectionTick)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("IFERROR(IF(TRUE,SelectionTick,0),0)", "True|V|E:3|=IFERROR(IF(TRUE,SelectionTick,0),0)|=IFERROR(IF(TRUE,SelectionTick,0),0)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("IFERROR(CHOOSE(1,SelectionTick),0)", "True|V|E:3|=IFERROR(CHOOSE(1,SelectionTick),0)|=IFERROR(CHOOSE(1,SelectionTick),0)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("IFERROR(1/0,SelectionTick)", "True|V|E:3|=IFERROR(1/0,SelectionTick)|=IFERROR(1/0,SelectionTick)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("IFNA(NA(),SelectionTick)", "True|V|E:3|=IFNA(NA(),SelectionTick)|=IFNA(NA(),SelectionTick)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("TAKE(NA(),1)", "True|V|E:7|=TAKE(NA(),1)|=TAKE(NA(),1)", ["0|V|E:7|calls:0", "0|V|E:7|calls:0", "0|V|E:7|calls:0"], None),
+            ("TYPE(TAKE(NA(),1))", "False|V|5:16|=TYPE(TAKE(NA(),1))|=TYPE(TAKE(NA(),1))", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("TYPE(TAKE({#N/A},1))", "False|V|5:64|=TYPE(TAKE({#N/A},1))|=TYPE(TAKE({#N/A},1))", ["0|V|5:64|calls:0", "0|V|5:64|calls:0", "0|V|5:64|calls:0"], None),
+            ("TYPE(TAKE(1/0,1))", "False|V|5:16|=TYPE(TAKE(1/0,1))|=TYPE(TAKE(1/0,1))", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("IF(TRUE,1,NoSuchFunction)", "True|V|5:1|=IF(TRUE,1,NoSuchFunction)|=IF(TRUE,1,NoSuchFunction)", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("CHOOSE(1,1,NoSuchFunction)", "True|V|5:1|=CHOOSE(1,1,NoSuchFunction)|=CHOOSE(1,1,NoSuchFunction)", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("IFERROR(NoSuchFunction,0)", "True|V|5:0|=IFERROR(NoSuchFunction,0)|=IFERROR(NoSuchFunction,0)", ["0|V|5:0|calls:0", "0|V|5:0|calls:0", "0|V|5:0|calls:0"], None),
+            ("LET(x,NoSuchFunction,1)", "False|V|5:1|=LET(x,NoSuchFunction,1)|=LET(x,NoSuchFunction,1)", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(x,1)(NoSuchFunction)", "True|V|5:1|=LAMBDA(x,1)(NoSuchFunction)|=LAMBDA(x,1)(NoSuchFunction)", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("IF(TRUE,1,NoSuchFunction(2))", "True|V|5:1|=IF(TRUE,1,NoSuchFunction(2))|=IF(TRUE,1,NoSuchFunction(2))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(fn,fn(2))({#N/A})", "True|V|E:7|=LAMBDA(fn,fn(2))({#N/A})|=LAMBDA(fn,fn(2))({#N/A})", ["0|A1:1:1|E:7|calls:0", "0|A1:1:1|E:7|calls:0", "0|V|E:7|calls:0"], None),
+            ("LAMBDA(fn,fn(2))({#N/A;#DIV/0!})", "True|V|E:7|=LAMBDA(fn,fn(2))({#N/A;#DIV/0!})|=LAMBDA(fn,fn(2))({#N/A;#DIV/0!})", ["0|A2:1:2:1:1|E:7|E:2|calls:0", "0|A2:1:2:1:1|E:7|E:2|calls:0", "0|V|E:7|calls:0"], None),
+            ("LAMBDA(fn,fn(2))({#N/A;2})", "True|V|E:7|=LAMBDA(fn,fn(2))({#N/A;2})|=LAMBDA(fn,fn(2))({#N/A;2})", ["0|A2:1:2:1:1|E:7|E:3|calls:0", "0|A2:1:2:1:1|E:7|E:3|calls:0", "0|V|E:7|calls:0"], None),
+            ("LAMBDA(fn,fn(2))({2;#N/A})", "True|V|E:3|=LAMBDA(fn,fn(2))({2;#N/A})|=LAMBDA(fn,fn(2))({2;#N/A})", ["0|A2:1:2:1:1|E:3|E:7|calls:0", "0|A2:1:2:1:1|E:3|E:7|calls:0", "0|V|E:3|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(CHOOSE(1,LAMBDA(x,x+1),NoSuchFunction))", "True|V|5:3|=LAMBDA(fn,fn(2))(CHOOSE(1,LAMBDA(x,x+1),NoSuchFunction))|=LAMBDA(fn,fn(2))(CHOOSE(1,LAMBDA(x,x+1),NoSuchFunction))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:3|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(IF(TRUE,LAMBDA(x,x+1),NoSuchFunction))", "True|V|5:3|=LAMBDA(fn,fn(2))(IF(TRUE,LAMBDA(x,x+1),NoSuchFunction))|=LAMBDA(fn,fn(2))(IF(TRUE,LAMBDA(x,x+1),NoSuchFunction))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:3|calls:0"], None),
+            ("LET(fn,CHOOSE(1,SelectionTick,NoSuchFunction),fn(2))", "True|V|5:2|=LET(fn,CHOOSE(1,SelectionTick,NoSuchFunction),fn(2))|=LET(fn,CHOOSE(1,SelectionTick,NoSuchFunction),fn(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,TYPE(fn))(IFERROR(NoSuchFunction,0))", "True|V|5:1|=LAMBDA(fn,TYPE(fn))(IFERROR(NoSuchFunction,0))|=LAMBDA(fn,TYPE(fn))(IFERROR(NoSuchFunction,0))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(IF(TRUE,SelectionTick,NoSuchFunction))", "True|V|5:2|=LAMBDA(fn,fn(2))(IF(TRUE,SelectionTick,NoSuchFunction))|=LAMBDA(fn,fn(2))(IF(TRUE,SelectionTick,NoSuchFunction))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,#NAME?))", "True|V|5:2|=LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,#NAME?))|=LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,#NAME?))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(IFERROR(1/0,NoSuchFunction))", "True|V|E:5|=LAMBDA(fn,fn(2))(IFERROR(1/0,NoSuchFunction))|=LAMBDA(fn,fn(2))(IFERROR(1/0,NoSuchFunction))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,IFERROR(NoSuchFunction,0),fn(2))", "True|V|E:3|=LET(fn,IFERROR(NoSuchFunction,0),fn(2))|=LET(fn,IFERROR(NoSuchFunction,0),fn(2))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick(7),NoSuchFunction))", "True|V|E:3|=LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick(7),NoSuchFunction))|=LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick(7),NoSuchFunction))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:2"], None),
+            ("LAMBDA(fn,TYPE(fn))(CHOOSE(1,SelectionTick(7),NoSuchFunction))", "True|V|5:1|=LAMBDA(fn,TYPE(fn))(CHOOSE(1,SelectionTick(7),NoSuchFunction))|=LAMBDA(fn,TYPE(fn))(CHOOSE(1,SelectionTick(7),NoSuchFunction))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:1|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(IFERROR(NoSuchFunction(2),0))", "True|V|E:3|=LAMBDA(fn,fn(2))(IFERROR(NoSuchFunction(2),0))|=LAMBDA(fn,fn(2))(IFERROR(NoSuchFunction(2),0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:3|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,NoSuchFunction(2)))", "True|V|5:2|=LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,NoSuchFunction(2)))|=LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,NoSuchFunction(2)))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(IF(TRUE,SelectionTick,NoSuchFunction(2)))", "True|V|5:2|=LAMBDA(fn,fn(2))(IF(TRUE,SelectionTick,NoSuchFunction(2)))|=LAMBDA(fn,fn(2))(IF(TRUE,SelectionTick,NoSuchFunction(2)))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(LET(x,NoSuchFunction,SelectionTick))", "True|V|5:2|=LAMBDA(fn,fn(2))(LET(x,NoSuchFunction,SelectionTick))|=LAMBDA(fn,fn(2))(LET(x,NoSuchFunction,SelectionTick))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(LET(x,NoSuchFunction,LAMBDA(v,v+1)))", "True|V|5:3|=LAMBDA(fn,fn(2))(LET(x,NoSuchFunction,LAMBDA(v,v+1)))|=LAMBDA(fn,fn(2))(LET(x,NoSuchFunction,LAMBDA(v,v+1)))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:3|calls:0"], None),
+            ("LET(x,NoSuchFunction,LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,x)))", "True|V|5:2|=LET(x,NoSuchFunction,LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,x)))|=LET(x,NoSuchFunction,LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,x)))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(CHOOSE(1,LAMBDA(v,v+1),LAMBDA(unused,unused)))", "True|V|5:3|=LAMBDA(fn,fn(2))(CHOOSE(1,LAMBDA(v,v+1),LAMBDA(unused,unused)))|=LAMBDA(fn,fn(2))(CHOOSE(1,LAMBDA(v,v+1),LAMBDA(unused,unused)))", ["0|V|5:3|calls:0", "0|V|5:3|calls:0", "0|V|5:3|calls:0"], None),
+            ("LAMBDA(fn,fn(2))(CHOOSE(1,LAMBDA(v,v+1),LAMBDA(unused,NoSuchFunction)))", "True|V|5:3|=LAMBDA(fn,fn(2))(CHOOSE(1,LAMBDA(v,v+1),LAMBDA(unused,NoSuchFunction)))|=LAMBDA(fn,fn(2))(CHOOSE(1,LAMBDA(v,v+1),LAMBDA(unused,NoSuchFunction)))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:3|calls:0"], None),
+            ("LET(fn,LAMBDA(v,v+1),LAMBDA(g,g(2))(fn))", "True|V|5:3|=LET(fn,LAMBDA(v,v+1),LAMBDA(g,g(2))(fn))|=LET(fn,LAMBDA(v,v+1),LAMBDA(g,g(2))(fn))", ["0|V|5:3|calls:0", "0|V|5:3|calls:0", "0|V|5:3|calls:0"], None),
+            ("LAMBDA(fn,LET(g,fn,g(2)))(CHOOSE(1,SelectionTick,NoSuchFunction))", "True|V|5:2|=LAMBDA(fn,LET(g,fn,g(2)))(CHOOSE(1,SelectionTick,NoSuchFunction))|=LAMBDA(fn,LET(g,fn,g(2)))(CHOOSE(1,SelectionTick,NoSuchFunction))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(LAMBDA(v,v)(CHOOSE(1,SelectionTick,NoSuchFunction)))", "True|V|5:2|=LAMBDA(fn,fn(2))(LAMBDA(v,v)(CHOOSE(1,SelectionTick,NoSuchFunction)))|=LAMBDA(fn,fn(2))(LAMBDA(v,v)(CHOOSE(1,SelectionTick,NoSuchFunction)))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,fn(2))(IFERROR(NoSuchFunction,SelectionTick))", "True|V|5:2|=LAMBDA(fn,fn(2))(IFERROR(NoSuchFunction,SelectionTick))|=LAMBDA(fn,fn(2))(IFERROR(NoSuchFunction,SelectionTick))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("LET(fn,NoSuchFunction,N(fn))", "True|V|E:5|=LET(fn,NoSuchFunction,N(fn))|=LET(fn,NoSuchFunction,N(fn))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,NoSuchFunction,T(fn))", "True|V|E:5|=LET(fn,NoSuchFunction,T(fn))|=LET(fn,NoSuchFunction,T(fn))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,NoSuchFunction,ERROR.TYPE(fn))", "True|V|5:5|=LET(fn,NoSuchFunction,ERROR.TYPE(fn))|=LET(fn,NoSuchFunction,ERROR.TYPE(fn))", ["0|V|5:5|calls:0", "0|V|5:5|calls:0", "0|V|5:5|calls:0"], None),
+            ("LET(fn,NoSuchFunction,TYPE(INDEX(fn,1)))", "True|V|5:16|=LET(fn,NoSuchFunction,TYPE(INDEX(fn,1)))|=LET(fn,NoSuchFunction,TYPE(INDEX(fn,1)))", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("LET(fn,NoSuchFunction,ISERROR(INDEX(fn,1)))", "True|V|11:True|=LET(fn,NoSuchFunction,ISERROR(INDEX(fn,1)))|=LET(fn,NoSuchFunction,ISERROR(INDEX(fn,1)))", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LET(fn,NoSuchFunction,SUM(BYROW({1;2},fn)))", "True|V|E:3|=LET(fn,NoSuchFunction,SUM(BYROW({1;2},fn)))|=LET(fn,NoSuchFunction,SUM(BYROW({1;2},fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,NoSuchFunction,SUM(SCAN(0,{1;2},fn)))", "True|V|E:3|=LET(fn,NoSuchFunction,SUM(SCAN(0,{1;2},fn)))|=LET(fn,NoSuchFunction,SUM(SCAN(0,{1;2},fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,NoSuchFunction,SUM(MAKEARRAY(2,1,fn)))", "False|V|E:3|=LET(fn,NoSuchFunction,SUM(MAKEARRAY(2,1,fn)))|=LET(fn,NoSuchFunction,SUM(MAKEARRAY(2,1,fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,NoSuchFunction,SUM(fn))", "False|V|E:5|=LET(fn,NoSuchFunction,SUM(fn))|=LET(fn,NoSuchFunction,SUM(fn))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("LET(fn,SUM,N(fn))", "False|V|E:3|=LET(fn,SUM,N(fn))|=LET(fn,SUM,N(fn))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SUM,T(fn))", "False|V|E:3|=LET(fn,SUM,T(fn))|=LET(fn,SUM,T(fn))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,SUM,ERROR.TYPE(fn))", "False|V|E:7|=LET(fn,SUM,ERROR.TYPE(fn))|=LET(fn,SUM,ERROR.TYPE(fn))", ["0|V|E:7|calls:0", "0|V|E:7|calls:0", "0|V|E:7|calls:0"], None),
+            ("LET(fn,SUM,TYPE(INDEX(fn,1)))", "False|V|5:128|=LET(fn,SUM,TYPE(INDEX(fn,1)))|=LET(fn,SUM,TYPE(INDEX(fn,1)))", ["0|V|5:128|calls:0", "0|V|5:128|calls:0", "0|V|5:128|calls:0"], None),
+            ("LET(fn,SUM,ISERROR(INDEX(fn,1)))", "False|V|11:False|=LET(fn,SUM,ISERROR(INDEX(fn,1)))|=LET(fn,SUM,ISERROR(INDEX(fn,1)))", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], None),
+            ("LET(fn,SUM,SUM(BYROW({1;2},fn)))", "False|V|5:3|=LET(fn,SUM,SUM(BYROW({1;2},fn)))|=LET(fn,SUM,SUM(BYROW({1;2},fn)))", ["0|V|5:3|calls:0", "0|V|5:3|calls:0", "0|V|5:3|calls:0"], None),
+            ("LET(fn,SUM,SUM(SCAN(0,{1;2},fn)))", "False|V|5:4|=LET(fn,SUM,SUM(SCAN(0,{1;2},fn)))|=LET(fn,SUM,SUM(SCAN(0,{1;2},fn)))", ["0|V|5:4|calls:0", "0|V|5:4|calls:0", "0|V|5:4|calls:0"], None),
+            ("LET(fn,SUM,SUM(MAKEARRAY(2,1,fn)))", "False|V|5:5|=LET(fn,SUM,SUM(MAKEARRAY(2,1,fn)))|=LET(fn,SUM,SUM(MAKEARRAY(2,1,fn)))", ["0|V|5:5|calls:0", "0|V|5:5|calls:0", "0|V|5:5|calls:0"], None),
+            ("LET(fn,SUM,SUM(fn))", "False|V|E:3|=LET(fn,SUM,SUM(fn))|=LET(fn,SUM,SUM(fn))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,LAMBDA(x,x),N(fn))", "False|V|E:3|=LET(fn,LAMBDA(x,x),N(fn))|=LET(fn,LAMBDA(x,x),N(fn))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,LAMBDA(x,x),T(fn))", "False|V|E:3|=LET(fn,LAMBDA(x,x),T(fn))|=LET(fn,LAMBDA(x,x),T(fn))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,LAMBDA(x,x),ERROR.TYPE(fn))", "False|V|E:7|=LET(fn,LAMBDA(x,x),ERROR.TYPE(fn))|=LET(fn,LAMBDA(x,x),ERROR.TYPE(fn))", ["0|V|E:7|calls:0", "0|V|E:7|calls:0", "0|V|E:7|calls:0"], None),
+            ("LET(fn,LAMBDA(x,x),TYPE(INDEX(fn,1)))", "False|V|5:128|=LET(fn,LAMBDA(x,x),TYPE(INDEX(fn,1)))|=LET(fn,LAMBDA(x,x),TYPE(INDEX(fn,1)))", ["0|V|5:128|calls:0", "0|V|5:128|calls:0", "0|V|5:128|calls:0"], None),
+            ("LET(fn,LAMBDA(x,x),ISERROR(INDEX(fn,1)))", "False|V|11:False|=LET(fn,LAMBDA(x,x),ISERROR(INDEX(fn,1)))|=LET(fn,LAMBDA(x,x),ISERROR(INDEX(fn,1)))", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], None),
+            ("LET(fn,LAMBDA(x,x),SUM(BYROW({1;2},fn)))", "False|V|5:3|=LET(fn,LAMBDA(x,x),SUM(BYROW({1;2},fn)))|=LET(fn,LAMBDA(x,x),SUM(BYROW({1;2},fn)))", ["0|V|5:3|calls:0", "0|V|5:3|calls:0", "0|V|5:3|calls:0"], None),
+            ("LET(fn,LAMBDA(x,x),SUM(SCAN(0,{1;2},fn)))", "False|V|E:3|=LET(fn,LAMBDA(x,x),SUM(SCAN(0,{1;2},fn)))|=LET(fn,LAMBDA(x,x),SUM(SCAN(0,{1;2},fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,LAMBDA(x,x),SUM(MAKEARRAY(2,1,fn)))", "False|V|E:3|=LET(fn,LAMBDA(x,x),SUM(MAKEARRAY(2,1,fn)))|=LET(fn,LAMBDA(x,x),SUM(MAKEARRAY(2,1,fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,LAMBDA(x,x),SUM(fn))", "False|V|E:3|=LET(fn,LAMBDA(x,x),SUM(fn))|=LET(fn,LAMBDA(x,x),SUM(fn))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,D1:D3,N(fn))", "False|V|5:1|=LET(fn,D1:D3,N(fn))|=LET(fn,D1:D3,N(fn))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LET(fn,D1:D3,T(fn))", "False|V|S:0|=LET(fn,D1:D3,T(fn))|=LET(fn,D1:D3,T(fn))", ["0|V|S:0|calls:0", "0|V|S:0|calls:0", "0|V|S:0|calls:0"], None),
+            ("LET(fn,D1:D3,ERROR.TYPE(fn))", "True|V|E:7|=LET(fn,D1:D3,ERROR.TYPE(fn))|=LET(fn,D1:D3,ERROR.TYPE(fn))", ["0|A2:1:3:1:1|E:7|E:7|E:7|calls:0", "0|A2:1:3:1:1|E:7|E:7|E:7|calls:0", "0|V|E:7|calls:0"], None),
+            ("LET(fn,D1:D3,TYPE(INDEX(fn,1)))", "False|V|5:1|=LET(fn,D1:D3,TYPE(INDEX(fn,1)))|=LET(fn,D1:D3,TYPE(INDEX(fn,1)))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LET(fn,D1:D3,ISERROR(INDEX(fn,1)))", "False|V|11:False|=LET(fn,D1:D3,ISERROR(INDEX(fn,1)))|=LET(fn,D1:D3,ISERROR(INDEX(fn,1)))", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], None),
+            ("LET(fn,D1:D3,SUM(BYROW({1;2},fn)))", "True|V|E:3|=LET(fn,D1:D3,SUM(BYROW({1;2},fn)))|=LET(fn,D1:D3,SUM(BYROW({1;2},fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,D1:D3,SUM(SCAN(0,{1;2},fn)))", "True|V|E:3|=LET(fn,D1:D3,SUM(SCAN(0,{1;2},fn)))|=LET(fn,D1:D3,SUM(SCAN(0,{1;2},fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,D1:D3,SUM(MAKEARRAY(2,1,fn)))", "False|V|E:3|=LET(fn,D1:D3,SUM(MAKEARRAY(2,1,fn)))|=LET(fn,D1:D3,SUM(MAKEARRAY(2,1,fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,D1:D3,SUM(fn))", "False|V|5:6|=LET(fn,D1:D3,SUM(fn))|=LET(fn,D1:D3,SUM(fn))", ["0|V|5:6|calls:0", "0|V|5:6|calls:0", "0|V|5:6|calls:0"], None),
+            ("LET(fn,{1;2},N(fn))", "True|V|5:1|=LET(fn,{1;2},N(fn))|=LET(fn,{1;2},N(fn))", ["0|A2:1:2:1:1|5:1|5:2|calls:0", "0|A2:1:2:1:1|5:1|5:2|calls:0", "0|V|5:1|calls:0"], None),
+            ("LET(fn,{1;2},T(fn))", "True|V|S:0|=LET(fn,{1;2},T(fn))|=LET(fn,{1;2},T(fn))", ["0|A2:1:2:1:1|S:0|S:0|calls:0", "0|A2:1:2:1:1|S:0|S:0|calls:0", "0|V|S:0|calls:0"], None),
+            ("LET(fn,{1;2},ERROR.TYPE(fn))", "True|V|E:7|=LET(fn,{1;2},ERROR.TYPE(fn))|=LET(fn,{1;2},ERROR.TYPE(fn))", ["0|A2:1:2:1:1|E:7|E:7|calls:0", "0|A2:1:2:1:1|E:7|E:7|calls:0", "0|V|E:7|calls:0"], None),
+            ("LET(fn,{1;2},TYPE(INDEX(fn,1)))", "True|V|5:64|=LET(fn,{1;2},TYPE(INDEX(fn,1)))|=LET(fn,{1;2},TYPE(INDEX(fn,1)))", ["0|V|5:64|calls:0", "0|V|5:64|calls:0", "0|V|5:64|calls:0"], None),
+            ("LET(fn,{1;2},ISERROR(INDEX(fn,1)))", "True|V|11:False|=LET(fn,{1;2},ISERROR(INDEX(fn,1)))|=LET(fn,{1;2},ISERROR(INDEX(fn,1)))", ["0|A1:1:1|11:False|calls:0", "0|A1:1:1|11:False|calls:0", "0|V|11:False|calls:0"], None),
+            ("LET(fn,{1;2},SUM(BYROW({1;2},fn)))", "True|V|E:3|=LET(fn,{1;2},SUM(BYROW({1;2},fn)))|=LET(fn,{1;2},SUM(BYROW({1;2},fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,{1;2},SUM(SCAN(0,{1;2},fn)))", "True|V|E:3|=LET(fn,{1;2},SUM(SCAN(0,{1;2},fn)))|=LET(fn,{1;2},SUM(SCAN(0,{1;2},fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,{1;2},SUM(MAKEARRAY(2,1,fn)))", "False|V|E:3|=LET(fn,{1;2},SUM(MAKEARRAY(2,1,fn)))|=LET(fn,{1;2},SUM(MAKEARRAY(2,1,fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,{1;2},SUM(fn))", "False|V|5:3|=LET(fn,{1;2},SUM(fn))|=LET(fn,{1;2},SUM(fn))", ["0|V|5:3|calls:0", "0|V|5:3|calls:0", "0|V|5:3|calls:0"], None),
+            ("LET(fn,1,N(fn))", "False|V|5:1|=LET(fn,1,N(fn))|=LET(fn,1,N(fn))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LET(fn,1,T(fn))", "False|V|S:0|=LET(fn,1,T(fn))|=LET(fn,1,T(fn))", ["0|V|S:0|calls:0", "0|V|S:0|calls:0", "0|V|S:0|calls:0"], None),
+            ("LET(fn,1,ERROR.TYPE(fn))", "False|V|E:7|=LET(fn,1,ERROR.TYPE(fn))|=LET(fn,1,ERROR.TYPE(fn))", ["0|V|E:7|calls:0", "0|V|E:7|calls:0", "0|V|E:7|calls:0"], None),
+            ("LET(fn,1,TYPE(INDEX(fn,1)))", "False|V|5:1|=LET(fn,1,TYPE(INDEX(fn,1)))|=LET(fn,1,TYPE(INDEX(fn,1)))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LET(fn,1,ISERROR(INDEX(fn,1)))", "False|V|11:False|=LET(fn,1,ISERROR(INDEX(fn,1)))|=LET(fn,1,ISERROR(INDEX(fn,1)))", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], None),
+            ("LET(fn,1,SUM(BYROW({1;2},fn)))", "False|V|E:3|=LET(fn,1,SUM(BYROW({1;2},fn)))|=LET(fn,1,SUM(BYROW({1;2},fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,1,SUM(SCAN(0,{1;2},fn)))", "False|V|E:3|=LET(fn,1,SUM(SCAN(0,{1;2},fn)))|=LET(fn,1,SUM(SCAN(0,{1;2},fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,1,SUM(MAKEARRAY(2,1,fn)))", "False|V|E:3|=LET(fn,1,SUM(MAKEARRAY(2,1,fn)))|=LET(fn,1,SUM(MAKEARRAY(2,1,fn)))", ["0|V|E:3|calls:0", "0|V|E:3|calls:0", "0|V|E:3|calls:0"], None),
+            ("LET(fn,1,SUM(fn))", "False|V|5:1|=LET(fn,1,SUM(fn))|=LET(fn,1,SUM(fn))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(x,1)(CHOOSE(1,1,NoSuchFunction))", "True|V|5:1|=LAMBDA(x,1)(CHOOSE(1,1,NoSuchFunction))|=LAMBDA(x,1)(CHOOSE(1,1,NoSuchFunction))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(x,TYPE(x))(NoSuchFunction)", "True|V|5:16|=LAMBDA(x,TYPE(x))(NoSuchFunction)|=LAMBDA(x,TYPE(x))(NoSuchFunction)", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("LAMBDA(x,ISERROR(x))(NoSuchFunction)", "True|V|11:True|=LAMBDA(x,ISERROR(x))(NoSuchFunction)|=LAMBDA(x,ISERROR(x))(NoSuchFunction)", ["0|V|11:True|calls:0", "0|V|11:True|calls:0", "0|V|11:True|calls:0"], None),
+            ("LAMBDA(x,TYPE(x))(CHOOSE(1,1,NoSuchFunction))", "True|V|5:1|=LAMBDA(x,TYPE(x))(CHOOSE(1,1,NoSuchFunction))|=LAMBDA(x,TYPE(x))(CHOOSE(1,1,NoSuchFunction))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(x,ISERROR(x))(CHOOSE(1,1,NoSuchFunction))", "True|V|11:False|=LAMBDA(x,ISERROR(x))(CHOOSE(1,1,NoSuchFunction))|=LAMBDA(x,ISERROR(x))(CHOOSE(1,1,NoSuchFunction))", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], None),
+            ("LAMBDA(x,TYPE(x))(IF(TRUE,1,NoSuchFunction))", "True|V|5:1|=LAMBDA(x,TYPE(x))(IF(TRUE,1,NoSuchFunction))|=LAMBDA(x,TYPE(x))(IF(TRUE,1,NoSuchFunction))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(x,TYPE(x))(IFERROR(NoSuchFunction,0))", "True|V|5:1|=LAMBDA(x,TYPE(x))(IFERROR(NoSuchFunction,0))|=LAMBDA(x,TYPE(x))(IFERROR(NoSuchFunction,0))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(x,x)(IFERROR(NoSuchFunction,0))", "True|V|5:0|=LAMBDA(x,x)(IFERROR(NoSuchFunction,0))|=LAMBDA(x,x)(IFERROR(NoSuchFunction,0))", ["0|V|5:0|calls:0", "0|V|5:0|calls:0", "0|V|5:0|calls:0"], None),
+            ("LAMBDA(x,TYPE(x))(LET(unused,NoSuchFunction,1))", "True|V|5:1|=LAMBDA(x,TYPE(x))(LET(unused,NoSuchFunction,1))|=LAMBDA(x,TYPE(x))(LET(unused,NoSuchFunction,1))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(x,TYPE(x))(IFERROR(CHOOSE(1,1,NoSuchFunction),0))", "True|V|5:1|=LAMBDA(x,TYPE(x))(IFERROR(CHOOSE(1,1,NoSuchFunction),0))|=LAMBDA(x,TYPE(x))(IFERROR(CHOOSE(1,1,NoSuchFunction),0))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(x,ISERROR(x))(IFERROR(NoSuchFunction,0))", "True|V|11:False|=LAMBDA(x,ISERROR(x))(IFERROR(NoSuchFunction,0))|=LAMBDA(x,ISERROR(x))(IFERROR(NoSuchFunction,0))", ["0|V|11:False|calls:0", "0|V|11:False|calls:0", "0|V|11:False|calls:0"], None),
+            ("LAMBDA(x,1)(CHOOSE(1,SelectionTick(7),NoSuchFunction))", "True|V|5:1|=LAMBDA(x,1)(CHOOSE(1,SelectionTick(7),NoSuchFunction))|=LAMBDA(x,1)(CHOOSE(1,SelectionTick(7),NoSuchFunction))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:1|calls:2"], None),
+            ("IF(TRUE,SelectionTick(2),NoSuchFunction)", "True|V|5:2|=IF(TRUE,SelectionTick(2),NoSuchFunction)|=IF(TRUE,SelectionTick(2),NoSuchFunction)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("IFERROR(NoSuchFunction,SelectionTick(2))", "True|V|5:2|=IFERROR(NoSuchFunction,SelectionTick(2))|=IFERROR(NoSuchFunction,SelectionTick(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:1", "0|V|5:2|calls:2"], None),
+            ("LET(x,NoSuchFunction,SelectionTick(2))", "True|V|5:2|=LET(x,NoSuchFunction,SelectionTick(2))|=LET(x,NoSuchFunction,SelectionTick(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("IFERROR(SelectionTick(2)+NoSuchFunction,9)", "True|V|5:9|=IFERROR(SelectionTick(2)+NoSuchFunction,9)|=IFERROR(SelectionTick(2)+NoSuchFunction,9)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:9|calls:2"], None),
+            ("IF(TRUE,1,SelectionTick(2)+NoSuchFunction)", "True|V|5:1|=IF(TRUE,1,SelectionTick(2)+NoSuchFunction)|=IF(TRUE,1,SelectionTick(2)+NoSuchFunction)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:1|calls:0"], None),
+            ("LET(x,NoSuchFunction,IF(TRUE,1,SelectionTick(2)))", "True|V|5:1|=LET(x,NoSuchFunction,IF(TRUE,1,SelectionTick(2)))|=LET(x,NoSuchFunction,IF(TRUE,1,SelectionTick(2)))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("IFERROR(LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,NoSuchFunction)),9)", "True|V|5:2|=IFERROR(LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,NoSuchFunction)),9)|=IFERROR(LAMBDA(fn,fn(2))(CHOOSE(1,SelectionTick,NoSuchFunction)),9)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,IFERROR(fn(2),9))(CHOOSE(1,SelectionTick,NoSuchFunction))", "True|V|5:2|=LAMBDA(fn,IFERROR(fn(2),9))(CHOOSE(1,SelectionTick,NoSuchFunction))|=LAMBDA(fn,IFERROR(fn(2),9))(CHOOSE(1,SelectionTick,NoSuchFunction))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("LET(fn,LAMBDA(x,x),fn(2)+IFERROR(NoSuchFunction,0))", "True|V|5:2|=LET(fn,LAMBDA(x,x),fn(2)+IFERROR(NoSuchFunction,0))|=LET(fn,LAMBDA(x,x),fn(2)+IFERROR(NoSuchFunction,0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:0"], None),
+            ("LET(fn,LAMBDA(x,x),LAMBDA(g,g(2))(CHOOSE(1,fn,NoSuchFunction)))", "True|V|5:2|=LET(fn,LAMBDA(x,x),LAMBDA(g,g(2))(CHOOSE(1,fn,NoSuchFunction)))|=LET(fn,LAMBDA(x,x),LAMBDA(g,g(2))(CHOOSE(1,fn,NoSuchFunction)))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:0"], None),
+            ("LAMBDA(x,IFERROR(x+NoSuchFunction,0))(SelectionTick(2))", "True|V|5:0|=LAMBDA(x,IFERROR(x+NoSuchFunction,0))(SelectionTick(2))|=LAMBDA(x,IFERROR(x+NoSuchFunction,0))(SelectionTick(2))", ["0|V|5:0|calls:2", "0|V|5:0|calls:2", "0|V|5:0|calls:2"], None),
+            ("TYPE(LAMBDA(v,SelectionTick(v)+NoSuchFunction))", "True|V|5:128|=TYPE(LAMBDA(v,SelectionTick(v)+NoSuchFunction))|=TYPE(LAMBDA(v,SelectionTick(v)+NoSuchFunction))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:128|calls:0"], None),
+            ("SelectionTick(IFERROR(NoSuchFunction,0))", "True|V|5:0|=SelectionTick(IFERROR(NoSuchFunction,0))|=SelectionTick(IFERROR(NoSuchFunction,0))", ["0|V|5:0|calls:2", "0|V|5:0|calls:2", "0|V|5:0|calls:2"], None),
+            ("LET(x,SelectionTick(2),1)", "False|V|5:1|=LET(x,SelectionTick(2),1)|=LET(x,SelectionTick(2),1)", ["0|V|5:1|calls:2", "0|V|5:1|calls:2", "0|V|5:1|calls:2"], None),
+            ("IFERROR(IF(TRUE,SelectionTick(2),NoSuchFunction),9)", "True|V|5:2|=IFERROR(IF(TRUE,SelectionTick(2),NoSuchFunction),9)|=IFERROR(IF(TRUE,SelectionTick(2),NoSuchFunction),9)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,IF(TRUE,1,fn(2)))(IFERROR(NoSuchFunction,0))", "True|V|5:1|=LAMBDA(fn,IF(TRUE,1,fn(2)))(IFERROR(NoSuchFunction,0))|=LAMBDA(fn,IF(TRUE,1,fn(2)))(IFERROR(NoSuchFunction,0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(fn,LET(f,LAMBDA(x,fn(x)),1))(IFERROR(NoSuchFunction,0))", "True|V|5:1|=LAMBDA(fn,LET(f,LAMBDA(x,fn(x)),1))(IFERROR(NoSuchFunction,0))|=LAMBDA(fn,LET(f,LAMBDA(x,fn(x)),1))(IFERROR(NoSuchFunction,0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(fn,IFERROR(fn(2),9))(IFERROR(NoSuchFunction,0))", "True|V|5:9|=LAMBDA(fn,IFERROR(fn(2),9))(IFERROR(NoSuchFunction,0))|=LAMBDA(fn,IFERROR(fn(2),9))(IFERROR(NoSuchFunction,0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:9|calls:0"], None),
+            ("SelectionTick(2)+LET(x,NoSuchFunction,1)", "True|V|5:3|=SelectionTick(2)+LET(x,NoSuchFunction,1)|=SelectionTick(2)+LET(x,NoSuchFunction,1)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:3|calls:2"], None),
+            ("LET(x,NoSuchFunction,1)+SelectionTick(2)", "True|V|5:3|=LET(x,NoSuchFunction,1)+SelectionTick(2)|=LET(x,NoSuchFunction,1)+SelectionTick(2)", ["0|V|5:3|calls:2", "0|V|5:3|calls:1", "0|V|5:3|calls:2"], None),
+            ("SelectionTick(2)+LAMBDA(x,TYPE(x))(NoSuchFunction)", "True|V|5:18|=SelectionTick(2)+LAMBDA(x,TYPE(x))(NoSuchFunction)|=SelectionTick(2)+LAMBDA(x,TYPE(x))(NoSuchFunction)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:18|calls:2"], None),
+            ("IFERROR(SelectionTick(IFERROR(NoSuchFunction,0)),9)", "True|V|5:0|=IFERROR(SelectionTick(IFERROR(NoSuchFunction,0)),9)|=IFERROR(SelectionTick(IFERROR(NoSuchFunction,0)),9)", ["0|V|5:0|calls:2", "0|V|5:0|calls:1", "0|V|5:0|calls:2"], None),
+            ("IF(TRUE,SelectionTick(2),LET(x,NoSuchFunction,1))", "True|V|5:2|=IF(TRUE,SelectionTick(2),LET(x,NoSuchFunction,1))|=IF(TRUE,SelectionTick(2),LET(x,NoSuchFunction,1))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("CHOOSE(1,SelectionTick(2),LET(x,NoSuchFunction,1))", "True|V|5:2|=CHOOSE(1,SelectionTick(2),LET(x,NoSuchFunction,1))|=CHOOSE(1,SelectionTick(2),LET(x,NoSuchFunction,1))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("LAMBDA(fn,IF(TRUE,1,fn(2)))(CHOOSE(1,SelectionTick,NoSuchFunction))", "True|V|5:1|=LAMBDA(fn,IF(TRUE,1,fn(2)))(CHOOSE(1,SelectionTick,NoSuchFunction))|=LAMBDA(fn,IF(TRUE,1,fn(2)))(CHOOSE(1,SelectionTick,NoSuchFunction))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(x,IF(TRUE,1,SelectionTick(x)+NoSuchFunction))(2)", "True|V|5:1|=LAMBDA(x,IF(TRUE,1,SelectionTick(x)+NoSuchFunction))(2)|=LAMBDA(x,IF(TRUE,1,SelectionTick(x)+NoSuchFunction))(2)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:1|calls:0"], None),
+            ("LAMBDA(x,IFERROR(SelectionTick(x)+NoSuchFunction,9))(2)", "True|V|5:9|=LAMBDA(x,IFERROR(SelectionTick(x)+NoSuchFunction,9))(2)|=LAMBDA(x,IFERROR(SelectionTick(x)+NoSuchFunction,9))(2)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:9|calls:2"], None),
+            ("LAMBDA(fn,TYPE(fn))(CHOOSE(1,1,NoSuchFunction))", "True|V|5:1|=LAMBDA(fn,TYPE(fn))(CHOOSE(1,1,NoSuchFunction))|=LAMBDA(fn,TYPE(fn))(CHOOSE(1,1,NoSuchFunction))", ["0|V|5:1|calls:0", "0|V|5:1|calls:0", "0|V|5:1|calls:0"], None),
+            ("LET(fn,LAMBDA(x,x),IFERROR(fn(2)+NoSuchFunction,9))", "True|V|5:9|=LET(fn,LAMBDA(x,x),IFERROR(fn(2)+NoSuchFunction,9))|=LET(fn,LAMBDA(x,x),IFERROR(fn(2)+NoSuchFunction,9))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:9|calls:0"], None),
+            ("SelectionTick(NoSuchFunction)", "True|V|E:5|=SelectionTick(NoSuchFunction)|=SelectionTick(NoSuchFunction)", ["0|V|E:5|calls:2", "0|V|E:5|calls:2", "0|V|E:5|calls:2"], None),
+            ("NoSuchFunction+SelectionTick(2)", "True|V|E:5|=NoSuchFunction+SelectionTick(2)|=NoSuchFunction+SelectionTick(2)", ["0|V|E:5|calls:2", "0|V|E:5|calls:1", "0|V|E:5|calls:2"], None),
+            ("IFERROR(NoSuchFunction+SelectionTick(2),9)", "True|V|5:9|=IFERROR(NoSuchFunction+SelectionTick(2),9)|=IFERROR(NoSuchFunction+SelectionTick(2),9)", ["0|V|5:9|calls:2", "0|V|5:9|calls:1", "0|V|5:9|calls:2"], None),
+            ("IF(FALSE,NoSuchFunction,SelectionTick(2))", "True|V|5:2|=IF(FALSE,NoSuchFunction,SelectionTick(2))|=IF(FALSE,NoSuchFunction,SelectionTick(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("IF(TRUE,NoSuchFunction,SelectionTick(2))", "True|V|E:5|=IF(TRUE,NoSuchFunction,SelectionTick(2))|=IF(TRUE,NoSuchFunction,SelectionTick(2))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("CHOOSE(2,NoSuchFunction,SelectionTick(2))", "True|V|5:2|=CHOOSE(2,NoSuchFunction,SelectionTick(2))|=CHOOSE(2,NoSuchFunction,SelectionTick(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("IF(TRUE,NoSuchFunction(7),SelectionTick(2))", "True|V|E:5|=IF(TRUE,NoSuchFunction(7),SelectionTick(2))|=IF(TRUE,NoSuchFunction(7),SelectionTick(2))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|E:5|calls:0"], None),
+            ("IF(FALSE,NoSuchFunction(7),SelectionTick(2))", "True|V|5:2|=IF(FALSE,NoSuchFunction(7),SelectionTick(2))|=IF(FALSE,NoSuchFunction(7),SelectionTick(2))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("LET(x,SelectionTick(2),unused,NoSuchFunction,1)", "False|V|5:1|=LET(x,SelectionTick(2),unused,NoSuchFunction,1)|=LET(x,SelectionTick(2),unused,NoSuchFunction,1)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:1|calls:2"], None),
+            ("LET(unused,NoSuchFunction,x,SelectionTick(2),1)", "False|V|5:1|=LET(unused,NoSuchFunction,x,SelectionTick(2),1)|=LET(unused,NoSuchFunction,x,SelectionTick(2),1)", ["0|V|5:1|calls:2", "0|V|5:1|calls:2", "0|V|5:1|calls:2"], None),
+            ("SelectionTick(IF(TRUE,1,NoSuchFunction))", "True|V|5:1|=SelectionTick(IF(TRUE,1,NoSuchFunction))|=SelectionTick(IF(TRUE,1,NoSuchFunction))", ["0|V|5:1|calls:2", "0|V|5:1|calls:2", "0|V|5:1|calls:2"], None),
+            ("SelectionTick(IFERROR(SelectionTick(2)+NoSuchFunction,9))", "True|V|5:9|=SelectionTick(IFERROR(SelectionTick(2)+NoSuchFunction,9))|=SelectionTick(IFERROR(SelectionTick(2)+NoSuchFunction,9))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:9|calls:4"], None),
+            ("IF(FALSE,SelectionTick(2),IFERROR(NoSuchFunction,0))", "True|V|5:0|=IF(FALSE,SelectionTick(2),IFERROR(NoSuchFunction,0))|=IF(FALSE,SelectionTick(2),IFERROR(NoSuchFunction,0))", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:0|calls:0"], None),
+            ("IF(FALSE,NoSuchFunction,IFERROR(SelectionTick(2),0))", "True|V|5:2|=IF(FALSE,NoSuchFunction,IFERROR(SelectionTick(2),0))|=IF(FALSE,NoSuchFunction,IFERROR(SelectionTick(2),0))", ["0|V|5:2|calls:2", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("IFERROR(NoSuchFunction,0)+SelectionTick(2)", "True|V|5:2|=IFERROR(NoSuchFunction,0)+SelectionTick(2)|=IFERROR(NoSuchFunction,0)+SelectionTick(2)", ["0|V|5:2|calls:2", "0|V|5:2|calls:1", "0|V|5:2|calls:2"], None),
+            ("SelectionTick(2)+IFERROR(NoSuchFunction,0)", "True|V|5:2|=SelectionTick(2)+IFERROR(NoSuchFunction,0)|=SelectionTick(2)+IFERROR(NoSuchFunction,0)", ["0|V|E:5|calls:0", "0|V|E:5|calls:0", "0|V|5:2|calls:2"], None),
+            ("LET(fn,LAMBDA(x,x),IFERROR(NoSuchFunction,0)+fn(2))", "True|V|5:2|=LET(fn,LAMBDA(x,x),IFERROR(NoSuchFunction,0)+fn(2))|=LET(fn,LAMBDA(x,x),IFERROR(NoSuchFunction,0)+fn(2))", ["0|V|5:2|calls:0", "0|V|5:2|calls:0", "0|V|5:2|calls:0"], None),
+            ("LAMBDA(fn,TYPE(fn))(CHOOSE(1,SelectionTick,NoSuchFunction))", "True|V|5:16|=LAMBDA(fn,TYPE(fn))(CHOOSE(1,SelectionTick,NoSuchFunction))|=LAMBDA(fn,TYPE(fn))(CHOOSE(1,SelectionTick,NoSuchFunction))", ["0|V|5:16|calls:0", "0|V|5:16|calls:0", "0|V|5:16|calls:0"], None),
+            ("LAMBDA(x,x)(SelectionTick(IFERROR(NoSuchFunction,0)))", "True|V|5:0|=LAMBDA(x,x)(SelectionTick(IFERROR(NoSuchFunction,0)))|=LAMBDA(x,x)(SelectionTick(IFERROR(NoSuchFunction,0)))", ["0|V|5:0|calls:2", "0|V|5:0|calls:2", "0|V|5:0|calls:2"], None),
+            ("ISERROR(SelectionTick(M1+0))", "True|V|11:False|=ISERROR(SelectionTick(M1+0))|=ISERROR(SelectionTick(M1+0))", ["0|V|11:False|calls:2", "0|V|11:False|calls:1", "0|V|11:False|calls:1"], None),
+            ("TYPE(SelectionTick(M1+D1))", "True|V|5:1|=TYPE(SelectionTick(M1+D1))|=TYPE(SelectionTick(M1+D1))", ["0|V|5:1|calls:2", "0|V|5:1|calls:1", "0|V|5:1|calls:1"], None),
+            ("TYPE(SelectionTick(M1))", "True|V|5:1|=TYPE(SelectionTick(M1))|=TYPE(SelectionTick(M1))", ["0|V|5:1|calls:2", "0|V|5:1|calls:1", "0|V|5:1|calls:2"], None),
+            ("TYPE(SelectionTick(D1))", "True|V|5:1|=TYPE(SelectionTick(D1))|=TYPE(SelectionTick(D1))", ["0|V|5:1|calls:2", "0|V|5:1|calls:1", "0|V|5:1|calls:2"], None),
+            ("TYPE(SelectionTick(2))", "True|V|5:1|=TYPE(SelectionTick(2))|=TYPE(SelectionTick(2))", ["0|V|5:1|calls:2", "0|V|5:1|calls:1", "0|V|5:1|calls:2"], None),
+            ("TYPE(SelectionTick(M1+0)+0)", "True|V|5:1|=TYPE(SelectionTick(M1+0)+0)|=TYPE(SelectionTick(M1+0)+0)", ["0|V|5:1|calls:2", "0|V|5:1|calls:1", "0|V|5:1|calls:1"], None),
+            ("TYPE(SelectionTick(M1+0))+SelectionTick(D1)", "True|V|5:2|=TYPE(SelectionTick(M1+0))+SelectionTick(D1)|=TYPE(SelectionTick(M1+0))+SelectionTick(D1)", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("TYPE(SelectionTick(M1))+SelectionTick(D1)", "True|V|5:2|=TYPE(SelectionTick(M1))+SelectionTick(D1)|=TYPE(SelectionTick(M1))+SelectionTick(D1)", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:3"], None),
+            ("TYPE(M1+0)+SelectionTick(D1)", "True|V|5:2|=TYPE(M1+0)+SelectionTick(D1)|=TYPE(M1+0)+SelectionTick(D1)", ["0|V|5:2|calls:2", "0|V|5:2|calls:1", "0|V|5:2|calls:1"], None),
+            ("TYPE(M1)+SelectionTick(D1)", "True|V|5:2|=TYPE(M1)+SelectionTick(D1)|=TYPE(M1)+SelectionTick(D1)", ["0|V|5:2|calls:2", "0|V|5:2|calls:1", "0|V|5:2|calls:1"], None),
+            ("TYPE(M1+D1)+SelectionTick(D1)", "True|V|5:2|=TYPE(M1+D1)+SelectionTick(D1)|=TYPE(M1+D1)+SelectionTick(D1)", ["0|V|5:2|calls:2", "0|V|5:2|calls:1", "0|V|5:2|calls:1"], None),
+            ("ISNUMBER(M1+0)+SelectionTick(D1)", "True|V|5:2|=ISNUMBER(M1+0)+SelectionTick(D1)|=ISNUMBER(M1+0)+SelectionTick(D1)", ["0|V|5:2|calls:2", "0|V|5:2|calls:1", "0|V|5:2|calls:1"], None),
+            ("IF(TYPE(M1+0)=1,SelectionTick(D1),0)", "True|V|5:1|=IF(TYPE(M1+0)=1,SelectionTick(D1),0)|=IF(TYPE(M1+0)=1,SelectionTick(D1),0)", ["0|V|5:1|calls:2", "0|V|5:1|calls:2", "0|V|5:1|calls:1"], None),
+            ("LAMBDA(x,TYPE(x))(M1+0)+SelectionTick(D1)", "True|V|5:2|=LAMBDA(x,TYPE(x))(M1+0)+SelectionTick(D1)|=LAMBDA(x,TYPE(x))(M1+0)+SelectionTick(D1)", ["0|V|5:2|calls:2", "0|V|5:2|calls:1", "0|V|5:2|calls:1"], None),
+            ("TYPE(SelectionTick(M1+0))+TYPE(SelectionTick(D1))", "True|V|5:2|=TYPE(SelectionTick(M1+0))+TYPE(SelectionTick(D1))|=TYPE(SelectionTick(M1+0))+TYPE(SelectionTick(D1))", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("TYPE(SelectionTick(M1*0))+SelectionTick(D1)", "True|V|5:2|=TYPE(SelectionTick(M1*0))+SelectionTick(D1)|=TYPE(SelectionTick(M1*0))+SelectionTick(D1)", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("TYPE(SelectionTick(0+M1))+SelectionTick(D1)", "True|V|5:2|=TYPE(SelectionTick(0+M1))+SelectionTick(D1)|=TYPE(SelectionTick(0+M1))+SelectionTick(D1)", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("TYPE(SelectionTick(IF(TRUE,M1,0)))+SelectionTick(D1)", "True|V|5:2|=TYPE(SelectionTick(IF(TRUE,M1,0)))+SelectionTick(D1)|=TYPE(SelectionTick(IF(TRUE,M1,0)))+SelectionTick(D1)", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:3"], None),
+            ("SelectionTick(D1)+TYPE(SelectionTick(M1))", "True|V|5:2|=SelectionTick(D1)+TYPE(SelectionTick(M1))|=SelectionTick(D1)+TYPE(SelectionTick(M1))", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:4"], None),
+            ("TYPE(SelectionTick(M1))+CounterTick()", "True|V|5:3|=TYPE(SelectionTick(M1))+CounterTick()|=TYPE(SelectionTick(M1))+CounterTick()", ["0|V|5:5|calls:4", "0|V|5:3|calls:2", "0|V|5:3|calls:3"], None),
+            ("CounterTick()+TYPE(SelectionTick(M1))", "True|V|5:2|=CounterTick()+TYPE(SelectionTick(M1))|=CounterTick()+TYPE(SelectionTick(M1))", ["0|V|5:4|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:4"], None),
+            ("TYPE(SelectionTick(M1))+SelectionTick(D1)+SelectionTick(2)", "True|V|5:4|=TYPE(SelectionTick(M1))+SelectionTick(D1)+SelectionTick(2)|=TYPE(SelectionTick(M1))+SelectionTick(D1)+SelectionTick(2)", ["0|V|5:4|calls:6", "0|V|5:4|calls:3", "0|V|5:4|calls:4"], None),
+            ("SelectionTick(D1)+TYPE(SelectionTick(M1))+SelectionTick(2)", "True|V|5:4|=SelectionTick(D1)+TYPE(SelectionTick(M1))+SelectionTick(2)|=SelectionTick(D1)+TYPE(SelectionTick(M1))+SelectionTick(2)", ["0|V|5:4|calls:6", "0|V|5:4|calls:3", "0|V|5:4|calls:5"], None),
+            ("TYPE(SelectionTick(M1))+TYPE(SelectionTick(M1))", "True|V|5:2|=TYPE(SelectionTick(M1))+TYPE(SelectionTick(M1))|=TYPE(SelectionTick(M1))+TYPE(SelectionTick(M1))", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:3"], None),
+            ("TYPE(SelectionTick(M1))+TYPE(M1)", "True|V|5:2|=TYPE(SelectionTick(M1))+TYPE(M1)|=TYPE(SelectionTick(M1))+TYPE(M1)", ["0|V|5:2|calls:2", "0|V|5:2|calls:1", "0|V|5:2|calls:2"], None),
+            ("TYPE(M1)+TYPE(SelectionTick(M1))", "True|V|5:2|=TYPE(M1)+TYPE(SelectionTick(M1))|=TYPE(M1)+TYPE(SelectionTick(M1))", ["0|V|5:2|calls:2", "0|V|5:2|calls:1", "0|V|5:2|calls:1"], None),
+            ("IF(TRUE,TYPE(SelectionTick(M1)),TYPE(M1))", "True|V|5:1|=IF(TRUE,TYPE(SelectionTick(M1)),TYPE(M1))|=IF(TRUE,TYPE(SelectionTick(M1)),TYPE(M1))", ["0|V|5:1|calls:2", "0|V|5:1|calls:2", "0|V|5:1|calls:2"], None),
+            ("TYPE(SelectionTick(M1)+0)", "True|V|5:1|=TYPE(SelectionTick(M1)+0)|=TYPE(SelectionTick(M1)+0)", ["0|V|5:1|calls:2", "0|V|5:1|calls:1", "0|V|5:1|calls:2"], None),
+            ("TYPE(SelectionTick(IF(TRUE,M1,0))+0)+SelectionTick(D1)", "True|V|5:2|=TYPE(SelectionTick(IF(TRUE,M1,0))+0)+SelectionTick(D1)|=TYPE(SelectionTick(IF(TRUE,M1,0))+0)+SelectionTick(D1)", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:3"], None),
+            ("TYPE(SelectionTick(IF(TRUE,M1+0,0)))+SelectionTick(D1)", "True|V|5:2|=TYPE(SelectionTick(IF(TRUE,M1+0,0)))+SelectionTick(D1)|=TYPE(SelectionTick(IF(TRUE,M1+0,0)))+SelectionTick(D1)", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("TYPE(SelectionTick(M1:M2))", "True|V|5:64|=TYPE(SelectionTick(M1:M2))|=TYPE(SelectionTick(M1:M2))", ["0|V|5:64|calls:2", "0|V|5:64|calls:1", "0|V|5:64|calls:2"], None),
+            ("TYPE(SelectionTick(M1:M2))+SelectionTick(D1)", "True|V|5:65|=TYPE(SelectionTick(M1:M2))+SelectionTick(D1)|=TYPE(SelectionTick(M1:M2))+SelectionTick(D1)", ["0|V|5:65|calls:4", "0|V|5:65|calls:2", "0|V|5:65|calls:3"], None),
+            ("TYPE(SelectionTick(L1:N2))+SelectionTick(D1)", "True|V|5:65|=TYPE(SelectionTick(L1:N2))+SelectionTick(D1)|=TYPE(SelectionTick(L1:N2))+SelectionTick(D1)", ["0|V|5:65|calls:4", "0|V|5:65|calls:2", "0|V|5:65|calls:3"], None),
+            ("ISNUMBER(SelectionTick(M1))+SelectionTick(D1)", "True|V|5:2|=ISNUMBER(SelectionTick(M1))+SelectionTick(D1)|=ISNUMBER(SelectionTick(M1))+SelectionTick(D1)", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:3"], None),
+            ("ISERROR(SelectionTick(M1))+SelectionTick(D1)", "True|V|5:1|=ISERROR(SelectionTick(M1))+SelectionTick(D1)|=ISERROR(SelectionTick(M1))+SelectionTick(D1)", ["0|V|5:1|calls:4", "0|V|5:1|calls:2", "0|V|5:1|calls:3"], None),
+            ("TYPE(SelectionTick(INDEX(M1,1)))+SelectionTick(D1)", "True|V|5:2|=TYPE(SelectionTick(INDEX(M1,1)))+SelectionTick(D1)|=TYPE(SelectionTick(INDEX(M1,1)))+SelectionTick(D1)", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:3"], None),
+            ("TYPE(SelectionTick(M1))+M1", "True|V|5:1|=TYPE(SelectionTick(M1))+M1|=TYPE(SelectionTick(M1))+M1", ["0|V|5:2|calls:2", "0|V|5:2|calls:1", "0|V|5:1|calls:2"], None),
+            ("TYPE(DoubleTick(M1))", "True|V|5:1|=TYPE(DoubleTick(M1))|=TYPE(DoubleTick(M1))", ["0|V|5:1|calls:2", "0|V|5:1|calls:1", "0|V|5:1|calls:2"], None),
+            ("TYPE(DoubleTick(M1+0))", "True|V|5:1|=TYPE(DoubleTick(M1+0))|=TYPE(DoubleTick(M1+0))", ["0|V|5:1|calls:2", "0|V|5:1|calls:1", "0|V|5:1|calls:1"], None),
+            ("TYPE(DoubleTick(M1))+SelectionTick(D1)", "True|V|5:2|=TYPE(DoubleTick(M1))+SelectionTick(D1)|=TYPE(DoubleTick(M1))+SelectionTick(D1)", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:3"], None),
+            ("TYPE(SelectionTick(IF(M1,M1,D1)))+SelectionTick(D1)", "True|V|5:2|=TYPE(SelectionTick(IF(M1,M1,D1)))+SelectionTick(D1)|=TYPE(SelectionTick(IF(M1,M1,D1)))+SelectionTick(D1)", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("TYPE(SelectionTick(IF(M1=0,M1,D1)))+SelectionTick(D1)", "True|V|5:2|=TYPE(SelectionTick(IF(M1=0,M1,D1)))+SelectionTick(D1)|=TYPE(SelectionTick(IF(M1=0,M1,D1)))+SelectionTick(D1)", ["0|V|5:2|calls:4", "0|V|5:2|calls:2", "0|V|5:2|calls:2"], None),
+            ("TYPE(M1)+M1", "False|V|5:1|=TYPE(M1)+M1|=TYPE(M1)+M1", ["0|V|5:2|calls:0", "0|V|5:2|calls:0", "0|V|5:1|calls:0"], None),
+            ("M1+TYPE(M1)", "False|V|5:1|=M1+TYPE(M1)|=M1+TYPE(M1)", ["0|V|5:2|calls:0", "0|V|5:2|calls:0", "0|V|5:1|calls:0"], None),
+            ("TYPE(M1:M2)+SelectionTick(D1)", "True|V|5:65|=TYPE(M1:M2)+SelectionTick(D1)|=TYPE(M1:M2)+SelectionTick(D1)", ["0|V|5:65|calls:2", "0|V|5:65|calls:1", "0|V|5:65|calls:2"], None),
+        ];
+        let mut mismatches = Vec::new();
+        for version in [1u8, 2] {
+            for (formula, properties, traces, warm) in cases {
+                let mut calls = vec![("CurrentBindingProperties", vec![Value::String(formula.into())], properties)];
+                for (stage, expected) in traces.iter().enumerate() {
+                    calls.push(("CurrentBindingTrace", vec![Value::String(formula.into()), Value::Integer(stage as i64)], expected));
+                }
+                if let Some(expected) = warm { calls.push(("CurrentBindingWarm", vec![Value::String(formula.into())], expected)); }
+                for (procedure, args, expected) in calls {
+                    let mut book = workbook(); book.calculation.compatibility_version = version;
+                    let mut session = None;
+                    let outcome = execute_workbook_action_in_session(book, &source,
+                        Some(&format!("IndexDriver.{procedure}")), args, 0, failure_context(), &mut session).unwrap();
+                    if let Some(error) = outcome.error {
+                        mismatches.push(format!("{formula}, version{version}, {procedure}: {}", error.message));
+                    } else {
+                        let actual = serde_json::to_value(&outcome.result).unwrap();
+                        let expected = serde_json::json!({"type":"string","value":expected});
+                        if actual != expected { mismatches.push(format!("{formula}, version{version}, {procedure}: {actual} != {expected}")); }
+                    }
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
     #[test]

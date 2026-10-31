@@ -588,6 +588,9 @@ impl Parser {
                         Expr::Table { name, asked } if name.is_empty() => Some(asked.to_uppercase()),
                         _ => None,
                     };
+                    if label.as_ref().is_some_and(|label| label.strip_prefix("_XLPM.").unwrap_or(label).contains('.')) {
+                        return Err(ParseError::UnexpectedToken("LAMBDA parameter names cannot contain a period".to_string()));
+                    }
                     if label.is_some_and(|label| !parameters.insert(label)) {
                         return Err(ParseError::UnexpectedToken("LAMBDA parameter names must be distinct".to_string()));
                     }
@@ -597,6 +600,11 @@ impl Parser {
             // measured, `=LET(x,1)` is refused as a formula (1004).
             if sheet.is_none() && crate::lexer::normalized_builtin_call(&name).as_deref() == Some("LET") && (args.len() < 3 || args.len() % 2 == 0) {
                 return Err(ParseError::UnexpectedToken("LET needs name, value pairs and a calculation".to_string()));
+            }
+            if sheet.is_none() && crate::lexer::normalized_builtin_call(&name).as_deref() == Some("LET")
+                && args.iter().take(args.len().saturating_sub(1)).step_by(2)
+                    .any(|label| matches!(label, Expr::Name(label) if label.strip_prefix("_XLPM.").unwrap_or(label).contains('.'))) {
+                return Err(ParseError::UnexpectedToken("LET binding names cannot contain a period".to_string()));
             }
             let called = if sheet.is_none() && name.eq_ignore_ascii_case("_xlfn.SINGLE") {
                 "_AT".to_string()

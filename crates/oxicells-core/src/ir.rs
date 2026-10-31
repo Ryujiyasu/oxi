@@ -100,12 +100,24 @@ pub struct RecalculationState {
     /// Retain the formula text so replacing a formula cannot inherit a stale flag.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub nonvolatile: std::collections::BTreeSet<(FormulaLocation, String)>,
+    /// Completed own-cell value cycles consumed through type/error inspection.
+    /// Keep the formula text so edits cannot inherit a previous cycle's cache.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub metadata_cycles: std::collections::BTreeSet<(FormulaLocation, String)>,
+    /// Reference-returning metadata cycles retain their value while explicit
+    /// calculations still probe through the first returned own reference.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub metadata_reference_cycles: std::collections::BTreeSet<(FormulaLocation, String)>,
 }
 
 impl RecalculationState {
-    pub fn is_empty(&self) -> bool { self.order.is_empty() && self.forced_order.is_none() && self.blocked_spills.is_empty() && self.changed.is_empty() && self.dirty.is_empty() && self.volatile.is_empty() && self.nonvolatile.is_empty() }
+    pub fn is_empty(&self) -> bool { self.order.is_empty() && self.forced_order.is_none() && self.blocked_spills.is_empty() && self.changed.is_empty() && self.dirty.is_empty() && self.volatile.is_empty() && self.nonvolatile.is_empty() && self.metadata_cycles.is_empty() && self.metadata_reference_cycles.is_empty() }
     pub fn pending(&self) -> bool { !self.changed.is_empty() || !self.dirty.is_empty() }
     pub fn change(&mut self, sheet: String, range: (u32, u32, u32, u32)) {
+        self.metadata_cycles.retain(|((owner, (col, row)), _)| !owner.eq_ignore_ascii_case(&sheet)
+            || *col < range.0 || *col > range.2 || *row < range.1 || *row > range.3);
+        self.metadata_reference_cycles.retain(|((owner, (col, row)), _)| !owner.eq_ignore_ascii_case(&sheet)
+            || *col < range.0 || *col > range.2 || *row < range.1 || *row > range.3);
         if let Some((last_sheet, last)) = self.changed.last_mut() {
             if *last_sheet == sheet {
                 if last.0 == range.0 && last.2 == range.2 && range.1 <= last.3.saturating_add(1) && last.1 <= range.3.saturating_add(1) {
