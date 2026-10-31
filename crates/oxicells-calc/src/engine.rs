@@ -569,12 +569,32 @@ pub struct RecalcReport {
     pub circular: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ArrayGroup {
+    anchor: (u32, u32),
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Clone)]
+enum ArrayResult {
+    Shared(std::rc::Rc<Arg>),
+    Lifted { occurrence_start: u64 },
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Workbook {
     calculation_order: BTreeMap<(String, (u32, u32)), usize>,
     chain_probes: bool,
     read_history: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<UserReadHistory>>>>,
     prepared_spills: BTreeMap<FormulaCell, Arg>,
+    array_groups: BTreeMap<FormulaCell, ArrayGroup>,
+    array_results: BTreeMap<FormulaCell, ArrayResult>,
+    array_context: std::cell::Cell<Option<ArrayGroup>>,
+    array_materialization: std::cell::Cell<u32>,
+    array_lifted: std::cell::Cell<bool>,
+    array_projection: std::cell::Cell<Option<(u32, u32)>>,
+    array_entry: bool,
     /// Consumers whose arguments cross a changing spill footprint.
     /// Their provisional and published reads require separate callbacks.
     scalar_replay_exclusions: BTreeSet<FormulaCell>,
@@ -1205,10 +1225,24 @@ impl Workbook {
         self.work_out(Extent::JustThese(wanted))
     }
 
+    /// Evaluate newly assigned legacy array formulas as complete array results.
+    pub fn recalculate_array_entry(&mut self, wanted: &[(String, (u32, u32))]) -> RecalcReport {
+        let previous = std::mem::replace(&mut self.array_entry, true);
+        let report = self.work_out(Extent::JustThese(wanted));
+        self.array_entry = previous;
+        report
+    }
+
     /// The whole of it, or some part.
     fn work_out(&mut self, extent: Extent<'_>) -> RecalcReport {
         *self.read_history.get_mut() = None;
         self.prepared_spills.clear();
+        self.array_results.clear();
+        self.array_context.set(None);
+        self.array_materialization.set(0);
+        self.array_lifted.set(false);
+        self.array_projection.set(None);
+        self.array_groups = self.collect_array_groups();
         self.scalar_replay_exclusions.clear();
         if !self.now_pinned {
             if let Some(moment) = Workbook::read_the_clock() {
@@ -1726,12 +1760,109 @@ impl Workbook {
             let dynamic = self.sheets.get(sheet).is_some_and(|held| held.dynamic.contains(coord));
             let value = match self.share_at(sheet, coord) {
                 Some(offset) => {
-                    formula_result(element_of(self.eval_arg(&expr, sheet, 0, Some(*coord)), offset))
+                    self.array_formula_value(sheet, *coord, &expr, offset)
                 }
                 None if dynamic => self.spill_out(sheet, *coord, &expr),
                 None => formula_result(self.eval(&expr, sheet, 0, Some(*coord))),
             };
             value
+    }
+
+    fn collect_array_groups(&self) -> BTreeMap<FormulaCell, ArrayGroup> {
+        let mut groups: BTreeMap<FormulaCell, (ArrayGroup, u64, bool)> = BTreeMap::new();
+        for (sheet, held) in &self.sheets {
+            for (&coord, cell) in &held.cells {
+                let Cell::Formula { source, source_utf16, share: Some((dx, dy)), .. } = cell else { continue; };
+                let (Some(col), Some(row)) = (coord.0.checked_sub(*dx), coord.1.checked_sub(*dy)) else { continue; };
+                let anchor = (col, row);
+                let same = matches!(held.cells.get(&anchor),
+                    Some(Cell::Formula { source: root, source_utf16: units, share: Some((0, 0)), .. })
+                        if source == root && source_utf16 == units);
+                let entry = groups.entry((sheet.clone(), anchor))
+                    .or_insert((ArrayGroup { anchor, width: 1, height: 1 }, 0, true));
+                entry.0.width = entry.0.width.max(dx + 1);
+                entry.0.height = entry.0.height.max(dy + 1);
+                entry.1 += 1;
+                entry.2 &= same;
+            }
+        }
+        groups.into_iter().filter_map(|(key, (group, cells, valid))|
+            (valid && cells == u64::from(group.width) * u64::from(group.height)).then_some((key, group))).collect()
+    }
+
+    fn array_formula_value(&mut self, sheet: &str, coord: (u32, u32), expr: &Expr, offset: (u32, u32)) -> Value {
+        let anchor = (coord.0.saturating_sub(offset.0), coord.1.saturating_sub(offset.1));
+        let key = (sheet.to_string(), anchor);
+        let Some(group) = self.array_groups.get(&key).copied() else {
+            return formula_result(element_of(&self.eval_arg(expr, sheet, 0, Some(coord)), offset));
+        };
+        let projected_start = match self.array_results.get(&key) {
+            Some(ArrayResult::Shared(answer)) => return formula_result(element_of(answer.as_ref(), offset)),
+            Some(ArrayResult::Lifted { occurrence_start }) => Some(*occurrence_start),
+            None => None,
+        };
+        let previous = self.array_context.replace(Some(group));
+        let previous_projection = self.array_projection.replace(projected_start.map(|_| offset));
+        let previous_lifted = self.array_lifted.replace(false);
+        if let Some(start) = projected_start { USER_FUNCTION_OCCURRENCE.with(|held| held.set(start)); }
+        let mut worked = self.eval_arg(expr, sheet, 0, Some(if projected_start.is_some() { coord } else { anchor }));
+        if projected_start.is_none() && !user_function_pending() && !self.value_deferred.get() {
+            if self.array_lifted.get() {
+                // Reserve probe occurrences even when another member is first.
+                let occurrence_start = USER_FUNCTION_OCCURRENCE.with(std::cell::Cell::get);
+                self.array_results.insert(key, ArrayResult::Lifted { occurrence_start });
+                self.array_projection.set(Some(offset));
+                USER_FUNCTION_OCCURRENCE.with(|held| held.set(occurrence_start));
+                worked = self.eval_arg(expr, sheet, 0, Some(coord));
+            } else {
+                self.array_results.insert(key, ArrayResult::Shared(std::rc::Rc::new(worked.clone())));
+            }
+        }
+        self.array_lifted.set(previous_lifted);
+        self.array_projection.set(previous_projection);
+        self.array_context.set(previous);
+        formula_result(element_of(&worked, offset))
+    }
+
+    fn materialized_index_argument(expr: &Expr) -> bool {
+        match expr {
+            Expr::Unary { operand, .. } => Self::materialized_index_argument(operand),
+            Expr::Binary { lhs, rhs, .. } =>
+                Self::materialized_index_argument(lhs) || Self::materialized_index_argument(rhs),
+            Expr::Function { name, args } if name == "N" && args.len() == 1 =>
+                matches!(&args[0], Expr::Ref(_) | Expr::Name(_) | Expr::Table { .. })
+                    || matches!(&args[0], Expr::Function { name, .. }
+                        if matches!(name.as_str(), "IF" | "CHOOSE" | "INDEX" | "TAKE" | "DROP" | "XLOOKUP" | "LET" | "OFFSET" | "INDIRECT")),
+            _ => false,
+        }
+    }
+
+    fn prepare_array_indexes(&self, indexes: &mut [Arg], expressions: &[Expr]) -> bool {
+        // The conversion belongs to this expression. LET bindings and other
+        // function results are fresh selector values, even with the same cells.
+        let materialized = expressions.iter().zip(indexes.iter()).any(|(expr, value)|
+            Self::materialized_index_argument(expr) && matches!(value, Arg::Range(block) if block.is_array()));
+        if materialized || self.array_entry || self.array_context.get().is_none() || self.array_materialization.get() != 0 {
+            return materialized;
+        }
+        for index in indexes {
+            if matches!(index, Arg::Range(block) if block.is_array() || block.cells.len() > 1) {
+                self.array_lifted.set(true);
+                if let Some(offset) = self.array_projection.get() {
+                    *index = Arg::Value(element_of(index, offset));
+                }
+            }
+        }
+        false
+    }
+
+    fn eval_materialized_arg(&self, expr: &Expr, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        if self.array_context.get().is_none() { return self.eval_arg_inner(expr, sheet, depth, skip, at); }
+        let previous = self.array_materialization.get();
+        self.array_materialization.set(previous + 1);
+        let answer = self.eval_arg_inner(expr, sheet, depth, skip, at);
+        self.array_materialization.set(previous);
+        answer
     }
 
     /// Work out a dynamic array and spill its block into the cells beside
@@ -2005,7 +2136,10 @@ impl Workbook {
             Expr::Binary { op, lhs, rhs } => Expr::Binary { op: *op, lhs: Box::new(self.ordering_expression(lhs, sheet, at)), rhs: Box::new(self.ordering_expression(rhs, sheet, at)) },
             Expr::Function { name, args } => {
                 let mut args: Vec<_> = args.iter().map(|arg| self.ordering_expression(arg, sheet, at)).collect();
-                if name == "INDEX" && !self.array_formula_context(sheet, at) {
+                if name == "INDEX" && !self.array_formula_context(sheet, at)
+                    && !args.iter().skip(1).any(|arg| Self::materialized_index_argument(arg)
+                        && (!self.dependency_value_is_fixed(arg, sheet)
+                            || matches!(self.eval_arg(arg, sheet, 0, at), Arg::Range(block) if block.is_array()))) {
                     // Legacy formulas consume only the first literal selector.
                     // Unused selector elements must not introduce graph cycles.
                     for arg in args.iter_mut().skip(1) {
@@ -2051,9 +2185,12 @@ impl Workbook {
                         match functions::call("XMATCH", &asked) {
                             Value::Number(position) if position >= 1.0 => {
                                 let offset = position as u32 - 1;let mut selected = returned.clone();
-                                if lookup.as_range().height > 1 {
-                                    if offset < selected.range.height() { selected.range.start.row += offset;selected.range.end.row = selected.range.start.row;return Expr::Ref(selected); }
-                                } else if offset < selected.range.width() { selected.range.start.col += offset;selected.range.end.col = selected.range.start.col;return Expr::Ref(selected); }
+                                let lookup = lookup.as_range();
+                                match functions::xlookup_axis((lookup.width, lookup.height), (selected.range.width() as usize, selected.range.height() as usize)) {
+                                    Some(true) if offset < selected.range.height() => { selected.range.start.row += offset;selected.range.end.row = selected.range.start.row;return Expr::Ref(selected); }
+                                    Some(false) if offset < selected.range.width() => { selected.range.start.col += offset;selected.range.end.col = selected.range.start.col;return Expr::Ref(selected); }
+                                    _ => {}
+                                }
                             }
                             Value::Error(ExcelError::NA) => return args.get(3).cloned().unwrap_or(Expr::Literal(Value::Error(ExcelError::NA))),
                             Value::Error(why) => return Expr::Literal(Value::Error(why)),
@@ -2319,7 +2456,9 @@ impl Workbook {
             USER_FUNCTION_ARGUMENT_CONTEXT.with(|held| { held.replace(previous_argument_context); });
             return value;
         }
-        let value = self.eval_arg_inner(expr, sheet, depth, skip, at);
+        let value = if name == "SUMPRODUCT" {
+            self.eval_materialized_arg(expr, sheet, depth, skip, at)
+        } else { self.eval_arg_inner(expr, sheet, depth, skip, at) };
         if user_function_argument {
             USER_FUNCTION_ARGUMENT_CONTEXT.with(|held| { held.replace(previous_argument_context); });
         }
@@ -2439,9 +2578,9 @@ impl Workbook {
             }
 
             Expr::Binary { op, lhs, rhs } => {
-                let a = self.eval_arg(lhs, sheet, depth + 1, at);
+                let a = self.eval_materialized_arg(lhs, sheet, depth + 1, Skip::Nothing, at);
                 if !self.require_ready_value(&a) { return Arg::Value(Value::Error(ExcelError::Value)); }
-                let b = self.eval_arg(rhs, sheet, depth + 1, at);
+                let b = self.eval_materialized_arg(rhs, sheet, depth + 1, Skip::Nothing, at);
                 if !self.require_ready_value(&b) { return Arg::Value(Value::Error(ExcelError::Value)); }
                 across(*op, &a, &b)
             }
@@ -2644,7 +2783,8 @@ impl Workbook {
                     if let Some(source) = source {
                         let mut indexes: Vec<_> = args.iter().skip(1).map(|index| self.eval_arg_inner(index, sheet, depth + 1, skip, at)).collect();
                         if indexes.iter().any(|index| !self.require_ready_value(index)) { return Arg::Value(Value::Error(ExcelError::Value)); }
-                        if !self.array_formula_context(sheet, at) {
+                        let materialized = self.prepare_array_indexes(&mut indexes, &args[1..]);
+                        if !self.array_formula_context(sheet, at) && !materialized {
                             for index in &mut indexes { *index = Arg::Value(index.first()); }
                         }
                         return match source {
@@ -2661,10 +2801,11 @@ impl Workbook {
                 let selectors: Vec<_> = if name == "XLOOKUP" { [0, 1, 4, 5].iter().filter_map(|i| evaluated.get(*i)).collect() } else { evaluated.iter().skip(1).collect() };
                 if selectors.iter().any(|arg| !self.require_ready_value(arg)) { return Arg::Value(Value::Error(ExcelError::Value)); }
                 if name == "INDEX" {
+                    let materialized = self.prepare_array_indexes(&mut evaluated[1..], &args[1..]);
                     // Excel Evaluate uses the first index in an index block;
                     // it does not produce one selection per index element.
                     let array_context = self.array_formula_context(sheet, at);
-                    if !array_context {
+                    if !array_context && !materialized {
                         for arg in evaluated.iter_mut().skip(1) {
                             *arg = Arg::Value(match &*arg { Arg::Range(block) => block.cells.first().cloned().unwrap_or(Value::Blank), other => other.scalar() });
                         }
@@ -3556,6 +3697,16 @@ impl Workbook {
     fn which_line(&self, name: &str, args: &[Expr], sheet: &str, at: At) -> Arg {
         let down = name == "ROW";
         let Some(first) = args.first() else {
+            if let Some(group) = self.array_context.get() {
+                let (from, many) = if down { (group.anchor.1, group.height) } else { (group.anchor.0, group.width) };
+                let cells = (0..many).map(|n| Value::Number(f64::from(from + n) + 1.0)).collect();
+                return Arg::Range(RangeData {
+                    origin: crate::functions::BlockOrigin::Array,
+                    width: if down { 1 } else { many as usize },
+                    height: if down { many as usize } else { 1 },
+                    cells,
+                });
+            }
             // No argument: wherever we are. Outside a cell there is no answer.
             // Counted from one, where everything inside here counts from zero.
             return match at {
@@ -4229,7 +4380,8 @@ impl Workbook {
             let Value::Number(position) = functions::call("XMATCH", &asked) else { return None };
             if position < 1.0 { return None; }
             let offset = position as u32 - 1;
-            let range = if looked.height > 1 {
+            let down = functions::xlookup_axis((looked.width, looked.height), (returned.width() as usize, returned.height() as usize))?;
+            let range = if down {
                 if offset >= returned.height() { return None; }
                 RangeRef::normalised(CellRef::new(returned.start.col, returned.start.row + offset), CellRef::new(returned.end.col, returned.start.row + offset))
             } else {
@@ -4685,9 +4837,9 @@ impl Workbook {
 /// formula's answer it is a number.
 /// The element of a worked-out block that a member of an array formula
 /// shows, with a one-column or one-row block dealt along the other side.
-fn element_of(worked: Arg, (dx, dy): (u32, u32)) -> Value {
+fn element_of(worked: &Arg, (dx, dy): (u32, u32)) -> Value {
     match worked {
-        Arg::Value(value) => value,
+        Arg::Value(value) => value.clone(),
         Arg::Range(block) => {
             let col = if block.width == 1 { 0 } else { dx as usize };
             let row = if block.height == 1 { 0 } else { dy as usize };

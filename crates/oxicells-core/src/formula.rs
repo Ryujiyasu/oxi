@@ -149,6 +149,16 @@ pub fn evaluate_workbook_formula_subset(workbook: &mut Workbook, cells: &[(Strin
     report.calculated
 }
 
+/// Evaluate a newly assigned legacy array formula before normal recalculation.
+pub fn evaluate_workbook_formula_array_entry(workbook: &mut Workbook, cells: &[(String, (u32, u32))], now: Option<f64>) -> Vec<(String, (u32, u32))> {
+    let previous = crate::recalculation::spill_layout(workbook);
+    let names = workbook.defined_names.clone(); let external = workbook.external_books.clone();
+    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::ArrayEntry { cells }, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order);
+    crate::recalculation::remember_completed_calculation(workbook, &report);
+    crate::recalculation::complete(workbook, &report.calculated, &previous, false);
+    report.calculated
+}
+
 /// Normal dirty calculation can reach newly filled or emptied spill cells.
 /// A suspended pass returns newly discovered continuation cells; a completed
 /// pass returns the learned traversal order.
@@ -489,6 +499,7 @@ enum Overwrite<'a> {
     Dirty { cells: &'a [(String, (u32, u32))], sheet_scope: Option<&'a str>, defer_dynamic_references: bool },
     Selected { cells: &'a [(String, (u32, u32))], changed: bool },
     Entry { cells: &'a [(String, (u32,u32))] },
+    ArrayEntry { cells: &'a [(String, (u32, u32))] },
 }
 
 /// Whether a formula reads a workbook this file remembers nothing of.
@@ -543,13 +554,13 @@ fn recalculate(
     book.set_compatibility_version(compatibility_version);
     book.set_dbcs_language(dbcs_language);
     book.set_calculation_order(calculation_order);
-    book.set_chain_probes(!matches!(mode, Overwrite::OnlyMissing | Overwrite::Entry { .. }));
+    book.set_chain_probes(!matches!(mode, Overwrite::OnlyMissing | Overwrite::Entry { .. } | Overwrite::ArrayEntry { .. }));
     let forgotten: Vec<u32> = (1..=external.len() as u32)
         .filter(|number| !book.remembers_link(*number))
         .collect();
 
     let report = match mode {
-        Overwrite::All | Overwrite::Dirty { .. } | Overwrite::Selected { .. } | Overwrite::Entry { .. } => {
+        Overwrite::All | Overwrite::Dirty { .. } | Overwrite::Selected { .. } | Overwrite::Entry { .. } | Overwrite::ArrayEntry { .. } => {
             // What each formula last showed goes in with it, which a cell
             // caught in a cycle keeps: measured, `=B1+1` in A1 reads 1 and
             // still 1 once `=A1+1` in B1 closes the loop.
@@ -565,6 +576,7 @@ fn recalculate(
                 Overwrite::Selected { cells, changed: true } => book.recalculate_after(cells),
                 Overwrite::Selected { cells, changed: false } => book.recalculate_these(cells),
                 Overwrite::Entry { cells } => book.recalculate_these(cells),
+                Overwrite::ArrayEntry { cells } => book.recalculate_array_entry(cells),
                 _ => book.recalculate(),
             }
         }

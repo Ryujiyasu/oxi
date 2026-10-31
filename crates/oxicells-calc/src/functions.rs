@@ -437,8 +437,58 @@ pub fn call_arg_with_compatibility(name: &str, args: &[Arg], version: u8) -> Arg
     call_arg_with_text_context(name,args,version,true)
 }
 
+pub(crate) fn xlookup_axis(looked: (usize, usize), returned: (usize, usize)) -> Option<bool> {
+    if looked.0 == 0 || looked.1 == 0 || returned.0 == 0 || returned.1 == 0 { return None; }
+    let down = if looked.0 == 1 && looked.1 > 1 { true }
+        else if looked.1 == 1 && looked.0 > 1 { false }
+        else if looked.0 == 1 && looked.1 == 1 { returned.1 == 1 }
+        else { return None; };
+    ((down && looked.1 == returned.1) || (!down && looked.0 == returned.0)).then_some(down)
+}
+
 pub fn call_arg_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_language: bool) -> Arg {
     let name = plain(name);
+    if name == "XLOOKUP" && (3..=6).contains(&args.len())
+        && matches!(&args[2], Arg::Range(_))
+        && !matches!(&args[0], Arg::Range(block) if block.cells.len() > 1) {
+        if let Some(why) = args[0].scalar().err() { return Arg::Value(Value::Error(why)); }
+        let lookup = args[1].as_range();
+        let returned = args[2].as_range();
+        let Some(down) = xlookup_axis((lookup.width, lookup.height), (returned.width, returned.height)) else {
+            return Arg::Value(Value::Error(ExcelError::Value));
+        };
+        let (width, height) = if down { (returned.width, 1) } else { (1, returned.height) };
+        if width * height > 1 || matches!(args.get(3), Some(Arg::Range(_))) {
+            let position = call("XMATCH", &[
+                args[0].clone(), args[1].clone(),
+                args.get(4).cloned().unwrap_or(Arg::Value(Value::Number(0.0))),
+                args.get(5).cloned().unwrap_or(Arg::Value(Value::Number(1.0))),
+            ]);
+            match position {
+                Value::Number(position) if position >= 1.0 => {
+                    if width * height == 1 { return Arg::Value(call(name, args)); }
+                    let index = position as usize - 1;
+                    let mut cells = Vec::with_capacity(width * height);
+                    for row in 0..height {
+                        for col in 0..width { cells.push(returned.at(if down { col } else { index }, if down { index } else { row })); }
+                    }
+                    return Arg::Range(RangeData {
+                        origin: if height == 1 { BlockOrigin::Vector } else { BlockOrigin::Array },
+                        width, height, cells,
+                    });
+                }
+                Value::Error(ExcelError::NA) => {
+                    let mut answer = args.get(3).cloned().unwrap_or(Arg::Value(Value::Error(ExcelError::NA)));
+                    if let Arg::Range(block) = &mut answer {
+                        if block.height == 1 && block.cell_reference().is_none() { block.origin = BlockOrigin::Vector; }
+                    }
+                    return answer;
+                }
+                Value::Error(why) => return Arg::Value(Value::Error(why)),
+                _ => return Arg::Value(Value::Error(ExcelError::Value)),
+            }
+        }
+    }
     // An INDEX missing one of its two indexes means a whole line rather than
     // one cell, and a whole line is an array — which `call` has no way to
     // return.
@@ -5309,6 +5359,13 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
     let sideways = match name {
         "UNIQUE" => reads_true(args.get(1)),
         "SORT" => reads_true(args.get(3)),
+        "FILTER" => {
+            let include = args.get(1).ok_or(ExcelError::Value)?.as_range();
+            let rows = include.width == 1 && include.height == table.height;
+            let columns = include.height == 1 && include.width == table.width;
+            if !rows && !columns { return Err(ExcelError::Value); }
+            columns && !rows
+        }
         _ => false,
     };
     // SORTBY orders one block by the values in ANOTHER, which do not appear in
@@ -5410,7 +5467,9 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
         height,
         cells: rows.into_iter().flatten().collect(),
     };
-    Ok(Arg::Range(if sideways { on_its_side(&block) } else { block }))
+    let mut block = if sideways { on_its_side(&block) } else { block };
+    if name == "FILTER" && block.height == 1 { block.origin = BlockOrigin::Vector; }
+    Ok(Arg::Range(block))
 }
 
 /// Which of two values comes first when a block is being put in order.

@@ -865,7 +865,7 @@ pub fn requires_array_storage(input: &str, multiple_name: &dyn Fn(&str) -> bool)
     let Some(mut node) = reader.expr() else { return false; };
     if reader.pos != tokens.len() { return false; }
     bind_intersection_shapes(&mut node, &std::collections::BTreeMap::new());
-    has_array_arithmetic(&node)
+    has_array_arithmetic(&node) || modern_value_array(&node) || has_array_index_arguments(&node)
 }
 
 /// Whether using this defined-name formula needs implicit intersection.
@@ -900,10 +900,55 @@ fn has_array_arithmetic(node: &AtNode) -> bool {
 
 fn modern_result_is_multiple(node: &AtNode) -> bool {
     match node {
-        AtNode::Block { .. } | AtNode::Symbol { multiple: true, .. } | AtNode::Invoke { .. } => true,
-        AtNode::Call { name, args, .. } => may_answer_a_block(name, args),
+        AtNode::Block { .. } | AtNode::Invoke { .. } => true,
+        AtNode::Symbol { multiple, array_value, .. } => *multiple || *array_value,
+        AtNode::Call { name, args, .. } => may_answer_a_block(name, args) || modern_value_array(node),
         AtNode::Group(parts) => parts.len() > 1 || parts.iter().any(modern_result_is_multiple),
         AtNode::Operation(parts) => parts.iter().any(modern_result_is_multiple),
+        _ => false,
+    }
+}
+
+// Modern value arrays carry values rather than the identity of source cells.
+// Keep this separate from the legacy intersection classification.
+fn modern_value_array(node: &AtNode) -> bool {
+    match node {
+        AtNode::Block { literal, .. } => *literal,
+        AtNode::Symbol { array_value, .. } => *array_value,
+        AtNode::Operation(parts) => parts.iter().any(modern_result_is_multiple),
+        AtNode::Group(parts) if parts.len() == 1 => modern_value_array(&parts[0]),
+        AtNode::Call { name, args, .. } => {
+            let first = args.first().and_then(Option::as_ref);
+            match name.as_str() {
+                "N" => first.is_some_and(modern_value_array),
+                "LET" => args.last().and_then(Option::as_ref).is_some_and(modern_value_array),
+                "IF" | "CHOOSE" => first.is_some_and(modern_result_is_multiple)
+                    || args.iter().skip(1).flatten().any(modern_value_array),
+                "IFERROR" | "IFNA" => args.iter().flatten().any(modern_result_is_multiple),
+                "ROW" | "COLUMN" => first.is_some_and(modern_result_is_multiple),
+                "INDEX" => (first.is_some_and(modern_value_array) && may_answer_a_block(name, args))
+                    || args.iter().skip(1).take(2).flatten().any(modern_result_is_multiple),
+                "OFFSET" | "INDIRECT" | "TRIMRANGE" => false,
+                _ if returns_value_array(name) => true,
+                _ => args.iter().enumerate().any(|(index, arg)|
+                    parameter_kind(name, index, args) == AtContext::Value
+                        && arg.as_ref().is_some_and(modern_result_is_multiple)),
+            }
+        }
+        AtNode::Invoke { .. } => true,
+        _ => false,
+    }
+}
+
+fn has_array_index_arguments(node: &AtNode) -> bool {
+    match node {
+        AtNode::Call { name, args, .. } =>
+            (name == "INDEX" && args.iter().skip(1).take(2).flatten().any(modern_result_is_multiple))
+                || args.iter().flatten().any(has_array_index_arguments),
+        AtNode::Operation(parts) | AtNode::Group(parts) => parts.iter().any(has_array_index_arguments),
+        AtNode::Written(operand) => has_array_index_arguments(operand),
+        AtNode::Invoke { callee, args, .. } => has_array_index_arguments(callee)
+            || args.iter().flatten().any(has_array_index_arguments),
         _ => false,
     }
 }
@@ -922,7 +967,7 @@ enum AtNode {
     Plain { number: Option<f64>, cell: bool },
     /// A range, or a name standing for one.
     Block { start: usize, shape: Option<(u32, u32)>, literal: bool },
-    Symbol { start: usize, name: String, multiple: bool },
+    Symbol { start: usize, name: String, multiple: bool, array_value: bool },
     /// Operators, whose operands are worked one value at a time.
     Operation(Vec<AtNode>),
     /// A `@` already written.
@@ -1054,7 +1099,7 @@ impl AtReader<'_> {
                     return Some(AtNode::Plain { number: None, cell: true });
                 }
                 let qualified = sheet.as_ref().map(|owner| format!("'{}'!{name}", owner.replace('\'', "''"))).unwrap_or_else(|| name.clone());
-                Some(AtNode::Symbol { start, multiple: (self.multi_name)(&qualified), name: qualified })
+                Some(AtNode::Symbol { start, multiple: (self.multi_name)(&qualified), name: qualified, array_value: false })
             }
             Token::LParen => {
                 let mut inner = vec![self.expr()?];
@@ -1093,11 +1138,20 @@ impl AtReader<'_> {
     }
 }
 
-fn bind_intersection_shapes(node: &mut AtNode, outer: &std::collections::BTreeMap<String, bool>) {
+#[derive(Clone, Copy, Default)]
+struct BindingShape {
+    multiple: bool,
+    array_value: bool,
+}
+
+fn bind_intersection_shapes(node: &mut AtNode, outer: &std::collections::BTreeMap<String, BindingShape>) {
     match node {
         AtNode::Written(operand) => bind_intersection_shapes(operand, outer),
-        AtNode::Symbol { name, multiple, .. } => {
-            if let Some(bound) = outer.get(&crate::case_fold::name_key(name)) { *multiple = *bound; }
+        AtNode::Symbol { name, multiple, array_value, .. } => {
+            if let Some(bound) = outer.get(&crate::case_fold::name_key(name)) {
+                *multiple = bound.multiple;
+                *array_value = bound.array_value;
+            }
         }
         AtNode::Operation(parts) | AtNode::Group(parts) => {
             for part in parts { bind_intersection_shapes(part, outer); }
@@ -1110,12 +1164,18 @@ fn bind_intersection_shapes(node: &mut AtNode, outer: &std::collections::BTreeMa
                 while i + 1 < last {
                     let label = match &args[i] { Some(AtNode::Symbol { name, .. }) => Some(crate::case_fold::name_key(name)), _ => None };
                     if let Some(value) = &mut args[i + 1] { bind_intersection_shapes(value, &scope); }
-                    if let Some(label) = label { scope.insert(label, args[i + 1].as_ref().is_some_and(intersection_result_is_multiple)); }
+                    if let Some(label) = label {
+                        let value = args[i + 1].as_ref();
+                        scope.insert(label, BindingShape {
+                            multiple: value.is_some_and(intersection_result_is_multiple),
+                            array_value: value.is_some_and(modern_value_array),
+                        });
+                    }
                     i += 2;
                 }
             } else {
                 for parameter in args.iter().take(last) {
-                    if let Some(AtNode::Symbol { name, .. }) = parameter { scope.insert(crate::case_fold::name_key(name), true); }
+                    if let Some(AtNode::Symbol { name, .. }) = parameter { scope.insert(crate::case_fold::name_key(name), BindingShape { multiple: true, array_value: false }); }
                 }
             }
             if let Some(Some(body)) = args.last_mut() { bind_intersection_shapes(body, &scope); }
@@ -3831,6 +3891,42 @@ mod shift_tests {
                 count += 1;
             }
             println!("Native named-array oracle: {count} cases, 0 mismatches");
+        }
+    }
+
+    #[test]
+    fn modern_index_selector_storage_matches_native_excel() {
+        for (formula, expected) in [
+            ("=SUM(INDEX(D1:D3,N({1;2;3}),1))", true),
+            ("=SUM(INDEX(D1:D3,N(IF(1,{1;2;3})),1))", true),
+            ("=SUM(INDEX(D1:D3,N(ROW(A1:A3)),1))", true),
+            ("=SUM(INDEX(D1:D3,N(TRANSPOSE({1,2,3})),1))", true),
+            ("=SUM(INDEX(D1:D3,IF(1,N({1;2;3})),1))", true),
+            ("=SUM(INDEX(D1:D3,IF(1,N(ROW(A1:A3))),1))", true),
+            ("=SUM(INDEX(D1:D3,IFERROR({1;2;3},0),1))", true),
+            ("=SUM(INDEX(D1:D3,ABS({1;2;3}),1))", true),
+            ("=SUM(INDEX(D1:D3,INT({1;2;3}),1))", true),
+            ("=SUM(INDEX(D1:D3,--{1;2;3},1))", true),
+            ("=SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))+0,1))", true),
+            ("=SUM(INDEX(D1:D3,N(D1:D3),1))", false),
+            ("=SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))*1,1))", true),
+            ("=LET(n,N(IF(1,{1;2;3})),SUM(INDEX(D1:D3,n,1)))", true),
+            ("=SUM(INDEX(D1:D3,N(IFERROR({1;2;3},0)),1))", true),
+            ("=SUM(INDEX(D1:D3,N(CHOOSE(1,{1;2;3})),1))", true),
+            ("=SUM(INDEX(D1:D3,N({1;2;3})+ROW(A1:A3)*0,1))", true),
+            ("=SUMPRODUCT(INDEX(D1:D3,N(IF(1,{1;2;3})),1))", true),
+            ("=SUM(INDEX(D1:D3,N(INDEX(D1:D3,0,1)),1))", false),
+            ("=SUM(INDEX(D1:D3,N(INDEX({1;2;3},0,1)),1))", true),
+            ("=SUM(INDEX(D1:D3,N(IF(1,D1:D3)),1))", false),
+            ("=SUM(INDEX(D1:D3,N(CHOOSE(1,D1:D3)),1))", false),
+            ("=LET(n,{1;2;3},SUM(INDEX(D1:D3,N(n),1)))", true),
+            ("=LET(n,D1:D3,SUM(INDEX(D1:D3,N(n),1)))", false),
+            ("=SUM(INDEX(D1:D3,N(OFFSET(D1,0,0,3,1)),1))", false),
+            ("=SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\")),1))", false),
+            ("=SUM(INDEX(D1:D3,N(D1:D3+0),1))", true),
+            ("=SUM(INDEX(D1:D3,N(IFERROR(D1:D3,0)),1))", true),
+        ] {
+            assert_eq!(super::requires_array_storage(formula, &|_| false), expected, "{formula}");
         }
     }
 

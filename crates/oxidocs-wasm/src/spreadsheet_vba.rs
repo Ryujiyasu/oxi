@@ -4010,6 +4010,7 @@ impl<'a> WorkbookHost<'a> {
         };
         let calculated = match reason {
             CalculationReason::ManualEntry => oxicells_core::formula::evaluate_workbook_formula_entry(self.workbook, &cells, self.now),
+            CalculationReason::ArrayEntry => oxicells_core::formula::evaluate_workbook_formula_array_entry(self.workbook, &cells, self.now),
             CalculationReason::Calculate => oxicells_core::formula::evaluate_workbook_formula_subset(self.workbook, &cells, changed, self.now),
             CalculationReason::Dirty { sheet } => {
                 let scope = sheet.and_then(|index| self.workbook.sheets.get(index).map(|sheet| sheet.name.clone()));
@@ -25835,11 +25836,13 @@ impl Host for WorkbookHost<'_> {
             // is Error 2023 -- and `Volatile` does nothing outside a function
             // a cell calls.
             if self.is_application(receiver) && name.eq_ignore_ascii_case("caller") {
-                // Inside a function a cell runs, the cell: measured,
-                // `=Where()` answering `Application.Caller.Address` is $B$2.
+                // A legacy array formula supplies its whole block as Caller.
                 let running = self.user_functions.borrow().running;
                 if let Some(at) = running {
-                    return Ok(Some(self.object(HostObject::Range(CellRange::single(at)))));
+                    let range = self.array_of(at).map(|(start_row, start_column, end_row, end_column)| CellRange {
+                        sheet: at.sheet, start_row, start_column, end_row, end_column,
+                    }).unwrap_or_else(|| CellRange::single(at));
+                    return Ok(Some(self.object(HostObject::Range(range))));
                 }
                 return Ok(Some(Value::Error(2023)));
             }
@@ -30769,7 +30772,10 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("formulaarray") {
             self.set_formula_array(range, value)?;
-            self.calculate_assignment(range);
+            let cells = self.formula_locations(range);
+            if !cells.is_empty() {
+                self.recalculate_subset(cells, false, false, CalculationReason::ArrayEntry);
+            }
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("formular1c1")
@@ -36441,7 +36447,7 @@ fn calculate_needs_lagging_scalar_indirect_probe(workbook: &Workbook, functions:
 #[derive(Clone)]
 enum UserCalculation { All, Cells { cells: Vec<(String, (u32, u32))>, changed: bool, clear_dirty: bool, reason: CalculationReason } }
 #[derive(Clone, Copy)]
-enum CalculationReason { Calculate, Dirty { sheet: Option<usize> }, ManualEntry }
+enum CalculationReason { Calculate, Dirty { sheet: Option<usize> }, ManualEntry, ArrayEntry }
 struct UserOperation { formula_reads: FormulaReadObservations, answers: std::collections::HashMap<String, CachedUserAnswer>, calculation: Option<UserCalculation>, calculation_baseline: Option<CalculationBaseline>, evaluation_pass: usize, calculation_done: bool, wait_for_dependencies: bool, wait_for_dynamic_lookups: bool, provisional_dynamic_text_value: bool, provisional_zero_text_probe: bool, prioritize_dynamic_indirect_consumers: bool, provisional_text_probe_target: Option<oxicells_calc::FormulaCell>, distinct_provisional_calls: bool, full_rebuild: bool, full_calculation: bool, copy_saved: Option<bool>, text_columns_result: Option<Result<Value, String>>, spill_probe_layout: Option<oxicells_calc::engine::SpillProbeLayout> }
 
 #[derive(Clone)]
@@ -62014,6 +62020,132 @@ End Function
             }
         }
         assert!(mismatches.is_empty(), "{} native trace mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+    }
+
+
+    #[test]
+    fn legacy_array_udf_caller_covers_its_entire_block() {
+        let source = r#"
+            Public Function Who() As String
+                Who = Application.Caller.Address(False,False) & ":" & CStr(Application.Caller.Rows.Count) & "x" & CStr(Application.Caller.Columns.Count)
+            End Function
+            Public Function CallerRangeCase(ByVal address As String) As String
+                Application.Calculation = xlCalculationManual
+                Dim target As Range
+                Set target = Range(address)
+                target.FormulaArray = "=Who()"
+                target.Calculate
+                CallerRangeCase = CStr(target.Cells(1,1).Value2) & "|" & CStr(target.Cells(target.Rows.Count,target.Columns.Count).Value2)
+            End Function
+        "#;
+        for (address, shape) in [("M1:M3", "3x1"), ("M1:O1", "1x3"), ("M1:N2", "2x2")] {
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(
+                workbook(), source, Some("CallerRangeCase"), vec![Value::String(address.into())],
+                0, failure_context(), &mut session,
+            ).unwrap();
+            assert!(outcome.error.is_none(), "{address}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+            let caller = format!("{address}:{shape}");
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap(),
+                serde_json::json!({"type":"string","value":format!("{caller}|{caller}")}), "{address}");
+        }
+    }
+
+    #[test]
+    fn legacy_array_assignment_and_recalculation_match_native_stages() {
+        let source = format!("{}{}", include_str!("../../../tests/fixtures/vba/worksheet_index_contexts.bas"), r#"
+Public Function CseGraphStages(ByVal expression As String, ByVal repetition As Long) As String
+ Dim previous As Long, report As String, beforeRead As Long, saved As String
+ previous=Application.Calculation
+ Application.Calculation=xlCalculationManual
+ Driver
+ Range("M1:AA3").ClearContents
+ evaluationCalls=0
+ Range("M1:M3").FormulaArray="=" & expression
+ beforeRead=evaluationCalls
+ saved=ArrayReport(Range("M1:M3").Value2)
+ report="set:" & CStr(beforeRead) & "~" & CStr(evaluationCalls) & ":" & saved
+ Range("M1:M3").Calculate
+ beforeRead=evaluationCalls
+ report=report & "|entry:" & CStr(beforeRead) & ":" & ArrayReport(Range("M1:M3").Value2)
+ Range("M1:M3").Calculate
+ beforeRead=evaluationCalls
+ report=report & "|repeat:" & CStr(beforeRead) & ":" & ArrayReport(Range("M1:M3").Value2)
+ Application.CalculateFullRebuild
+ beforeRead=evaluationCalls
+ CseGraphStages=report & "|full:" & CStr(beforeRead) & ":" & ArrayReport(Range("M1:M3").Value2)
+ Range("M1:AA3").ClearContents
+ Application.Calculation=previous
+End Function
+"#);
+        let mut mismatches = Vec::new();
+        for (formula, expected) in [
+            ("SelectionTick(5)", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:2:A2:1:3:1:1|5:5|5:5|5:5|repeat:3:A2:1:3:1:1|5:5|5:5|5:5|full:4:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("SelectionTick(5)+{1;2;3}", "set:1~1:A2:1:3:1:1|5:6|5:7|5:8|entry:2:A2:1:3:1:1|5:6|5:7|5:8|repeat:3:A2:1:3:1:1|5:6|5:7|5:8|full:4:A2:1:3:1:1|5:6|5:7|5:8"),
+            ("SelectionTick(5)+{1;2}", "set:1~1:A2:1:3:1:1|5:6|5:7|E:7|entry:2:A2:1:3:1:1|5:6|5:7|E:7|repeat:3:A2:1:3:1:1|5:6|5:7|E:7|full:4:A2:1:3:1:1|5:6|5:7|E:7"),
+            ("SelectionTick(5)+{1,2}", "set:1~1:A2:1:3:1:1|5:6|5:6|5:6|entry:2:A2:1:3:1:1|5:6|5:6|5:6|repeat:3:A2:1:3:1:1|5:6|5:6|5:6|full:4:A2:1:3:1:1|5:6|5:6|5:6"),
+            ("LET(unused,SelectionTick(5),INDEX(D1:D3,1,1))", "set:1~1:A2:1:3:1:1|5:1|5:1|5:1|entry:2:A2:1:3:1:1|5:1|5:1|5:1|repeat:3:A2:1:3:1:1|5:1|5:1|5:1|full:4:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("SUM(SelectionTick(5)+{1;2;3})", "set:1~1:A2:1:3:1:1|5:21|5:21|5:21|entry:2:A2:1:3:1:1|5:21|5:21|5:21|repeat:3:A2:1:3:1:1|5:21|5:21|5:21|full:4:A2:1:3:1:1|5:21|5:21|5:21"),
+            ("SUM(INDEX(D1:D3,SelectionTick(1)+{0;1;2},1))", "set:1~1:A2:1:3:1:1|5:6|5:6|5:6|entry:5:A2:1:3:1:1|5:1|5:2|5:3|repeat:9:A2:1:3:1:1|5:1|5:2|5:3|full:13:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUMPRODUCT(INDEX(D1:D3,{1;2;3},SelectionTick(1)))", "set:1~1:A2:1:3:1:1|5:6|5:6|5:6|entry:2:A2:1:3:1:1|5:6|5:6|5:6|repeat:3:A2:1:3:1:1|5:6|5:6|5:6|full:4:A2:1:3:1:1|5:6|5:6|5:6"),
+            ("IF({TRUE;FALSE;TRUE},SelectionTick(5),0)", "set:1~1:A2:1:3:1:1|5:5|5:0|5:5|entry:2:A2:1:3:1:1|5:5|5:0|5:5|repeat:3:A2:1:3:1:1|5:5|5:0|5:5|full:4:A2:1:3:1:1|5:5|5:0|5:5"),
+            ("IF(TRUE,SelectionTick(5),{1;2;3})", "set:1~1:A2:1:3:1:1|5:5|5:5|5:5|entry:2:A2:1:3:1:1|5:5|5:5|5:5|repeat:3:A2:1:3:1:1|5:5|5:5|5:5|full:4:A2:1:3:1:1|5:5|5:5|5:5"),
+            ("LET(r,SelectionTick(5)+{1;2;3},SUM(r))", "set:1~1:A2:1:3:1:1|5:21|5:21|5:21|entry:2:A2:1:3:1:1|5:21|5:21|5:21|repeat:3:A2:1:3:1:1|5:21|5:21|5:21|full:4:A2:1:3:1:1|5:21|5:21|5:21"),
+            ("LET(r,SelectionTick(5),r+{1;2;3})", "set:1~1:A2:1:3:1:1|5:6|5:7|5:8|entry:2:A2:1:3:1:1|5:6|5:7|5:8|repeat:3:A2:1:3:1:1|5:6|5:7|5:8|full:4:A2:1:3:1:1|5:6|5:7|5:8"),
+            ("CounterTick()", "set:1~1:A2:1:3:1:1|5:1|5:1|5:1|entry:2:A2:1:3:1:1|5:2|5:2|5:2|repeat:3:A2:1:3:1:1|5:3|5:3|5:3|full:4:A2:1:3:1:1|5:4|5:4|5:4"),
+            ("CounterTick()+{0;0;0}", "set:1~1:A2:1:3:1:1|5:1|5:1|5:1|entry:2:A2:1:3:1:1|5:2|5:2|5:2|repeat:3:A2:1:3:1:1|5:3|5:3|5:3|full:4:A2:1:3:1:1|5:4|5:4|5:4"),
+            ("SUM(INDEX(D1:D3,N({1;2;3}),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3})),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:6|5:6|5:6|repeat:0:A2:1:3:1:1|5:6|5:6|5:6|full:0:A2:1:3:1:1|5:6|5:6|5:6"),
+            ("SUM(INDEX(D1:D3,N(ROW(A1:A3)),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,N(TRANSPOSE({1,2,3})),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,IF(1,N({1;2;3})),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,IF(1,N(ROW(A1:A3))),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,IFERROR({1;2;3},0),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,ABS({1;2;3}),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,INT({1;2;3}),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,--{1;2;3},1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))+0,1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:6|5:6|5:6|repeat:0:A2:1:3:1:1|5:6|5:6|5:6|full:0:A2:1:3:1:1|5:6|5:6|5:6"),
+            ("SUM(INDEX(D1:D3,N(D1:D3),1))", "set:0~0:A2:1:3:1:1|5:1|5:1|5:1|entry:0:A2:1:3:1:1|5:1|5:1|5:1|repeat:0:A2:1:3:1:1|5:1|5:1|5:1|full:0:A2:1:3:1:1|5:1|5:1|5:1"),
+            ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))*1,1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:6|5:6|5:6|repeat:0:A2:1:3:1:1|5:6|5:6|5:6|full:0:A2:1:3:1:1|5:6|5:6|5:6"),
+            ("LET(n,N(IF(1,{1;2;3})),SUM(INDEX(D1:D3,n,1)))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,N(IFERROR({1;2;3},0)),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,N(CHOOSE(1,{1;2;3})),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:6|5:6|5:6|repeat:0:A2:1:3:1:1|5:6|5:6|5:6|full:0:A2:1:3:1:1|5:6|5:6|5:6"),
+            ("SUM(INDEX(D1:D3,N({1;2;3})+ROW(A1:A3)*0,1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUMPRODUCT(INDEX(D1:D3,N(IF(1,{1;2;3})),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:6|5:6|5:6|repeat:0:A2:1:3:1:1|5:6|5:6|5:6|full:0:A2:1:3:1:1|5:6|5:6|5:6"),
+            ("SUM(INDEX(D1:D3,LET(n,N(IF(1,{1;2;3})),n),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,LET(n,N(IF(1,{3;2;1})),{1;2;3}),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,IF(FALSE,N(IF(1,{3;2;1})),{1;2;3}),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,IF(TRUE,N(IF(1,{1;2;3})),{3;2;1}),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,ABS(IF(1,{1;2;3})),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,INT(IF(1,{1;2;3})),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,IF(1,{1;2;3})+0,1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,--IF(1,{1;2;3}),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,TRANSPOSE(N(IF(1,{1,2,3}))),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,VALUE(IF(1,{\"1\";\"2\";\"3\"})),1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:1|5:2|5:3|repeat:0:A2:1:3:1:1|5:1|5:2|5:3|full:0:A2:1:3:1:1|5:1|5:2|5:3"),
+            ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3})),{1;1;1}))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:6|5:6|5:6|repeat:0:A2:1:3:1:1|5:6|5:6|5:6|full:0:A2:1:3:1:1|5:6|5:6|5:6"),
+            ("SUM(INDEX(D1:D3,N(IF(1,{1;2;3}))+{0;0;0},1))", "set:0~0:A2:1:3:1:1|5:6|5:6|5:6|entry:0:A2:1:3:1:1|5:6|5:6|5:6|repeat:0:A2:1:3:1:1|5:6|5:6|5:6|full:0:A2:1:3:1:1|5:6|5:6|5:6"),
+        ] {
+            for version in [1u8, 2] {
+                let mut book = workbook();
+                book.calculation.compatibility_version = version;
+                let mut session = None;
+                let outcome = execute_workbook_action_in_session(
+                    book, &source, Some("CseGraphStages"),
+                    vec![Value::String(formula.into()), Value::Integer(0)],
+                    0, failure_context(), &mut session,
+                ).unwrap();
+                if let Some(error) = outcome.error {
+                    mismatches.push(format!("{formula}, version {version}: {}", error.message));
+                    continue;
+                }
+                let actual = serde_json::to_value(&outcome.result).unwrap();
+                let expected = serde_json::json!({"type":"string","value":expected});
+                if actual != expected {
+                    mismatches.push(format!("{formula}, version {version}: {actual} != {expected}"));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
     #[test]
