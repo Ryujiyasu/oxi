@@ -4446,9 +4446,20 @@ impl<'a> TableFitLayouter<'a> {
                                     };
                                     let mut wrap_w =
                                         (wrap_base - p_indent_left - p_indent_right).max(0.0);
+                                    // OXI_CELL_NEGFIRST (2026-11-01, default ON, opt-out _DISABLE): a
+                                    // first line that starts left of the cell's inner edge also WRAPS
+                                    // that much wider -- the start was already drawn there, only the
+                                    // budget stopped at the edge. `_pb_cell_negfirst_gen.py` (3000tw
+                                    // cell): firstLine=-200 and left=200 hanging=400 put 14 chars on
+                                    // line 1 at -10pt in Word against 13 with no indent; Oxi drew the
+                                    // -10 start and still broke after 13. ja/educational__244a3664's
+                                    // «(10分)» labels (leftChars=-47 hangingChars=47, w:w=66) sit on
+                                    // one line in Word from 3.6 left of the edge; Oxi broke after «(10».
+                                    let negfirst = std::env::var_os("OXI_CELL_NEGFIRST_DISABLE").is_none();
                                     let mut first_line_wrap_w = if p_first_line_indent < 0.0 {
+                                        let fl_start = p_indent_left + p_first_line_indent;
                                         (wrap_base
-                                            - (p_indent_left + p_first_line_indent).max(0.0)
+                                            - if negfirst { fl_start } else { fl_start.max(0.0) }
                                             - p_indent_right)
                                             .max(0.0)
                                     } else {
@@ -4824,6 +4835,7 @@ impl<'a> TableFitLayouter<'a> {
                                         crate::layout::jc_both_compress::CharContext,
                                     > = Vec::new();
                                     let mut is_first_line = true;
+                                    let mut forcefit_hang_pending = false;
                                     // S1169 (2026-08-19, default ON, opt-out
                                     // OXI_S1169_DISABLE): a paragraph that ENDS
                                     // with a hard break keeps the empty line that
@@ -5221,6 +5233,39 @@ impl<'a> TableFitLayouter<'a> {
                                         for (s586_ci, ch) in
                                             s586_run_chars.iter().copied().enumerate()
                                         {
+                                            if forcefit_hang_pending && !matches!(ch, ' ' | '\u{3000}') {
+                                                forcefit_hang_pending = false;
+                                                if !buf.is_empty() {
+                                                    current_line.push((
+                                                        buf.clone(),
+                                                        font_size,
+                                                        buf_w,
+                                                        bold,
+                                                        run.style.italic,
+                                                        run.style.underline,
+                                                        run.style.underline_style.clone(),
+                                                        run.style.strikethrough,
+                                                        font_family.clone(),
+                                                        run.style.color.clone(),
+                                                        run.style.highlight.clone().or_else(
+                                                            || run.style.shading.clone(),
+                                                        ),
+                                                        cs,
+                                                        run.style.text_scale.unwrap_or(100.0),
+                                                        std::mem::take(&mut s993_lrpb_pending),
+                                                        run.style.font_family_east_asia.clone(),
+                                                        run.ruby.is_some(),
+                                                        cell_run_style.clone(),
+                                                    ));
+                                                    buf.clear();
+                                                    buf_w = 0.0;
+                                                    current_line_chars.extend(buf_chars.drain(..));
+                                                }
+                                                lines.push(std::mem::take(&mut current_line));
+                                                line_x = 0.0;
+                                                current_line_chars.clear();
+                                                is_first_line = false;
+                                            }
                                             // Session 109 (2026-05-19): honour soft line breaks
                                             // (<w:br/>) and column/page break markers within table
                                             // cells. The OOXML parser converts <w:br/> to '\n' in
@@ -6298,7 +6343,32 @@ impl<'a> TableFitLayouter<'a> {
                                                         .enumerate()
                                                     {
                                                         last_ch = Some(c.ch);
-                                                        if s1208 && c.ch == '\u{3000}' {
+                                                        // OXI_CELL_SPACE_MARK (2026-11-01, default ON, opt-out
+                                                        // _DISABLE): S1208's "a fullwidth space is not a mark"
+                                                        // was read off tokyoshugyo, which carries
+                                                        // balanceSingleByteDoubleByteWidth. Without it the
+                                                        // space lends its half em like a comma.
+                                                        // `_pb_cell_middot_lend_gen.py` (19.66em jc=both cell,
+                                                        // «一　夢…»): 20 chars on line 1 in compat 14 and 15,
+                                                        // 19 with balance in both.
+                                                        if s1208 && c.ch == '\u{3000}'
+                                                            && (self.balance_single_byte_double_byte_width
+                                                                || std::env::var_os("OXI_CELL_SPACE_MARK_DISABLE").is_some())
+                                                        {
+                                                            continue;
+                                                        }
+                                                        // OXI_CELL_LEAD_MIDDOT (2026-11-01, default ON, opt-out
+                                                        // _DISABLE): under compat 15 a middle dot that opens the
+                                                        // paragraph lends nothing (a ・ cannot start any other
+                                                        // line). Same probe: «・夢と…» 19 in compat 15 (with or
+                                                        // without balance), 20 in compat 14; «夢と・…» 20 in all
+                                                        // four. ja/educational__244a3664 «・　夢として…» (compat
+                                                        // 15, balance): Word 19 chars, Oxi credited the dot and
+                                                        // kept 20 with «な» drawn 3.5pt past the cell edge.
+                                                        if c.ch == '・' && i == 0 && is_first_line
+                                                            && self.compat_mode >= 15
+                                                            && std::env::var_os("OXI_CELL_LEAD_MIDDOT_DISABLE").is_none()
+                                                        {
                                                             continue;
                                                         }
                                                         if kinsoku::cell_yaku_type_b(c.ch) {
@@ -6506,6 +6576,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     para, &run.style,
                                                     current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.ch),
                                                     font_size, ch, grid_char_pitch,
+                                                    is_first_line && self.compat_mode >= 15,
                                                 ));
                                                 let pool = LayoutEngine::cell_english_pair_capacity(para, &run.style, current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.ch), font_size, pool);
                                                 if std::env::var("OXI_DUMP_GLYPHW").is_ok() {
@@ -7161,6 +7232,16 @@ impl<'a> TableFitLayouter<'a> {
                                                         buf_w = 0.0;
                                                         current_line_chars
                                                             .extend(buf_chars.drain(..));
+                                                    }
+                                                    // OXI_CELL_FORCEFIT_SPACE_HANG (2026-11-01, default ON,
+                                                    // opt-out _DISABLE): spaces that follow the force-fitted
+                                                    // mark hang on its line (S1436 in the cell breaker); the
+                                                    // break waits for the next non-space character.
+                                                    // ja/educational__244a3664 «…話し合う。» + 12 U+3000: one
+                                                    // line in Word, Oxi gave the spaces a line of their own.
+                                                    if std::env::var_os("OXI_CELL_FORCEFIT_SPACE_HANG_DISABLE").is_none() {
+                                                        forcefit_hang_pending = true;
+                                                        continue;
                                                     }
                                                     lines.push(std::mem::take(&mut current_line));
                                                     line_x = 0.0;

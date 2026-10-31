@@ -20461,12 +20461,20 @@ cells={} pitch={:.2} text={:?}",
                         let mut n_a = 0.0f32;
                         let mut b = 0.0f32;
                         let mut last_ch: Option<char> = None;
-                        for c in current_line_chars.iter().chain(buf_chars.iter()) {
+                        let space_mark = !self.balance_single_byte_double_byte_width
+                            && std::env::var_os("OXI_CELL_SPACE_MARK_DISABLE").is_none();
+                        for (i, c) in current_line_chars.iter().chain(buf_chars.iter()).enumerate() {
+                            if c.ch == '\u{30fb}' && i == 0 && is_first_line && self.compat_mode >= 15
+                                && Self::cell_lead_middot_free()
+                            {
+                                last_ch = Some(c.ch);
+                                continue;
+                            }
                             if kinsoku::cell_yaku_type_b(c.ch) {
                                 b += 0.5 * c.natural_advance;
                             } else if kinsoku::cell_yaku_type_a(c.ch) {
                                 has_a = true;
-                                if c.ch != '\u{3000}' {
+                                if c.ch != '\u{3000}' || space_mark {
                                     n_a += 1.0;
                                 }
                             }
@@ -20519,7 +20527,7 @@ cells={} pitch={:.2} text={:?}",
                     let pool = pool.max(self.modern_cell_punctuation_capacity(
                         para, &run.style,
                         current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.ch),
-                        font_size, ch, grid_char_pitch,
+                        font_size, ch, grid_char_pitch, is_first_line,
                     ));
                     let pool = Self::cell_english_pair_capacity(para, &run.style, current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.ch), font_size, pool);
 
@@ -23613,9 +23621,13 @@ cells={} pitch={:.2} text={:?}",
         pool.min(pairs as f32 * font_size * 0.5)
     }
 
+    fn cell_lead_middot_free() -> bool {
+        std::env::var_os("OXI_CELL_LEAD_MIDDOT_DISABLE").is_none()
+    }
+
     fn modern_cell_punctuation_capacity(
         &self, para: &Paragraph, style: &RunStyle, chars: impl Iterator<Item = char>,
-        font_size: f32, next: char, grid_char_pitch: Option<f32>,
+        font_size: f32, next: char, grid_char_pitch: Option<f32>, para_first_line: bool,
     ) -> f32 {
         let language = style.east_asia_lang.as_deref().or_else(||
             para.style.default_run_style.as_ref().and_then(|r| r.east_asia_lang.as_deref()));
@@ -23643,6 +23655,8 @@ cells={} pitch={:.2} text={:?}",
         let mut n = 0; let mut k = 0; let mut last = None;
         for ch in chars {
             n += 1; last = Some(ch);
+            // OXI_CELL_LEAD_MIDDOT: a paragraph-initial ・ lends nothing (see table_fit).
+            if ch == '・' && n == 1 && para_first_line && Self::cell_lead_middot_free() { continue; }
             if ch != '\u{3000}' && ch != '\u{ff1a}' && ch != '\u{ff1b}'
                 && (kinsoku::cell_yaku_type_a(ch) || kinsoku::cell_yaku_type_b(ch)) { k += 1; }
         }
