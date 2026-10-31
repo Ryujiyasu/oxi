@@ -3795,7 +3795,6 @@ impl<'a> WorkbookHost<'a> {
         let mut palette = self.indexed_colour_palette();
         palette[index] = i64::from(colour);
         self.store_indexed_colour_palette(palette);
-        self.workbook.recalculation.change("__palette__".into(), (0, 0, 0, 0));
         Ok(())
     }
 
@@ -3810,13 +3809,21 @@ impl<'a> WorkbookHost<'a> {
             palette[index] = i64::from(colour);
         }
         self.store_indexed_colour_palette(palette);
-        self.workbook.recalculation.change("__palette__".into(), (0, 0, 0, 0));
         Ok(())
     }
 
     fn automatic_calculation(&self) -> bool { matches!(self.calculation, -4105 | 2) }
 
     fn calculation_state(&mut self) -> i64 {
+        let running = self.user_functions.borrow().running_key.is_some();
+        if !running {
+            // Edit rectangles describe mutations, not necessarily formula work.
+            // Resolve their dependency closure without evaluating a cell or UDF.
+            if !self.workbook.recalculation.changed.is_empty() {
+                self.queue_volatile_calculation();
+            }
+            oxicells_core::recalculation::prepare(self.workbook);
+        }
         let pending = self.workbook.recalculation.pending();
         let held = self.user_functions.borrow();
         if held.running_key.is_some() {
@@ -3915,6 +3922,26 @@ impl<'a> WorkbookHost<'a> {
         }
     }
 
+    fn queue_volatile_calculation(&mut self) {
+        self.workbook.recalculation.dirty.extend(
+            oxicells_core::recalculation::volatile_dependents(self.workbook),
+        );
+    }
+
+    fn clear_contents_bounds(&self, range: CellRange) -> Result<Option<CellRange>, String> {
+        let used = self.used_range(range.sheet)?;
+        let clipped = CellRange {
+            start_row: range.start_row.max(used.start_row),
+            end_row: range.end_row.min(used.end_row),
+            end_column: range.end_column.min(used.end_column),
+            ..range
+        };
+        // Leading blank columns in used rows are still invalidated. Rows
+        // before the used extent and columns beyond its end are not written.
+        Ok((clipped.start_row <= clipped.end_row
+            && clipped.start_column <= clipped.end_column).then_some(clipped))
+    }
+
     fn queue_metadata_cycles(&mut self, sheet: Option<usize>) {
         let cells: Vec<_> = self.workbook.recalculation.metadata_cycles.iter()
             .chain(self.workbook.recalculation.metadata_reference_cycles.iter()).filter_map(|(cell, formula)| {
@@ -3945,7 +3972,10 @@ impl<'a> WorkbookHost<'a> {
             .filter(|(name, _)| sheet_scope.as_ref().is_none_or(|scope| same_sheet_name(name, scope))));
         dirty.sort();
         dirty.dedup();
-        if dirty.is_empty() { return; }
+        if dirty.is_empty() {
+            if sheet_scope.is_some() { self.queue_volatile_calculation(); }
+            return;
+        }
         self.lend_user_functions();
         self.user_functions.borrow_mut().calculation = Some(UserCalculation::Cells {
             cells: dirty.clone(), changed: false, clear_dirty: true, reason: CalculationReason::Dirty { sheet },
@@ -3954,6 +3984,7 @@ impl<'a> WorkbookHost<'a> {
         self.retain_pending_calculation_cells(&calculated);
         if let Some(scope) = sheet_scope {
             for cell in calculated { self.workbook.recalculation.dirty.remove(&cell); }
+            self.queue_volatile_calculation();
             if self.workbook.recalculation.dirty.is_empty() { self.workbook.recalculation.changed.clear(); }
             else { self.workbook.recalculation.changed.retain(|(name, _)| !same_sheet_name(name, &scope)); }
         } else {
@@ -4048,6 +4079,7 @@ impl<'a> WorkbookHost<'a> {
         if clear_dirty {
             if let Some(scope) = dirty_scope {
                 for cell in cells { self.workbook.recalculation.dirty.remove(&cell); }
+                self.queue_volatile_calculation();
                 if self.workbook.recalculation.dirty.is_empty() { self.workbook.recalculation.changed.clear(); }
                 else { self.workbook.recalculation.changed.retain(|(name, _)| !same_sheet_name(name, &scope)); }
             } else {
@@ -26402,24 +26434,24 @@ impl Host for WorkbookHost<'_> {
                         return Err("Range.ClearContents does not accept arguments".to_string());
                     }
                     self.refuse_part_of_merge(range)?;
-                    // Emptying cells that hold nothing does nothing, so a
-                    // whole column is cleared as far as the sheet holds --
-                    // unless the sheet is protected, where an empty locked
-                    // cell still refuses.
-                    let range = if self.cell_protection(range.sheet).is_none() {
-                        self.cut_to_contents(range)?
-                    } else {
-                        range
-                    };
-                    // Measured: clearing one cell of an array is 1004, where
-                    // writing to it is quietly nothing.
                     self.arrays_allow(range, false)?;
-                    let writes = self.set_range_input(range, Value::Empty, "range assignment", FormulaStyle::A1)?;
+                    let requested = range;
+                    let target = if self.cell_protection(range.sheet).is_none() {
+                        self.clear_contents_bounds(range)?
+                    } else {
+                        Some(range)
+                    };
+                    let writes = if let Some(target) = target {
+                        self.set_range_input(target, Value::Empty, "range assignment", FormulaStyle::A1)?
+                    } else {
+                        RangeInputWrite::default()
+                    };
+                    // Clearing even an unused region invalidates volatile
+                    // formulas. Automatic input consumes that work immediately.
+                    if !writes.refused || writes.wrote { self.queue_volatile_calculation(); }
                     self.calculate_input(&writes);
                     writes.finish()?;
-                    // Measured: the hyperlink goes with the contents and the
-                    // blue underline stays.
-                    let ids = self.links_in(HyperlinkScope::Range(range));
+                    let ids = self.links_in(HyperlinkScope::Range(requested));
                     self.delete_links(&ids, true)?;
                     self.clipboard = None;
                     return Ok(Some(Value::Empty));
@@ -26433,6 +26465,8 @@ impl Host for WorkbookHost<'_> {
                         return Err("Range.ClearFormats does not accept arguments".to_string());
                     }
                     self.clear_range(range, false, true)?;
+                    self.queue_volatile_calculation();
+                    if self.automatic_calculation() { self.calculate_dirty(None); }
                     self.clipboard = None;
                     return Ok(Some(Value::Boolean(true)));
                 }
@@ -63928,6 +63962,369 @@ End Function
             assert_eq!(serde_json::to_value(&outcome.result).unwrap(), serde_json::json!({"type":"string","value":fields[3]}), "{fields:?}");
             book = serde_json::from_slice(&serde_json::to_vec(&outcome.workbook).unwrap()).unwrap();
         }
+    }
+
+    #[test]
+    fn native_pending_edits_and_scoped_calculation_match_excel() {
+        let source = format!("Attribute VB_Name = \"IndexDriver\"\n{}\n{}", include_str!("../../../tests/fixtures/vba/worksheet_index_contexts.bas"), r##"
+Public Function EmptyDirtyStateAudit(ByVal context As String, ByVal operation As String) As String
+ Dim result As String
+ Dim value As Variant
+ Application.Calculation=xlCalculationAutomatic
+ Driver
+ Range("M1:O6").ClearContents
+ If context="independent_formula" Then Range("E1").Formula2="=1"
+ If context="dependent_formula" Then Range("E1").Formula2="=M1+1"
+ Application.Calculate
+ Application.Calculation=xlCalculationManual
+ result=CStr(Application.CalculationState)
+ Select Case operation
+ Case "clear_empty"
+  Range("M1:O6").ClearContents
+ Case "set_empty"
+  Range("M1").Value2=Empty
+ Case "set_zero"
+  Range("M1").Value2=0
+ Case "write_unrelated"
+  Range("Z1").Value2=17
+ Case Else
+  Range("M1:O6").ClearFormats
+ End Select
+ result=result & "|" & CStr(Application.CalculationState)
+ value=Range("E1").Value2
+ result=result & "|" & CStr(Application.CalculationState)
+ ActiveSheet.Calculate
+ EmptyDirtyStateAudit=result & "|" & CStr(Application.CalculationState)
+End Function
+
+
+Public Function VolatilePendingStateAudit(ByVal expression As String, ByVal operation As String) As String
+ Dim result As String
+ Dim ignored As Variant
+ Application.Calculation=xlCalculationAutomatic
+ Driver
+ Range("M1:O6").ClearContents
+ Range("E1").Formula2="=" & expression
+ Application.Calculate
+ Application.Calculation=xlCalculationManual
+ result=CStr(Application.CalculationState)
+ Select Case operation
+ Case "empty_clear"
+  Range("M1:O6").ClearContents
+ Case "unrelated_write"
+  Range("Z1").Value2=17
+ Case "dependent_write"
+  Range("M1").Value2=17
+ Case Else
+  Range("Z1:Z3").ClearContents
+ End Select
+ result=result & "|" & CStr(Application.CalculationState)
+ ignored=Range("E1").Value2
+ result=result & "|" & CStr(Application.CalculationState)
+ Range("E1").Calculate
+ result=result & "|" & CStr(Application.CalculationState)
+ ActiveSheet.Calculate
+ result=result & "|" & CStr(Application.CalculationState)
+ Application.Calculate
+ result=result & "|" & CStr(Application.CalculationState)
+ Application.CalculateFull
+ VolatilePendingStateAudit=result & "|" & CStr(Application.CalculationState)
+End Function
+
+
+Public Function MixedClearStateAudit(ByVal dependent As String, ByVal mKind As Long, ByVal mValue As Variant, ByVal nKind As Long, ByVal nValue As Variant, ByVal formatCell As Boolean) As String
+ Dim result As String
+ Dim ignored As Variant
+ Application.Calculation=xlCalculationAutomatic
+ Driver
+ Range("M1:O6").ClearContents
+ If mKind=1 Then Range("M1").Value2=mValue
+ If mKind=2 Then Range("M1").Formula2="=" & mValue
+ If nKind=1 Then Range("N1").Value2=nValue
+ If nKind=2 Then Range("N1").Formula2="=" & nValue
+ If formatCell Then Range("M1").NumberFormat="0.00"
+ Range("E1").Formula2="=" & dependent
+ Application.Calculate
+ Application.Calculation=xlCalculationManual
+ result=CStr(Application.CalculationState)
+ Range("M1:N1").ClearContents
+ result=result & "|" & CStr(Application.CalculationState)
+ ignored=Range("E1").Value2
+ result=result & "|" & CStr(Application.CalculationState)
+ ActiveSheet.Calculate
+ MixedClearStateAudit=result & "|" & CStr(Application.CalculationState)
+End Function
+
+Public Function AutomaticModeStateAudit(ByVal expression As String, ByVal mode As Long, ByVal operation As String) As String
+ Dim result As String
+ Dim ignored As Variant
+ Application.Calculation=xlCalculationAutomatic
+ Range("E1").Formula2="=" & expression
+ Application.Calculate
+ Application.Calculation=mode
+ result=CStr(Application.CalculationState)
+ If operation="empty_clear" Then
+  Range("M1").ClearContents
+ Else
+  Range("Z1").Value2=17
+ End If
+ result=result & "|" & CStr(Application.CalculationState)
+ ignored=Range("E1").Value2
+ result=result & "|" & CStr(Application.CalculationState)
+ Range("E1").Calculate
+ result=result & "|" & CStr(Application.CalculationState)
+ ActiveSheet.Calculate
+ result=result & "|" & CStr(Application.CalculationState)
+ Application.Calculate
+ AutomaticModeStateAudit=result & "|" & CStr(Application.CalculationState)
+End Function
+
+Public Function FormattingStateAudit(ByVal expression As String, ByVal operation As String) As String
+ Dim result As String
+ Dim ignored As Variant
+ Application.Calculation=xlCalculationAutomatic
+ Range("E1").Formula2="=" & expression
+ Application.Calculate
+ Application.Calculation=xlCalculationManual
+ result=CStr(Application.CalculationState)
+ Select Case operation
+ Case "clear_formats"
+  Range("M1").ClearFormats
+ Case "font_bold"
+  Range("M1").Font.Bold=True
+ Case "number_format"
+  Range("M1").NumberFormat="0.00"
+ Case Else
+  Range("M1").Select
+ End Select
+ result=result & "|" & CStr(Application.CalculationState)
+ ignored=Range("E1").Value2
+ result=result & "|" & CStr(Application.CalculationState)
+ Range("E1").Calculate
+ result=result & "|" & CStr(Application.CalculationState)
+ ActiveSheet.Calculate
+ result=result & "|" & CStr(Application.CalculationState)
+ Application.Calculate
+ FormattingStateAudit=result & "|" & CStr(Application.CalculationState)
+End Function
+
+Public Function BoundsClearStateAudit(ByVal driverFirst As Boolean, ByVal anchor As String, ByVal expression As String, ByVal target As String, ByVal extra As String, ByVal usedBefore As Boolean, ByVal usedAfter As Boolean) As String
+ Dim result As String
+ Dim ignored As Variant
+ Application.Calculation=xlCalculationAutomatic
+ If driverFirst Then
+  Driver
+  Range("M1:O6").ClearContents
+ End If
+ If Len(extra)>0 Then Range(extra).Value2=17
+ Range(anchor).Formula2="=" & expression
+ Application.Calculate
+ Application.Calculation=xlCalculationManual
+ If usedBefore Then ignored=ActiveSheet.UsedRange.Address
+ result=CStr(Application.CalculationState)
+ Range(target).ClearContents
+ result=result & "|" & CStr(Application.CalculationState)
+ If usedAfter Then ignored=ActiveSheet.UsedRange.Address
+ ignored=Range(anchor).Value2
+ result=result & "|" & CStr(Application.CalculationState)
+ ActiveSheet.Calculate
+ result=result & "|" & CStr(Application.CalculationState)
+ Application.Calculate
+ BoundsClearStateAudit=result & "|" & CStr(Application.CalculationState)
+End Function
+
+Public Function CrossSheetPendingStateAudit(ByVal mode As Long, ByVal selected As Long) As String
+ Dim ignored As Object
+ Dim result As String
+ Application.Calculation=xlCalculationAutomatic
+ Set ignored=Worksheets.Add
+ Worksheets(1).Range("A1").Formula2="=1"
+ Worksheets(2).Range("A1").Formula2="=NOW()"
+ Application.Calculate
+ Application.Calculation=mode
+ result=CStr(Application.CalculationState)
+ Worksheets(selected).Calculate
+ result=result & "|" & CStr(Application.CalculationState)
+ Application.Calculate
+ CrossSheetPendingStateAudit=result & "|" & CStr(Application.CalculationState)
+End Function
+Public Function ClearFormatsModeStateAudit(ByVal expression As String, ByVal mode As Long) As String
+ Dim result As String
+ Application.Calculation=xlCalculationAutomatic
+ Range("E1").Formula2="=" & expression
+ Application.Calculate
+ Application.Calculation=mode
+ result=CStr(Application.CalculationState)
+ Range("M1").ClearFormats
+ result=result & "|" & CStr(Application.CalculationState)
+ Range("E1").Calculate
+ result=result & "|" & CStr(Application.CalculationState)
+ ActiveSheet.Calculate
+ result=result & "|" & CStr(Application.CalculationState)
+ Application.Calculate
+ ClearFormatsModeStateAudit=result & "|" & CStr(Application.CalculationState)
+End Function
+
+Public Function PalettePendingStateAudit(ByVal expression As String, ByVal mode As Long) As String
+ Dim result As String
+ Application.Calculation=xlCalculationAutomatic
+ If Len(expression)>0 Then Range("E1").Formula2="=" & expression
+ Application.Calculate
+ Application.Calculation=mode
+ result=CStr(Application.CalculationState)
+ ThisWorkbook.Colors(3)=0
+ result=result & "|" & CStr(Application.CalculationState)
+ ActiveSheet.Calculate
+ result=result & "|" & CStr(Application.CalculationState)
+ Application.Calculate
+ PalettePendingStateAudit=result & "|" & CStr(Application.CalculationState)
+End Function
+"##);
+        let cases = [
+            ("empty:driver_only:clear_empty", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("driver_only".into()), Value::String("clear_empty".into())], "0|0|0|0"),
+            ("empty:driver_only:set_empty", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("driver_only".into()), Value::String("set_empty".into())], "0|0|0|0"),
+            ("empty:driver_only:set_zero", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("driver_only".into()), Value::String("set_zero".into())], "0|0|0|0"),
+            ("empty:driver_only:write_unrelated", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("driver_only".into()), Value::String("write_unrelated".into())], "0|0|0|0"),
+            ("empty:driver_only:formats_only", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("driver_only".into()), Value::String("formats_only".into())], "0|0|0|0"),
+            ("empty:independent_formula:clear_empty", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("independent_formula".into()), Value::String("clear_empty".into())], "0|0|0|0"),
+            ("empty:independent_formula:set_empty", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("independent_formula".into()), Value::String("set_empty".into())], "0|0|0|0"),
+            ("empty:independent_formula:set_zero", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("independent_formula".into()), Value::String("set_zero".into())], "0|0|0|0"),
+            ("empty:independent_formula:write_unrelated", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("independent_formula".into()), Value::String("write_unrelated".into())], "0|0|0|0"),
+            ("empty:independent_formula:formats_only", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("independent_formula".into()), Value::String("formats_only".into())], "0|0|0|0"),
+            ("empty:dependent_formula:clear_empty", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("dependent_formula".into()), Value::String("clear_empty".into())], "0|0|0|0"),
+            ("empty:dependent_formula:set_empty", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("dependent_formula".into()), Value::String("set_empty".into())], "0|2|2|0"),
+            ("empty:dependent_formula:set_zero", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("dependent_formula".into()), Value::String("set_zero".into())], "0|2|2|0"),
+            ("empty:dependent_formula:write_unrelated", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("dependent_formula".into()), Value::String("write_unrelated".into())], "0|0|0|0"),
+            ("empty:dependent_formula:formats_only", "IndexDriver.EmptyDirtyStateAudit", vec![Value::String("dependent_formula".into()), Value::String("formats_only".into())], "0|0|0|0"),
+            ("volatile:NOW():empty_clear", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("NOW()".into()), Value::String("empty_clear".into())], "0|2|2|2|2|0|0"),
+            ("volatile:NOW():unrelated_write", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("NOW()".into()), Value::String("unrelated_write".into())], "0|2|2|2|2|0|0"),
+            ("volatile:NOW():dependent_write", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("NOW()".into()), Value::String("dependent_write".into())], "0|2|2|2|2|0|0"),
+            ("volatile:NOW():unrelated_empty_clear", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("NOW()".into()), Value::String("unrelated_empty_clear".into())], "0|2|2|2|2|0|0"),
+            ("volatile:RAND():empty_clear", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("RAND()".into()), Value::String("empty_clear".into())], "0|2|2|2|2|0|0"),
+            ("volatile:RAND():unrelated_write", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("RAND()".into()), Value::String("unrelated_write".into())], "0|2|2|2|2|0|0"),
+            ("volatile:RAND():dependent_write", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("RAND()".into()), Value::String("dependent_write".into())], "0|2|2|2|2|0|0"),
+            ("volatile:RAND():unrelated_empty_clear", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("RAND()".into()), Value::String("unrelated_empty_clear".into())], "0|2|2|2|2|0|0"),
+            ("volatile:INDIRECT(\"M1\"):empty_clear", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("INDIRECT(\"M1\")".into()), Value::String("empty_clear".into())], "0|2|2|2|2|0|0"),
+            ("volatile:INDIRECT(\"M1\"):unrelated_write", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("INDIRECT(\"M1\")".into()), Value::String("unrelated_write".into())], "0|2|2|2|2|0|0"),
+            ("volatile:INDIRECT(\"M1\"):dependent_write", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("INDIRECT(\"M1\")".into()), Value::String("dependent_write".into())], "0|2|2|2|2|0|0"),
+            ("volatile:INDIRECT(\"M1\"):unrelated_empty_clear", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("INDIRECT(\"M1\")".into()), Value::String("unrelated_empty_clear".into())], "0|2|2|2|2|0|0"),
+            ("volatile:OFFSET(M1,0,0):empty_clear", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("OFFSET(M1,0,0)".into()), Value::String("empty_clear".into())], "0|2|2|2|2|0|0"),
+            ("volatile:OFFSET(M1,0,0):unrelated_write", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("OFFSET(M1,0,0)".into()), Value::String("unrelated_write".into())], "0|2|2|2|2|0|0"),
+            ("volatile:OFFSET(M1,0,0):dependent_write", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("OFFSET(M1,0,0)".into()), Value::String("dependent_write".into())], "0|2|2|2|2|0|0"),
+            ("volatile:OFFSET(M1,0,0):unrelated_empty_clear", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("OFFSET(M1,0,0)".into()), Value::String("unrelated_empty_clear".into())], "0|2|2|2|2|0|0"),
+            ("volatile:CELL(\"address\",M1):empty_clear", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("CELL(\"address\",M1)".into()), Value::String("empty_clear".into())], "0|2|2|2|2|0|0"),
+            ("volatile:CELL(\"address\",M1):unrelated_write", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("CELL(\"address\",M1)".into()), Value::String("unrelated_write".into())], "0|2|2|2|2|0|0"),
+            ("volatile:CELL(\"address\",M1):dependent_write", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("CELL(\"address\",M1)".into()), Value::String("dependent_write".into())], "0|2|2|2|2|0|0"),
+            ("volatile:CELL(\"address\",M1):unrelated_empty_clear", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("CELL(\"address\",M1)".into()), Value::String("unrelated_empty_clear".into())], "0|2|2|2|2|0|0"),
+            ("volatile:M1+1:empty_clear", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("M1+1".into()), Value::String("empty_clear".into())], "0|0|0|2|0|0|0"),
+            ("volatile:M1+1:unrelated_write", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("M1+1".into()), Value::String("unrelated_write".into())], "0|0|0|2|0|0|0"),
+            ("volatile:M1+1:dependent_write", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("M1+1".into()), Value::String("dependent_write".into())], "0|2|2|2|0|0|0"),
+            ("volatile:M1+1:unrelated_empty_clear", "IndexDriver.VolatilePendingStateAudit", vec![Value::String("M1+1".into()), Value::String("unrelated_empty_clear".into())], "0|0|0|2|0|0|0"),
+            ("mixed:empty", "IndexDriver.MixedClearStateAudit", vec![Value::String("M1+1".into()), Value::Integer(0), Value::String("".into()), Value::Integer(0), Value::String("".into()), Value::Boolean(false)], "0|0|0|0"),
+            ("mixed:zero", "IndexDriver.MixedClearStateAudit", vec![Value::String("M1+1".into()), Value::Integer(1), Value::Integer(0), Value::Integer(0), Value::String("".into()), Value::Boolean(false)], "0|2|2|0"),
+            ("mixed:empty_string", "IndexDriver.MixedClearStateAudit", vec![Value::String("M1+1".into()), Value::Integer(1), Value::String("".into()), Value::Integer(0), Value::String("".into()), Value::Boolean(false)], "0|0|0|0"),
+            ("mixed:formula_empty", "IndexDriver.MixedClearStateAudit", vec![Value::String("M1+1".into()), Value::Integer(2), Value::String("IF(TRUE,\"\",0)".into()), Value::Integer(0), Value::String("".into()), Value::Boolean(false)], "0|2|2|0"),
+            ("mixed:formula_zero", "IndexDriver.MixedClearStateAudit", vec![Value::String("M1+1".into()), Value::Integer(2), Value::String("0".into()), Value::Integer(0), Value::String("".into()), Value::Boolean(false)], "0|2|2|0"),
+            ("mixed:formatted_empty", "IndexDriver.MixedClearStateAudit", vec![Value::String("M1+1".into()), Value::Integer(0), Value::String("".into()), Value::Integer(0), Value::String("".into()), Value::Boolean(true)], "0|2|2|0"),
+            ("mixed:mixed_N_only_dep_M", "IndexDriver.MixedClearStateAudit", vec![Value::String("M1+1".into()), Value::Integer(0), Value::String("".into()), Value::Integer(1), Value::Integer(17), Value::Boolean(false)], "0|2|2|0"),
+            ("mixed:mixed_N_only_dep_N", "IndexDriver.MixedClearStateAudit", vec![Value::String("N1+1".into()), Value::Integer(0), Value::String("".into()), Value::Integer(1), Value::Integer(17), Value::Boolean(false)], "0|2|2|0"),
+            ("mixed:mixed_N_only_dep_sum", "IndexDriver.MixedClearStateAudit", vec![Value::String("SUM(M1:N1)".into()), Value::Integer(0), Value::String("".into()), Value::Integer(1), Value::Integer(17), Value::Boolean(false)], "0|2|2|0"),
+            ("mixed:mixed_M_only_dep_N", "IndexDriver.MixedClearStateAudit", vec![Value::String("N1+1".into()), Value::Integer(1), Value::Integer(17), Value::Integer(0), Value::String("".into()), Value::Boolean(false)], "0|0|0|0"),
+            ("mixed:mixed_both_dep_M", "IndexDriver.MixedClearStateAudit", vec![Value::String("M1+1".into()), Value::Integer(1), Value::Integer(17), Value::Integer(1), Value::Integer(18), Value::Boolean(false)], "0|2|2|0"),
+            ("mixed:mixed_N_formula_empty_dep_M", "IndexDriver.MixedClearStateAudit", vec![Value::String("M1+1".into()), Value::Integer(0), Value::String("".into()), Value::Integer(2), Value::String("IF(TRUE,\"\",0)".into()), Value::Boolean(false)], "0|2|2|0"),
+            ("native_pending_clear_used_bounds_controls:baseline", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(true), Value::String("E1".into()), Value::String("M1+1".into()), Value::String("M1:N1".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(false)], "0|0|0|0|0"),
+            ("native_pending_clear_used_bounds_controls:same_row_Z1", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(true), Value::String("E1".into()), Value::String("M1+1".into()), Value::String("M1:N1".into()), Value::String("Z1".into()), Value::Boolean(true), Value::Boolean(false)], "0|2|2|0|0"),
+            ("native_pending_clear_used_bounds_controls:other_row_Z2", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(true), Value::String("E1".into()), Value::String("M1+1".into()), Value::String("M1:N1".into()), Value::String("Z2".into()), Value::Boolean(true), Value::Boolean(false)], "0|2|2|0|0"),
+            ("native_pending_clear_used_bounds_controls:far_Z20", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(true), Value::String("E1".into()), Value::String("M1+1".into()), Value::String("M1:N1".into()), Value::String("Z20".into()), Value::Boolean(true), Value::Boolean(false)], "0|2|2|0|0"),
+            ("native_pending_clear_used_bounds_controls:same_column_M20", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(true), Value::String("E1".into()), Value::String("M1+1".into()), Value::String("M1:N1".into()), Value::String("M20".into()), Value::Boolean(true), Value::Boolean(false)], "0|2|2|0|0"),
+            ("native_pending_clear_used_bounds_controls:far_A20", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(true), Value::String("E1".into()), Value::String("M1+1".into()), Value::String("M1:N1".into()), Value::String("A20".into()), Value::Boolean(true), Value::Boolean(false)], "0|0|0|0|0"),
+            ("native_pending_clear_used_bounds_controls:same_row_Z1_dep_N", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(true), Value::String("E1".into()), Value::String("N1+1".into()), Value::String("M1:N1".into()), Value::String("Z1".into()), Value::Boolean(true), Value::Boolean(false)], "0|2|2|0|0"),
+            ("native_pending_clear_used_bounds_controls:other_row_Z2_dep_N", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(true), Value::String("E1".into()), Value::String("N1+1".into()), Value::String("M1:N1".into()), Value::String("Z2".into()), Value::Boolean(true), Value::Boolean(false)], "0|2|2|0|0"),
+            ("native_pending_clear_used_bounds_controls:N1_dep_M", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(true), Value::String("E1".into()), Value::String("M1+1".into()), Value::String("M1:N1".into()), Value::String("N1".into()), Value::Boolean(true), Value::Boolean(false)], "0|2|2|0|0"),
+            ("native_pending_clear_used_bounds_controls:M1_dep_N", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(true), Value::String("E1".into()), Value::String("N1+1".into()), Value::String("M1:N1".into()), Value::String("M1".into()), Value::Boolean(true), Value::Boolean(false)], "0|0|0|0|0"),
+            ("native_pending_minimal_used_bounds_controls:left", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("R1".into()), Value::String("A1+1".into()), Value::String("A1:B1".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(false)], "0|2|2|0|0"),
+            ("native_pending_minimal_used_bounds_controls:left_far_row", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("R20".into()), Value::String("A20+1".into()), Value::String("A20:B20".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(false)], "0|2|2|0|0"),
+            ("native_pending_minimal_used_bounds_controls:above", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("R20".into()), Value::String("R1+1".into()), Value::String("R1:S2".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(false)], "0|0|0|0|0"),
+            ("native_pending_minimal_used_bounds_controls:above_left", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("R20".into()), Value::String("A1+1".into()), Value::String("A1:B2".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(false)], "0|0|0|0|0"),
+            ("native_pending_minimal_used_bounds_controls:right", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("E1".into()), Value::String("M1+1".into()), Value::String("M1:N1".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(false)], "0|0|0|0|0"),
+            ("native_pending_minimal_used_bounds_controls:below_right", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("E1".into()), Value::String("M14+1".into()), Value::String("M14:N15".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(false)], "0|0|0|0|0"),
+            ("native_pending_minimal_used_bounds_controls:within_expanded", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("E1".into()), Value::String("M14+1".into()), Value::String("M14:N15".into()), Value::String("Z20".into()), Value::Boolean(true), Value::Boolean(false)], "0|2|2|0|0"),
+            ("native_pending_minimal_used_bounds_controls:below_expanded", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("E1".into()), Value::String("M14+1".into()), Value::String("M14:N15".into()), Value::String("Z13".into()), Value::Boolean(true), Value::Boolean(false)], "0|0|0|0|0"),
+            ("native_pending_minimal_used_bounds_controls:within_last_row", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("E1".into()), Value::String("M14+1".into()), Value::String("M14:N15".into()), Value::String("Z14".into()), Value::Boolean(true), Value::Boolean(false)], "0|2|2|0|0"),
+            ("native_pending_minimal_used_bounds_controls:partial_below_right", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("E1".into()), Value::String("N15+1".into()), Value::String("M14:N15".into()), Value::String("M14".into()), Value::Boolean(true), Value::Boolean(false)], "0|0|0|0|0"),
+            ("native_pending_minimal_used_bounds_controls:volatile_left", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("E1".into()), Value::String("NOW()".into()), Value::String("A1:B1".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(false)], "0|2|2|2|0"),
+            ("native_pending_minimal_used_bounds_controls:literal_left", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("E1".into()), Value::String("1".into()), Value::String("A1:B1".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(false)], "0|0|0|0|0"),
+            ("native_pending_minimal_spanning_clear_controls:above_spanning_dep_top", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("S20".into()), Value::String("A1+1".into()), Value::String("A1:R20".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(true)], "0|0|0|0|0"),
+            ("native_pending_minimal_spanning_clear_controls:above_spanning_dep_used", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("S20".into()), Value::String("A20+1".into()), Value::String("A1:R20".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(true)], "0|2|2|0|0"),
+            ("native_pending_minimal_spanning_clear_controls:above_partial_dep_top", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("S20".into()), Value::String("A19+1".into()), Value::String("A18:R21".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(true)], "0|0|0|0|0"),
+            ("native_pending_minimal_spanning_clear_controls:left_same_row", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("S20".into()), Value::String("B20+1".into()), Value::String("A20:R20".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(true)], "0|2|2|0|0"),
+            ("native_pending_minimal_spanning_clear_controls:gap_inside_used_rows", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("R20".into()), Value::String("M25+1".into()), Value::String("M25:N25".into()), Value::String("Z30".into()), Value::Boolean(true), Value::Boolean(true)], "0|2|2|0|0"),
+            ("native_pending_minimal_spanning_clear_controls:below_clip_dependency", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("S20".into()), Value::String("A26+1".into()), Value::String("A20:R30".into()), Value::String("M25".into()), Value::Boolean(true), Value::Boolean(true)], "0|0|0|0|0"),
+            ("native_pending_minimal_spanning_clear_controls:inside_clip_dependency", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("S20".into()), Value::String("A25+1".into()), Value::String("A20:R30".into()), Value::String("M25".into()), Value::Boolean(true), Value::Boolean(true)], "0|2|2|0|0"),
+            ("native_pending_minimal_spanning_clear_controls:left_used_after_clear", "IndexDriver.BoundsClearStateAudit", vec![Value::Boolean(false), Value::String("R1".into()), Value::String("A1+1".into()), Value::String("A1:B1".into()), Value::String("".into()), Value::Boolean(true), Value::Boolean(true)], "0|2|2|0|0"),
+            ("native_pending_automatic_mode_controls:NOW():-4135:empty_clear", "IndexDriver.AutomaticModeStateAudit", vec![Value::String("NOW()".into()), Value::Integer(-4135), Value::String("empty_clear".into())], "0|2|2|2|2|0"),
+            ("native_pending_automatic_mode_controls:NOW():-4135:unrelated_write", "IndexDriver.AutomaticModeStateAudit", vec![Value::String("NOW()".into()), Value::Integer(-4135), Value::String("unrelated_write".into())], "0|2|2|2|2|0"),
+            ("native_pending_automatic_mode_controls:NOW():-4105:empty_clear", "IndexDriver.AutomaticModeStateAudit", vec![Value::String("NOW()".into()), Value::Integer(-4105), Value::String("empty_clear".into())], "0|0|0|0|2|0"),
+            ("native_pending_automatic_mode_controls:NOW():-4105:unrelated_write", "IndexDriver.AutomaticModeStateAudit", vec![Value::String("NOW()".into()), Value::Integer(-4105), Value::String("unrelated_write".into())], "0|0|0|0|2|0"),
+            ("native_pending_automatic_mode_controls:NOW():2:empty_clear", "IndexDriver.AutomaticModeStateAudit", vec![Value::String("NOW()".into()), Value::Integer(2), Value::String("empty_clear".into())], "0|0|0|0|2|0"),
+            ("native_pending_automatic_mode_controls:NOW():2:unrelated_write", "IndexDriver.AutomaticModeStateAudit", vec![Value::String("NOW()".into()), Value::Integer(2), Value::String("unrelated_write".into())], "0|0|0|0|2|0"),
+            ("native_pending_automatic_mode_controls:M1+1:-4135:empty_clear", "IndexDriver.AutomaticModeStateAudit", vec![Value::String("M1+1".into()), Value::Integer(-4135), Value::String("empty_clear".into())], "0|0|0|2|0|0"),
+            ("native_pending_automatic_mode_controls:M1+1:-4135:unrelated_write", "IndexDriver.AutomaticModeStateAudit", vec![Value::String("M1+1".into()), Value::Integer(-4135), Value::String("unrelated_write".into())], "0|0|0|2|0|0"),
+            ("native_pending_automatic_mode_controls:M1+1:-4105:empty_clear", "IndexDriver.AutomaticModeStateAudit", vec![Value::String("M1+1".into()), Value::Integer(-4105), Value::String("empty_clear".into())], "0|0|0|0|0|0"),
+            ("native_pending_automatic_mode_controls:M1+1:-4105:unrelated_write", "IndexDriver.AutomaticModeStateAudit", vec![Value::String("M1+1".into()), Value::Integer(-4105), Value::String("unrelated_write".into())], "0|0|0|0|0|0"),
+            ("native_pending_automatic_mode_controls:M1+1:2:empty_clear", "IndexDriver.AutomaticModeStateAudit", vec![Value::String("M1+1".into()), Value::Integer(2), Value::String("empty_clear".into())], "0|0|0|0|0|0"),
+            ("native_pending_automatic_mode_controls:M1+1:2:unrelated_write", "IndexDriver.AutomaticModeStateAudit", vec![Value::String("M1+1".into()), Value::Integer(2), Value::String("unrelated_write".into())], "0|0|0|0|0|0"),
+            ("native_pending_formatting_event_controls:NOW():manual:clear_formats", "IndexDriver.FormattingStateAudit", vec![Value::String("NOW()".into()), Value::String("clear_formats".into())], "0|2|2|2|2|0"),
+            ("native_pending_formatting_event_controls:NOW():manual:font_bold", "IndexDriver.FormattingStateAudit", vec![Value::String("NOW()".into()), Value::String("font_bold".into())], "0|0|0|2|2|0"),
+            ("native_pending_formatting_event_controls:NOW():manual:number_format", "IndexDriver.FormattingStateAudit", vec![Value::String("NOW()".into()), Value::String("number_format".into())], "0|0|0|2|2|0"),
+            ("native_pending_formatting_event_controls:NOW():manual:select", "IndexDriver.FormattingStateAudit", vec![Value::String("NOW()".into()), Value::String("select".into())], "0|0|0|2|2|0"),
+            ("native_pending_formatting_event_controls:CELL(\"format\",M1):manual:clear_formats", "IndexDriver.FormattingStateAudit", vec![Value::String("CELL(\"format\",M1)".into()), Value::String("clear_formats".into())], "0|2|2|2|2|0"),
+            ("native_pending_formatting_event_controls:CELL(\"format\",M1):manual:font_bold", "IndexDriver.FormattingStateAudit", vec![Value::String("CELL(\"format\",M1)".into()), Value::String("font_bold".into())], "0|0|0|2|2|0"),
+            ("native_pending_formatting_event_controls:CELL(\"format\",M1):manual:number_format", "IndexDriver.FormattingStateAudit", vec![Value::String("CELL(\"format\",M1)".into()), Value::String("number_format".into())], "0|0|0|2|2|0"),
+            ("native_pending_formatting_event_controls:CELL(\"format\",M1):manual:select", "IndexDriver.FormattingStateAudit", vec![Value::String("CELL(\"format\",M1)".into()), Value::String("select".into())], "0|0|0|2|2|0"),
+            ("native_pending_formatting_event_controls:M1+1:manual:clear_formats", "IndexDriver.FormattingStateAudit", vec![Value::String("M1+1".into()), Value::String("clear_formats".into())], "0|0|0|2|0|0"),
+            ("native_pending_formatting_event_controls:M1+1:manual:font_bold", "IndexDriver.FormattingStateAudit", vec![Value::String("M1+1".into()), Value::String("font_bold".into())], "0|0|0|2|0|0"),
+            ("native_pending_formatting_event_controls:M1+1:manual:number_format", "IndexDriver.FormattingStateAudit", vec![Value::String("M1+1".into()), Value::String("number_format".into())], "0|0|0|2|0|0"),
+            ("native_pending_formatting_event_controls:M1+1:manual:select", "IndexDriver.FormattingStateAudit", vec![Value::String("M1+1".into()), Value::String("select".into())], "0|0|0|2|0|0"),
+            ("scope_modes:cross_sheet:[-4135, 1]", "IndexDriver.CrossSheetPendingStateAudit", vec![Value::Integer(-4135), Value::Integer(1)], "0|2|0"),
+            ("scope_modes:cross_sheet:[-4135, 2]", "IndexDriver.CrossSheetPendingStateAudit", vec![Value::Integer(-4135), Value::Integer(2)], "0|2|0"),
+            ("scope_modes:cross_sheet:[-4105, 1]", "IndexDriver.CrossSheetPendingStateAudit", vec![Value::Integer(-4105), Value::Integer(1)], "0|2|0"),
+            ("scope_modes:cross_sheet:[-4105, 2]", "IndexDriver.CrossSheetPendingStateAudit", vec![Value::Integer(-4105), Value::Integer(2)], "0|2|0"),
+            ("scope_modes:clear_formats:['NOW()', -4135]", "IndexDriver.ClearFormatsModeStateAudit", vec![Value::String("NOW()".into()), Value::Integer(-4135)], "0|2|2|2|0"),
+            ("scope_modes:clear_formats:['NOW()', -4105]", "IndexDriver.ClearFormatsModeStateAudit", vec![Value::String("NOW()".into()), Value::Integer(-4105)], "0|0|0|2|0"),
+            ("scope_modes:clear_formats:['NOW()', 2]", "IndexDriver.ClearFormatsModeStateAudit", vec![Value::String("NOW()".into()), Value::Integer(2)], "0|0|0|2|0"),
+            ("scope_modes:clear_formats:['M1+1', -4135]", "IndexDriver.ClearFormatsModeStateAudit", vec![Value::String("M1+1".into()), Value::Integer(-4135)], "0|0|2|0|0"),
+            ("scope_modes:clear_formats:['M1+1', -4105]", "IndexDriver.ClearFormatsModeStateAudit", vec![Value::String("M1+1".into()), Value::Integer(-4105)], "0|0|0|0|0"),
+            ("scope_modes:clear_formats:['M1+1', 2]", "IndexDriver.ClearFormatsModeStateAudit", vec![Value::String("M1+1".into()), Value::Integer(2)], "0|0|0|0|0"),
+            ("palette::-4135", "IndexDriver.PalettePendingStateAudit", vec![Value::String("".into()), Value::Integer(-4135)], "0|0|0|0"),
+            ("palette::-4105", "IndexDriver.PalettePendingStateAudit", vec![Value::String("".into()), Value::Integer(-4105)], "0|0|0|0"),
+            ("palette:1:-4135", "IndexDriver.PalettePendingStateAudit", vec![Value::String("1".into()), Value::Integer(-4135)], "0|0|0|0"),
+            ("palette:1:-4105", "IndexDriver.PalettePendingStateAudit", vec![Value::String("1".into()), Value::Integer(-4105)], "0|0|0|0"),
+            ("palette:NOW():-4135", "IndexDriver.PalettePendingStateAudit", vec![Value::String("NOW()".into()), Value::Integer(-4135)], "0|0|2|0"),
+            ("palette:NOW():-4105", "IndexDriver.PalettePendingStateAudit", vec![Value::String("NOW()".into()), Value::Integer(-4105)], "0|0|2|0"),
+        ];
+        assert_eq!(cases.len(), 121);
+        let mut mismatches = Vec::new();
+        for version in [1u8, 2] {
+            for (label, procedure, args, expected) in &cases {
+                let mut book = workbook();
+                book.calculation.compatibility_version = version;
+                let mut session = None;
+                let outcome = execute_workbook_action_in_session(
+                    book, &source, Some(procedure), args.clone(), 0, failure_context(), &mut session,
+                ).unwrap();
+                let actual = if let Some(error) = outcome.error {
+                    format!("ERROR: {}", error.message)
+                } else {
+                    serde_json::to_value(&outcome.result).unwrap().get("value")
+                        .and_then(|value| value.as_str()).unwrap_or("<not a string>").to_string()
+                };
+                if actual != *expected {
+                    mismatches.push(format!("{label}, mode{version}: expected {expected}, got {actual}"));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{} mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
     }
 
     #[test]
