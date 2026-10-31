@@ -11018,6 +11018,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // Header/footer text boxes: the part's variant chosen as above, drawn
             // behind the body like the rest of the header layer, each anchored to
             // the header/footer block it was parsed in (tops recorded below).
+            super::HF_PAGE_EVEN.with(|c| c.set((first_logical as usize + page_idx) % 2 == 0));
             let hf_draw = s1553_run.is_none() && !page.hf_text_boxes.is_empty();
             let hf_variant = |base: u8| -> u8 {
                 if s755_on && hs_title_pg && s755_pno == 1 {

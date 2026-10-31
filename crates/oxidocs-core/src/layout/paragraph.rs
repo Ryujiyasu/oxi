@@ -10164,7 +10164,14 @@ impl<'a> ParagraphLayouter<'a> {
                 }
             }
             // Between border (horizontal line between consecutive bordered paragraphs)
-            if let Some(ref between) = borders.between {
+            // OXI_BETWEEN_NEEDS_NEXT (2026-10-31, default ON, opt-out _DISABLE): the
+            // between rule is drawn only when the next paragraph carries the same
+            // borders. en/reference__00f99483's footer: one Header-style paragraph
+            // with a between rule, then a plain Footer paragraph; Word draws no
+            // rule there, Oxi drew one under the page number.
+            let between_ok = std::env::var_os("OXI_BETWEEN_NEEDS_NEXT_DISABLE").is_some()
+                || s903_next_borders.map_or(false, |nb| nb == borders);
+            if let Some(ref between) = borders.between.as_ref().filter(|_| between_ok) {
                 let bw = between.width;
                 let color = between
                     .color

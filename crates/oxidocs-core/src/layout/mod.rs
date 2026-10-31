@@ -3794,6 +3794,8 @@ thread_local! {
     /// header / footer frame paragraph (the Latin baseline law applies there
     /// even in a CJK document).
     static IN_HF_FRAME_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// OXI_HF_FRAME_OUTSIDE: true while an even page's header / footer is painted.
+    pub(crate) static HF_PAGE_EVEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// OXI_HF_TXBX_NO_CHARGRID: set while a header / footer text box is laid out.
     static IN_HF_TEXT_BOX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// S816 (2026-07-13): true once the document's FIRST IR section has been
@@ -10632,9 +10634,18 @@ cells={} pitch={:.2} text={:?}",
         let min_x = elements.iter().map(|e| e.x).fold(f32::INFINITY, f32::min);
         let max_x = elements.iter().map(|e| e.x + e.width).fold(0.0, f32::max);
         let width = fp.width.unwrap_or_else(|| if min_x.is_finite() { max_x - min_x } else { 0.0 });
+        // OXI_HF_FRAME_OUTSIDE (2026-10-31, default ON, opt-out _DISABLE): xAlign
+        // outside / inside put the frame at the right / left edge on an odd page
+        // and the reverse on an even one. en/reference__00f99483's footer page
+        // number (framePr xAlign outside, hAnchor margin): Word sets «1» at the
+        // right margin; Oxi read the unknown value as x = 0 and set it at the left.
+        let even = HF_PAGE_EVEN.with(|c| c.get());
+        let outside_on = std::env::var_os("OXI_HF_FRAME_OUTSIDE_DISABLE").is_none();
         let x = match fp.x_align.as_deref() {
             Some("right") => left + span - width,
             Some("center") => left + (span - width) * 0.5,
+            Some("outside") if outside_on => if even { left } else { left + span - width },
+            Some("inside") if outside_on => if even { left + span - width } else { left },
             Some("left") => left, _ => left + fp.x,
         };
         let shift = x - if fp.width.is_none() && min_x.is_finite() { min_x } else { 0.0 };
