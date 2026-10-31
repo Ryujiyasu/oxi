@@ -93,12 +93,16 @@ impl Expr {
     }
 }
 
-// An alias retains two dependency views without copying its syntax tree:
-// consuming its values, and obtaining the address of its result.
+// An alias retains dependency views without copying its syntax tree:
+// consuming its values, obtaining its address, and selecting array elements.
 #[derive(Clone, Default)]
 struct ReferenceReads {
     values: Vec<Reference>,
     addresses: Vec<Reference>,
+    // Reads needed even when a consumer selects only part of an array.
+    // Elementwise operations preserve this view; scalar reductions consume
+    // all their input values before a selection can take place.
+    projection: Vec<Reference>,
 }
 
 impl ReferenceReads {
@@ -109,7 +113,7 @@ impl ReferenceReads {
     }
 
     fn value(values: Vec<Reference>) -> Self {
-        Self { addresses: values.clone(), values }
+        Self { projection: values.clone(), addresses: values.clone(), values }
     }
 }
 
@@ -188,13 +192,20 @@ impl Expr {
     fn reference_reads_in(&self, aliases: &[(String, ReferenceReads)], required: bool) -> ReferenceReads {
         let append = ReferenceReads::append;
         match self {
-            Expr::Ref(reference) => ReferenceReads { values: vec![reference.clone()], addresses: Vec::new() },
+            Expr::Ref(reference) => ReferenceReads { values: vec![reference.clone()], ..ReferenceReads::default() },
             Expr::Name(label) => aliases.iter().rev().find(|(held, _)| held.eq_ignore_ascii_case(label)).map(|(_, reads)| reads.clone()).unwrap_or_default(),
-            Expr::Unary { operand, .. } => ReferenceReads::value(operand.reference_reads_in(aliases, required).values),
+            Expr::Unary { operand, .. } => {
+                let read = operand.reference_reads_in(aliases, required);
+                ReferenceReads { addresses: read.values.clone(), values: read.values, projection: read.projection }
+            },
             Expr::Binary { lhs, rhs, .. } => {
-                let mut values = lhs.reference_reads_in(aliases, required).values;
-                append(&mut values, &rhs.reference_reads_in(aliases, required).values);
-                ReferenceReads::value(values)
+                let left = lhs.reference_reads_in(aliases, required);
+                let right = rhs.reference_reads_in(aliases, required);
+                let mut values = left.values;
+                append(&mut values, &right.values);
+                let mut projection = left.projection;
+                append(&mut projection, &right.projection);
+                ReferenceReads { addresses: values.clone(), values, projection }
             },
             Expr::Function { name, args } if name == "LET" && args.len() >= 3 && args.len() % 2 == 1 => {
                 let mut scope = aliases.to_vec();
@@ -202,15 +213,17 @@ impl Expr {
                 for pair in args[..args.len()-1].chunks_exact(2) {
                     let Expr::Name(label) = &pair[0] else { return ReferenceReads::value(self.references()); };
                     // The initializer still sees the outer binding. Shadow it
-                    // only after both dependency views have been collected.
+                    // only after its dependency views have been collected.
                     let bound = pair[1].reference_reads_in(&scope, required);
-                    append(&mut result.values, &bound.addresses);
+                    append(&mut result.values, if required { &bound.projection } else { &bound.addresses });
                     append(&mut result.addresses, &bound.addresses);
+                    append(&mut result.projection, &bound.projection);
                     scope.push((label.clone(), bound));
                 }
                 let body = args.last().unwrap().reference_reads_in(&scope, required);
                 append(&mut result.values, &body.values);
                 append(&mut result.addresses, &body.addresses);
+                append(&mut result.projection, &body.projection);
                 result
             },
             Expr::Function { name, args } => {
@@ -224,21 +237,57 @@ impl Expr {
                                 let bound = value.reference_reads_in(aliases, required);
                                 append(&mut result.values, &bound.values);
                                 append(&mut result.addresses, &bound.addresses);
+                                append(&mut result.projection, &bound.projection);
                                 scope.push((label.clone(), bound));
                             }
                             let body = body.last().unwrap().reference_reads_in(&scope, required);
                             append(&mut result.values, &body.values);
                             append(&mut result.addresses, &body.addresses);
+                            append(&mut result.projection, &body.projection);
                             return result;
                         }
                     }
                 }
                 let reads: Vec<_> = args.iter().map(|arg| arg.reference_reads_in(aliases, required)).collect();
+                let mut projection = Vec::new();
+                for (i, read) in reads.iter().enumerate() {
+                    if matches!(name.as_str(), "IF" | "CHOOSE") && i > 0 { continue; }
+                    if matches!(name.as_str(), "IFERROR" | "IFNA") && i > 0 {
+                        // Native array calculations retain the fallback's
+                        // dependencies even when no element needs its value.
+                        append(&mut projection, &read.values);
+                        continue;
+                    }
+                    let selectable = match name.as_str() {
+                        "IFERROR" | "IFNA" | "_UNION" | "_ISECT" | "_SPILL" => true,
+                        "INDEX" | "TAKE" | "DROP" | "OFFSET" => i == 0,
+                        "XLOOKUP" => i == 2 || i == 3,
+                        "N" | "TRANSPOSE" => i == 0,
+                        _ => crate::functions::taken_one_at_a_time(name, i),
+                    };
+                    append(&mut projection, if selectable { &read.projection } else { &read.values });
+                }
                 if required && matches!(name.as_str(), "IF" | "CHOOSE" | "IFERROR" | "IFNA") {
-                    return ReferenceReads::value(reads.first().map(|read| read.values.clone()).unwrap_or_default());
+                    let values = reads.first().map(|read| read.values.clone()).unwrap_or_default();
+                    return ReferenceReads { addresses: values.clone(), values, projection };
                 }
                 let mut values = Vec::new();
                 for read in &reads { append(&mut values, &read.values); }
+                if name == "N" && reads.len() == 1 {
+                    let read = &reads[0];
+                    let mut first = read.addresses.clone();
+                    let mut reference = false;
+                    for source in read.values.iter().filter(|source| !read.addresses.contains(source)) {
+                        let mut source = source.clone();
+                        source.range.end = source.range.start;
+                        append(&mut first, &[source]);
+                        reference = true;
+                    }
+                    if reference {
+                        projection = first.clone();
+                        if required { values = first; }
+                    }
+                }
                 if name == "INDEX" {
                     let selected = Self::indexed_references(args).or_else(|| {
                         if !matches!(args.first(), Some(Expr::Name(_))) { return None; }
@@ -256,6 +305,8 @@ impl Expr {
                     if let Some(selected) = selected {
                         values = selected;
                         for read in reads.iter().skip(1) { append(&mut values, &read.values); }
+                    } else if required && (2..=3).contains(&args.len()) {
+                        values = projection.clone();
                     }
                 }
                 if name == "SUMIF" && args.len() == 3 {
@@ -277,7 +328,9 @@ impl Expr {
                 if let Some(index) = Self::metadata_reference_argument(name, args) {
                     let mut measured = Vec::new();
                     for (i, read) in reads.iter().enumerate() {
-                        append(&mut measured, if i == index { &read.addresses } else { &read.values });
+                        append(&mut measured, if i == index {
+                            if required { &read.projection } else { &read.addresses }
+                        } else { &read.values });
                     }
                     return ReferenceReads::value(measured);
                 }
@@ -294,7 +347,7 @@ impl Expr {
                     };
                     append(&mut addresses, if reference { &read.addresses } else { &read.values });
                 }
-                ReferenceReads { values, addresses }
+                ReferenceReads { values, addresses, projection }
             },
             Expr::Table { .. } | Expr::Literal(_) | Expr::Array(_) => ReferenceReads::default(),
         }

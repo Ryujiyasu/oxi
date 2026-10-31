@@ -1068,3 +1068,149 @@ fn conditional_legacy_array_cycles_resume_through_the_core_bridge() {
     }
     assert!(mismatches.is_empty(), "{} Native async/core mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
 }
+
+#[test]
+fn dynamic_index_dependencies_and_selector_stages_match_native_excel() {
+    use oxicells_calc::functions::{BlockOrigin, RangeData};
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_user_function_hook(None);
+            oxicells_calc::engine::set_user_function_wait_for_dependencies(false);
+            oxicells_calc::engine::set_user_function_full_rebuild(false);
+        }
+    }
+    let _restore = Restore;
+    let cases = [
+        ("INDEX(A1:O3,SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(D1:D3,SelectionTick(1),1)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("LET(r,A1:O3,INDEX(r,SelectionTick(1),4))", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("LET(r,D1:D3,INDEX(r,SelectionTick(1),1))", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("SUM(INDEX(A1:O3,{1;2;3},SelectionTick(4)))", [(1, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (5, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (9, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (13, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)])]),
+        ("SUM(INDEX(D1:D3,{1;2;3},SelectionTick(1)))", [(1, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (5, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (9, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (13, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)])]),
+        ("SUM(INDEX(A1:O3,SelectionTick({1;2;3}),4))", [(1, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (5, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (9, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (13, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)])]),
+        ("SUM(INDEX(D1:D3,SelectionTick({1;2;3}),1))", [(1, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (5, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (9, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (13, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)])]),
+        ("INDEX(A1:O3,SelectionTick(1),13)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (3, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (6, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("SUM(INDEX(A1:O3,{1;2;3},SelectionTick(13)))", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (8, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (15, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (25, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("LET(r,A1:O3,INDEX(r,SelectionTick(1),13))", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (3, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (6, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(A1:O3,IF(SelectionTick(1),1,2),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(A1:O3,SelectionTick(1),SelectionTick(4))", [(2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (6, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (8, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("SUM(INDEX(A1:O3,SelectionTick({1;2;3}),SelectionTick(4)))", [(2, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (10, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (18, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (26, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)])]),
+        ("INDEX(A1:O3+0,SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("LET(r,A1:O3+0,INDEX(r,SelectionTick(1),4))", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(D1:D3+0,SelectionTick(1),1)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("LET(r,D1:D3+0,INDEX(r,SelectionTick(1),1))", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(IF(1,A1:O3),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(IFERROR(A1:O3,0),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("LET(r,IF(1,A1:O3),INDEX(r,SelectionTick(1),4))", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("LET(r,IFERROR(A1:O3,0),INDEX(r,SelectionTick(1),4))", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(XLOOKUP(1,{1},A1:O3),SelectionTick(1),4)", [(1, [Value::Error(ExcelError::Value), Value::Error(ExcelError::Value), Value::Error(ExcelError::Value)]), (2, [Value::Error(ExcelError::Value), Value::Error(ExcelError::Value), Value::Error(ExcelError::Value)]), (3, [Value::Error(ExcelError::Value), Value::Error(ExcelError::Value), Value::Error(ExcelError::Value)]), (4, [Value::Error(ExcelError::Value), Value::Error(ExcelError::Value), Value::Error(ExcelError::Value)])]),
+        ("INDEX(OFFSET(A1,0,0,3,15),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("LET(r,OFFSET(A1,0,0,3,15),INDEX(r,SelectionTick(1),4))", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(INDIRECT(\"A1:O3\"),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("LET(r,INDIRECT(\"A1:O3\"),INDEX(r,SelectionTick(1),4))", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("SUM(INDEX(A1:O3+0,{1;2;3},SelectionTick(4)))", [(1, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (5, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (9, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (13, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)])]),
+        ("LET(r,A1:O3+0,SUM(INDEX(r,{1;2;3},SelectionTick(4))))", [(1, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (5, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (9, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (13, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)])]),
+        ("INDEX(SUM(M1:M3),SelectionTick(1),1)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("LET(r,SUM(M1:M3),INDEX(r,SelectionTick(1),1))", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(SelectionTick(SUM(M1:M3)),SelectionTick(1),1)", [(2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(SUM(D1:D3),SelectionTick(1),1)", [(1, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (2, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (3, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (4, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)])]),
+        ("LET(r,SUM(D1:D3),INDEX(r,SelectionTick(1),1))", [(1, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (2, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (3, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (4, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)])]),
+        ("INDEX(A1:O3*2,SelectionTick(1),4)", [(1, [Value::Number(2.0), Value::Number(2.0), Value::Number(2.0)]), (2, [Value::Number(2.0), Value::Number(2.0), Value::Number(2.0)]), (3, [Value::Number(2.0), Value::Number(2.0), Value::Number(2.0)]), (4, [Value::Number(2.0), Value::Number(2.0), Value::Number(2.0)])]),
+        ("INDEX(SelectionTick(1)+(A1:O3+0),SelectionTick(1),4)", [(2, [Value::Number(2.0), Value::Number(2.0), Value::Number(2.0)]), (4, [Value::Number(2.0), Value::Number(2.0), Value::Number(2.0)]), (6, [Value::Number(2.0), Value::Number(2.0), Value::Number(2.0)]), (8, [Value::Number(2.0), Value::Number(2.0), Value::Number(2.0)])]),
+        ("LET(r,A1:O3+SelectionTick(1),INDEX(r,SelectionTick(1),4))", [(2, [Value::Number(2.0), Value::Number(2.0), Value::Number(2.0)]), (4, [Value::Number(2.0), Value::Number(2.0), Value::Number(2.0)]), (6, [Value::Number(2.0), Value::Number(2.0), Value::Number(2.0)]), (8, [Value::Number(2.0), Value::Number(2.0), Value::Number(2.0)])]),
+        ("INDEX(CHOOSE(1,A1:O3),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("LET(r,CHOOSE(1,A1:O3),INDEX(r,SelectionTick(1),4))", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("LET(r,A1:O3+0,SelectionTick(7))", [(1, [Value::Number(7.0), Value::Number(7.0), Value::Number(7.0)]), (2, [Value::Number(7.0), Value::Number(7.0), Value::Number(7.0)]), (3, [Value::Number(7.0), Value::Number(7.0), Value::Number(7.0)]), (4, [Value::Number(7.0), Value::Number(7.0), Value::Number(7.0)])]),
+        ("LET(r,SUM(M1:M3),SelectionTick(7))", [(1, [Value::Number(7.0), Value::Number(7.0), Value::Number(7.0)]), (1, [Value::Number(7.0), Value::Number(7.0), Value::Number(7.0)]), (1, [Value::Number(7.0), Value::Number(7.0), Value::Number(7.0)]), (1, [Value::Number(7.0), Value::Number(7.0), Value::Number(7.0)])]),
+        ("LET(r,IFERROR(A1:O3,0),SelectionTick(7))", [(1, [Value::Number(7.0), Value::Number(7.0), Value::Number(7.0)]), (2, [Value::Number(7.0), Value::Number(7.0), Value::Number(7.0)]), (3, [Value::Number(7.0), Value::Number(7.0), Value::Number(7.0)]), (4, [Value::Number(7.0), Value::Number(7.0), Value::Number(7.0)])]),
+        ("LET(r,A1:O3+0,ROWS(r)+SelectionTick(7))", [(1, [Value::Number(10.0), Value::Number(10.0), Value::Number(10.0)]), (2, [Value::Number(10.0), Value::Number(10.0), Value::Number(10.0)]), (3, [Value::Number(10.0), Value::Number(10.0), Value::Number(10.0)]), (4, [Value::Number(10.0), Value::Number(10.0), Value::Number(10.0)])]),
+        ("INDEX(SUM(M1:M3)+0,SelectionTick(1),1)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(-SUM(M1:M3),SelectionTick(1),1)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(IF(1,SUM(M1:M3),0),SelectionTick(1),1)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(IFERROR(SUM(M1:M3),0),SelectionTick(1),1)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("LET(r,A1:O3+0,INDEX(r,1,4))", [(0, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (0, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (0, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (0, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(A1:O3+0,1,4)", [(0, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (0, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (0, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (0, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("LET(r,IFERROR(A1:O3,0),INDEX(r,1,4))", [(0, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (0, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (0, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (0, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(A1:O1+0,SelectionTick(4))", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(A1:O1+0,SelectionTick(13))", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (3, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (6, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("LET(r,A1:O1+0,INDEX(r,SelectionTick(4)))", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(-A1:O3,SelectionTick(1),4)", [(1, [Value::Number(-1.0), Value::Number(-1.0), Value::Number(-1.0)]), (2, [Value::Number(-1.0), Value::Number(-1.0), Value::Number(-1.0)]), (3, [Value::Number(-1.0), Value::Number(-1.0), Value::Number(-1.0)]), (4, [Value::Number(-1.0), Value::Number(-1.0), Value::Number(-1.0)])]),
+        ("INDEX(N(A1:O3),SelectionTick(1),4)", [(1, [Value::Error(ExcelError::Ref), Value::Error(ExcelError::Ref), Value::Error(ExcelError::Ref)]), (2, [Value::Error(ExcelError::Ref), Value::Error(ExcelError::Ref), Value::Error(ExcelError::Ref)]), (3, [Value::Error(ExcelError::Ref), Value::Error(ExcelError::Ref), Value::Error(ExcelError::Ref)]), (4, [Value::Error(ExcelError::Ref), Value::Error(ExcelError::Ref), Value::Error(ExcelError::Ref)])]),
+        ("INDEX(IF({1;1;1},A1:O3,0),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(IFERROR(A1:O3,M1:M3),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(IFERROR(1/(A1:O3+0),M1:M3),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(ABS(A1:O3),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(TRANSPOSE(A1:O3),SelectionTick(4),1)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(LET(r,A1:O3+0,r),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("SUM(INDEX(A1:O3,{1,2,3},SelectionTick(4)))", [(1, [Value::Number(6.0), Value::Number(6.0), Value::Number(6.0)]), (5, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (9, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (13, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("SUM(INDEX(A1:O3,SelectionTick({1;2;3}),SelectionTick(13)))", [(2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (16, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (30, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (50, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(IFERROR(A1:O3,SUM(M1:M3)),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(IF(1,A1:O3,SUM(M1:M3)),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("LET(r,IFERROR(A1:O3,SUM(M1:M3)),INDEX(r,SelectionTick(1),4))", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("SelectionTick(INDEX(A1:O3+0,SelectionTick(1),4))", [(2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (6, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (8, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("SelectionTick(INDEX(A1:O3+0,SelectionTick(1),13))", [(2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (3, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (4, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (7, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(IF({1;1;1},A1:O3,0),SelectionTick(1),13)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (3, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (6, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(ABS(A1:O3),SelectionTick(1),13)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (3, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (6, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(TRANSPOSE(A1:O3),SelectionTick(13),1)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (3, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (6, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(N(A1:O3+0),SelectionTick(1),4)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(N(A1:O3+0),SelectionTick(1),13)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (3, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (6, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("SelectionTick(INDEX(A1:O3+0,{1;2;3},4))", [(1, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (4, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (7, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]), (10, [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)])]),
+        ("INDEX(IFERROR(A1:O3+0,0),SelectionTick(1),13)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (3, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (6, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(A1:O3+0,SelectionTick(1.9),4.9)", [(1, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (2, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (3, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)]), (4, [Value::Number(1.0), Value::Number(1.0), Value::Number(1.0)])]),
+        ("INDEX(A1:O3+0,SelectionTick(3.9),13.9)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (3, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (6, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+        ("INDEX(IF({1;0;1},A1:O3,0),SelectionTick(2),13)", [(1, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (2, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (3, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)]), (6, [Value::Number(0.0), Value::Number(0.0), Value::Number(0.0)])]),
+    ];
+    let mut mismatches = Vec::new();
+    for (formula, stages) in cases {
+        for version in [1u8, 2] {
+            let count = Rc::new(RefCell::new(0u32));
+            let counted = count.clone();
+            set_user_function_hook(Some(Box::new(move |name, args, _| {
+                if !name.eq_ignore_ascii_case("SelectionTick") { return None; }
+                *counted.borrow_mut() += 1;
+                Some(match args.first() {
+                    Some(UserArg::Value(value)) => Arg::Value(value.clone()),
+                    Some(UserArg::Block(block)) => Arg::Range(RangeData {
+                        origin: BlockOrigin::Array, ..block.clone()
+                    }),
+                    Some(UserArg::Cells { range, values, .. }) if range.is_single() =>
+                        Arg::Value(values.first().cloned().unwrap_or(Value::Blank)),
+                    Some(UserArg::Cells { range, values, .. }) => Arg::Range(RangeData {
+                        origin: BlockOrigin::Array,
+                        width: range.width() as usize, height: range.height() as usize,
+                        cells: values.clone(),
+                    }),
+                    _ => Arg::Value(Value::Blank),
+                })
+            })));
+            let mut held = book();
+            held.set_compatibility_version(version);
+            for (address, value) in [("D1", 1.), ("D2", 2.), ("D3", 3.)] {
+                held.set_value("S", address, Value::Number(value)).unwrap();
+            }
+            let wanted = vec![("S".to_string(), (12, 0)), ("S".to_string(), (12, 1)), ("S".to_string(), (12, 2))];
+            for (row, cell) in ["M1", "M2", "M3"].iter().enumerate() {
+                held.set_array_member("S", cell, formula, (0, row as u32)).unwrap();
+            }
+            let mut reverse = wanted.clone(); reverse.reverse();
+            held.set_calculation_order(&reverse);
+            for (stage, (expected_calls, expected_values)) in stages.iter().enumerate() {
+                held.set_chain_probes(stage != 0);
+                oxicells_calc::engine::set_user_function_wait_for_dependencies(true);
+                oxicells_calc::engine::set_user_function_full_rebuild(stage == 3);
+                match stage {
+                    0 => { held.recalculate_array_entry(&wanted); }
+                    1 | 2 => { held.recalculate_these(&wanted); }
+                    _ => { held.recalculate(); }
+                }
+                let values: Vec<_> = ["M1", "M2", "M3"].iter().map(|cell| held.value("S", cell)).collect();
+                let calls = *count.borrow();
+                if values.as_slice() != expected_values || calls != *expected_calls {
+                    mismatches.push(format!("{formula}, version {version}, stage {stage}: calls {calls} != {expected_calls}, {values:?} != {expected_values:?}"));
+                }
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{} Native dynamic INDEX stage mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+}

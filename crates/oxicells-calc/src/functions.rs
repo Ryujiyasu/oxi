@@ -24,6 +24,16 @@ pub enum BlockOrigin {
     /// A one-dimensional array supplied by a worksheet function.
     Vector,
     Cells { sheet: String, range: RangeRef },
+    /// Unpublished formula values retained by individual array elements.
+    /// Selecting an element consumes only that element's pending reads.
+    ArrayWithReads { vector: bool, reads: Vec<ArrayRead> },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayRead {
+    pub index: usize,
+    pub sheet: String,
+    pub cell: (u32, u32),
 }
 
 /// A materialised rectangular block of values, row-major.
@@ -36,8 +46,11 @@ pub struct RangeData {
 }
 
 impl RangeData {
-    pub fn is_array(&self) -> bool { matches!(self.origin, BlockOrigin::Array | BlockOrigin::Vector) }
-    pub fn is_vector(&self) -> bool { matches!(self.origin, BlockOrigin::Vector) }
+    pub fn is_array(&self) -> bool { matches!(self.origin, BlockOrigin::Array | BlockOrigin::Vector | BlockOrigin::ArrayWithReads { .. }) }
+    pub fn is_vector(&self) -> bool { matches!(self.origin, BlockOrigin::Vector | BlockOrigin::ArrayWithReads { vector: true, .. }) }
+    pub fn array_reads(&self) -> &[ArrayRead] {
+        match &self.origin { BlockOrigin::ArrayWithReads { reads, .. } => reads, _ => &[] }
+    }
     /// Scalar operations retain a vector's rank; any matrix input promotes it.
     pub fn value_origin<'a>(blocks: impl IntoIterator<Item = &'a RangeData>) -> BlockOrigin {
         let mut vector = false;
@@ -55,6 +68,15 @@ impl RangeData {
             BlockOrigin::Cells { sheet, range } => {
                 let start = crate::reference::CellRef::new(range.start.col + col as u32, range.start.row + row as u32);
                 BlockOrigin::Cells { sheet: sheet.clone(), range: RangeRef::normalised(start, crate::reference::CellRef::new(start.col + width as u32 - 1, start.row + height as u32 - 1)) }
+            }
+            BlockOrigin::ArrayWithReads { vector, reads } => {
+                let reads: Vec<_> = reads.iter().filter_map(|read| {
+                    let (x, y) = (read.index % self.width, read.index / self.width);
+                    (x >= col && x - col < width && y >= row && y - row < height).then(||
+                        ArrayRead { index: (y - row) * width + x - col, ..read.clone() })
+                }).collect();
+                if reads.is_empty() { if *vector { BlockOrigin::Vector } else { BlockOrigin::Array } }
+                else { BlockOrigin::ArrayWithReads { vector: *vector, reads } }
             }
             other => other.clone(),
         }
@@ -406,7 +428,7 @@ fn one_at_a_time(name: &str) -> bool {
 ///
 /// So the question is per argument. A function absent from both lists takes
 /// everything whole.
-fn taken_one_at_a_time(name: &str, at: usize) -> bool {
+pub(crate) fn taken_one_at_a_time(name: &str, at: usize) -> bool {
     if one_at_a_time(name) {
         return true;
     }
@@ -502,6 +524,7 @@ pub fn call_arg_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_la
             let table = args[0].as_range();
             let table_height = table.cell_reference().map_or(table.height, |(_, range)| range.height() as usize);
             let mut cells = Vec::with_capacity(width * height);
+            let mut reads = Vec::new();
             for row in 0..height {
                 for col in 0..width {
                     let mut selected = vec![args[0].clone()];
@@ -515,10 +538,18 @@ pub fn call_arg_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_la
                         continue;
                     }
                     if selected.len() == 2 && table_height > 1 { selected.push(Arg::Value(Value::Number(1.0))); }
-                    cells.push(match call_arg("INDEX", &selected) { Arg::Value(value) => value, Arg::Range(block) => block.cells.first().cloned().unwrap_or(Value::Blank) });
+                    cells.push(match call_arg("INDEX", &selected) {
+                        Arg::Value(value) => value,
+                        Arg::Range(block) => {
+                            reads.extend(block.array_reads().iter().filter(|read| read.index == 0)
+                                .map(|read| ArrayRead { index: row * width + col, ..read.clone() }));
+                            block.cells.first().cloned().unwrap_or(Value::Blank)
+                        }
+                    });
                 }
             }
-            return Arg::Range(RangeData { origin: BlockOrigin::Array, width, height, cells });
+            let origin = if reads.is_empty() { BlockOrigin::Array } else { BlockOrigin::ArrayWithReads { vector: false, reads } };
+            return Arg::Range(RangeData { origin, width, height, cells });
         }
         if let Some(line) = a_whole_line(args) {
             return line;
@@ -530,13 +561,16 @@ pub fn call_arg_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_la
         // settles before it gets here.)
         if let [table, row] = args {
             let table = table.as_range();
+            if table.height == 1 && !table.array_reads().is_empty() {
+                return call_arg("INDEX", &[Arg::Range(table), Arg::Value(Value::Number(1.0)), row.clone()]);
+            }
             if table.height > 1 {
                 return match row.scalar().to_number() {
                     Ok(0.0) => Arg::Range(table),
                     Ok(row) if row < 0.0 => Arg::Value(Value::Error(ExcelError::Value)),
                     Ok(row) if row >= 1.0 && (row as usize) <= table.height => {
                         let at = row as usize - 1;
-                        Arg::Range(RangeData {origin: table.origin.clone(),
+                        Arg::Range(RangeData {origin: table.slice_origin(0, at, table.width, 1),
                             width: table.width,
                             height: 1,
                             cells: (0..table.width).map(|col| table.at(col, at)).collect(),
@@ -545,6 +579,20 @@ pub fn call_arg_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_la
                     Ok(_) => Arg::Value(Value::Error(ExcelError::Ref)),
                     Err(why) => Arg::Value(Value::Error(why)),
                 };
+            }
+        }
+        if let [Arg::Range(table), row, col] = args {
+            if !table.array_reads().is_empty() {
+                if let (Ok(row), Ok(col)) = (row.scalar().to_number(), col.scalar().to_number()) {
+                    let (row, col) = (row.trunc(), col.trunc());
+                    if row >= 1.0 && col >= 1.0 && row <= table.height as f64 && col <= table.width as f64 {
+                        let (row, col) = (row as usize - 1, col as usize - 1);
+                        return Arg::Range(RangeData {
+                            origin: table.slice_origin(col, row, 1, 1), width: 1, height: 1,
+                            cells: vec![table.at(col, row)],
+                        });
+                    }
+                }
             }
         }
     }
@@ -649,7 +697,7 @@ pub fn call_arg_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_la
             [block] => {
                 let data = block.as_range();
                 if data.cells.len() == 1 && !data.is_array() { Arg::Value(data.cells[0].clone()) }
-                else { let mut output = on_its_side(&data); output.origin = BlockOrigin::Array; Arg::Range(output) }
+                else { Arg::Range(on_its_side(&data)) }
             },
             _ => Arg::Value(Value::Error(ExcelError::Value)),
         };
@@ -5536,7 +5584,10 @@ fn on_its_side(block: &RangeData) -> RangeData {
             cells.push(block.at(col, row));
         }
     }
-    RangeData {origin: crate::functions::BlockOrigin::Array,
+    let reads: Vec<_> = block.array_reads().iter().map(|read|
+        ArrayRead { index: (read.index % block.width) * block.height + read.index / block.width, ..read.clone() }).collect();
+    let origin = if reads.is_empty() { BlockOrigin::Array } else { BlockOrigin::ArrayWithReads { vector: false, reads } };
+    RangeData {origin,
         width: block.height,
         height: block.width,
         cells,
