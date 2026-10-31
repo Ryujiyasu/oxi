@@ -275,9 +275,20 @@ impl<'a> TableFitLayouter<'a> {
                     0.0
                 }
             };
+            // OXI_TBL_RIGHT_LEGACY_MAR (2026-11-01, default ON, opt-out _DISABLE): in
+            // compat < 15 a right-aligned table stands out past the text edge by its
+            // right cell margin (the mirror of the legacy left shift). `_pb_tbljc_legacy_gen.py`
+            // (6000tw table, text edge 547.1): compat 14 right rule 552.58 with margin
+            // 108, 547.18 with 0; compat 15 546.94 either way; left / center never
+            // move. en/forms__031af703 (compat 14, jc right): Word 552.3, Oxi 547.1.
+            let right_legacy = if self.compat_mode < 15
+                && std::env::var_os("OXI_TBL_RIGHT_LEGACY_MAR_DISABLE").is_none()
+            {
+                table.style.default_cell_margins.as_ref().and_then(|m| m.right).unwrap_or(5.4)
+            } else { 0.0 };
             match table.style.alignment.as_deref() {
                 Some("center") => start_x + (content_width - table_width) / 2.0,
-                Some("right") => start_x + content_width - table_width,
+                Some("right") => start_x + content_width - table_width + right_legacy,
                 _ => start_x + table.style.indent.unwrap_or(0.0) - border_offset,
             }
         });
