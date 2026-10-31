@@ -6378,8 +6378,25 @@ impl<'a> PageLayouter<'a> {
                     // paragraph. Used by the post-layout reserve-correction (Step 1).
                     let mut para_fn_refs_per_page: Vec<Vec<u32>> = Vec::new();
                     let mut s900_para_deferred: Vec<u32> = Vec::new();
+                    // OXI_BDR_SKIP_CARRIER (2026-10-31, default ON, opt-out _DISABLE): an
+                    // empty section-break carrier that S945 drops takes no part in a
+                    // border group either -- the paragraph before it closes the group.
+                    // en/reference__00f99483: two empty paragraphs with the same bottom
+                    // rule, the second carrying a continuous sectPr; Word rules the first
+                    // (165.1) and gives the carrier no line; Oxi took the carrier as the
+                    // group's next member, drew no rule and lost its 3.5pt.
+                    let s903_next_idx = match page.blocks.get(block_idx + 1) {
+                        Some(Block::Paragraph(np))
+                            if std::env::var_os("OXI_BDR_SKIP_CARRIER_DISABLE").is_none()
+                                && np.style.page_section_break
+                                && np.runs.iter().all(|r| r.text.is_empty())
+                                && !np.style.page_break_after
+                                && !matches!(page.blocks.get(block_idx + 2), Some(Block::Table(_)))
+                                && !matches!(page.blocks.get(block_idx), Some(Block::Table(_))) => block_idx + 2,
+                        _ => block_idx + 1,
+                    };
                     let s903_next_borders_body: Option<&ParagraphBorders> =
-                        page.blocks.get(block_idx + 1).and_then(|b| match b {
+                        page.blocks.get(s903_next_idx).and_then(|b| match b {
                             Block::Paragraph(p) => p.style.borders.as_ref(),
                             _ => None,
                         });
