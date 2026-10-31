@@ -7557,7 +7557,16 @@ impl<'a> ParagraphLayouter<'a> {
             // the raised run's own offset then puts it back where it was.
             // No corpus document reaches this (the A/B changed 0 bytes), so the
             // claim rests on the probe alone, which is what it was measured on.
-            let line_ascent_growth: f32 = if std::env::var("OXI_S1360_DISABLE").is_err() {
+            // OXI_EXACT_RAISE (2026-10-31, default ON, opt-out _DISABLE): an EXACT
+            // line does not grow, so a raise does not move its baseline either; the
+            // raised run alone goes up by its w:position. en/policies__00c91ba3
+            // (Courier New 12, line 640 exact, every run w:position 16): Word's
+            // baselines sit at 0.8 x 32 - 8 = 17.6 below each line top (89.66 on
+            // p2); S1360 dropped the line by the 8pt raise and the run's own offset
+            // put it back, so every line of all 19 pages sat 7.7pt low.
+            let exact_line_no_growth = para.style.line_spacing_rule.as_deref() == Some("exact")
+                && std::env::var_os("OXI_EXACT_RAISE_DISABLE").is_none();
+            let line_ascent_growth: f32 = if std::env::var("OXI_S1360_DISABLE").is_err() && !exact_line_no_growth {
                 let s1045_ma = self.s1045_height_drivers(&line.fragments, para_font_size);
                 line.fragments
                     .iter()
