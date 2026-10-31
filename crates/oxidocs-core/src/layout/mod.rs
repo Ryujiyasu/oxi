@@ -9254,7 +9254,14 @@ cells={} pitch={:.2} text={:?}",
         // v-text-anchor: middle/bottom shifts content within textbox.
         // Initial cursor at top; for middle/bottom, compute content height first,
         // then offset all elements after layout.
-        if text_box.vertical_text && std::env::var_os("OXI_VERTICAL_TEXTBOX_LAYOUT").is_some() {
+        // OXI_VERTICAL_TEXTBOX_LAYOUT (default ON since 2026-10-31, opt-out _DISABLE;
+        // OXI_VERTICAL_TEXTBOX_LAYOUT still forces it): an eaVert text box lays its
+        // text out in vertical columns. ja/reports__67cf8704's section labels
+        // (HG丸ゴシックM-PRO 11, eaVert): Word sets 学び・授業づくり部 one em apart
+        // (10.8pt); the horizontal fallback broke after every character and
+        // stacked them a line height (19.45pt) apart, running past the label.
+        if text_box.vertical_text && (std::env::var_os("OXI_VERTICAL_TEXTBOX_LAYOUT").is_some()
+            || std::env::var_os("OXI_VERTICAL_TEXTBOX_LAYOUT_DISABLE").is_none()) {
             // (already folded into the insets above when OXI_TXBX_OUTLINE_INSET is on)
             let outline = (text_box.text_outline_inset.max(0.0) - txbx_outline).max(0.0);
             let width = (inner_width - 2.0 * outline).max(0.0);
