@@ -11257,7 +11257,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     crop.top = crop.top.max(0.0); crop.bottom = crop.bottom.max(0.0);
                                 }
                             }
-                            if std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") {
+                            if (std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || std::env::var_os("OXI_HEADER_FLOAT_BANDS_DISABLE").is_none()) {
                                 header_float_indices.push((img.relative_height, lp.elements.len()));
                             }
                             lp.elements.push(LayoutElement::new(
@@ -11319,7 +11319,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             lp.elements.extend(tbl_elements);
                         }
                     }
-                    if std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() != Some("1")
+                    if !(std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || std::env::var_os("OXI_HEADER_FLOAT_BANDS_DISABLE").is_none())
                         || !matches!(block, Block::Image(image) if image.position.is_some())
                     {
                         prev_block_top = this_block_top;

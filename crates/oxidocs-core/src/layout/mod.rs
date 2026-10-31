@@ -8954,7 +8954,7 @@ cells={} pitch={:.2} text={:?}",
             }
         } else {
             match pos.v_relative.as_deref() {
-                Some("topMargin") if std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") => pos.y,
+                Some("topMargin") if (std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || std::env::var_os("OXI_HEADER_FLOAT_BANDS_DISABLE").is_none()) => pos.y,
                 Some("page") => pos.y,
                 Some("paragraph") | Some("line") => {
                     let anchor_y = block_y_positions
@@ -10874,7 +10874,13 @@ cells={} pitch={:.2} text={:?}",
             };
             // A full-width wrapping header image excludes the body even
             // when its anchor paragraph fits above the image's top edge.
-            let floating_bands: Vec<(f32, f32, bool)> = if std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") {
+            // OXI_HEADER_FLOAT_BANDS (default ON since 2026-10-31, opt-out _DISABLE;
+            // OXI_HEADER_FLOAT_BANDS=1 still forces it): a header's floats wrap the
+            // header's own text. en/administrative__008d78a6: a page-wide wrapSquare
+            // banner (Picture 4, paragraph -20.25, 89pt) sits over the header line;
+            // Word sets «As of November 2, 2021» under it at 107.7 and the body
+            // follows the deeper header; Oxi set the line at 39, under the banner.
+            let floating_bands: Vec<(f32, f32, bool)> = if (std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || std::env::var_os("OXI_HEADER_FLOAT_BANDS_DISABLE").is_none()) {
                 blocks.iter().filter_map(|block| {
                     let Block::Image(image) = block else { return None; };
                     let position = image.position.as_ref()?;
