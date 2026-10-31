@@ -581,7 +581,7 @@ struct ArrayGroup {
 #[derive(Debug, Clone)]
 enum ArrayResult {
     Shared(std::rc::Rc<Arg>),
-    Lifted { occurrence_start: u64, occurrence_end: u64 },
+    Lifted { occurrence_start: u64, occurrence_end: u64, information: bool },
     Deferred { reads: Vec<FormulaCell>, occurrence_end: u64 },
 }
 
@@ -601,6 +601,7 @@ pub struct Workbook {
     array_context: std::cell::Cell<Option<ArrayGroup>>,
     array_materialization: std::cell::Cell<u32>,
     array_lifted: std::cell::Cell<bool>,
+    array_information_lifted: std::cell::Cell<bool>,
     array_projection: std::cell::Cell<Option<(u32, u32)>>,
     array_entry: bool,
     /// Consumers whose arguments cross a changing spill footprint.
@@ -1252,6 +1253,7 @@ impl Workbook {
         self.array_context.set(None);
         self.array_materialization.set(0);
         self.array_lifted.set(false);
+        self.array_information_lifted.set(false);
         self.array_projection.set(None);
         self.array_groups = self.collect_array_groups();
         self.conditional_array_groups = self.array_groups.keys().filter(|(sheet, anchor)| {
@@ -1608,9 +1610,9 @@ impl Workbook {
                         let Some((dx, dy)) = self.share_at(sheet, coord) else { continue; };
                         let anchor = (coord.0.saturating_sub(dx), coord.1.saturating_sub(dy));
                         let key = (sheet.clone(), anchor);
-                        let (prefix, lifted) = match self.array_results.get(&key) {
-                            Some(ArrayResult::Deferred { occurrence_end, .. }) => (*occurrence_end, false),
-                            Some(ArrayResult::Lifted { occurrence_end, .. }) => (*occurrence_end, true),
+                        let (prefix, lifted, information) = match self.array_results.get(&key) {
+                            Some(ArrayResult::Deferred { occurrence_end, .. }) => (*occurrence_end, false, false),
+                            Some(ArrayResult::Lifted { occurrence_end, information, .. }) => (*occurrence_end, true, *information),
                             _ => continue,
                         };
                         // An explicit range repairs a projected member once;
@@ -1626,7 +1628,7 @@ impl Workbook {
                         circular_passes.insert(key.clone(), next);
                         self.array_retry_prefix.insert(key.clone(), prefix);
                         if lifted {
-                            self.array_results.insert(key.clone(), ArrayResult::Lifted { occurrence_start: prefix, occurrence_end: prefix });
+                            self.array_results.insert(key.clone(), ArrayResult::Lifted { occurrence_start: prefix, occurrence_end: prefix, information });
                         } else { self.array_results.remove(&key); }
                         // Rebuild this group's discovered edges. A selector can
                         // choose a noncircular reference on the next attempt.
@@ -1950,6 +1952,8 @@ impl Workbook {
         let previous = self.array_context.replace(Some(group));
         let previous_projection = self.array_projection.replace(projected_start.map(|_| offset));
         let previous_lifted = self.array_lifted.replace(false);
+        let information = matches!(self.array_results.get(&key), Some(ArrayResult::Lifted { information: true, .. }));
+        let previous_information = self.array_information_lifted.replace(information);
         if let Some(start) = projected_start { USER_FUNCTION_OCCURRENCE.with(|held| held.set(start)); }
         else if let Some(start) = self.array_retry_prefix.get(&key) { USER_FUNCTION_OCCURRENCE.with(|held| held.set(*start)); }
         let mut worked = self.eval_arg(expr, sheet, 0, Some(if projected_start.is_some() { coord } else { anchor }));
@@ -1963,12 +1967,14 @@ impl Workbook {
             if self.array_lifted.get() {
                 // Reserve probe occurrences even when another member is first.
                 let occurrence_start = USER_FUNCTION_OCCURRENCE.with(std::cell::Cell::get);
-                self.array_results.insert(key.clone(), ArrayResult::Lifted { occurrence_start, occurrence_end: occurrence_start });
+                self.array_results.insert(key.clone(), ArrayResult::Lifted { occurrence_start, occurrence_end: occurrence_start,
+                    information: self.array_information_lifted.get() });
                 self.array_projection.set(Some(offset));
                 USER_FUNCTION_OCCURRENCE.with(|held| held.set(occurrence_start));
                 self.value_deferred.set(false);
                 clear_user_function_reads();
                 worked = self.eval_arg(expr, sheet, 0, Some(coord));
+                if self.conditional_array_groups.contains(&key) && !self.array_entry { self.require_ready_value(&worked); }
             } else {
                 self.array_results.insert(key.clone(), ArrayResult::Shared(std::rc::Rc::new(worked.clone())));
             }
@@ -1977,6 +1983,7 @@ impl Workbook {
             *occurrence_end = (*occurrence_end).max(USER_FUNCTION_OCCURRENCE.with(std::cell::Cell::get));
         }
         self.array_lifted.set(previous_lifted);
+        self.array_information_lifted.set(previous_information);
         self.array_projection.set(previous_projection);
         self.array_context.set(previous);
         formula_result(element_of(&worked, offset))
@@ -2000,7 +2007,8 @@ impl Workbook {
         // function results are fresh selector values, even with the same cells.
         let materialized = expressions.iter().zip(indexes.iter()).any(|(expr, value)|
             Self::materialized_index_argument(expr) && matches!(value, Arg::Range(block) if block.is_array()));
-        if materialized || self.array_entry || self.array_context.get().is_none() || self.array_materialization.get() != 0 {
+        if materialized || self.array_entry || self.array_context.get().is_none()
+            || (self.array_materialization.get() != 0 && !self.array_information_lifted.get()) {
             return materialized;
         }
         for index in indexes {
@@ -2429,6 +2437,8 @@ impl Workbook {
             return Value::Blank;
         };
         match held.cells.get(&(col, row)) {
+            // New CSE members expose zero before their first cached result.
+            Some(Cell::Formula { cached: Value::Blank, share: Some(_), .. }) if self.array_entry => Value::Number(0.0),
             Some(Cell::Literal(Value::Blank)) | None => held
                 .spilled
                 .get(&(col, row))
@@ -2535,7 +2545,7 @@ impl Workbook {
                 }
             }
             let origin = if reads.is_empty() { functions::BlockOrigin::Array }
-                else { functions::BlockOrigin::ArrayWithReads { vector: false, reads } };
+                else { functions::BlockOrigin::WithReads { kind: functions::BlockKind::Array, reads } };
             return Arg::Range(RangeData { origin, width, height, cells });
         }
         let number = |arg: &Arg| -> Result<u32, ExcelError> {
@@ -2630,6 +2640,11 @@ impl Workbook {
         self.provisional_value.get() && self.array_context.get().is_some()
     }
 
+    fn projecting_argument_values(&self, argument: &Arg) -> bool {
+        self.projecting_array_values()
+            && matches!(argument, Arg::Range(block) if block.is_array() || block.cells.len() > 1)
+    }
+
     // An elementwise operation can form a provisional array before every
     // source cell is ready. Keep the pending reads on their elements so an
     // INDEX consumer need not wait for elements it never selects.
@@ -2667,7 +2682,8 @@ impl Workbook {
             }
         }
         if reads.is_empty() { return answer; }
-        result.origin = functions::BlockOrigin::ArrayWithReads { vector: result.is_vector(), reads };
+        let kind = if result.is_vector() { functions::BlockKind::Vector } else if result.is_array() { functions::BlockKind::Array } else { functions::BlockKind::Scalar };
+        result.origin = functions::BlockOrigin::WithReads { kind, reads };
         Arg::Range(result)
     }
 
@@ -2686,7 +2702,7 @@ impl Workbook {
             USER_FUNCTION_ARGUMENT_CONTEXT.with(|held| { held.replace(previous_argument_context); });
             return value;
         }
-        let value = if name == "SUMPRODUCT" {
+        let value = if matches!(name, "SUMPRODUCT" | "TYPE") {
             self.eval_materialized_arg(expr, sheet, depth, skip, at)
         } else { self.eval_arg_inner(expr, sheet, depth, skip, at) };
         if user_function_argument {
@@ -2791,7 +2807,7 @@ impl Workbook {
 
             Expr::Unary { op, operand } => {
                 let operand = self.eval_arg(operand, sheet, depth + 1, at);
-                if !self.projecting_array_values() && !self.require_ready_value(&operand) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                if !self.projecting_argument_values(&operand) && !self.require_ready_value(&operand) { return Arg::Value(Value::Error(ExcelError::Value)); }
                 let answer = match &operand {
                     Arg::Value(v) => Arg::Value(apply_unary(*op, v.clone())),
                     Arg::Range(block) if block.cells.len() == 1 && !block.is_array() => Arg::Value(apply_unary(*op, block.cells[0].clone())),
@@ -2810,9 +2826,9 @@ impl Workbook {
 
             Expr::Binary { op, lhs, rhs } => {
                 let a = self.eval_materialized_arg(lhs, sheet, depth + 1, Skip::Nothing, at);
-                if !self.projecting_array_values() && !self.require_ready_value(&a) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                if !self.projecting_argument_values(&a) && !self.require_ready_value(&a) { return Arg::Value(Value::Error(ExcelError::Value)); }
                 let b = self.eval_materialized_arg(rhs, sheet, depth + 1, Skip::Nothing, at);
-                if !self.projecting_array_values() && !self.require_ready_value(&b) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                if !self.projecting_argument_values(&b) && !self.require_ready_value(&b) { return Arg::Value(Value::Error(ExcelError::Value)); }
                 self.projected_array_result(across(*op, &a, &b), &[&a, &b], |_, _, _| true)
             }
 
@@ -2975,12 +2991,14 @@ impl Workbook {
             }
             Expr::Function { name, args } if name == "CHOOSE" && args.len() >= 2 => {
                 let index = self.eval_arg_inner(&args[0], sheet, depth + 1, skip, at);
-                if !self.require_ready_value(&index) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                let projected = self.projecting_array_values() && matches!(&index, Arg::Range(block) if block.cells.len() > 1);
+                if !projected && !self.require_ready_value(&index) { return Arg::Value(Value::Error(ExcelError::Value)); }
                 if user_function_pending() || self.value_deferred.get() { return Arg::Value(Value::Error(ExcelError::Value)); }
                 if matches!(&index, Arg::Range(block) if block.is_array() || block.cells.len() > 1) {
                     let mut evaluated = vec![index];
                     evaluated.extend(args.iter().skip(1).map(|arg| self.eval_arg_inner(arg, sheet, depth + 1, skip, at)));
-                    functions::call_arg_with_text_context(name, &evaluated, self.compatibility_version, self.dbcs_language.unwrap_or(true))
+                    let answer = functions::call_arg_with_text_context(name, &evaluated, self.compatibility_version, self.dbcs_language.unwrap_or(true));
+                    self.projected_array_result(answer, &evaluated.iter().collect::<Vec<_>>(), |_, _, _| true)
                 } else {
                     match index.scalar().to_number() {
                         Ok(n) if n >= 1.0 && (n.trunc() as usize) < args.len() => self.eval_arg_inner(&args[n.trunc() as usize], sheet, depth + 1, skip, at),
@@ -3401,7 +3419,8 @@ impl Workbook {
             // cell by cell, and then every branch is worked out as before.
             Expr::Function { name, args } if name == "IF" && (2..=3).contains(&args.len()) => {
                 let test = self.eval_arg_inner(&args[0], sheet, depth + 1, skip, at);
-                if !self.require_ready_value(&test) { return Arg::Value(Value::Error(ExcelError::Value)); }
+                let projected = self.projecting_array_values() && matches!(&test, Arg::Range(block) if block.cells.len() > 1);
+                if !projected && !self.require_ready_value(&test) { return Arg::Value(Value::Error(ExcelError::Value)); }
                 let single = match &test {
                     Arg::Value(value) => Some(value.clone()),
                     Arg::Range(block) if block.cells.len() == 1 => Some(block.cells[0].clone()),
@@ -3597,6 +3616,14 @@ impl Workbook {
                     return Arg::Value(Value::Error(ExcelError::Value));
                 }
                 if user_function_pending() || self.value_deferred.get() { return Arg::Value(Value::Error(ExcelError::Value)); }
+                if !self.array_entry && self.array_context.get().is_some()
+                    && matches!(name.as_str(), "ISNUMBER" | "ISTEXT" | "ISBLANK" | "ISLOGICAL" | "ISERROR" | "ISERR" | "ISNA")
+                    && evaluated.iter().any(|argument| matches!(argument, Arg::Range(block) if block.is_array() || block.cells.len() > 1)) {
+                    // Information arrays repeat the group before an INDEX
+                    // selector is probed, including in materialised consumers.
+                    self.array_information_lifted.set(true);
+                    self.array_lifted.set(true);
+                }
                 if name == "IFS" && evaluated.len() >= 2 && evaluated.len() % 2 == 0 {
                     for pair in evaluated.chunks_exact(2) {
                         if matches!(&pair[0], Arg::Range(block) if block.is_array() || block.cells.len() > 1) { break; }
@@ -3629,7 +3656,8 @@ impl Workbook {
                     if self.array_lifted.get() && self.array_projection.get().is_none() { return Arg::Value(Value::Error(ExcelError::Value)); }
                     for argument in &evaluated {
                         if let Arg::Range(block) = argument {
-                            if !block.array_reads().is_empty() && !self.require_ready_value(argument) {
+                            if (!self.array_information_lifted.get() || !block.is_array())
+                                && !block.array_reads().is_empty() && !self.require_ready_value(argument) {
                                 return Arg::Value(Value::Error(ExcelError::Value));
                             }
                         }
@@ -3760,6 +3788,12 @@ impl Workbook {
                             } else if user_function_full_rebuild() { !previous_nonzero } else { previous_nonzero }
                         }));
                     }
+                    if self.array_context.get().is_some() {
+                        // Variant callbacks can observe a provisional cell
+                        // reference; consuming their answer still waits below.
+                        unready_formula_values.retain(|(target, coord)| !value_argument_ranges.iter().any(|(index, source, range)|
+                            user_variant_argument(name, *index) && self.reference_waits_for_formula(source, range, target, *coord)));
+                    }
                     if !unready_formula_values.is_empty() {
                         // A scalar formula argument is only a provisional
                         // value until its formula precedent is published.
@@ -3801,9 +3835,12 @@ impl Workbook {
                             }
                         }
                         self.callback_answer_observed.set(true);
-                        if evaluated.iter().enumerate().any(|(index, argument)|
-                            !user_reference_argument(name, index) && self.unready_argument(argument))
-                            || USER_FORMULA_READS.with(|held| held.borrow().iter().any(|cell|
+                        for (index, argument) in evaluated.iter().enumerate() {
+                            if !user_reference_argument(name, index) && self.unready_argument(argument) {
+                                self.require_ready_value(argument);
+                            }
+                        }
+                        if USER_FORMULA_READS.with(|held| held.borrow().iter().any(|cell|
                                 self.unready_cells.borrow().contains(cell))) {
                             self.value_deferred.set(true);
                         }
@@ -3846,11 +3883,28 @@ impl Workbook {
                 let projected = |index: usize| functions::taken_one_at_a_time(name, index)
                     || (name == "N" && matches!(evaluated.get(index), Some(Arg::Range(block)) if block.is_array()));
                 if arguments.iter().enumerate().any(|(index, argument)|
-                    !(self.projecting_array_values() && projected(index)) && !self.require_ready_value(argument)) {
+                    !(self.projecting_argument_values(argument) && projected(index))
+                        && !(name == "TYPE" && matches!(argument, Arg::Range(block) if (block.is_array() || block.cells.len() > 1)
+                            && (!self.array_information_lifted.get() || block.width > 1)))
+                        && !self.require_ready_value(argument)) {
                     return Arg::Value(Value::Error(ExcelError::Value));
                 }
                 let answer = functions::call_arg_with_text_context(name, &evaluated, self.compatibility_version, self.dbcs_language.unwrap_or(true));
-                self.projected_array_result(answer, &evaluated.iter().collect::<Vec<_>>(), |index, _, _| projected(index))
+                let answer = self.projected_array_result(answer, &evaluated.iter().collect::<Vec<_>>(), |index, _, _| projected(index));
+                if matches!(name.as_str(), "ISNUMBER" | "ISTEXT" | "ISBLANK" | "ISLOGICAL" | "ISERROR" | "ISERR" | "ISNA") {
+                    if let Arg::Range(mut block) = answer {
+                        if let functions::BlockOrigin::WithReads { reads, .. } = &mut block.origin {
+                            for read in reads.clone() {
+                                for row in 0..block.height {
+                                    let read = functions::ArrayRead { index: row * block.width + read.index % block.width, ..read.clone() };
+                                    if !reads.contains(&read) { reads.push(read); }
+                                }
+                            }
+                        }
+                        return Arg::Range(block);
+                    }
+                }
+                answer
             }
         }
     }

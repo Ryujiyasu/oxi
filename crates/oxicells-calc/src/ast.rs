@@ -115,6 +115,15 @@ impl ReferenceReads {
     fn value(values: Vec<Reference>) -> Self {
         Self { projection: values.clone(), addresses: values.clone(), values }
     }
+
+    fn consumed_projection(&self) -> Vec<Reference> {
+        let mut projection = self.projection.clone();
+        for reference in self.values.iter().filter(|reference|
+            reference.range.is_single() && !self.addresses.contains(reference)) {
+            Self::append(&mut projection, std::slice::from_ref(reference));
+        }
+        projection
+    }
 }
 
 impl Expr {
@@ -196,15 +205,16 @@ impl Expr {
             Expr::Name(label) => aliases.iter().rev().find(|(held, _)| held.eq_ignore_ascii_case(label)).map(|(_, reads)| reads.clone()).unwrap_or_default(),
             Expr::Unary { operand, .. } => {
                 let read = operand.reference_reads_in(aliases, required);
-                ReferenceReads { addresses: read.values.clone(), values: read.values, projection: read.projection }
+                let projection = read.consumed_projection();
+                ReferenceReads { addresses: read.values.clone(), values: read.values, projection }
             },
             Expr::Binary { lhs, rhs, .. } => {
                 let left = lhs.reference_reads_in(aliases, required);
                 let right = rhs.reference_reads_in(aliases, required);
+                let mut projection = left.consumed_projection();
+                append(&mut projection, &right.consumed_projection());
                 let mut values = left.values;
                 append(&mut values, &right.values);
-                let mut projection = left.projection;
-                append(&mut projection, &right.projection);
                 ReferenceReads { addresses: values.clone(), values, projection }
             },
             Expr::Function { name, args } if name == "LET" && args.len() >= 3 && args.len() % 2 == 1 => {
@@ -259,13 +269,35 @@ impl Expr {
                         continue;
                     }
                     let selectable = match name.as_str() {
-                        "IFERROR" | "IFNA" | "_UNION" | "_ISECT" | "_SPILL" => true,
+                        "IF" | "CHOOSE" | "IFERROR" | "IFNA" | "_UNION" | "_ISECT" | "_SPILL" => true,
                         "INDEX" | "TAKE" | "DROP" | "OFFSET" => i == 0,
                         "XLOOKUP" => i == 2 || i == 3,
                         "N" | "TRANSPOSE" => i == 0,
                         _ => crate::functions::taken_one_at_a_time(name, i),
                     };
-                    append(&mut projection, if selectable { &read.projection } else { &read.values });
+                    if selectable && crate::functions::taken_one_at_a_time(name, i) {
+                        append(&mut projection, &read.consumed_projection());
+                    } else {
+                        append(&mut projection, if selectable { &read.projection } else { &read.values });
+                    }
+                }
+                if required && !name.starts_with('_') && !crate::functions::is_known_function(name) {
+                    // Callback arguments can expose provisional references or
+                    // arrays. Their actual value reads are checked at dispatch.
+                    let mut values = Vec::new();
+                    for read in &reads { append(&mut values, &read.projection); }
+                    return ReferenceReads::value(values);
+                }
+                if required && name == "TYPE" && reads.len() == 1 {
+                    // The block's kind does not consume every array element.
+                    // Keep the reads needed to form it and scalar/column inputs.
+                    let read = &reads[0];
+                    let mut values = read.projection.clone();
+                    let direct = if matches!(args[0], Expr::Ref(_)) { &read.values[..] } else { &[] };
+                    for source in direct.iter().chain(&read.addresses).filter(|source| source.range.width() == 1) {
+                        append(&mut values, std::slice::from_ref(source));
+                    }
+                    return ReferenceReads::value(values);
                 }
                 if required && matches!(name.as_str(), "IF" | "CHOOSE" | "IFERROR" | "IFNA") {
                     let values = reads.first().map(|read| read.values.clone()).unwrap_or_default();

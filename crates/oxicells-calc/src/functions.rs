@@ -24,10 +24,13 @@ pub enum BlockOrigin {
     /// A one-dimensional array supplied by a worksheet function.
     Vector,
     Cells { sheet: String, range: RangeRef },
-    /// Unpublished formula values retained by individual array elements.
-    /// Selecting an element consumes only that element's pending reads.
-    ArrayWithReads { vector: bool, reads: Vec<ArrayRead> },
+    /// Pending reads retained by individual materialised values. Their scalar,
+    /// array or vector kind is independent of whether those reads are ready.
+    WithReads { kind: BlockKind, reads: Vec<ArrayRead> },
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockKind { Scalar, Array, Vector }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArrayRead {
@@ -46,10 +49,10 @@ pub struct RangeData {
 }
 
 impl RangeData {
-    pub fn is_array(&self) -> bool { matches!(self.origin, BlockOrigin::Array | BlockOrigin::Vector | BlockOrigin::ArrayWithReads { .. }) }
-    pub fn is_vector(&self) -> bool { matches!(self.origin, BlockOrigin::Vector | BlockOrigin::ArrayWithReads { vector: true, .. }) }
+    pub fn is_array(&self) -> bool { matches!(self.origin, BlockOrigin::Array | BlockOrigin::Vector | BlockOrigin::WithReads { kind: BlockKind::Array | BlockKind::Vector, .. }) }
+    pub fn is_vector(&self) -> bool { matches!(self.origin, BlockOrigin::Vector | BlockOrigin::WithReads { kind: BlockKind::Vector, .. }) }
     pub fn array_reads(&self) -> &[ArrayRead] {
-        match &self.origin { BlockOrigin::ArrayWithReads { reads, .. } => reads, _ => &[] }
+        match &self.origin { BlockOrigin::WithReads { reads, .. } => reads, _ => &[] }
     }
     /// Scalar operations retain a vector's rank; any matrix input promotes it.
     pub fn value_origin<'a>(blocks: impl IntoIterator<Item = &'a RangeData>) -> BlockOrigin {
@@ -69,14 +72,14 @@ impl RangeData {
                 let start = crate::reference::CellRef::new(range.start.col + col as u32, range.start.row + row as u32);
                 BlockOrigin::Cells { sheet: sheet.clone(), range: RangeRef::normalised(start, crate::reference::CellRef::new(start.col + width as u32 - 1, start.row + height as u32 - 1)) }
             }
-            BlockOrigin::ArrayWithReads { vector, reads } => {
+            BlockOrigin::WithReads { kind, reads } => {
                 let reads: Vec<_> = reads.iter().filter_map(|read| {
                     let (x, y) = (read.index % self.width, read.index / self.width);
                     (x >= col && x - col < width && y >= row && y - row < height).then(||
                         ArrayRead { index: (y - row) * width + x - col, ..read.clone() })
                 }).collect();
-                if reads.is_empty() { if *vector { BlockOrigin::Vector } else { BlockOrigin::Array } }
-                else { BlockOrigin::ArrayWithReads { vector: *vector, reads } }
+                if reads.is_empty() { match kind { BlockKind::Scalar => BlockOrigin::Range, BlockKind::Array => BlockOrigin::Array, BlockKind::Vector => BlockOrigin::Vector } }
+                else { BlockOrigin::WithReads { kind: *kind, reads } }
             }
             other => other.clone(),
         }
@@ -548,7 +551,7 @@ pub fn call_arg_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_la
                     });
                 }
             }
-            let origin = if reads.is_empty() { BlockOrigin::Array } else { BlockOrigin::ArrayWithReads { vector: false, reads } };
+            let origin = if reads.is_empty() { BlockOrigin::Array } else { BlockOrigin::WithReads { kind: BlockKind::Array, reads } };
             return Arg::Range(RangeData { origin, width, height, cells });
         }
         if let Some(line) = a_whole_line(args) {
@@ -587,9 +590,13 @@ pub fn call_arg_with_text_context(name: &str, args: &[Arg], version: u8, dbcs_la
                     let (row, col) = (row.trunc(), col.trunc());
                     if row >= 1.0 && col >= 1.0 && row <= table.height as f64 && col <= table.width as f64 {
                         let (row, col) = (row as usize - 1, col as usize - 1);
+                        let value = table.at(col, row);
+                        let origin = match table.slice_origin(col, row, 1, 1) {
+                            BlockOrigin::WithReads { reads, .. } => BlockOrigin::WithReads { kind: BlockKind::Scalar, reads },
+                            _ => return Arg::Value(value),
+                        };
                         return Arg::Range(RangeData {
-                            origin: table.slice_origin(col, row, 1, 1), width: 1, height: 1,
-                            cells: vec![table.at(col, row)],
+                            origin, width: 1, height: 1, cells: vec![value],
                         });
                     }
                 }
@@ -5586,7 +5593,7 @@ fn on_its_side(block: &RangeData) -> RangeData {
     }
     let reads: Vec<_> = block.array_reads().iter().map(|read|
         ArrayRead { index: (read.index % block.width) * block.height + read.index / block.width, ..read.clone() }).collect();
-    let origin = if reads.is_empty() { BlockOrigin::Array } else { BlockOrigin::ArrayWithReads { vector: false, reads } };
+    let origin = if reads.is_empty() { BlockOrigin::Array } else { BlockOrigin::WithReads { kind: BlockKind::Array, reads } };
     RangeData {origin,
         width: block.height,
         height: block.width,
