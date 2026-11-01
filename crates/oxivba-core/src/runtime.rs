@@ -8774,19 +8774,8 @@ impl<'a> Runtime<'a> {
                     }
                 }
                 3 if member_key == "clear" && !rest.is_empty() => Err(language_error(451, "Clear does not take indices", at)),
-                1 | 3 if method => err_call(frame, &member, rest, &[], at, ErrCallMode::CallByName).map_err(|failure| {
-                    if failure.kind != RuntimeErrorKind::UserDefined {
-                        return failure;
-                    }
-                    // Automation dispatch supplies the standard error metadata.
-                    let number = runtime_error_number(&failure);
-                    let number = if number < 0 { 440 } else { number };
-                    let mut dispatched = raised_error(
-                        number, frame.source_name.clone(), frame.error_environment.description(number).to_string(), at,
-                    );
-                    dispatched.vba_help_context = Some(vba_error_help_context(number));
-                    dispatched
-                }),
+                1 | 3 if method => err_call(frame, &member, rest, &[], at, ErrCallMode::CallByName)
+                    .map_err(|failure| automation_error(failure, frame, at)),
                 _ => Err(missing()),
             };
         }
@@ -8905,6 +8894,14 @@ impl<'a> Runtime<'a> {
         if let Some((module, procedure)) = self.source_class_procedure_view(class, name, wanted, view) {
             let variadic = procedure.params.last().is_some_and(|p| p.mode == ParamMode::ParamArray);
             if args.len() > procedure.params.len() && !variadic {
+                if matches!(kind, 2 | 3) && procedure.params.is_empty() {
+                    return self.automation_getter_result((receiver, name, 0), kind, args, frame, line, source);
+                }
+                if kind == 4 && self.source_class_procedure_view(class, name, &[ProcKind::PropertyGet], view)
+                    .is_some_and(|(_, getter)| getter.params.is_empty())
+                {
+                    return self.automation_getter_result((receiver, name, 0), kind, args, frame, line, source);
+                }
                 return Err(language_error(450, "too many dispatch arguments", line));
             }
             // PROPERTYPUT's final argument is named DISPID_PROPERTYPUT. It
@@ -8954,9 +8951,17 @@ impl<'a> Runtime<'a> {
                 self.as_instance(receiver, |runtime| runtime.call_kind(&procedure.name, wanted, values, Some(line)))
             };
             return result
+                .map_err(|failure| automation_error(failure, frame, line))
                 .map(|value| if matches!(kind, 4 | 8) { Value::Empty } else { value });
         }
         if procedure_exists {
+            if kind == 4 {
+                if let Some((_, getter)) = self.source_class_procedure_view(class, name, &[ProcKind::PropertyGet], view) {
+                    if args.len() > getter.params.len() {
+                        return self.automation_getter_result((receiver, name, getter.params.len()), kind, args, frame, line, source);
+                    }
+                }
+            }
             return Err(language_error(450, "invalid property invocation", line));
         }
         let field = view.is_none() && self.classes.get(&key(class)).is_some_and(|module| self.public_instance_field(module, name));
@@ -8971,6 +8976,62 @@ impl<'a> Runtime<'a> {
             return Err(language_error(13, "object property assignment requires an object", line));
         }
         self.instance_assign(receiver, name, &[], value, line).map(|_| Value::Empty)
+    }
+
+    fn automation_getter_result(&mut self, getter: (&ObjectRef, &str, usize), kind: u8,
+        args: &[Value], frame: &mut Frame, line: u32,
+        source: Option<(&[Argument], &[EvaluatedArgument], bool)>) -> Result<Value, RuntimeError>
+    {
+        let (receiver, name, getter_count) = getter;
+        let getter_kind = if kind == 4 { 2 } else { kind };
+        let getter_source = source.map(|(arguments, evaluated, forced)|
+            (&arguments[..getter_count], &evaluated[..getter_count], forced));
+        let value = self.instance_automation_member(receiver, name, getter_kind,
+            &args[..getter_count], frame, line, getter_source)?;
+        let Value::Object(object) = value else {
+            if matches!(value, Value::Nothing) {
+                // A failed default-member lookup makes Automation retry the
+                // getter; the argument expressions have already been evaluated.
+                self.instance_automation_member(receiver, name, getter_kind,
+                    &args[..getter_count], frame, line, getter_source)?;
+                return Err(no_such_member("the returned object has no default member".into(), Some(line)));
+            }
+            return Err(language_error(451, "the getter did not return an object", line));
+        };
+        let forwarded = source.map(|(arguments, evaluated, forced)|
+            (&arguments[getter_count..], &evaluated[getter_count..], forced));
+        let result = self.automation_default_member(&object, kind, &args[getter_count..], frame, line, forwarded);
+        if result.as_ref().is_err_and(|failure|
+            failure.kind == RuntimeErrorKind::Unsupported && failure.vba_number == Some(438))
+        {
+            self.instance_automation_member(receiver, name, getter_kind,
+                &args[..getter_count], frame, line, getter_source)?;
+        }
+        result
+    }
+
+    fn automation_default_member(&mut self, receiver: &ObjectRef, kind: u8,
+        args: &[Value], frame: &mut Frame, line: u32,
+        source: Option<(&[Argument], &[EvaluatedArgument], bool)>) -> Result<Value, RuntimeError>
+    {
+        if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+            return self.instance_automation_member(receiver, "_default", kind, args, frame, line, source);
+        }
+        let name = if matches!(receiver.kind.as_str(), "Collection" | "Dictionary") { "Item" } else { "Value" };
+        let mut values = vec![Value::Object(receiver.clone()), Value::String(name.into()), Value::Integer(i64::from(kind))];
+        values.extend_from_slice(args);
+        let mut arguments = Vec::new();
+        let mut evaluated = Vec::new();
+        if let Some((rest, bound, _)) = source {
+            for value in &values[..3] {
+                arguments.push(Argument { name: None, value: None, file_number: false, force_by_value: false });
+                evaluated.push(EvaluatedArgument::new(value.clone(), None));
+            }
+            arguments.extend_from_slice(rest);
+            evaluated.extend_from_slice(bound);
+        }
+        self.call_by_name(&values, frame, Some(line), source.map(|(_, _, forced)|
+            (arguments.as_slice(), evaluated.as_slice(), forced)))
     }
 
     fn automation_member_name(&self, receiver: &ObjectRef, requested: &str) -> String {
@@ -9182,7 +9243,17 @@ impl<'a> Runtime<'a> {
                 "a Collection's default member Item wants an index",
                 Some(line),
             )),
-            Value::Object(receiver) => self.host_get(&receiver, "Value", line)?.ok_or_else(|| {
+            Value::Object(receiver) => {
+                if let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&receiver.handle) {
+                    if let Some((_, getter)) = self.source_class_procedure_view(&instance.class, "_default",
+                        &[ProcKind::PropertyGet], receiver.dispatch_view.as_deref())
+                    {
+                        if getter.params.iter().any(|parameter| !parameter.optional && parameter.mode != ParamMode::ParamArray) {
+                            return Err(language_error(449, "the default property requires arguments", line));
+                        }
+                    }
+                }
+                self.host_get(&receiver, "Value", line)?.ok_or_else(|| {
                 if let Some(number) = self.host.as_deref().and_then(|host| host.default_member_error(&receiver)) {
                     return language_error(number, "the default member requires arguments", line);
                 }
@@ -9190,7 +9261,8 @@ impl<'a> Runtime<'a> {
                     format!("{} has no default scalar Value property", receiver.kind),
                     Some(line),
                 )
-            }),
+                })
+            }
             Value::Nothing => Err(error(
                 RuntimeErrorKind::ObjectVariableNotSet,
                 "object variable or With block variable not set",
@@ -10560,6 +10632,39 @@ fn raised_error(number: i64, source: String, description: String, line: u32) -> 
     }
 }
 
+fn raised_error_number(number: i64) -> i64 {
+    match number as u32 {
+        0x8007_0005 => 70,
+        0x8007_000e => 7,
+        0x8007_0057 => 5,
+        0x8000_4001 => 445,
+        0x8000_4002 => 430,
+        0x8002_0005 => 13,
+        0x8002_000e => 450,
+        0x8002_0004 => 448,
+        0x8002_000b => 9,
+        0x8002_0006 => 438,
+        0x800a_0005 => 5,
+        0x800a_01c2 => 450,
+        _ => number,
+    }
+}
+
+fn automation_error(failure: RuntimeError, frame: &Frame, line: u32) -> RuntimeError {
+    if failure.kind != RuntimeErrorKind::UserDefined {
+        return failure;
+    }
+    // Automation reports the standard VBA error metadata, including 440 for
+    // unmapped negative HRESULTs. Ordinary dotted calls retain Err.Raise info.
+    let number = runtime_error_number(&failure);
+    let number = if number < 0 { 440 } else { number };
+    let mut dispatched = raised_error(
+        number, frame.source_name.clone(), frame.error_environment.description(number).to_string(), line,
+    );
+    dispatched.vba_help_context = Some(vba_error_help_context(number));
+    dispatched
+}
+
 fn language_error(number: i64, message: impl Into<String>, line: u32) -> RuntimeError {
     let mut failure = error(RuntimeErrorKind::UserDefined, message, Some(line));
     failure.vba_number = Some(number);
@@ -10811,6 +10916,7 @@ fn err_call(
                 Some(line),
             ));
         }
+        let number = raised_error_number(number);
         let supplied = |position| args.get(position).filter(|value| !matches!(value, Value::Missing));
         let source = match supplied(1) {
             Some(value) => err_string_argument(value, line)?,
@@ -26463,16 +26569,558 @@ failed:
  Probe = "error=" & CStr(Err.Number)
 End Function
 "####, false, r####"Long()|0|rank=60"####),
+            ("module_dim_61", r####"Private a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+Public Function Probe() As String
+ On Error GoTo failed
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 61)) & "|rank=61"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, true, r####"次元が多すぎます。"####),
+            ("type_field_61", r####"Private Type Holder
+ values(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+End Type
+Public Function Probe() As String
+ On Error GoTo failed
+ Dim h As Holder
+ Probe = TypeName(h.values) & "|" & CStr(UBound(h.values, 61)) & "|rank=61"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, true, r####"次元が多すぎます。"####),
         ] {
             let compilation = crate::compile_project(source);
             if compile_error {
                 assert_eq!(compilation.unwrap_err().error.description(crate::ErrorLanguage::Japanese), expected, "{name}");
+                let module = crate::parse_module(source).unwrap();
+                let failure = Runtime::new(&module).call("Probe", vec![]).unwrap_err();
+                assert_eq!(failure.kind, RuntimeErrorKind::Compile, "{name}: declaration errors must remain compile errors");
             } else {
                 compilation.unwrap();
                 let module = crate::parse_module(source).unwrap();
                 let mut runtime = Runtime::new(&module);
                 assert_eq!(runtime.call("Probe", vec![]).unwrap(), Value::String(expected.to_string()), "{name}");
             }
+        }
+
+        for (name, source, expected, invalid) in [
+            ("class_module_dim_60", r####"Attribute VB_Name = "EntryProbe"
+Public Function Probe() As String
+ Dim target As BoundClass
+ Set target = New BoundClass
+ Probe = target.Probe()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "BoundClass"
+Attribute VB_Exposed = False
+Private a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+Public Function Probe() As String
+ On Error GoTo failed
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 60)) & "|rank=60"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, r####"Long()|0|rank=60"####, false),
+            ("class_module_dim_61", r####"Attribute VB_Name = "EntryProbe"
+Public Function Probe() As String
+ Dim target As BoundClass
+ Set target = New BoundClass
+ Probe = target.Probe()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "BoundClass"
+Attribute VB_Exposed = False
+Private a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+Public Function Probe() As String
+ On Error GoTo failed
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 61)) & "|rank=61"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, r####"次元が多すぎます。"####, true),
+            ("class_type_field_60", r####"Attribute VB_Name = "EntryProbe"
+Public Function Probe() As String
+ Dim target As BoundClass
+ Set target = New BoundClass
+ Probe = target.Probe()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "BoundClass"
+Attribute VB_Exposed = False
+Private Type Holder
+ values(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+End Type
+Public Function Probe() As String
+ On Error GoTo failed
+ Dim h As Holder
+ Probe = TypeName(h.values) & "|" & CStr(UBound(h.values, 60)) & "|rank=60"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, r####"Long()|0|rank=60"####, false),
+            ("class_type_field_61", r####"Attribute VB_Name = "EntryProbe"
+Public Function Probe() As String
+ Dim target As BoundClass
+ Set target = New BoundClass
+ Probe = target.Probe()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "BoundClass"
+Attribute VB_Exposed = False
+Private Type Holder
+ values(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+End Type
+Public Function Probe() As String
+ On Error GoTo failed
+ Dim h As Holder
+ Probe = TypeName(h.values) & "|" & CStr(UBound(h.values, 61)) & "|rank=61"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, r####"次元が多すぎます。"####, true),
+        ] {
+            let compilation = crate::compile_project(source);
+            if invalid {
+                let failure = compilation.unwrap_err();
+                assert_eq!(failure.error.kind, crate::CompileErrorKind::TooManyDimensions, "{name}");
+                assert_eq!(failure.error.description(crate::ErrorLanguage::Japanese), expected, "{name}");
+            } else {
+                compilation.unwrap();
+            }
+            let (module, classes) = crate::parse_project(source).unwrap();
+            let mut runtime = Runtime::new(&module).with_classes(&classes);
+            let result = runtime.call_macro("EntryProbe.Probe", vec![]);
+            if invalid {
+                assert_eq!(result.unwrap_err().kind, RuntimeErrorKind::Compile, "{name}");
+            } else {
+                assert_eq!(result.unwrap(), Value::String(expected.to_string()), "{name}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod automation_getter_result_native_regressions {
+    use super::*;
+
+    const SOURCE: &str = r####"Attribute VB_Name = "TraceDriver"
+Option Explicit
+Public TraceLog As String
+Public Function Probe(ByVal memberName As String, ByVal callKind As Long, ByVal argumentCount As Long, ByVal directCall As Boolean) As String
+ Dim target As TraceClass, answer As Variant, text As String
+ Set target = New TraceClass
+ TraceLog = ""
+ On Error GoTo failed
+ If directCall Then
+  answer = target.Explode()
+ Else
+  Select Case argumentCount
+  Case 0: answer = CallByName(target, memberName, callKind)
+  Case 1: answer = CallByName(target, memberName, callKind, 1)
+  Case 2: answer = CallByName(target, memberName, callKind, 1, 2)
+  End Select
+ End If
+ If IsArray(answer) Then
+  text = "array|" & TypeName(answer) & "|" & CStr(VarType(answer)) & "|" & CStr(LBound(answer)) & "|" & CStr(UBound(answer))
+ Else
+  text = "value|" & TypeName(answer) & "|" & CStr(VarType(answer)) & "|" & CStr(answer)
+ End If
+ Probe = text & "|trace=" & TraceLog
+ Exit Function
+failed:
+ Probe = "error|" & CStr(Err.Number) & "|" & Err.Description & "|" & Err.Source & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext) & "|trace=" & TraceLog
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "TraceClass"
+Attribute VB_Exposed = False
+Public Property Get ScalarValue() As Long
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "S;"
+ ScalarValue = 42
+End Property
+Public Property Get ChildValue() As Object
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "C;"
+ Set ChildValue = New DefaultChild
+End Property
+Public Property Get ArrayValue() As Variant
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "A;"
+ ArrayValue = Array(10, 20)
+End Property
+Public Property Get IndexedValue(ByVal index As Long) As Long
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "D" & CStr(index) & ";"
+ IndexedValue = index * 10
+End Property
+Public Property Get NothingValue() As Object
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "N;"
+ Set NothingValue = Nothing
+End Property
+Public Property Get NoDefaultValue() As Object
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "O;"
+ Set NoDefaultValue = New TraceClass
+End Property
+Public Property Get CollectionValue() As Object
+ Dim items As Collection
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "K;"
+ Set items = New Collection
+ items.Add 10
+ items.Add 20
+ Set CollectionValue = items
+End Property
+Public Function Explode() As Long
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "F;"
+ Err.Raise 5, "TraceClass", "trace-failure", "trace-help.chm", 41
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "DefaultChild"
+Attribute VB_Exposed = False
+Public Property Get Item(ByVal index As Long) As String
+Attribute Item.VB_UserMemId = 0
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "G" & CStr(index) & ";"
+ Item = "item:" & CStr(index)
+End Property
+Public Property Let Item(ByVal index As Long, ByVal incoming As String)
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "L" & CStr(index) & ":" & incoming & ";"
+End Property
+"####;
+
+    #[test]
+    fn getters_forward_default_members_and_preserve_execution_order() {
+        let (module, classes) = crate::parse_project(SOURCE).unwrap();
+        for (member, kind, count, direct, expected) in [
+            ("ScalarValue", 1, 0, false, "error|450|trace="),
+            ("ScalarValue", 1, 1, false, "error|450|trace="),
+            ("ScalarValue", 1, 2, false, "error|450|trace="),
+            ("ScalarValue", 2, 0, false, "value|Long|3|42|trace=S;"),
+            ("ScalarValue", 2, 1, false, "error|451|trace=S;"),
+            ("ScalarValue", 2, 2, false, "error|451|trace=S;"),
+            ("ScalarValue", 3, 0, false, "value|Long|3|42|trace=S;"),
+            ("ScalarValue", 3, 1, false, "error|451|trace=S;"),
+            ("ScalarValue", 3, 2, false, "error|451|trace=S;"),
+            ("ScalarValue", 4, 0, false, "error|446|trace="),
+            ("ScalarValue", 4, 1, false, "error|451|trace=S;"),
+            ("ScalarValue", 4, 2, false, "error|451|trace=S;"),
+            ("ScalarValue", 8, 0, false, "error|446|trace="),
+            ("ScalarValue", 8, 1, false, "error|450|trace="),
+            ("ScalarValue", 8, 2, false, "error|450|trace="),
+            ("ChildValue", 1, 0, false, "error|450|trace="),
+            ("ChildValue", 1, 1, false, "error|450|trace="),
+            ("ChildValue", 1, 2, false, "error|450|trace="),
+            ("ChildValue", 2, 0, false, "error|449|trace=C;"),
+            ("ChildValue", 2, 1, false, "value|String|8|item:1|trace=C;G1;"),
+            ("ChildValue", 2, 2, false, "error|450|trace=C;"),
+            ("ChildValue", 3, 0, false, "error|449|trace=C;"),
+            ("ChildValue", 3, 1, false, "value|String|8|item:1|trace=C;G1;"),
+            ("ChildValue", 3, 2, false, "error|450|trace=C;"),
+            ("ChildValue", 4, 0, false, "error|446|trace="),
+            ("ChildValue", 4, 1, false, "error|449|trace=C;"),
+            ("ChildValue", 4, 2, false, "value|Empty|0||trace=C;L1:2;"),
+            ("ChildValue", 8, 0, false, "error|446|trace="),
+            ("ChildValue", 8, 1, false, "error|450|trace="),
+            ("ChildValue", 8, 2, false, "error|450|trace="),
+            ("ArrayValue", 1, 0, false, "error|450|trace="),
+            ("ArrayValue", 1, 1, false, "error|450|trace="),
+            ("ArrayValue", 1, 2, false, "error|450|trace="),
+            ("ArrayValue", 2, 0, false, "array|Variant()|8204|0|1|trace=A;"),
+            ("ArrayValue", 2, 1, false, "error|451|trace=A;"),
+            ("ArrayValue", 2, 2, false, "error|451|trace=A;"),
+            ("ArrayValue", 3, 0, false, "array|Variant()|8204|0|1|trace=A;"),
+            ("ArrayValue", 3, 1, false, "error|451|trace=A;"),
+            ("ArrayValue", 3, 2, false, "error|451|trace=A;"),
+            ("ArrayValue", 4, 0, false, "error|446|trace="),
+            ("ArrayValue", 4, 1, false, "error|451|trace=A;"),
+            ("ArrayValue", 4, 2, false, "error|451|trace=A;"),
+            ("ArrayValue", 8, 0, false, "error|446|trace="),
+            ("ArrayValue", 8, 1, false, "error|450|trace="),
+            ("ArrayValue", 8, 2, false, "error|450|trace="),
+            ("IndexedValue", 1, 0, false, "error|450|trace="),
+            ("IndexedValue", 1, 1, false, "error|450|trace="),
+            ("IndexedValue", 1, 2, false, "error|450|trace="),
+            ("IndexedValue", 2, 0, false, "error|449|trace="),
+            ("IndexedValue", 2, 1, false, "value|Long|3|10|trace=D1;"),
+            ("IndexedValue", 2, 2, false, "error|450|trace="),
+            ("IndexedValue", 3, 0, false, "error|449|trace="),
+            ("IndexedValue", 3, 1, false, "value|Long|3|10|trace=D1;"),
+            ("IndexedValue", 3, 2, false, "error|450|trace="),
+            ("IndexedValue", 4, 0, false, "error|446|trace="),
+            ("IndexedValue", 4, 1, false, "error|450|trace="),
+            ("IndexedValue", 4, 2, false, "error|451|trace=D1;"),
+            ("IndexedValue", 8, 0, false, "error|446|trace="),
+            ("IndexedValue", 8, 1, false, "error|450|trace="),
+            ("IndexedValue", 8, 2, false, "error|450|trace="),
+            ("Explode", 1, 0, false, "error|5|trace=F;"),
+            ("Explode", 1, 1, false, "error|450|trace="),
+            ("Explode", 1, 2, false, "error|450|trace="),
+            ("Explode", 2, 0, false, "error|450|trace="),
+            ("Explode", 2, 1, false, "error|450|trace="),
+            ("Explode", 2, 2, false, "error|450|trace="),
+            ("Explode", 3, 0, false, "error|5|trace=F;"),
+            ("Explode", 3, 1, false, "error|5|trace=F;"),
+            ("Explode", 3, 2, false, "error|5|trace=F;"),
+            ("Explode", 4, 0, false, "error|446|trace="),
+            ("Explode", 4, 1, false, "error|450|trace="),
+            ("Explode", 4, 2, false, "error|450|trace="),
+            ("Explode", 8, 0, false, "error|446|trace="),
+            ("Explode", 8, 1, false, "error|450|trace="),
+            ("Explode", 8, 2, false, "error|450|trace="),
+            ("NothingValue", 1, 0, false, "error|450|trace="),
+            ("NothingValue", 1, 1, false, "error|450|trace="),
+            ("NothingValue", 1, 2, false, "error|450|trace="),
+            ("NothingValue", 2, 0, false, "error|91|trace=N;"),
+            ("NothingValue", 2, 1, false, "error|438|trace=N;N;"),
+            ("NothingValue", 2, 2, false, "error|438|trace=N;N;"),
+            ("NothingValue", 3, 0, false, "error|91|trace=N;"),
+            ("NothingValue", 3, 1, false, "error|438|trace=N;N;"),
+            ("NothingValue", 3, 2, false, "error|438|trace=N;N;"),
+            ("NothingValue", 4, 0, false, "error|446|trace="),
+            ("NothingValue", 4, 1, false, "error|438|trace=N;N;"),
+            ("NothingValue", 4, 2, false, "error|438|trace=N;N;"),
+            ("NothingValue", 8, 0, false, "error|446|trace="),
+            ("NothingValue", 8, 1, false, "error|450|trace="),
+            ("NothingValue", 8, 2, false, "error|450|trace="),
+            ("NoDefaultValue", 1, 0, false, "error|450|trace="),
+            ("NoDefaultValue", 1, 1, false, "error|450|trace="),
+            ("NoDefaultValue", 1, 2, false, "error|450|trace="),
+            ("NoDefaultValue", 2, 0, false, "error|438|trace=O;"),
+            ("NoDefaultValue", 2, 1, false, "error|438|trace=O;O;"),
+            ("NoDefaultValue", 2, 2, false, "error|438|trace=O;O;"),
+            ("NoDefaultValue", 3, 0, false, "error|438|trace=O;"),
+            ("NoDefaultValue", 3, 1, false, "error|438|trace=O;O;"),
+            ("NoDefaultValue", 3, 2, false, "error|438|trace=O;O;"),
+            ("NoDefaultValue", 4, 0, false, "error|446|trace="),
+            ("NoDefaultValue", 4, 1, false, "error|438|trace=O;O;"),
+            ("NoDefaultValue", 4, 2, false, "error|438|trace=O;O;"),
+            ("NoDefaultValue", 8, 0, false, "error|446|trace="),
+            ("NoDefaultValue", 8, 1, false, "error|450|trace="),
+            ("NoDefaultValue", 8, 2, false, "error|450|trace="),
+            ("CollectionValue", 1, 0, false, "error|450|trace="),
+            ("CollectionValue", 1, 1, false, "error|450|trace="),
+            ("CollectionValue", 1, 2, false, "error|450|trace="),
+            ("CollectionValue", 2, 0, false, "error|450|trace=K;"),
+            ("CollectionValue", 2, 1, false, "error|438|trace=K;K;"),
+            ("CollectionValue", 2, 2, false, "error|438|trace=K;K;"),
+            ("CollectionValue", 3, 0, false, "error|450|trace=K;"),
+            ("CollectionValue", 3, 1, false, "value|Integer|2|10|trace=K;"),
+            ("CollectionValue", 3, 2, false, "error|450|trace=K;"),
+            ("CollectionValue", 4, 0, false, "error|446|trace="),
+            ("CollectionValue", 4, 1, false, "error|438|trace=K;K;"),
+            ("CollectionValue", 4, 2, false, "error|438|trace=K;K;"),
+            ("CollectionValue", 8, 0, false, "error|446|trace="),
+            ("CollectionValue", 8, 1, false, "error|450|trace="),
+            ("CollectionValue", 8, 2, false, "error|450|trace="),
+            ("Explode", 1, 0, true, "error|5|trace=F;")
+        ] {
+            let mut runtime = Runtime::new(&module).with_classes(&classes)
+                .with_error_environment(ErrorEnvironment { language: crate::ErrorLanguage::Japanese, help_file: "vba-help.chm".into() });
+            let result = runtime.call_macro("TraceDriver.Probe", vec![
+                Value::String(member.into()), Value::Integer(kind), Value::Integer(count), Value::Boolean(direct)
+            ]).unwrap();
+            let Value::String(report) = result else { panic!("unexpected report {result:?}"); };
+            // Error descriptions are localized separately; this matrix checks
+            // the native error number, complete successful values and body trace.
+            let actual = if report.starts_with("error|") {
+                let mut fields = report.split('|');
+                format!("{}|{}|trace={}", fields.next().unwrap(), fields.next().unwrap(),
+                    report.rsplit_once("|trace=").unwrap().1)
+            } else { report };
+            assert_eq!(actual, expected, "{member}, kind={kind}, count={count}, direct={direct}");
+        }
+    }
+
+    #[test]
+    fn automation_errors_normalize_metadata_and_direct_calls_retain_it() {
+        for (number, kind, direct, expected) in [
+            (5, 1, false, "error|5|プロシージャの呼び出し、または引数が不正です。|VBAProject|vba-help.chm|1000005|trace=F;"),
+            (5, 3, false, "error|5|プロシージャの呼び出し、または引数が不正です。|VBAProject|vba-help.chm|1000005|trace=F;"),
+            (5, 1, true, "error|5|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (513, 1, false, "error|513|アプリケーション定義またはオブジェクト定義のエラーです。|VBAProject|vba-help.chm|1000095|trace=F;"),
+            (513, 3, false, "error|513|アプリケーション定義またはオブジェクト定義のエラーです。|VBAProject|vba-help.chm|1000095|trace=F;"),
+            (513, 1, true, "error|513|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (65535, 1, false, "error|65535|アプリケーション定義またはオブジェクト定義のエラーです。|VBAProject|vba-help.chm|1000095|trace=F;"),
+            (65535, 3, false, "error|65535|アプリケーション定義またはオブジェクト定義のエラーです。|VBAProject|vba-help.chm|1000095|trace=F;"),
+            (65535, 1, true, "error|65535|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147221503, 1, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147221503, 3, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147221503, 1, true, "error|-2147221503|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147467259, 1, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147467259, 3, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147467259, 1, true, "error|-2147467259|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147024891, 1, false, "error|70|書き込みできません。|VBAProject|vba-help.chm|1000070|trace=F;"),
+            (-2147024891, 3, false, "error|70|書き込みできません。|VBAProject|vba-help.chm|1000070|trace=F;"),
+            (-2147024891, 1, true, "error|70|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147024894, 1, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147024894, 3, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147024894, 1, true, "error|-2147024894|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147024893, 1, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147024893, 3, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147024893, 1, true, "error|-2147024893|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147024882, 1, false, "error|7|メモリが不足しています｡|VBAProject|vba-help.chm|1000007|trace=F;"),
+            (-2147024882, 3, false, "error|7|メモリが不足しています｡|VBAProject|vba-help.chm|1000007|trace=F;"),
+            (-2147024882, 1, true, "error|7|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147024864, 1, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147024864, 3, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147024864, 1, true, "error|-2147024864|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147024816, 1, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147024816, 3, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147024816, 1, true, "error|-2147024816|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147024784, 1, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147024784, 3, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147024784, 1, true, "error|-2147024784|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147024809, 1, false, "error|5|プロシージャの呼び出し、または引数が不正です。|VBAProject|vba-help.chm|1000005|trace=F;"),
+            (-2147024809, 3, false, "error|5|プロシージャの呼び出し、または引数が不正です。|VBAProject|vba-help.chm|1000005|trace=F;"),
+            (-2147024809, 1, true, "error|5|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147467263, 1, false, "error|445|オブジェクトはこの動作をサポートしていません。|VBAProject|vba-help.chm|1000445|trace=F;"),
+            (-2147467263, 3, false, "error|445|オブジェクトはこの動作をサポートしていません。|VBAProject|vba-help.chm|1000445|trace=F;"),
+            (-2147467263, 1, true, "error|445|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147467262, 1, false, "error|430|クラスはオートメーションまたは予測したインターフェースをサポートしていません。|VBAProject|vba-help.chm|1000430|trace=F;"),
+            (-2147467262, 3, false, "error|430|クラスはオートメーションまたは予測したインターフェースをサポートしていません。|VBAProject|vba-help.chm|1000430|trace=F;"),
+            (-2147467262, 1, true, "error|430|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147467261, 1, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147467261, 3, false, "error|440|オートメーション エラーです。|VBAProject|vba-help.chm|1000440|trace=F;"),
+            (-2147467261, 1, true, "error|-2147467261|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147352571, 1, false, "error|13|型が一致しません。|VBAProject|vba-help.chm|1000013|trace=F;"),
+            (-2147352571, 3, false, "error|13|型が一致しません。|VBAProject|vba-help.chm|1000013|trace=F;"),
+            (-2147352571, 1, true, "error|13|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147352562, 1, false, "error|450|引数の数が一致していません。または不正なプロパティを指定しています。|VBAProject|vba-help.chm|1000450|trace=F;"),
+            (-2147352562, 3, false, "error|450|引数の数が一致していません。または不正なプロパティを指定しています。|VBAProject|vba-help.chm|1000450|trace=F;"),
+            (-2147352562, 1, true, "error|450|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147352572, 1, false, "error|448|名前付き引数が見つかりません。|VBAProject|vba-help.chm|1000448|trace=F;"),
+            (-2147352572, 3, false, "error|448|名前付き引数が見つかりません。|VBAProject|vba-help.chm|1000448|trace=F;"),
+            (-2147352572, 1, true, "error|448|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147352565, 1, false, "error|9|インデックスが有効範囲にありません。|VBAProject|vba-help.chm|1000009|trace=F;"),
+            (-2147352565, 3, false, "error|9|インデックスが有効範囲にありません。|VBAProject|vba-help.chm|1000009|trace=F;"),
+            (-2147352565, 1, true, "error|9|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2147352570, 1, false, "error|438|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|VBAProject|vba-help.chm|1000438|trace=F;"),
+            (-2147352570, 3, false, "error|438|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|VBAProject|vba-help.chm|1000438|trace=F;"),
+            (-2147352570, 1, true, "error|438|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2146828283, 1, false, "error|5|プロシージャの呼び出し、または引数が不正です。|VBAProject|vba-help.chm|1000005|trace=F;"),
+            (-2146828283, 3, false, "error|5|プロシージャの呼び出し、または引数が不正です。|VBAProject|vba-help.chm|1000005|trace=F;"),
+            (-2146828283, 1, true, "error|5|trace-failure|TraceClass|trace-help.chm|41|trace=F;"),
+            (-2146827838, 1, false, "error|450|引数の数が一致していません。または不正なプロパティを指定しています。|VBAProject|vba-help.chm|1000450|trace=F;"),
+            (-2146827838, 3, false, "error|450|引数の数が一致していません。または不正なプロパティを指定しています。|VBAProject|vba-help.chm|1000450|trace=F;"),
+            (-2146827838, 1, true, "error|450|trace-failure|TraceClass|trace-help.chm|41|trace=F;")
+        ] {
+            let source = SOURCE.replace("Err.Raise 5,", &format!("Err.Raise {number},"));
+            let (module, classes) = crate::parse_project(&source).unwrap();
+            let mut runtime = Runtime::new(&module).with_classes(&classes)
+                .with_error_environment(ErrorEnvironment { language: crate::ErrorLanguage::Japanese, help_file: "vba-help.chm".into() });
+            let result = runtime.call_macro("TraceDriver.Probe", vec![
+                Value::String("Explode".into()), Value::Integer(kind), Value::Integer(0), Value::Boolean(direct)
+            ]).unwrap();
+            assert_eq!(result, Value::String(expected.into()), "number={number}, kind={kind}, direct={direct}");
+        }
+    }
+
+    #[test]
+    fn existing_scalar_and_indexed_setters_bind_before_running_the_body() {
+        let source = r####"Attribute VB_Name = "TraceDriver"
+Option Explicit
+Public TraceLog As String
+Public Function Probe(ByVal memberName As String, ByVal callKind As Long, ByVal argumentCount As Long, ByVal directCall As Boolean) As String
+ Dim target As TraceClass, answer As Variant, text As String
+ Set target = New TraceClass
+ TraceLog = ""
+ On Error GoTo failed
+ If directCall Then
+  answer = target.Explode()
+ Else
+  Select Case argumentCount
+  Case 0: answer = CallByName(target, memberName, callKind)
+  Case 1: answer = CallByName(target, memberName, callKind, 1)
+  Case 2: answer = CallByName(target, memberName, callKind, 1, 2)
+  Case 3: answer = CallByName(target, memberName, callKind, 1, 2, 3)
+  End Select
+ End If
+ If IsArray(answer) Then
+  text = "array|" & TypeName(answer) & "|" & CStr(VarType(answer)) & "|" & CStr(LBound(answer)) & "|" & CStr(UBound(answer))
+ Else
+  text = "value|" & TypeName(answer) & "|" & CStr(VarType(answer)) & "|" & CStr(answer)
+ End If
+ Probe = text & "|trace=" & TraceLog
+ Exit Function
+failed:
+ Probe = "error|" & CStr(Err.Number) & "|" & Err.Description & "|" & Err.Source & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext) & "|trace=" & TraceLog
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "TraceClass"
+Attribute VB_Exposed = False
+Public Property Get ScalarValue() As Long
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "S;"
+ ScalarValue = 42
+End Property
+Public Property Get ChildValue() As Object
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "C;"
+ Set ChildValue = New DefaultChild
+End Property
+Public Property Get ArrayValue() As Variant
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "A;"
+ ArrayValue = Array(10, 20)
+End Property
+Public Property Get IndexedValue(ByVal index As Long) As Long
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "D" & CStr(index) & ";"
+ IndexedValue = index * 10
+End Property
+Public Property Get NothingValue() As Object
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "N;"
+ Set NothingValue = Nothing
+End Property
+Public Property Get NoDefaultValue() As Object
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "O;"
+ Set NoDefaultValue = New TraceClass
+End Property
+Public Property Get CollectionValue() As Object
+ Dim items As Collection
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "K;"
+ Set items = New Collection
+ items.Add 10
+ items.Add 20
+ Set CollectionValue = items
+End Property
+Public Property Let ScalarValue(ByVal incoming As Long)
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "P" & CStr(incoming) & ";"
+End Property
+Public Property Let IndexedValue(ByVal index As Long, ByVal incoming As Long)
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "Q" & CStr(index) & ":" & CStr(incoming) & ";"
+End Property
+Public Function Explode() As Long
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "F;"
+ Err.Raise 5, "TraceClass", "trace-failure", "trace-help.chm", 41
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "DefaultChild"
+Attribute VB_Exposed = False
+Public Property Get Item(ByVal index As Long) As String
+Attribute Item.VB_UserMemId = 0
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "G" & CStr(index) & ";"
+ Item = "item:" & CStr(index)
+End Property
+Public Property Let Item(ByVal index As Long, ByVal incoming As String)
+ TraceDriver.TraceLog = TraceDriver.TraceLog & "L" & CStr(index) & ":" & incoming & ";"
+End Property
+"####;
+        let (module, classes) = crate::parse_project(source).unwrap();
+        for (member, count, expected) in [
+            ("ScalarValue", 1, "value|Empty|0||trace=P1;"),
+            ("ScalarValue", 2, "error|451|trace=S;"),
+            ("ScalarValue", 3, "error|451|trace=S;"),
+            ("IndexedValue", 1, "error|449|trace="),
+            ("IndexedValue", 2, "value|Empty|0||trace=Q1:2;"),
+            ("IndexedValue", 3, "error|450|trace=")
+        ] {
+            let mut runtime = Runtime::new(&module).with_classes(&classes)
+                .with_error_environment(ErrorEnvironment { language: crate::ErrorLanguage::Japanese, help_file: "vba-help.chm".into() });
+            let Value::String(report) = runtime.call_macro("TraceDriver.Probe", vec![
+                Value::String(member.into()), Value::Integer(4), Value::Integer(count), Value::Boolean(false)
+            ]).unwrap() else { panic!("expected String"); };
+            let actual = if report.starts_with("error|") {
+                let fields: Vec<_> = report.split('|').collect();
+                format!("{}|{}|trace={}", fields[0], fields[1], report.rsplit_once("|trace=").unwrap().1)
+            } else { report };
+            assert_eq!(actual, expected, "{member}, count={count}");
         }
     }
 }

@@ -23,6 +23,7 @@ use crate::{ErrorLanguage, Span};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompileErrorKind {
     SyntaxError,
+    TooManyDimensions,
     ExpectedExpression,
     ExpectedIdentifier,
     EndIfWithoutBlock,
@@ -324,6 +325,8 @@ impl CompileError {
             (CompileErrorKind::ProcedureNotDefined, ErrorLanguage::Japanese) => {
                 "Sub または Function が定義されていません。"
             }
+            (CompileErrorKind::TooManyDimensions, ErrorLanguage::English) => "Too many dimensions",
+            (CompileErrorKind::TooManyDimensions, ErrorLanguage::Japanese) => "次元が多すぎます。",
             (CompileErrorKind::VariableRequired, ErrorLanguage::English) => "Variable required",
             (CompileErrorKind::VariableRequired, ErrorLanguage::Japanese) => "変数が必要です。",
             (CompileErrorKind::InvalidParamArrayUse, ErrorLanguage::English) => {
@@ -435,6 +438,7 @@ fn check_with_environment<'a>(
     let mut checker =
         Checker::for_context_with_references(module, globals, classes, Some(procedure), references);
     checker.project_name = project_name;
+    checker.array_declaration_dimensions()?;
     if checker.known_types.is_some() && intrinsic_operator(&key(&procedure.name)) {
         return Err(checker.failure(CompileErrorKind::SyntaxError, procedure.span));
     }
@@ -959,10 +963,32 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn array_declaration_dimensions(&self) -> Result<(), CompileError> {
+        for item in &self.module.items {
+            let variables = match item {
+                ModuleItem::Variables(declaration) => declaration.items.as_slice(),
+                ModuleItem::Type(record) => record.fields.as_slice(),
+                _ => continue,
+            };
+            for variable in variables {
+                if let Some(bounds) = &variable.array_bounds {
+                    if bounds.len() > 60 {
+                        return Err(self.failure(
+                            CompileErrorKind::TooManyDimensions,
+                            bounds[60].upper.span(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn module_declarations(&mut self) -> Result<(), CompileError> {
         if let Some(span) = self.module.syntax_errors.first() {
             return Err(self.failure(CompileErrorKind::SyntaxError, *span));
         }
+        self.array_declaration_dimensions()?;
         self.declaration_syntax()?;
         if let Some((name, _)) = self
             .classes
@@ -3305,6 +3331,9 @@ impl<'a> Checker<'a> {
             }
             Statement::Dim(declaration) => {
                 for variable in &declaration.items {
+                    if variable.array_bounds.as_ref().is_some_and(|bounds| bounds.len() > 60) {
+                        return Err(self.failure(CompileErrorKind::SyntaxError, declaration.span));
+                    }
                     if variable.type_name.is_new
                         && self.document_modules.is_some_and(|documents| {
                             documents.contains_key(&key(&variable.type_name.name))
@@ -3419,6 +3448,9 @@ impl<'a> Checker<'a> {
             }
             Statement::ReDim { items, .. } => {
                 for item in items {
+                    if item.bounds.len() > 60 {
+                        return Err(self.failure(CompileErrorKind::SyntaxError, item.target.span()));
+                    }
                     if self.is_paramarray(&item.target) {
                         return Err(self
                             .failure(CompileErrorKind::InvalidParamArrayUse, item.target.span()));
