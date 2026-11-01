@@ -1,4 +1,5 @@
-[
+{
+  "ansi": [
   {
     "input": [
       1
@@ -13258,4 +13259,2617 @@
       0
     ]
   }
+],
+  "workbooks": [
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "vba-\u00e4\u03c3\uff41\u00e9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "VBA-\u00c4\u03a3\uff21\u00c9.XLSM",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "vBA-\u00e4\u03c3\uff41\u00c9.XLSM",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "Vba-A\u0308\u03a3\uff21e\u0301.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "Vba-\u00c4\u03a3A\u00e9.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "Vba-\u00c4\u03c3\uff21\u00e9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "Vba-\u00c4\u03c2\uff21\u00e9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": " Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm ",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "Vba-\u00c4\u03a3\uff21\u00e9",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "Vba-\u00e4\u03a3\uff21\u00e9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "Vba-\u00c4\u03a3\uff41\u00e9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3\uff21\u00e9.xlsm",
+    "request": "Vba-\u00c4\u03a3\uff21\u00c9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "vba-ii\u0307\u0131\u00df\u00df.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "VBA-I\u0130ISS\u1e9e.XLSM",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "vba-ii\u0307\u0131ssss.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "vBA-ii\u0307ISS\u00df.XLSM",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "Vba-II\u0307\u0131\u00df\u1e9e.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": " Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm ",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "Vba-I\u0130\u0131\u00df\u1e9e",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "Vba-Ii\u0307\u0131\u00df\u1e9e.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "Vba-I\u0130I\u00df\u1e9e.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "Vba-I\u0130\u0131SS\u1e9e.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "Vba-I\u0130\u0131ss\u1e9e.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "Vba-I\u0130\u0131\u00df\u00df.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-I\u0130\u0131\u00df\u1e9e.xlsm",
+    "request": "Vba-I\u0130\u0131\u00dfss.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u30ac\u30ab\u3099.xlsm",
+    "request": "Vba-\u30ac\u30ab\u3099.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u30ac\u30ab\u3099.xlsm",
+    "request": "vba-\u30ac\u30ab\u3099.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u30ac\u30ab\u3099.xlsm",
+    "request": "VBA-\u30ac\u30ab\u3099.XLSM",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u30ac\u30ab\u3099.xlsm",
+    "request": "vBA-\u30ac\u30ab\u3099.XLSM",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u30ac\u30ab\u3099.xlsm",
+    "request": "Vba-\u30ac\u30ac.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u30ac\u30ab\u3099.xlsm",
+    "request": "Vba-\u30ab\u3099\u30ab\u3099.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u30ac\u30ab\u3099.xlsm",
+    "request": " Vba-\u30ac\u30ab\u3099.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u30ac\u30ab\u3099.xlsm",
+    "request": "Vba-\u30ac\u30ab\u3099.xlsm ",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u30ac\u30ab\u3099.xlsm",
+    "request": "Vba-\u30ac\u30ab\u3099",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name.Extensions.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "vba-name.extensions.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "VBA-NAME.EXTENSIONS.XLSM",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name.Extensions",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "vba-name.extensions",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "VBA-NAME.EXTENSIONS",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name.Extensions.xlsx",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name.Extensions.xls",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name.Extensions.xlsb",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name.Extensions.xlsm.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name.Extensions.xlsm.",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name.Extensions.xlsm ",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\oxi-vba-wasm-cache-20261031\\Vba-Name.Extensions.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "C:/Users/ryuji/AppData/Local/Temp/oxi-vba-wasm-cache-20261031/Vba-Name.Extensions.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "[Vba-Name.Extensions.xlsm]",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "'Vba-Name.Extensions.xlsm'",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "[Vba-Name.Extensions]",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name.Extensions.",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name.Extensions ",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name.Extensions\u0000",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": "Vba-Name.Extensions.xlsm\u0000",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Extensions.xlsm",
+    "request": " Vba-Name.Extensions.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "vba-name.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "VBA-NAME.XLSM",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "vba-name",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "VBA-NAME",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsx",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xls",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsb",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm.",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm ",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\oxi-vba-wasm-cache-20261031\\Vba-Name.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "C:/Users/ryuji/AppData/Local/Temp/oxi-vba-wasm-cache-20261031/Vba-Name.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "[Vba-Name.xlsm]",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "'Vba-Name.xlsm'",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "[Vba-Name]",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name ",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name\u0000",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm\u0000",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": " Vba-Name.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name.xlsx.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "vba-name.xlsx.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "VBA-NAME.XLSX.XLSM",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name.xlsx",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "vba-name.xlsx",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "VBA-NAME.XLSX",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name.xlsx.xlsx",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name.xlsx.xls",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name.xlsx.xlsb",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name.xlsx.xlsm.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name.xlsx.xlsm.",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name.xlsx.xlsm ",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\oxi-vba-wasm-cache-20261031\\Vba-Name.xlsx.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "C:/Users/ryuji/AppData/Local/Temp/oxi-vba-wasm-cache-20261031/Vba-Name.xlsx.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "[Vba-Name.xlsx.xlsm]",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "'Vba-Name.xlsx.xlsm'",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "[Vba-Name.xlsx]",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name.xlsx.",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name.xlsx ",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name.xlsx\u0000",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": "Vba-Name.xlsx.xlsm\u0000",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsx.xlsm",
+    "request": " Vba-Name.xlsx.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-0-\u00c6.xlsm",
+    "request": "Vba-Collation-0-\u00c6.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-0-\u00c6.xlsm",
+    "request": "Vba-Collation-0-AE.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-1-\u0152.xlsm",
+    "request": "Vba-Collation-1-\u0152.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-1-\u0152.xlsm",
+    "request": "Vba-Collation-1-OE.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-2-\ufb01.xlsm",
+    "request": "Vba-Collation-2-\ufb01.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-2-\ufb01.xlsm",
+    "request": "Vba-Collation-2-fi.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-3-\ufb02.xlsm",
+    "request": "Vba-Collation-3-\ufb02.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-3-\ufb02.xlsm",
+    "request": "Vba-Collation-3-fl.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-4-\ufb00.xlsm",
+    "request": "Vba-Collation-4-\ufb00.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-4-\ufb00.xlsm",
+    "request": "Vba-Collation-4-ff.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-5-\u0133.xlsm",
+    "request": "Vba-Collation-5-\u0133.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-5-\u0133.xlsm",
+    "request": "Vba-Collation-5-ij.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-6-\u01c5.xlsm",
+    "request": "Vba-Collation-6-\u01c5.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-6-\u01c5.xlsm",
+    "request": "Vba-Collation-6-d\u017e.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-7-\u03a3.xlsm",
+    "request": "Vba-Collation-7-\u03a3.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-7-\u03a3.xlsm",
+    "request": "Vba-Collation-7-\u03c2.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-8-\u00b5.xlsm",
+    "request": "Vba-Collation-8-\u00b5.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-8-\u00b5.xlsm",
+    "request": "Vba-Collation-8-\u03bc.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-9-\u00df.xlsm",
+    "request": "Vba-Collation-9-\u00df.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-9-\u00df.xlsm",
+    "request": "Vba-Collation-9-ss.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-10-\u1e9e.xlsm",
+    "request": "Vba-Collation-10-\u1e9e.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-10-\u1e9e.xlsm",
+    "request": "Vba-Collation-10-\u00df.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-11-\u0131.xlsm",
+    "request": "Vba-Collation-11-\u0131.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-11-\u0131.xlsm",
+    "request": "Vba-Collation-11-I.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-12-\u0130.xlsm",
+    "request": "Vba-Collation-12-\u0130.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-12-\u0130.xlsm",
+    "request": "Vba-Collation-12-i\u0307.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-13-\u212a.xlsm",
+    "request": "Vba-Collation-13-\u212a.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-13-\u212a.xlsm",
+    "request": "Vba-Collation-13-K.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-14-\u212b.xlsm",
+    "request": "Vba-Collation-14-\u212b.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-14-\u212b.xlsm",
+    "request": "Vba-Collation-14-\u00c5.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-15-\u2126.xlsm",
+    "request": "Vba-Collation-15-\u2126.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-15-\u2126.xlsm",
+    "request": "Vba-Collation-15-\u03a9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-16-\u00c5.xlsm",
+    "request": "Vba-Collation-16-\u00c5.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-16-\u00c5.xlsm",
+    "request": "Vba-Collation-16-A\u030a.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-17-\u00e9.xlsm",
+    "request": "Vba-Collation-17-\u00e9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-17-\u00e9.xlsm",
+    "request": "Vba-Collation-17-e\u0301.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-18-\u00e9.xlsm",
+    "request": "Vba-Collation-18-\u00e9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-18-\u00e9.xlsm",
+    "request": "Vba-Collation-18-e.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-19-\u30ac.xlsm",
+    "request": "Vba-Collation-19-\u30ac.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-19-\u30ac.xlsm",
+    "request": "Vba-Collation-19-\u30ab\u3099.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-20-\u30ac.xlsm",
+    "request": "Vba-Collation-20-\u30ac.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-20-\u30ac.xlsm",
+    "request": "Vba-Collation-20-\uff76\uff9e.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-21-\u30ac.xlsm",
+    "request": "Vba-Collation-21-\u30ac.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-21-\u30ac.xlsm",
+    "request": "Vba-Collation-21-\u304c.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-22-\u30ab.xlsm",
+    "request": "Vba-Collation-22-\u30ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-22-\u30ab.xlsm",
+    "request": "Vba-Collation-22-\uff76.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-23-\u30ab.xlsm",
+    "request": "Vba-Collation-23-\u30ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-23-\u30ab.xlsm",
+    "request": "Vba-Collation-23-\u304b.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-24-\u30f7.xlsm",
+    "request": "Vba-Collation-24-\u30f7.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-24-\u30f7.xlsm",
+    "request": "Vba-Collation-24-\u30ef\u3099.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-25-ab.xlsm",
+    "request": "Vba-Collation-25-ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-25-ab.xlsm",
+    "request": "Vba-Collation-25-a\u00adb.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-26-ab.xlsm",
+    "request": "Vba-Collation-26-ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-26-ab.xlsm",
+    "request": "Vba-Collation-26-a\u034fb.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-27-ab.xlsm",
+    "request": "Vba-Collation-27-ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-27-ab.xlsm",
+    "request": "Vba-Collation-27-a\u200bb.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-28-ab.xlsm",
+    "request": "Vba-Collation-28-ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-28-ab.xlsm",
+    "request": "Vba-Collation-28-a\u200cb.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-29-ab.xlsm",
+    "request": "Vba-Collation-29-ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-29-ab.xlsm",
+    "request": "Vba-Collation-29-a\u200db.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-30-ab.xlsm",
+    "request": "Vba-Collation-30-ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-30-ab.xlsm",
+    "request": "Vba-Collation-30-a\u2060b.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-31-ab.xlsm",
+    "request": "Vba-Collation-31-ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-31-ab.xlsm",
+    "request": "Vba-Collation-31-a\ufeffb.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-32-ab.xlsm",
+    "request": "Vba-Collation-32-ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-32-ab.xlsm",
+    "request": "Vba-Collation-32-a\ufe0fb.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-33-\ud801\udc00.xlsm",
+    "request": "Vba-Collation-33-\ud801\udc00.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-33-\ud801\udc00.xlsm",
+    "request": "Vba-Collation-33-\ud801\udc28.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-34-\u1c90.xlsm",
+    "request": "Vba-Collation-34-\u1c90.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-34-\u1c90.xlsm",
+    "request": "Vba-Collation-34-\u10d0.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-35-\u13a0.xlsm",
+    "request": "Vba-Collation-35-\u13a0.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-35-\u13a0.xlsm",
+    "request": "Vba-Collation-35-\uab70.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-36-\u10a0.xlsm",
+    "request": "Vba-Collation-36-\u10a0.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-36-\u10a0.xlsm",
+    "request": "Vba-Collation-36-\u2d00.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-37-\u00e6.xlsm",
+    "request": "Vba-Collation-37-\u00e6.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-37-\u00e6.xlsm",
+    "request": "Vba-Collation-37-ae.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-38-\u0149.xlsm",
+    "request": "Vba-Collation-38-\u0149.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-38-\u0149.xlsm",
+    "request": "Vba-Collation-38-\u02bcn.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-39-\u0142.xlsm",
+    "request": "Vba-Collation-39-\u0142.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-39-\u0142.xlsm",
+    "request": "Vba-Collation-39-l.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-40-\u00f8.xlsm",
+    "request": "Vba-Collation-40-\u00f8.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-40-\u00f8.xlsm",
+    "request": "Vba-Collation-40-o.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-41-\u0111.xlsm",
+    "request": "Vba-Collation-41-\u0111.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-41-\u0111.xlsm",
+    "request": "Vba-Collation-41-d.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-42-\u013f.xlsm",
+    "request": "Vba-Collation-42-\u013f.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-42-\u013f.xlsm",
+    "request": "Vba-Collation-42-l\u00b7.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-43-\uac01.xlsm",
+    "request": "Vba-Collation-43-\uac01.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-43-\uac01.xlsm",
+    "request": "Vba-Collation-43-\u1100\u1161\u11a8.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-44-\u0386.xlsm",
+    "request": "Vba-Collation-44-\u0386.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-44-\u0386.xlsm",
+    "request": "Vba-Collation-44-\u0391\u0301.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-45-\u1f88.xlsm",
+    "request": "Vba-Collation-45-\u1f88.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-45-\u1f88.xlsm",
+    "request": "Vba-Collation-45-\u1f00\u03b9.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-46-a\u0301\u0323.xlsm",
+    "request": "Vba-Collation-46-a\u0301\u0323.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-46-a\u0301\u0323.xlsm",
+    "request": "Vba-Collation-46-a\u0323\u0301.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-47-\u2460.xlsm",
+    "request": "Vba-Collation-47-\u2460.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-47-\u2460.xlsm",
+    "request": "Vba-Collation-47-1.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-48-\u2160.xlsm",
+    "request": "Vba-Collation-48-\u2160.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-48-\u2160.xlsm",
+    "request": "Vba-Collation-48-I.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-49-\uff21.xlsm",
+    "request": "Vba-Collation-49-\uff21.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-49-\uff21.xlsm",
+    "request": "Vba-Collation-49-a.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-50-\u017f.xlsm",
+    "request": "Vba-Collation-50-\u017f.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-50-\u017f.xlsm",
+    "request": "Vba-Collation-50-s.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-51-\u00e1.xlsm",
+    "request": "Vba-Collation-51-\u00e1.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-51-\u00e1.xlsm",
+    "request": "Vba-Collation-51-a\u0341.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-52-ab.xlsm",
+    "request": "Vba-Collation-52-ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-52-ab.xlsm",
+    "request": "Vba-Collation-52-a\u180eb.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Collation-53-ab.xlsm",
+    "request": "Vba-Collation-53-ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-53-ab.xlsm",
+    "request": "Vba-Collation-53-a\u061cb.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-54-ab.xlsm",
+    "request": "Vba-Collation-54-ab.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-54-ab.xlsm",
+    "request": "Vba-Collation-54-a\u2066b.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-55-\ud83d\ude00.xlsm",
+    "request": "Vba-Collation-55-\ud83d\ude00.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Collation-55-\ud83d\ude00.xlsm",
+    "request": "Vba-Collation-55-\ud83d\ude00\ufe0f.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul.xlsm\u0000junk.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul\u0000junk",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-N\u0000ame.Nul.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "\u0000Vba-Name.Nul.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul.xlsm\u0000\u0000tail",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul.xlsm\u0000 ",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.NulBAD\u0000Vba-Name.Nul.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul\u0000.",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\oxi-vba-wasm-cache-20261031\\Vba-Name.Nul.xlsm\u0000Vba-Name.Nul",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul.xlsm\u0001",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul.xlsm\u0002",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul.xlsm\u001f",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul.xlsm\u007f",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul.xlsm\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul.xlsm\u200b",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul.xlsm\u200c",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.Nul.xlsm",
+    "request": "Vba-Name.Nul.xlsm\ufeff",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u0000junk.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3\u0000junk",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u0000\u03a3.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "\u0000Vba-\u00c4\u03a3.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u0000\u0000tail",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u0000 ",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3BAD\u0000Vba-\u00c4\u03a3.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3\u0000.",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\oxi-vba-wasm-cache-20261031\\Vba-\u00c4\u03a3.xlsm\u0000Vba-\u00c4\u03a3",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u0001",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u0002",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u001f",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u007f",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u200b",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u200c",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\ufeff",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm\u0000junk.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name\u0000junk",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-N\u0000ame.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "\u0000Vba-Name.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm\u0000\u0000tail",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm\u0000 ",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-NameBAD\u0000Vba-Name.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name\u0000.",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\oxi-vba-wasm-cache-20261031\\Vba-Name.xlsm\u0000Vba-Name",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm\u0001",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm\u0002",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm\u001f",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm\u007f",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm\u200b",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm\u200c",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Name.xlsm",
+    "request": "Vba-Name.xlsm\ufeff",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "Vba-Format.0.xlsx",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "VBA-FORMAT.0.XLSX",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "Vba-Format.0",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "VBA-FORMAT.0",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "Vba-Format",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "Vba-Format.0.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "Vba-Format.0.xlsb",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "Vba-Format.0.xls",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "Vba-Format.0.csv",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "Vba-Format.0.txt",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "Vba-Format.0.xlsx\u0000suffix",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\oxi-vba-wasm-cache-20261031\\Vba-Format.0.xlsx",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.0.xlsx",
+    "request": "[Vba-Format.0.xlsx]",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "Vba-Format.1.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "VBA-FORMAT.1.XLSM",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "Vba-Format.1",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "VBA-FORMAT.1",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "Vba-Format",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "Vba-Format.1.xlsx",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "Vba-Format.1.xlsb",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "Vba-Format.1.xls",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "Vba-Format.1.csv",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "Vba-Format.1.txt",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "Vba-Format.1.xlsm\u0000suffix",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\oxi-vba-wasm-cache-20261031\\Vba-Format.1.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.1.xlsm",
+    "request": "[Vba-Format.1.xlsm]",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "Vba-Format.2.xlsb",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "VBA-FORMAT.2.XLSB",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "Vba-Format.2",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "VBA-FORMAT.2",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "Vba-Format",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "Vba-Format.2.xlsx",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "Vba-Format.2.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "Vba-Format.2.xls",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "Vba-Format.2.csv",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "Vba-Format.2.txt",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "Vba-Format.2.xlsb\u0000suffix",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\oxi-vba-wasm-cache-20261031\\Vba-Format.2.xlsb",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.2.xlsb",
+    "request": "[Vba-Format.2.xlsb]",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "Vba-Format.3.xls",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "VBA-FORMAT.3.XLS",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "Vba-Format.3",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "VBA-FORMAT.3",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "Vba-Format",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "Vba-Format.3.xlsx",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "Vba-Format.3.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "Vba-Format.3.xlsb",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "Vba-Format.3.csv",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "Vba-Format.3.txt",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "Vba-Format.3.xls\u0000suffix",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\oxi-vba-wasm-cache-20261031\\Vba-Format.3.xls",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.3.xls",
+    "request": "[Vba-Format.3.xls]",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "Vba-Format.4.csv",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "VBA-FORMAT.4.CSV",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "Vba-Format.4",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "VBA-FORMAT.4",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "Vba-Format",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "Vba-Format.4.xlsx",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "Vba-Format.4.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "Vba-Format.4.xlsb",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "Vba-Format.4.xls",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "Vba-Format.4.txt",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "Vba-Format.4.csv\u0000suffix",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\oxi-vba-wasm-cache-20261031\\Vba-Format.4.csv",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.4.csv",
+    "request": "[Vba-Format.4.csv]",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "Vba-Format.5.txt",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "VBA-FORMAT.5.TXT",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "Vba-Format.5",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "VBA-FORMAT.5",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "Vba-Format",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "Vba-Format.5.xlsx",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "Vba-Format.5.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "Vba-Format.5.xlsb",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "Vba-Format.5.xls",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "Vba-Format.5.csv",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "Vba-Format.5.txt\u0000suffix",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\oxi-vba-wasm-cache-20261031\\Vba-Format.5.txt",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Format.5.txt",
+    "request": "[Vba-Format.5.txt]",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one\u200c",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one\ufeff",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one\u00ad.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one\u200c.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one\ufeff.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one.xlsm\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one.xlsm\u200c",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one.xlsm\ufeff",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one.xl\u00adsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one.x\u00adlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one.xL\u200cSm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one.\uff58\uff4c\uff53\uff4d",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one.XLSM",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one.xlsx",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one..xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one.xlsm\u0000junk",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.one.xlsm",
+    "request": "Vba-Base.one\u0000.xlsmBAD",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3\u200c",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3\ufeff",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3\u00ad.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3\u200c.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3\ufeff.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u200c",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\ufeff",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xl\u00adsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.x\u00adlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xL\u200cSm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.\uff58\uff4c\uff53\uff4d",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.XLSM",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsx",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3..xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3.xlsm\u0000junk",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-\u00c4\u03a3.xlsm",
+    "request": "Vba-\u00c4\u03a3\u0000.xlsmBAD",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt\u200c",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt\ufeff",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt\u00ad.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt\u200c.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt\ufeff.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt.xlsm\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt.xlsm\u200c",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt.xlsm\ufeff",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt.xl\u00adsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt.x\u00adlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt.xL\u200cSm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt.\uff58\uff4c\uff53\uff4d",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt.XLSM",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt.xlsx",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt..xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt.xlsm\u0000junk",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Base.txt.xlsm",
+    "request": "Vba-Base.txt\u0000.xlsmBAD",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-0-\u1100\uaabe\u1dff.xlsm",
+    "request": "Vba-Context-0-\u1100\uaabe\u1dff.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-0-\u1100\uaabe\u1dff.xlsm",
+    "request": "Vba-Context-0-\u1100\u1dff\uaabe.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-1-\u0915\u1dff\u0f7d.xlsm",
+    "request": "Vba-Context-1-\u0915\u1dff\u0f7d.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-1-\u0915\u1dff\u0f7d.xlsm",
+    "request": "Vba-Context-1-\u0915\u0f7d\u1dff.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-2-\u1100\u0f80\u1dff.xlsm",
+    "request": "Vba-Context-2-\u1100\u0f80\u1dff.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-2-\u1100\u0f80\u1dff.xlsm",
+    "request": "Vba-Context-2-\u1100\u1dff\u0f80.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-3-\u30ab\u1dca\u1cd4.xlsm",
+    "request": "Vba-Context-3-\u30ab\u1dca\u1cd4.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-3-\u30ab\u1dca\u1cd4.xlsm",
+    "request": "Vba-Context-3-\u30ab\u1cd4\u1dca.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-4-\u30ab\u1dca\u1ced.xlsm",
+    "request": "Vba-Context-4-\u30ab\u1dca\u1ced.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-4-\u30ab\u1dca\u1ced.xlsm",
+    "request": "Vba-Context-4-\u30ab\u1ced\u1dca.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-5-a\u1dff\u193a.xlsm",
+    "request": "Vba-Context-5-a\u1dff\u193a.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-5-a\u1dff\u193a.xlsm",
+    "request": "Vba-Context-5-a\u193a\u1dff.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-6-a\u1be6\u1dff.xlsm",
+    "request": "Vba-Context-6-a\u1be6\u1dff.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-6-a\u1be6\u1dff.xlsm",
+    "request": "Vba-Context-6-a\u1dff\u1be6.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-7-a\u1dff\u0eca.xlsm",
+    "request": "Vba-Context-7-a\u1dff\u0eca.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-7-a\u1dff\u0eca.xlsm",
+    "request": "Vba-Context-7-a\u0eca\u1dff.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-8-\u30ab\uff70.xlsm",
+    "request": "Vba-Context-8-\u30ab\uff70.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-8-\u30ab\uff70.xlsm",
+    "request": "Vba-Context-8-\u30ab\u30fc.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-9-\u304b\uff70.xlsm",
+    "request": "Vba-Context-9-\u304b\uff70.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-9-\u304b\uff70.xlsm",
+    "request": "Vba-Context-9-\u304b\u30fc.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-10-\u30ac\uff70.xlsm",
+    "request": "Vba-Context-10-\u30ac\uff70.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-10-\u30ac\uff70.xlsm",
+    "request": "Vba-Context-10-\u30ac\u30fc.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-11-\u30f3\uff70.xlsm",
+    "request": "Vba-Context-11-\u30f3\uff70.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-11-\u30f3\uff70.xlsm",
+    "request": "Vba-Context-11-\u30f3\u30fc.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-12-a\uff70.xlsm",
+    "request": "Vba-Context-12-a\uff70.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-12-a\uff70.xlsm",
+    "request": "Vba-Context-12-a\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-13-a-\uff70.xlsm",
+    "request": "Vba-Context-13-a-\uff70.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-13-a-\uff70.xlsm",
+    "request": "Vba-Context-13-a-\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-14-\u30ab\u30fc.xlsm",
+    "request": "Vba-Context-14-\u30ab\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-14-\u30ab\u30fc.xlsm",
+    "request": "Vba-Context-14-\u30ab\u30a2.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-15-\u0385.xlsm",
+    "request": "Vba-Context-15-\u0385.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-15-\u0385.xlsm",
+    "request": "Vba-Context-15-\u00a8\u0301.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-16-\u0f73.xlsm",
+    "request": "Vba-Context-16-\u0f73.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-16-\u0f73.xlsm",
+    "request": "Vba-Context-16-\u0f71\u0f72.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00e9.xlsm",
+    "request": "Vba-Tail-\u00e9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00e9.xlsm",
+    "request": "Vba-Tail-\u00e9",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00e9.xlsm",
+    "request": "Vba-Tail-e\u0301.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00e9.xlsm",
+    "request": "Vba-Tail-e\u0301",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00e9.xlsm",
+    "request": "vba-tail-\u00e9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00e9.xlsm",
+    "request": "vba-tail-\u00e9",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00e9.xlsm",
+    "request": "\u00adVba-Tail-\u00e9.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00e9.xlsm",
+    "request": "\u00adVba-Tail-\u00e9",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00e9.xlsm",
+    "request": "Vba-Tail-\u00e9.xlsm\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Tail-\u00e9.xlsm",
+    "request": "Vba-Tail-\u00e9\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Tail-\u00e9.xlsm",
+    "request": "Vba-Tail-\u00e9.xlsm\u0000tail",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00df.xlsm",
+    "request": "Vba-Tail-\u00df.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00df.xlsm",
+    "request": "Vba-Tail-\u00df",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00df.xlsm",
+    "request": "vba-tail-ss.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00df.xlsm",
+    "request": "vba-tail-ss",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00df.xlsm",
+    "request": "\u00adVba-Tail-\u00df.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00df.xlsm",
+    "request": "\u00adVba-Tail-\u00df",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Tail-\u00df.xlsm",
+    "request": "Vba-Tail-\u00df.xlsm\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Tail-\u00df.xlsm",
+    "request": "Vba-Tail-\u00df\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Tail-\u00df.xlsm",
+    "request": "Vba-Tail-\u00df.xlsm\u0000tail",
+    "expected": true
+  },
+  {
+    "file_name": "\u00adVba-Start.xlsm",
+    "request": "\u00adVba-Start.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "\u00adVba-Start.xlsm",
+    "request": "\u00adVba-Start",
+    "expected": true
+  },
+  {
+    "file_name": "\u00adVba-Start.xlsm",
+    "request": "\u00advba-start.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "\u00adVba-Start.xlsm",
+    "request": "\u00advba-start",
+    "expected": true
+  },
+  {
+    "file_name": "\u00adVba-Start.xlsm",
+    "request": "\u00ad\u00adVba-Start.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "\u00adVba-Start.xlsm",
+    "request": "\u00ad\u00adVba-Start",
+    "expected": true
+  },
+  {
+    "file_name": "\u00adVba-Start.xlsm",
+    "request": "\u00adVba-Start.xlsm\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "\u00adVba-Start.xlsm",
+    "request": "\u00adVba-Start\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "\u00adVba-Start.xlsm",
+    "request": "\u00adVba-Start.xlsm\u0000tail",
+    "expected": true
+  },
+  {
+    "file_name": "\u200cVba-Start.xlsm",
+    "request": "\u200cVba-Start.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "\u200cVba-Start.xlsm",
+    "request": "\u200cVba-Start",
+    "expected": true
+  },
+  {
+    "file_name": "\u200cVba-Start.xlsm",
+    "request": "\u200cvba-start.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "\u200cVba-Start.xlsm",
+    "request": "\u200cvba-start",
+    "expected": true
+  },
+  {
+    "file_name": "\u200cVba-Start.xlsm",
+    "request": "\u00ad\u200cVba-Start.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "\u200cVba-Start.xlsm",
+    "request": "\u00ad\u200cVba-Start",
+    "expected": true
+  },
+  {
+    "file_name": "\u200cVba-Start.xlsm",
+    "request": "\u200cVba-Start.xlsm\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "\u200cVba-Start.xlsm",
+    "request": "\u200cVba-Start\u00ad",
+    "expected": false
+  },
+  {
+    "file_name": "\u200cVba-Start.xlsm",
+    "request": "\u200cVba-Start.xlsm\u0000tail",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-State-0-\u00c6\u30fc.xlsm",
+    "request": "Vba-State-0-\u00c6\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-State-0-\u00c6\u30fc.xlsm",
+    "request": "Vba-State-0-\u00c6e.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-State-1-\u00df\u30fc.xlsm",
+    "request": "Vba-State-1-\u00df\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-State-1-\u00df\u30fc.xlsm",
+    "request": "Vba-State-1-\u00dfs.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-State-2-\u0152\u30fc.xlsm",
+    "request": "Vba-State-2-\u0152\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-State-2-\u0152\u30fc.xlsm",
+    "request": "Vba-State-2-\u0152e.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-State-3-\ufb01\u30fc.xlsm",
+    "request": "Vba-State-3-\ufb01\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-State-3-\ufb01\u30fc.xlsm",
+    "request": "Vba-State-3-fi\u30fc.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-State-4-\ufb03\u30fc.xlsm",
+    "request": "Vba-State-4-\ufb03\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-State-4-\ufb03\u30fc.xlsm",
+    "request": "Vba-State-4-ffi\u30fc.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-State-5-\u01c5\u30fc.xlsm",
+    "request": "Vba-State-5-\u01c5\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-State-5-\u01c5\u30fc.xlsm",
+    "request": "Vba-State-5-d\u017e\u30fc.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-State-6-\u6f22\u30fc.xlsm",
+    "request": "Vba-State-6-\u6f22\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-State-6-\u6f22\u30fc.xlsm",
+    "request": "Vba-State-6-\u6f22\u6f22.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-State-7-\u1100\u30fc.xlsm",
+    "request": "Vba-State-7-\u1100\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-State-7-\u1100\u30fc.xlsm",
+    "request": "Vba-State-7-\u1100\u1100.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-State-8-\uac00\u30fc.xlsm",
+    "request": "Vba-State-8-\uac00\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-State-8-\uac00\u30fc.xlsm",
+    "request": "Vba-State-8-\uac00\uac00.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-State-9-\u0385\u30fc.xlsm",
+    "request": "Vba-State-9-\u0385\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-State-9-\u0385\u30fc.xlsm",
+    "request": "Vba-State-9-\u00a8\u0301\u30fc.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-0-a\u30a0.xlsm",
+    "request": "Vba-Context-0-a\u30a0.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-0-a\u30a0.xlsm",
+    "request": "Vba-Context-0-aa.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-1-a\u30a0.xlsm",
+    "request": "Vba-Context-1-a\u30a0.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-1-a\u30a0.xlsm",
+    "request": "Vba-Context-1-a\u30fc.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-2-\u30ab\u30a0.xlsm",
+    "request": "Vba-Context-2-\u30ab\u30a0.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-2-\u30ab\u30a0.xlsm",
+    "request": "Vba-Context-2-\u30ab\u30fd.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-3-\u30ab\u30a0.xlsm",
+    "request": "Vba-Context-3-\u30ab\u30a0.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-3-\u30ab\u30a0.xlsm",
+    "request": "Vba-Context-3-\u30ab\u30ab.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-4-\u6f22\u30a0.xlsm",
+    "request": "Vba-Context-4-\u6f22\u30a0.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-4-\u6f22\u30a0.xlsm",
+    "request": "Vba-Context-4-\u6f22\u30fc.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-5-\uac00\u30a0.xlsm",
+    "request": "Vba-Context-5-\uac00\u30a0.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-5-\uac00\u30a0.xlsm",
+    "request": "Vba-Context-5-\uac00\uac00.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-6-a\u00c6\u30fc.xlsm",
+    "request": "Vba-Context-6-a\u00c6\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-6-a\u00c6\u30fc.xlsm",
+    "request": "Vba-Context-6-a\u00c6a.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-7-\u30ab\u00c6\u30fc.xlsm",
+    "request": "Vba-Context-7-\u30ab\u00c6\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-7-\u30ab\u00c6\u30fc.xlsm",
+    "request": "Vba-Context-7-\u30ab\u00c6\u30a2.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-8-a\u3372\u30fc.xlsm",
+    "request": "Vba-Context-8-a\u3372\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-8-a\u3372\u30fc.xlsm",
+    "request": "Vba-Context-8-ada\u30fc.xlsm",
+    "expected": false
+  },
+  {
+    "file_name": "Vba-Context-9-a\ufcf2\u30fc.xlsm",
+    "request": "Vba-Context-9-a\ufcf2\u30fc.xlsm",
+    "expected": true
+  },
+  {
+    "file_name": "Vba-Context-9-a\ufcf2\u30fc.xlsm",
+    "request": "Vba-Context-9-a\u0640\u064e\u0651\u30fc.xlsm",
+    "expected": false
+  }
 ]
+}

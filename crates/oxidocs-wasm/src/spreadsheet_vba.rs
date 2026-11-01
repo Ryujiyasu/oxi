@@ -12049,8 +12049,8 @@ impl<'a> WorkbookHost<'a> {
     fn workbook_item(&mut self, index: &Value) -> Result<Value, String> {
         let own = self.file_name.clone().unwrap_or_else(|| "Book1".to_string());
         let found = match index {
-            Value::String(name) => name.eq_ignore_ascii_case(&own),
-            Value::Utf16(units) => String::from_utf16(units).is_ok_and(|name| name.eq_ignore_ascii_case(&own)),
+            Value::String(name) => crate::vba_automation::workbook_name_matches(&own, &name.encode_utf16().collect::<Vec<_>>()),
+            Value::Utf16(units) => crate::vba_automation::workbook_name_matches(&own, units),
             Value::NullString | Value::Empty | Value::Boolean(_) => false,
             value => {
                 let number = match value {
