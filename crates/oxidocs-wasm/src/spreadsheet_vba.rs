@@ -37793,6 +37793,91 @@ fn cell_input(value: Value, this_year: i64) -> Result<CellInput, String> {
     to_cell_value(value).map(|cell| CellInput::Constant(cell, None))
 }
 
+
+fn exact_input_decimal(text: &str) -> Result<oxivba_core::decimal::Dec, String> {
+    let (negative, digits) = text.strip_prefix('-').map_or((false, text), |rest| (true, rest));
+    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
+    if whole.is_empty() || !whole.bytes().all(|b| b.is_ascii_digit())
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+        || (digits.contains('.') && fraction.is_empty()) {
+        return Err("expected a finite decimal string".into());
+    }
+    let fraction = fraction.trim_end_matches('0');
+    if fraction.len() > 28 { return Err("decimal scale exceeds 28".into()); }
+    let magnitude = format!("{whole}{fraction}").parse::<u128>()
+        .map_err(|_| "decimal magnitude is out of range".to_string())?;
+    if magnitude > (1u128 << 96) - 1 { return Err("decimal magnitude exceeds 96 bits".into()); }
+    Ok(oxivba_core::decimal::Dec {
+        negative: negative && magnitude != 0,
+        magnitude,
+        scale: fraction.len() as u8,
+    })
+}
+
+fn decode_typed_scalar(input: &serde_json::Value) -> Result<oxivba_core::Value, String> {
+    use oxivba_core::Value;
+    let object = input.as_object().ok_or("typed scalar must be an object")?;
+    if object.keys().any(|key| key != "type" && key != "value") {
+        return Err("unknown typed scalar field".into());
+    }
+    let tag = object.get("type").and_then(|v| v.as_str()).ok_or("typed scalar has no type")?;
+    let unit = match tag {
+        "empty" => Some(Value::Empty),
+        "missing" => Some(Value::Missing),
+        "null" => Some(Value::Null),
+        "nothing" => Some(Value::Nothing),
+        "null_string" => Some(Value::NullString),
+        _ => None,
+    };
+    if let Some(value) = unit {
+        if object.contains_key("value") { return Err("unit scalar has an unexpected value".into()); }
+        return Ok(value);
+    }
+    let payload = object.get("value").ok_or("typed scalar has no value")?;
+    let integral = || payload.as_i64().ok_or_else(|| "expected an exact integral payload".to_string());
+    let decimal = || payload.as_str().ok_or_else(|| "expected a decimal string".to_string())
+        .and_then(exact_input_decimal);
+    let finite = || payload.as_f64().filter(|v| v.is_finite())
+        .ok_or_else(|| "expected a finite numeric payload".to_string());
+    match tag {
+        "boolean" => payload.as_bool().map(Value::Boolean).ok_or_else(|| "expected a boolean".into()),
+        "byte" => u8::try_from(integral()?).map(Value::Byte).map_err(|_| "Byte is out of range".into()),
+        "integer" => i16::try_from(integral()?).map(Value::Int16).map_err(|_| "Integer is out of range".into()),
+        "long" => i32::try_from(integral()?).map(|v| Value::Integer(i64::from(v)))
+            .map_err(|_| "Long is out of range".into()),
+        "long_long" => payload.as_str().ok_or_else(|| "LongLong requires an exact decimal string".to_string())?
+            .parse::<i64>().map(Value::LongLong).map_err(|_| "LongLong is out of range".into()),
+        "single" => {
+            let value = finite()? as f32;
+            if !value.is_finite() { return Err("Single is out of range".into()); }
+            Ok(Value::Single(value))
+        }
+        "double" => finite().map(Value::Double),
+        "date" => finite().map(Value::Date),
+        "currency" => {
+            let value = decimal()?;
+            if value.scale > 4 { return Err("Currency scale exceeds 4".into()); }
+            let units = i128::try_from(value.magnitude).map_err(|_| "Currency is out of range".to_string())?
+                * 10i128.pow(u32::from(4 - value.scale));
+            let units = if value.negative { -units } else { units };
+            i64::try_from(units).map(Value::Currency).map_err(|_| "Currency is out of range".into())
+        }
+        "decimal" => decimal().map(Value::Decimal),
+        "error" => i32::try_from(integral()?).map(|v| Value::Error(i64::from(v)))
+            .map_err(|_| "Error code is out of range".into()),
+        "string" => payload.as_str().map(|v| Value::String(v.into()))
+            .ok_or_else(|| "expected a string".into()),
+        "utf16" => {
+            let units = payload.as_array().ok_or("expected UTF-16 units")?.iter()
+                .map(|v| v.as_u64().and_then(|n| u16::try_from(n).ok())
+                     .ok_or_else(|| "invalid UTF-16 unit".to_string()))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Value::from_utf16(units))
+        }
+        _ => Err(format!("unsupported typed scalar {tag}")),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum InputValue {
@@ -37800,22 +37885,66 @@ enum InputValue {
     Boolean(bool),
     Number(f64),
     String(String),
+    Typed(serde_json::Value),
 }
 
-impl From<InputValue> for Value {
-    fn from(value: InputValue) -> Self {
-        match value {
+impl TryFrom<InputValue> for Value {
+    type Error = String;
+
+    fn try_from(value: InputValue) -> Result<Self, String> {
+        Ok(match value {
             InputValue::Null(()) => Value::Null,
             InputValue::Boolean(value) => Value::Boolean(value),
             InputValue::Number(value)
-                if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 =>
+                if value.fract() == 0.0 && value >= f64::from(i32::MIN) && value <= f64::from(i32::MAX) =>
             {
                 Value::Integer(value as i64)
             }
             InputValue::Number(value) => Value::Double(value),
             InputValue::String(value) => Value::String(value),
+            InputValue::Typed(value) => return decode_typed_scalar(&value),
+        })
+    }
+}
+
+
+fn decode_vba_input_argument(value: JsValue) -> Result<Value, JsError> {
+    let bstr = |value: JsValue| {
+        let text = js_sys::JsString::from(value);
+        let units = (0..text.length()).map(|index| text.char_code_at(index) as u16).collect();
+        Value::from_utf16(units)
+    };
+    if value.is_string() {
+        return Ok(bstr(value));
+    }
+    if value.is_object() && !value.is_null() && !js_sys::Array::is_array(&value) {
+        let tag = js_sys::Reflect::get(&value, &JsValue::from_str("type"))
+            .map_err(|_| JsError::new("invalid VBA argument: cannot read type"))?.as_string();
+        if matches!(tag.as_deref(), Some("string" | "single" | "double" | "date")) {
+            let keys = js_sys::Object::keys(&js_sys::Object::from(value.clone()));
+            if keys.length() != 2 || keys.iter().any(|key|
+                !matches!(key.as_string().as_deref(), Some("type" | "value")))
+            {
+                return Err(JsError::new("invalid VBA argument: unknown typed scalar field"));
+            }
+            let payload = js_sys::Reflect::get(&value, &JsValue::from_str("value"))
+                .map_err(|_| JsError::new("invalid VBA argument: cannot read typed scalar value"))?;
+            if tag.as_deref() == Some("string") {
+                if !payload.is_string() {
+                    return Err(JsError::new("invalid VBA argument: typed String requires a string"));
+                }
+                return Ok(bstr(payload));
+            }
+            let number = payload.as_f64().and_then(serde_json::Number::from_f64)
+                .ok_or_else(|| JsError::new("invalid VBA argument: expected a finite number"))?;
+            let descriptor = serde_json::json!({"type": tag, "value": number});
+            return decode_typed_scalar(&descriptor)
+                .map_err(|error| JsError::new(&format!("invalid VBA argument: {error}")));
         }
     }
+    let input = serde_wasm_bindgen::from_value::<InputValue>(value)
+        .map_err(|error| JsError::new(&format!("invalid VBA argument: {error}")))?;
+    Value::try_from(input).map_err(|error| JsError::new(&format!("invalid VBA argument: {error}")))
 }
 
 fn serialize_vba_signed_integer<S: serde::Serializer>(value: &i64, serializer: S) -> Result<S::Ok, S::Error> {
@@ -38960,10 +39089,8 @@ fn prepare_spreadsheet_vba(
         workbook.calculation.dbcs_language = Some(dbcs_language);
     }
     if !js_sys::Array::is_array(&args){return Err(JsError::new("invalid VBA arguments: expected an array"));}
-    let args: Vec<Value> = js_sys::Array::from(&args).iter().map(|v| {
-        if v.is_string(){let text=js_sys::JsString::from(v);let units=(0..text.length()).map(|i|text.char_code_at(i) as u16).collect();Ok(Value::from_utf16(units))}
-        else {serde_wasm_bindgen::from_value::<InputValue>(v).map(Value::from).map_err(|e|JsError::new(&e.to_string()))}
-    }).collect::<Result<_,_>>()?;
+    let args: Vec<Value> = js_sys::Array::from(&args).iter()
+        .map(decode_vba_input_argument).collect::<Result<_, _>>()?;
     let random_seed =
         js_sys::Date::now().to_bits() ^ js_sys::Math::random().to_bits().rotate_left(17);
     let browser_now = js_sys::Date::new_0();

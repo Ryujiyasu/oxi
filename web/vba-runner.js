@@ -153,12 +153,39 @@ export function parseVbaArguments(text) {
         throw new Error('VBA arguments must be a JSON array.');
     }
     args.forEach((value, index) => {
+        const typedScalar = () => {
+            if (!value || typeof value !== 'object' || Array.isArray(value)
+                || typeof value.type !== 'string'
+                || Object.keys(value).some(key => key !== 'type' && key !== 'value')) return false;
+            const units = ['empty', 'missing', 'null', 'nothing', 'null_string'];
+            if (units.includes(value.type)) return !Object.hasOwn(value, 'value');
+            if (!Object.hasOwn(value, 'value')) return false;
+            const payload = value.value;
+            switch (value.type) {
+                case 'boolean': return typeof payload === 'boolean';
+                case 'byte':
+                case 'integer':
+                case 'long':
+                case 'error': return Number.isSafeInteger(payload);
+                case 'single':
+                case 'double':
+                case 'date': return typeof payload === 'number' && Number.isFinite(payload);
+                case 'long_long': return typeof payload === 'string' && /^-?\d+$/.test(payload);
+                case 'currency':
+                case 'decimal': return typeof payload === 'string' && /^-?\d+(?:\.\d+)?$/.test(payload);
+                case 'string': return typeof payload === 'string';
+                case 'utf16': return Array.isArray(payload)
+                    && payload.every(unit => Number.isInteger(unit) && unit >= 0 && unit <= 65535);
+                default: return false;
+            }
+        };
         const supported = value === null
             || typeof value === 'boolean'
             || typeof value === 'string'
-            || (typeof value === 'number' && Number.isFinite(value));
+            || (typeof value === 'number' && Number.isFinite(value))
+            || typedScalar();
         if (!supported) {
-            throw new Error(`VBA argument ${index + 1} must be null, a boolean, a number, or a string.`);
+            throw new Error(`VBA argument ${index + 1} must be null, a boolean, a number, a string, or a typed VBA scalar.`);
         }
     });
     return args;

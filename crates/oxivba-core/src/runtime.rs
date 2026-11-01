@@ -12168,6 +12168,11 @@ pub(crate) fn call_builtin(
             "cstr" if matches!(value, Value::Missing) => Ok(Value::String("Error 448".to_string())),
             "cstr" => match value {
                 Value::Null => Err(invalid_null(line)),
+                Value::Date(serial) => {
+                    let parts = serial_date_parts(*serial)
+                        .map_err(|message| invalid_procedure_call(message, line))?;
+                    Ok(Value::String(general_date(parts)))
+                }
                 _ => Ok(Value::String(text(value).map_err(mismatch)?)),
             },
             "cvar" => Ok(value.clone()),
@@ -13840,7 +13845,7 @@ fn format_date(
     let lower = pattern.to_ascii_lowercase();
     match lower.as_str() {
         "general date" => {
-            return Ok(general_date(serial, parts));
+            return Ok(general_date(parts));
         }
         "long date" => {
             return Ok(format!(
@@ -14009,7 +14014,7 @@ fn format_date(
                 'w' => weekday_number(serial.trunc() as i64, first_day).to_string(),
                 // The one code that stands for a whole format rather than
                 // a field: the same as the named General Date.
-                'c' => general_date(serial, parts),
+                'c' => general_date(parts),
                 _ => {
                     output.push(pattern[cursor..].chars().next().unwrap());
                     cursor += pattern[cursor..].chars().next().unwrap().len_utf8();
@@ -14041,9 +14046,10 @@ fn format_date(
 /// The whole date and time, as the named General Date and the lone code `c`
 /// both write it: the date alone when there is no time of day, the time alone
 /// when there is no date, and both when there are both.
-fn general_date(serial: f64, parts: DateParts) -> String {
-    let (day, time) = serial_day_and_time(serial);
-    match (day != 0.0, time != 0.0) {
+fn general_date(parts: DateParts) -> String {
+    let has_date = (parts.year, parts.month, parts.day) != (1899, 12, 30);
+    let has_time = parts.hour != 0 || parts.minute != 0 || parts.second != 0;
+    match (has_date, has_time) {
         (true, true) => format!(
             "{}/{}/{} {}",
             parts.month,
@@ -14849,6 +14855,16 @@ fn call_date_builtin(
                     mismatch(message)
                 }
             })?;
+            if matches!(name, "datevalue" | "timevalue") && matches!(args[0], Value::Date(_)) {
+                let parts = serial_date_parts(serial).map_err(mismatch)?;
+                let result = if name == "datevalue" {
+                    date_serial(parts.year, i64::from(parts.month), i64::from(parts.day))
+                        .map_err(mismatch)?
+                } else {
+                    f64::from(parts.hour * 3_600 + parts.minute * 60 + parts.second) / 86_400.0
+                };
+                return Ok(Value::Date(result));
+            }
             Ok(Value::Date(match name {
                 "datevalue" => serial.floor(),
                 "timevalue" => serial.rem_euclid(1.0),
@@ -15298,6 +15314,11 @@ fn serial_date_parts(serial: f64) -> Result<DateParts, String> {
         return Err("Date year must be between 100 and 9999".to_string());
     }
     let seconds = (time * 86_400.0).round() as i64;
+    let seconds = if year == 9_999 && month == 12 && day == 31 {
+        seconds.min(86_399)
+    } else {
+        seconds
+    };
     if seconds == 86_400 {
         let (year, month, day) = civil_from_days(days + 1);
         return Ok(DateParts {
@@ -18454,7 +18475,7 @@ fn single_text_value(value: f32) -> f64 {
 /// arm saying the serial -- one rule in two places is one rule that drifts.
 pub fn vba_date_text(serial: f64) -> String {
     match serial_date_parts(serial) {
-        Ok(parts) => general_date(serial, parts),
+        Ok(parts) => general_date(parts),
         Err(_) => vba_number_text(serial),
     }
 }
@@ -25152,4 +25173,238 @@ fn ansi_bytes(text: &str) -> Vec<u8> {
 
 fn ansi_text(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| char::from(*byte)).collect()
+}
+
+#[cfg(test)]
+mod date_boundary_native_regressions {
+    use crate::{parse_module, ErrorEnvironment, ErrorLanguage, Runtime, Value};
+    #[test]
+    fn date_components_and_variant_states_match_native() {
+        {
+            let module = parse_module(r###"Public Function DateBoundaryProbe(ByVal serial As Double) As String
+ On Error GoTo failed
+ Dim stage As String
+ Dim moment As Date
+ Dim yearValue As Long
+ stage = "convert"
+ moment = CDate(serial)
+ stage = "year"
+ yearValue = Year(moment)
+ DateBoundaryProbe = "ok|" & TypeName(moment) & "|" & CStr(VarType(moment)) & "|" & CStr(CDbl(moment)) & "|year=" & CStr(yearValue) & "|same=" & CStr(CDbl(moment) = serial)
+ Exit Function
+failed:
+ DateBoundaryProbe = "error|" & stage & "|" & CStr(Err.Number)
+End Function
+"###).unwrap();
+            let cases = [
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0x0000000000000000)), "ok|Date|7|0|year=1899|same=True"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0x8000000000000000)), "ok|Date|7|-0|year=1899|same=True"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0x3fe8000000000000)), "ok|Date|7|0.75|year=1899|same=True"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0xbfe8000000000000)), "ok|Date|7|-0.75|year=1899|same=True"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0xc124103400000000)), "ok|Date|7|-657434|year=100|same=True"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0xc124103580000000)), "ok|Date|7|-657434.75|year=100|same=True"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0xc1241035ffffffff)), "ok|Date|7|-657435|year=100|same=True"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0xc124103600000000)), "error|convert|6"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0xc124103600000001)), "error|convert|6"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0x4146924080000000)), "ok|Date|7|2958465|year=9999|same=True"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0x41469240e0000000)), "ok|Date|7|2958465.75|year=9999|same=True"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0x41469240ffffffff)), "ok|Date|7|2958466|year=9999|same=True"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0x4146924100000000)), "error|convert|6"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0x4146924100000001)), "error|convert|6"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0x40e61d6800000000)), "ok|Date|7|45291.25|year=2023|same=True"),
+                ("DateBoundaryProbe", Value::Double(f64::from_bits(0x7fe1ccf385ebc8a0)), "error|convert|6"),
+            ];
+            for (procedure, argument, expected) in cases {
+                let mut runtime = Runtime::new(&module).with_error_environment(ErrorEnvironment {
+                    language: ErrorLanguage::Japanese, help_file: String::new(),
+                });
+                assert_eq!(runtime.call(procedure, vec![argument]).unwrap(), Value::String(expected.into()), "{procedure}");
+            }
+        }
+        {
+            let module = parse_module(r###"Public Function CalendarParts(ByVal serial As Double) As String
+ On Error GoTo failed
+ Dim moment As Date
+ moment = CDate(serial)
+ CalendarParts = CStr(Year(moment)) & "/" & CStr(Month(moment)) & "/" & CStr(Day(moment)) & " " & CStr(Hour(moment)) & ":" & CStr(Minute(moment)) & ":" & CStr(Second(moment))
+ CalendarParts = CalendarParts & "|part=" & CStr(DatePart("yyyy", moment)) & "/" & CStr(DatePart("m", moment)) & "/" & CStr(DatePart("d", moment)) & " " & CStr(DatePart("h", moment)) & ":" & CStr(DatePart("n", moment)) & ":" & CStr(DatePart("s", moment))
+ Exit Function
+failed:
+ CalendarParts = "error|" & CStr(Err.Number)
+End Function
+
+Public Function WrittenParts(ByVal serial As Double) As String
+ On Error GoTo failed
+ Dim moment As Date
+ moment = CDate(serial)
+ WrittenParts = "date=" & CStr(CDbl(DateValue(moment))) & "|time=" & CStr(CDbl(TimeValue(moment))) & "|str=" & CStr(moment) & "|fmt=" & Format$(moment, "yyyy-mm-dd hh:nn:ss")
+ Exit Function
+failed:
+ WrittenParts = "error|" & CStr(Err.Number)
+End Function
+"###).unwrap();
+            let cases = [
+                ("CalendarParts", Value::Double(f64::from_bits(0x40e61d6000000000)), "2023/12/31 0:0:0|part=2023/12/31 0:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x40e61d6000000000)), "date=45291|time=0|str=12/31/2023|fmt=2023-12-31 00:00:00"),
+                ("CalendarParts", Value::Double(f64::from_bits(0x40e61d60000c1cae)), "2023/12/31 0:0:0|part=2023/12/31 0:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x40e61d60000c1cae)), "date=45291|time=0|str=12/31/2023|fmt=2023-12-31 00:00:00"),
+                ("CalendarParts", Value::Double(f64::from_bits(0x40e61d60000c22e4)), "2023/12/31 0:0:0|part=2023/12/31 0:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x40e61d60000c22e4)), "date=45291|time=0|str=12/31/2023|fmt=2023-12-31 00:00:00"),
+                ("CalendarParts", Value::Double(f64::from_bits(0x40e61d60000c291b)), "2023/12/31 0:0:1|part=2023/12/31 0:0:1"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x40e61d60000c291b)), "date=45291|time=1.15740740740741E-05|str=12/31/2023 12:00:01 AM|fmt=2023-12-31 00:00:01"),
+                ("CalendarParts", Value::Double(f64::from_bits(0x40e61d7ffff3d6e5)), "2023/12/31 23:59:59|part=2023/12/31 23:59:59"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x40e61d7ffff3d6e5)), "date=45291|time=0.999988425925926|str=12/31/2023 11:59:59 PM|fmt=2023-12-31 23:59:59"),
+                ("CalendarParts", Value::Double(f64::from_bits(0x40e61d7ffff3dd1c)), "2024/1/1 0:0:0|part=2024/1/1 0:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x40e61d7ffff3dd1c)), "date=45292|time=0|str=1/1/2024|fmt=2024-01-01 00:00:00"),
+                ("CalendarParts", Value::Double(f64::from_bits(0x40e61d7ffff3e352)), "2024/1/1 0:0:0|part=2024/1/1 0:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x40e61d7ffff3e352)), "date=45292|time=0|str=1/1/2024|fmt=2024-01-01 00:00:00"),
+                ("CalendarParts", Value::Double(f64::from_bits(0x41469240ffffffff)), "9999/12/31 23:59:59|part=9999/12/31 23:59:59"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x41469240ffffffff)), "date=2958465|time=0.999988425925926|str=12/31/9999 11:59:59 PM|fmt=9999-12-31 23:59:59"),
+                ("CalendarParts", Value::Double(f64::from_bits(0xc1241035ffffffff)), "100/1/2 0:0:0|part=100/1/2 0:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0xc1241035ffffffff)), "date=-657433|time=0|str=1/2/100|fmt=0100-01-02 00:00:00"),
+                ("CalendarParts", Value::Double(f64::from_bits(0xbfe8000000000000)), "1899/12/30 18:0:0|part=1899/12/30 18:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0xbfe8000000000000)), "date=0|time=0.75|str=6:00:00 PM|fmt=1899-12-30 18:00:00"),
+            ];
+            for (procedure, argument, expected) in cases {
+                let mut runtime = Runtime::new(&module).with_error_environment(ErrorEnvironment {
+                    language: ErrorLanguage::Japanese, help_file: String::new(),
+                });
+                assert_eq!(runtime.call(procedure, vec![argument]).unwrap(), Value::String(expected.into()), "{procedure}");
+            }
+        }
+        {
+            let module = parse_module(r###"Public Function CalendarParts(ByVal serial As Double) As String
+ On Error GoTo failed
+ Dim moment As Date
+ moment = CDate(serial)
+ CalendarParts = CStr(Year(moment)) & "/" & CStr(Month(moment)) & "/" & CStr(Day(moment)) & " " & CStr(Hour(moment)) & ":" & CStr(Minute(moment)) & ":" & CStr(Second(moment))
+ CalendarParts = CalendarParts & "|part=" & CStr(DatePart("yyyy", moment)) & "/" & CStr(DatePart("m", moment)) & "/" & CStr(DatePart("d", moment)) & " " & CStr(DatePart("h", moment)) & ":" & CStr(DatePart("n", moment)) & ":" & CStr(DatePart("s", moment))
+ Exit Function
+failed:
+ CalendarParts = "error|" & CStr(Err.Number)
+End Function
+
+Public Function WrittenParts(ByVal serial As Double) As String
+ On Error GoTo failed
+ Dim moment As Date
+ moment = CDate(serial)
+ WrittenParts = "date=" & CStr(CDbl(DateValue(moment))) & "|time=" & CStr(CDbl(TimeValue(moment))) & "|str=" & CStr(moment) & "|fmt=" & Format$(moment, "yyyy-mm-dd hh:nn:ss")
+ Exit Function
+failed:
+ WrittenParts = "error|" & CStr(Err.Number)
+End Function
+"###).unwrap();
+            let cases = [
+                ("CalendarParts", Value::Double(f64::from_bits(0x41469240ffffcf5c)), "9999/12/31 23:59:59|part=9999/12/31 23:59:59"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x41469240ffffcf5c)), "date=2958465|time=0.999988425925926|str=12/31/9999 11:59:59 PM|fmt=9999-12-31 23:59:59"),
+                ("CalendarParts", Value::Double(f64::from_bits(0x41469240ffffcf74)), "9999/12/31 23:59:59|part=9999/12/31 23:59:59"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x41469240ffffcf74)), "date=2958465|time=0.999988425925926|str=12/31/9999 11:59:59 PM|fmt=9999-12-31 23:59:59"),
+                ("CalendarParts", Value::Double(f64::from_bits(0x41469240ffffcf8d)), "9999/12/31 23:59:59|part=9999/12/31 23:59:59"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x41469240ffffcf8d)), "date=2958465|time=0.999988425925926|str=12/31/9999 11:59:59 PM|fmt=9999-12-31 23:59:59"),
+                ("CalendarParts", Value::Double(f64::from_bits(0x40e61d7ffff3e352)), "2024/1/1 0:0:0|part=2024/1/1 0:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x40e61d7ffff3e352)), "date=45292|time=0|str=1/1/2024|fmt=2024-01-01 00:00:00"),
+            ];
+            for (procedure, argument, expected) in cases {
+                let mut runtime = Runtime::new(&module).with_error_environment(ErrorEnvironment {
+                    language: ErrorLanguage::Japanese, help_file: String::new(),
+                });
+                assert_eq!(runtime.call(procedure, vec![argument]).unwrap(), Value::String(expected.into()), "{procedure}");
+            }
+        }
+        {
+            let module = parse_module(r###"Public Function CalendarParts(ByVal serial As Double) As String
+ On Error GoTo failed
+ Dim moment As Date
+ moment = CDate(serial)
+ CalendarParts = CStr(Year(moment)) & "/" & CStr(Month(moment)) & "/" & CStr(Day(moment)) & " " & CStr(Hour(moment)) & ":" & CStr(Minute(moment)) & ":" & CStr(Second(moment))
+ CalendarParts = CalendarParts & "|part=" & CStr(DatePart("yyyy", moment)) & "/" & CStr(DatePart("m", moment)) & "/" & CStr(DatePart("d", moment)) & " " & CStr(DatePart("h", moment)) & ":" & CStr(DatePart("n", moment)) & ":" & CStr(DatePart("s", moment))
+ Exit Function
+failed:
+ CalendarParts = "error|" & CStr(Err.Number)
+End Function
+
+Public Function WrittenParts(ByVal serial As Double) As String
+ On Error GoTo failed
+ Dim moment As Date
+ moment = CDate(serial)
+ WrittenParts = "date=" & CStr(CDbl(DateValue(moment))) & "|time=" & CStr(CDbl(TimeValue(moment))) & "|str=" & CStr(moment) & "|fmt=" & Format$(moment, "yyyy-mm-dd hh:nn:ss")
+ Exit Function
+failed:
+ WrittenParts = "error|" & CStr(Err.Number)
+End Function
+"###).unwrap();
+            let cases = [
+                ("CalendarParts", Value::Double(f64::from_bits(0x3fefffffffffffff)), "1899/12/31 0:0:0|part=1899/12/31 0:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x3fefffffffffffff)), "date=1|time=0|str=12/31/1899|fmt=1899-12-31 00:00:00"),
+                ("CalendarParts", Value::Double(f64::from_bits(0x3ed8523615dd10d0)), "1899/12/30 0:0:1|part=1899/12/30 0:0:1"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x3ed8523615dd10d0)), "date=0|time=1.15740740740741E-05|str=12:00:01 AM|fmt=1899-12-30 00:00:01"),
+                ("CalendarParts", Value::Double(f64::from_bits(0xbffffffffd50ce24)), "1899/12/30 0:0:0|part=1899/12/30 0:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0xbffffffffd50ce24)), "date=0|time=0|str=12:00:00 AM|fmt=1899-12-30 00:00:00"),
+                ("CalendarParts", Value::Double(f64::from_bits(0xbfeffffffaa19c47)), "1899/12/31 0:0:0|part=1899/12/31 0:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0xbfeffffffaa19c47)), "date=1|time=0|str=12/31/1899|fmt=1899-12-31 00:00:00"),
+                ("CalendarParts", Value::Double(f64::from_bits(0xbff0000000000000)), "1899/12/29 0:0:0|part=1899/12/29 0:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0xbff0000000000000)), "date=-1|time=0|str=12/29/1899|fmt=1899-12-29 00:00:00"),
+                ("CalendarParts", Value::Double(f64::from_bits(0x0000000000000000)), "1899/12/30 0:0:0|part=1899/12/30 0:0:0"),
+                ("WrittenParts", Value::Double(f64::from_bits(0x0000000000000000)), "date=0|time=0|str=12:00:00 AM|fmt=1899-12-30 00:00:00"),
+            ];
+            for (procedure, argument, expected) in cases {
+                let mut runtime = Runtime::new(&module).with_error_environment(ErrorEnvironment {
+                    language: ErrorLanguage::Japanese, help_file: String::new(),
+                });
+                assert_eq!(runtime.call(procedure, vec![argument]).unwrap(), Value::String(expected.into()), "{procedure}");
+            }
+        }
+        {
+            let module = parse_module(r###"Public Function DateStateDriver(ByVal mode As Long) As String
+ On Error GoTo failed
+ Dim value As Variant
+ Dim stage As String
+ Dim text As String
+ stage = "construct"
+ Select Case mode
+  Case 0: value = CLng(2000000000) + #1/2/2000#
+  Case 1: value = #1/2/2000# + CLng(2000000000)
+  Case 2: value = 1# + CDate(2958465#)
+  Case 3: value = CDate(2958465#) + 1#
+  Case 4: value = CLng(-2000000000) + #1/2/2000#
+  Case 5: value = #1/2/2000# + CLng(-2000000000)
+  Case 6: value = 1# + CDate(-657434#)
+  Case 7: value = -1# + CDate(-657434#)
+  Case 8: value = CDate(-657434#) - 1#
+  Case 9: value = CDate(45291.25)
+ End Select
+ stage = "type"
+ text = TypeName(value) & "|" & CStr(VarType(value))
+ stage = "number"
+ text = text & "|number=" & CStr(CDbl(value))
+ stage = "isdate"
+ text = text & "|isdate=" & CStr(IsDate(value))
+ stage = "text"
+ text = text & "|text=" & CStr(value)
+ DateStateDriver = text
+ Exit Function
+failed:
+ DateStateDriver = text & "|failure=" & stage & ":" & CStr(Err.Number)
+End Function
+"###).unwrap();
+            let cases = [
+                ("DateStateDriver", Value::Integer(0), "Date|7|number=2000036527|isdate=True|failure=text:5"),
+                ("DateStateDriver", Value::Integer(1), "|failure=construct:6"),
+                ("DateStateDriver", Value::Integer(2), "Date|7|number=2958466|isdate=True|failure=text:5"),
+                ("DateStateDriver", Value::Integer(3), "|failure=construct:6"),
+                ("DateStateDriver", Value::Integer(4), "Date|7|number=-1999963473|isdate=True|failure=text:5"),
+                ("DateStateDriver", Value::Integer(5), "|failure=construct:6"),
+                ("DateStateDriver", Value::Integer(6), "Date|7|number=-657433|isdate=True|text=1/2/100"),
+                ("DateStateDriver", Value::Integer(7), "Date|7|number=-657435|isdate=True|failure=text:5"),
+                ("DateStateDriver", Value::Integer(8), "|failure=construct:6"),
+                ("DateStateDriver", Value::Integer(9), "Date|7|number=45291.25|isdate=True|text=12/31/2023 6:00:00 AM"),
+            ];
+            for (procedure, argument, expected) in cases {
+                let mut runtime = Runtime::new(&module).with_error_environment(ErrorEnvironment {
+                    language: ErrorLanguage::Japanese, help_file: String::new(),
+                });
+                assert_eq!(runtime.call(procedure, vec![argument]).unwrap(), Value::String(expected.into()), "{procedure}");
+            }
+        }
+    }
 }
