@@ -433,6 +433,19 @@ pub struct ArrayDimension {
 impl ArrayValue {
     /// VBA enumerates the first subscript fastest. Storage and indexed access
     /// retain their existing row-major layout; only enumeration changes order.
+    fn prepare_variant_copy(&mut self) {
+        self.resizable = true;
+        if matches!(self.element_default.as_ref(), Value::Empty | Value::Missing | Value::Null | Value::Array(_)) {
+            for value in &mut self.values {
+                match value {
+                    Value::NullString => *value = Value::String(String::new()),
+                    Value::Array(array) => array.prepare_variant_copy(),
+                    _ => {}
+                }
+            }
+        }
+    }
+
     fn into_enumeration_values(self) -> Vec<Value> {
         if self.dimensions.len() < 2 || self.values.is_empty()
             || self.dimensions.iter().try_fold(1usize, |n, d| n.checked_mul(d.length)) != Some(self.values.len()) {
@@ -3505,7 +3518,12 @@ impl<'a> Runtime<'a> {
                 && (param.mode == ParamMode::ByVal || temporary)
                 && !param.type_name.is_new;
             if narrowed {
-                let taken = value.borrow().clone();
+                let mut taken = value.borrow().clone();
+                let byval_variant = param.mode == ParamMode::ByVal
+                    && self.parameter_scalar_name(&param.type_name.name) == "variant";
+                if let (true, Value::Array(array)) = (byval_variant, &mut taken) {
+                    array.prepare_variant_copy();
+                }
                 let taken = if matches!(
                     self.parameter_scalar_name(&param.type_name.name).as_str(),
                     "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double" | "currency" | "date" | "boolean" | "string"
@@ -5102,7 +5120,24 @@ impl<'a> Runtime<'a> {
     ) -> Result<Flow, RuntimeError> {
         let collection = self.eval_expr(&loop_.collection, frame)?;
         let values = match collection {
-            Value::Array(array) => array.into_enumeration_values(),
+            Value::Array(array) => {
+                if array.dimensions.is_empty() {
+                    return Err(language_error(92, "For loop not initialized", loop_.span.line));
+                }
+                if !array.values.is_empty() && matches!(array.element_default.as_ref(), Value::Error(_)) {
+                    return Err(language_error(13, "Type mismatch", loop_.span.line));
+                }
+                let string_elements = array.element_default.is_string();
+                let mut values = array.into_enumeration_values();
+                if string_elements {
+                    for value in &mut values {
+                        if matches!(value, Value::NullString) {
+                            *value = Value::String(String::new());
+                        }
+                    }
+                }
+                values
+            },
             Value::Object(object) => {
                 self.host_enumerate(&object, loop_.span.line)?
                     .ok_or_else(|| {
@@ -11061,6 +11096,9 @@ fn array_offset(array: &ArrayValue, indices: &[i64], line: u32) -> Result<usize,
                     Some(line),
                 )
             })?;
+    }
+    if matches!(array.element_default.as_ref(), Value::Error(_)) {
+        return Err(language_error(13, "Type mismatch", line));
     }
     Ok(offset)
 }
@@ -25404,6 +25442,827 @@ End Function
                     language: ErrorLanguage::Japanese, help_file: String::new(),
                 });
                 assert_eq!(runtime.call(procedure, vec![argument]).unwrap(), Value::String(expected.into()), "{procedure}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod array_copy_native_regressions {
+    #[test]
+    fn array_copy_and_iteration_match_native() {
+        {
+            let module = crate::parse_module(r####"Public Function TypedArrayDriver(ByVal mode As Long, ByVal action As Long) As String
+ On Error GoTo failed
+ Dim value As Variant
+ Dim longs(-2 To 0) As Long
+ Dim dynLongs() As Long
+ Dim fixedGrid(1 To 2, 4 To 6) As Integer
+ Dim grid() As Long
+ Dim strings() As String
+ Dim bytes() As Byte
+ Dim singles() As Single
+ Dim doubles() As Double
+ Dim dates() As Date
+ Dim money() As Currency
+ Dim erased() As Long
+ Dim wide() As LongLong
+ Dim flags() As Boolean
+ Dim i As Long, j As Long
+ Select Case mode
+  Case 0: value = Array()
+  Case 1: value = Array(CInt(-3), CLng(8), "A")
+  Case 2
+   longs(-2) = 11: longs(-1) = 22: longs(0) = 33
+   TypedArrayDriver = DescribeTypedArray(longs, action): Exit Function
+  Case 3
+   ReDim dynLongs(-2 To 0)
+   dynLongs(-2) = 11: dynLongs(-1) = 22: dynLongs(0) = 33
+   TypedArrayDriver = DescribeTypedArray(dynLongs, action): Exit Function
+  Case 4
+   For i = 1 To 2
+    For j = 4 To 6
+     fixedGrid(i, j) = i * 10 + j
+    Next j
+   Next i
+   TypedArrayDriver = DescribeTypedArray(fixedGrid, action): Exit Function
+  Case 5
+   ReDim grid(1 To 2, 4 To 6)
+   For i = 1 To 2
+    For j = 4 To 6
+     grid(i, j) = i * 10 + j
+    Next j
+   Next i
+   TypedArrayDriver = DescribeTypedArray(grid, action): Exit Function
+  Case 6
+   ReDim strings(5 To 6): strings(6) = ""
+   TypedArrayDriver = DescribeTypedArray(strings, action): Exit Function
+  Case 7
+   ReDim bytes(0 To 1): bytes(0) = 0: bytes(1) = 255
+   TypedArrayDriver = DescribeTypedArray(bytes, action): Exit Function
+  Case 8
+   ReDim singles(0 To 1): singles(0) = CSng(0.1): singles(1) = CSng(-0.25)
+   TypedArrayDriver = DescribeTypedArray(singles, action): Exit Function
+  Case 9
+   ReDim doubles(0 To 1): doubles(0) = 0.1#: doubles(1) = -0.25#
+   TypedArrayDriver = DescribeTypedArray(doubles, action): Exit Function
+  Case 10
+   ReDim dates(0 To 1): dates(0) = CDate(45291.25): dates(1) = CDate(-0.75)
+   TypedArrayDriver = DescribeTypedArray(dates, action): Exit Function
+  Case 11
+   ReDim money(0 To 1)
+   money(0) = CCur("922337203685477.5807"): money(1) = CCur("-922337203685477.5808")
+   TypedArrayDriver = DescribeTypedArray(money, action): Exit Function
+  Case 12
+   value = Array(CDec("79228162514264337593543950335"), Null, Empty, CVErr(2007), ChrW$(-10240))
+  Case 13
+   TypedArrayDriver = DescribeTypedArray(dynLongs, action): Exit Function
+  Case 14
+   ReDim erased(-2 To 0): Erase erased
+   TypedArrayDriver = DescribeTypedArray(erased, action): Exit Function
+  Case 15: value = Split("", ",")
+  Case 16: value = Array(Array(1, 2), Array(3, 4))
+  Case 17
+   ReDim dates(0 To 1)
+   dates(0) = 1# + CDate(2958465): dates(1) = CLng(2000000000) + #1/2/2000#
+   TypedArrayDriver = DescribeTypedArray(dates, action): Exit Function
+  Case 18: value = Array(vbNullString, "", "A" & Chr$(0) & "B")
+  Case 19
+   ReDim wide(-1 To 0)
+   wide(-1) = -CLngLng(4611686018427387904#) - CLngLng(4611686018427387904#)
+   wide(0) = CLngLng(4611686018427387904#) - CLngLng(1) + CLngLng(4611686018427387904#)
+   TypedArrayDriver = DescribeTypedArray(wide, action): Exit Function
+  Case 20
+   ReDim flags(1 To 2): flags(1) = True: flags(2) = False
+   TypedArrayDriver = DescribeTypedArray(flags, action): Exit Function
+  Case 21: value = Array(CByte(5), CInt(6), CLng(7), CSng(0.1), 0.1#, CDate(0))
+ End Select
+ TypedArrayDriver = DescribeTypedArray(value, action)
+ Exit Function
+failed:
+ TypedArrayDriver = "constructor_error=" & CStr(Err.Number)
+End Function
+
+Public Function DescribeTypedArray(ByVal value As Variant, ByVal action As Long) As String
+ Dim original As String, number As Long
+ original = DescribeArrayState(value)
+ On Error Resume Next
+ If action = 1 Then Erase value
+ If action = 2 Then
+  Dim lo As Long, hi As Long
+  lo = LBound(value): hi = UBound(value)
+  If Err.Number = 0 Then ReDim Preserve value(lo To hi + 1)
+ End If
+ number = Err.Number
+ Err.Clear
+ On Error GoTo 0
+ DescribeTypedArray = original & "|action=" & CStr(action) & "|error=" & CStr(number) & "|after=" & DescribeArrayState(value)
+End Function
+
+Public Function DescribeArrayState(ByVal value As Variant) As String
+ Dim text As String, dimIndex As Long, lo As Long, hi As Long, number As Long
+ text = TypeName(value) & "|" & CStr(VarType(value))
+ If Not IsArray(value) Then
+  DescribeArrayState = text & "|not_array": Exit Function
+ End If
+ For dimIndex = 1 To 4
+  On Error Resume Next
+  Err.Clear
+  lo = LBound(value, dimIndex): hi = UBound(value, dimIndex): number = Err.Number
+  On Error GoTo 0
+  If number <> 0 Then Exit For
+  text = text & "|d" & CStr(dimIndex) & "=" & CStr(lo) & ":" & CStr(hi)
+ Next dimIndex
+ text = text & "|each="
+ Dim item As Variant, count As Long
+ On Error GoTo iterationFailed
+ For Each item In value
+  If count > 0 Then text = text & ";"
+  If IsArray(item) Then
+   text = text & "[" & DescribeArrayState(item) & "]"
+  Else
+   text = text & DescribeArrayElement(item)
+  End If
+  count = count + 1
+ Next item
+ DescribeArrayState = text: Exit Function
+iterationFailed:
+ DescribeArrayState = text & "|iterate_error=" & CStr(Err.Number)
+End Function
+
+Public Function DescribeArrayElement(ByVal value As Variant) As String
+ Dim text As String, index As Long
+ On Error GoTo failed
+ text = TypeName(value) & ":" & CStr(VarType(value)) & ":"
+ If IsNull(value) Then
+  text = text & "null"
+ ElseIf IsEmpty(value) Then
+  text = text & "empty"
+ ElseIf VarType(value) = vbString Then
+  text = text & "null_bstr=" & CStr(StrPtr(value) = 0) & ",units="
+  For index = 1 To Len(value)
+   If index > 1 Then text = text & ","
+   text = text & CStr(AscW(Mid$(value, index, 1)) And 65535)
+  Next index
+ ElseIf VarType(value) = vbDate Then
+  text = text & CStr(CDbl(value))
+ Else
+  text = text & CStr(value)
+ End If
+ DescribeArrayElement = text: Exit Function
+failed:
+ DescribeArrayElement = text & "error=" & CStr(Err.Number)
+End Function
+"####).unwrap();
+            let cases: Vec<(&str, Vec<crate::Value>, &str)> = vec![
+                ("TypedArrayDriver", vec![crate::Value::Integer(0), crate::Value::Integer(0)], r####"Variant()|8204|d1=0:-1|each=|action=0|error=0|after=Variant()|8204|d1=0:-1|each="####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(0), crate::Value::Integer(1)], r####"Variant()|8204|d1=0:-1|each=|action=1|error=0|after=Variant()|8204|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(0), crate::Value::Integer(2)], r####"Variant()|8204|d1=0:-1|each=|action=2|error=0|after=Variant()|8204|d1=0:0|each=Empty:0:empty"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(1), crate::Value::Integer(0)], r####"Variant()|8204|d1=0:2|each=Integer:2:-3;Long:3:8;String:8:null_bstr=False,units=65|action=0|error=0|after=Variant()|8204|d1=0:2|each=Integer:2:-3;Long:3:8;String:8:null_bstr=False,units=65"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(1), crate::Value::Integer(1)], r####"Variant()|8204|d1=0:2|each=Integer:2:-3;Long:3:8;String:8:null_bstr=False,units=65|action=1|error=0|after=Variant()|8204|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(1), crate::Value::Integer(2)], r####"Variant()|8204|d1=0:2|each=Integer:2:-3;Long:3:8;String:8:null_bstr=False,units=65|action=2|error=0|after=Variant()|8204|d1=0:3|each=Integer:2:-3;Long:3:8;String:8:null_bstr=False,units=65;Empty:0:empty"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(2), crate::Value::Integer(0)], r####"Long()|8195|d1=-2:0|each=Long:3:11;Long:3:22;Long:3:33|action=0|error=0|after=Long()|8195|d1=-2:0|each=Long:3:11;Long:3:22;Long:3:33"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(2), crate::Value::Integer(1)], r####"Long()|8195|d1=-2:0|each=Long:3:11;Long:3:22;Long:3:33|action=1|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(2), crate::Value::Integer(2)], r####"Long()|8195|d1=-2:0|each=Long:3:11;Long:3:22;Long:3:33|action=2|error=0|after=Long()|8195|d1=-2:1|each=Long:3:11;Long:3:22;Long:3:33;Long:3:0"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(3), crate::Value::Integer(0)], r####"Long()|8195|d1=-2:0|each=Long:3:11;Long:3:22;Long:3:33|action=0|error=0|after=Long()|8195|d1=-2:0|each=Long:3:11;Long:3:22;Long:3:33"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(3), crate::Value::Integer(1)], r####"Long()|8195|d1=-2:0|each=Long:3:11;Long:3:22;Long:3:33|action=1|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(3), crate::Value::Integer(2)], r####"Long()|8195|d1=-2:0|each=Long:3:11;Long:3:22;Long:3:33|action=2|error=0|after=Long()|8195|d1=-2:1|each=Long:3:11;Long:3:22;Long:3:33;Long:3:0"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(4), crate::Value::Integer(0)], r####"Integer()|8194|d1=1:2|d2=4:6|each=Integer:2:14;Integer:2:24;Integer:2:15;Integer:2:25;Integer:2:16;Integer:2:26|action=0|error=0|after=Integer()|8194|d1=1:2|d2=4:6|each=Integer:2:14;Integer:2:24;Integer:2:15;Integer:2:25;Integer:2:16;Integer:2:26"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(4), crate::Value::Integer(1)], r####"Integer()|8194|d1=1:2|d2=4:6|each=Integer:2:14;Integer:2:24;Integer:2:15;Integer:2:25;Integer:2:16;Integer:2:26|action=1|error=0|after=Integer()|8194|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(4), crate::Value::Integer(2)], r####"Integer()|8194|d1=1:2|d2=4:6|each=Integer:2:14;Integer:2:24;Integer:2:15;Integer:2:25;Integer:2:16;Integer:2:26|action=2|error=9|after=Integer()|8194|d1=1:2|d2=4:6|each=Integer:2:14;Integer:2:24;Integer:2:15;Integer:2:25;Integer:2:16;Integer:2:26"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(5), crate::Value::Integer(0)], r####"Long()|8195|d1=1:2|d2=4:6|each=Long:3:14;Long:3:24;Long:3:15;Long:3:25;Long:3:16;Long:3:26|action=0|error=0|after=Long()|8195|d1=1:2|d2=4:6|each=Long:3:14;Long:3:24;Long:3:15;Long:3:25;Long:3:16;Long:3:26"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(5), crate::Value::Integer(1)], r####"Long()|8195|d1=1:2|d2=4:6|each=Long:3:14;Long:3:24;Long:3:15;Long:3:25;Long:3:16;Long:3:26|action=1|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(5), crate::Value::Integer(2)], r####"Long()|8195|d1=1:2|d2=4:6|each=Long:3:14;Long:3:24;Long:3:15;Long:3:25;Long:3:16;Long:3:26|action=2|error=9|after=Long()|8195|d1=1:2|d2=4:6|each=Long:3:14;Long:3:24;Long:3:15;Long:3:25;Long:3:16;Long:3:26"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(6), crate::Value::Integer(0)], r####"String()|8200|d1=5:6|each=String:8:null_bstr=False,units=;String:8:null_bstr=False,units=|action=0|error=0|after=String()|8200|d1=5:6|each=String:8:null_bstr=False,units=;String:8:null_bstr=False,units="####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(6), crate::Value::Integer(1)], r####"String()|8200|d1=5:6|each=String:8:null_bstr=False,units=;String:8:null_bstr=False,units=|action=1|error=0|after=String()|8200|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(6), crate::Value::Integer(2)], r####"String()|8200|d1=5:6|each=String:8:null_bstr=False,units=;String:8:null_bstr=False,units=|action=2|error=0|after=String()|8200|d1=5:7|each=String:8:null_bstr=False,units=;String:8:null_bstr=False,units=;String:8:null_bstr=False,units="####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(7), crate::Value::Integer(0)], r####"Byte()|8209|d1=0:1|each=Byte:17:0;Byte:17:255|action=0|error=0|after=Byte()|8209|d1=0:1|each=Byte:17:0;Byte:17:255"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(7), crate::Value::Integer(1)], r####"Byte()|8209|d1=0:1|each=Byte:17:0;Byte:17:255|action=1|error=0|after=Byte()|8209|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(7), crate::Value::Integer(2)], r####"Byte()|8209|d1=0:1|each=Byte:17:0;Byte:17:255|action=2|error=0|after=Byte()|8209|d1=0:2|each=Byte:17:0;Byte:17:255;Byte:17:0"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(8), crate::Value::Integer(0)], r####"Single()|8196|d1=0:1|each=Single:4:0.1;Single:4:-0.25|action=0|error=0|after=Single()|8196|d1=0:1|each=Single:4:0.1;Single:4:-0.25"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(8), crate::Value::Integer(1)], r####"Single()|8196|d1=0:1|each=Single:4:0.1;Single:4:-0.25|action=1|error=0|after=Single()|8196|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(8), crate::Value::Integer(2)], r####"Single()|8196|d1=0:1|each=Single:4:0.1;Single:4:-0.25|action=2|error=0|after=Single()|8196|d1=0:2|each=Single:4:0.1;Single:4:-0.25;Single:4:0"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(9), crate::Value::Integer(0)], r####"Double()|8197|d1=0:1|each=Double:5:0.1;Double:5:-0.25|action=0|error=0|after=Double()|8197|d1=0:1|each=Double:5:0.1;Double:5:-0.25"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(9), crate::Value::Integer(1)], r####"Double()|8197|d1=0:1|each=Double:5:0.1;Double:5:-0.25|action=1|error=0|after=Double()|8197|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(9), crate::Value::Integer(2)], r####"Double()|8197|d1=0:1|each=Double:5:0.1;Double:5:-0.25|action=2|error=0|after=Double()|8197|d1=0:2|each=Double:5:0.1;Double:5:-0.25;Double:5:0"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(10), crate::Value::Integer(0)], r####"Date()|8199|d1=0:1|each=Date:7:45291.25;Date:7:-0.75|action=0|error=0|after=Date()|8199|d1=0:1|each=Date:7:45291.25;Date:7:-0.75"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(10), crate::Value::Integer(1)], r####"Date()|8199|d1=0:1|each=Date:7:45291.25;Date:7:-0.75|action=1|error=0|after=Date()|8199|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(10), crate::Value::Integer(2)], r####"Date()|8199|d1=0:1|each=Date:7:45291.25;Date:7:-0.75|action=2|error=0|after=Date()|8199|d1=0:2|each=Date:7:45291.25;Date:7:-0.75;Date:7:0"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(11), crate::Value::Integer(0)], r####"Currency()|8198|d1=0:1|each=Currency:6:922337203685477.5807;Currency:6:-922337203685477.5808|action=0|error=0|after=Currency()|8198|d1=0:1|each=Currency:6:922337203685477.5807;Currency:6:-922337203685477.5808"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(11), crate::Value::Integer(1)], r####"Currency()|8198|d1=0:1|each=Currency:6:922337203685477.5807;Currency:6:-922337203685477.5808|action=1|error=0|after=Currency()|8198|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(11), crate::Value::Integer(2)], r####"Currency()|8198|d1=0:1|each=Currency:6:922337203685477.5807;Currency:6:-922337203685477.5808|action=2|error=0|after=Currency()|8198|d1=0:2|each=Currency:6:922337203685477.5807;Currency:6:-922337203685477.5808;Currency:6:0"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(12), crate::Value::Integer(0)], r####"Variant()|8204|d1=0:4|each=Decimal:14:79228162514264337593543950335;Null:1:null;Empty:0:empty;Error:10:エラー 2007;String:8:null_bstr=False,units=55296|action=0|error=0|after=Variant()|8204|d1=0:4|each=Decimal:14:79228162514264337593543950335;Null:1:null;Empty:0:empty;Error:10:エラー 2007;String:8:null_bstr=False,units=55296"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(12), crate::Value::Integer(1)], r####"Variant()|8204|d1=0:4|each=Decimal:14:79228162514264337593543950335;Null:1:null;Empty:0:empty;Error:10:エラー 2007;String:8:null_bstr=False,units=55296|action=1|error=0|after=Variant()|8204|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(12), crate::Value::Integer(2)], r####"Variant()|8204|d1=0:4|each=Decimal:14:79228162514264337593543950335;Null:1:null;Empty:0:empty;Error:10:エラー 2007;String:8:null_bstr=False,units=55296|action=2|error=0|after=Variant()|8204|d1=0:5|each=Decimal:14:79228162514264337593543950335;Null:1:null;Empty:0:empty;Error:10:エラー 2007;String:8:null_bstr=False,units=55296;Empty:0:empty"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(13), crate::Value::Integer(0)], r####"Long()|8195|each=|iterate_error=92|action=0|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(13), crate::Value::Integer(1)], r####"Long()|8195|each=|iterate_error=92|action=1|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(13), crate::Value::Integer(2)], r####"Long()|8195|each=|iterate_error=92|action=2|error=9|after=Long()|8195|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(14), crate::Value::Integer(0)], r####"Long()|8195|each=|iterate_error=92|action=0|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(14), crate::Value::Integer(1)], r####"Long()|8195|each=|iterate_error=92|action=1|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(14), crate::Value::Integer(2)], r####"Long()|8195|each=|iterate_error=92|action=2|error=9|after=Long()|8195|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(15), crate::Value::Integer(0)], r####"String()|8200|d1=0:-1|each=|action=0|error=0|after=String()|8200|d1=0:-1|each="####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(15), crate::Value::Integer(1)], r####"String()|8200|d1=0:-1|each=|action=1|error=0|after=String()|8200|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(15), crate::Value::Integer(2)], r####"String()|8200|d1=0:-1|each=|action=2|error=0|after=String()|8200|d1=0:0|each=String:8:null_bstr=False,units="####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(16), crate::Value::Integer(0)], r####"Variant()|8204|d1=0:1|each=[Variant()|8204|d1=0:1|each=Integer:2:1;Integer:2:2];[Variant()|8204|d1=0:1|each=Integer:2:3;Integer:2:4]|action=0|error=0|after=Variant()|8204|d1=0:1|each=[Variant()|8204|d1=0:1|each=Integer:2:1;Integer:2:2];[Variant()|8204|d1=0:1|each=Integer:2:3;Integer:2:4]"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(16), crate::Value::Integer(1)], r####"Variant()|8204|d1=0:1|each=[Variant()|8204|d1=0:1|each=Integer:2:1;Integer:2:2];[Variant()|8204|d1=0:1|each=Integer:2:3;Integer:2:4]|action=1|error=0|after=Variant()|8204|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(16), crate::Value::Integer(2)], r####"Variant()|8204|d1=0:1|each=[Variant()|8204|d1=0:1|each=Integer:2:1;Integer:2:2];[Variant()|8204|d1=0:1|each=Integer:2:3;Integer:2:4]|action=2|error=0|after=Variant()|8204|d1=0:2|each=[Variant()|8204|d1=0:1|each=Integer:2:1;Integer:2:2];[Variant()|8204|d1=0:1|each=Integer:2:3;Integer:2:4];Empty:0:empty"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(17), crate::Value::Integer(0)], r####"Date()|8199|d1=0:1|each=Date:7:2958466;Date:7:2000036527|action=0|error=0|after=Date()|8199|d1=0:1|each=Date:7:2958466;Date:7:2000036527"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(17), crate::Value::Integer(1)], r####"Date()|8199|d1=0:1|each=Date:7:2958466;Date:7:2000036527|action=1|error=0|after=Date()|8199|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(17), crate::Value::Integer(2)], r####"Date()|8199|d1=0:1|each=Date:7:2958466;Date:7:2000036527|action=2|error=0|after=Date()|8199|d1=0:2|each=Date:7:2958466;Date:7:2000036527;Date:7:0"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(18), crate::Value::Integer(0)], r####"Variant()|8204|d1=0:2|each=String:8:null_bstr=False,units=;String:8:null_bstr=False,units=;String:8:null_bstr=False,units=65,0,66|action=0|error=0|after=Variant()|8204|d1=0:2|each=String:8:null_bstr=False,units=;String:8:null_bstr=False,units=;String:8:null_bstr=False,units=65,0,66"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(18), crate::Value::Integer(1)], r####"Variant()|8204|d1=0:2|each=String:8:null_bstr=False,units=;String:8:null_bstr=False,units=;String:8:null_bstr=False,units=65,0,66|action=1|error=0|after=Variant()|8204|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(18), crate::Value::Integer(2)], r####"Variant()|8204|d1=0:2|each=String:8:null_bstr=False,units=;String:8:null_bstr=False,units=;String:8:null_bstr=False,units=65,0,66|action=2|error=0|after=Variant()|8204|d1=0:3|each=String:8:null_bstr=False,units=;String:8:null_bstr=False,units=;String:8:null_bstr=False,units=65,0,66;Empty:0:empty"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(19), crate::Value::Integer(0)], r####"LongLong()|8212|d1=-1:0|each=LongLong:20:-9223372036854775808;LongLong:20:9223372036854775807|action=0|error=0|after=LongLong()|8212|d1=-1:0|each=LongLong:20:-9223372036854775808;LongLong:20:9223372036854775807"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(19), crate::Value::Integer(1)], r####"LongLong()|8212|d1=-1:0|each=LongLong:20:-9223372036854775808;LongLong:20:9223372036854775807|action=1|error=0|after=LongLong()|8212|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(19), crate::Value::Integer(2)], r####"LongLong()|8212|d1=-1:0|each=LongLong:20:-9223372036854775808;LongLong:20:9223372036854775807|action=2|error=0|after=LongLong()|8212|d1=-1:1|each=LongLong:20:-9223372036854775808;LongLong:20:9223372036854775807;LongLong:20:0"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(20), crate::Value::Integer(0)], r####"Boolean()|8203|d1=1:2|each=Boolean:11:True;Boolean:11:False|action=0|error=0|after=Boolean()|8203|d1=1:2|each=Boolean:11:True;Boolean:11:False"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(20), crate::Value::Integer(1)], r####"Boolean()|8203|d1=1:2|each=Boolean:11:True;Boolean:11:False|action=1|error=0|after=Boolean()|8203|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(20), crate::Value::Integer(2)], r####"Boolean()|8203|d1=1:2|each=Boolean:11:True;Boolean:11:False|action=2|error=0|after=Boolean()|8203|d1=1:3|each=Boolean:11:True;Boolean:11:False;Boolean:11:False"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(21), crate::Value::Integer(0)], r####"Variant()|8204|d1=0:5|each=Byte:17:5;Integer:2:6;Long:3:7;Single:4:0.1;Double:5:0.1;Date:7:0|action=0|error=0|after=Variant()|8204|d1=0:5|each=Byte:17:5;Integer:2:6;Long:3:7;Single:4:0.1;Double:5:0.1;Date:7:0"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(21), crate::Value::Integer(1)], r####"Variant()|8204|d1=0:5|each=Byte:17:5;Integer:2:6;Long:3:7;Single:4:0.1;Double:5:0.1;Date:7:0|action=1|error=0|after=Variant()|8204|each=|iterate_error=92"####),
+                ("TypedArrayDriver", vec![crate::Value::Integer(21), crate::Value::Integer(2)], r####"Variant()|8204|d1=0:5|each=Byte:17:5;Integer:2:6;Long:3:7;Single:4:0.1;Double:5:0.1;Date:7:0|action=2|error=0|after=Variant()|8204|d1=0:6|each=Byte:17:5;Integer:2:6;Long:3:7;Single:4:0.1;Double:5:0.1;Date:7:0;Empty:0:empty"####),
+            ];
+            for (procedure, args, expected) in cases {
+                let mut runtime = crate::Runtime::new(&module).with_error_environment(
+                    crate::ErrorEnvironment { language: crate::ErrorLanguage::Japanese, help_file: String::new() });
+                let actual = runtime.call(procedure, args).unwrap();
+                assert_eq!(actual, crate::Value::String(expected.into()), "procedure: {procedure}");
+            }
+        }
+        {
+            let module = crate::parse_module(r####"Public Function TypedScalarDriver(ByVal mode As Long) As String
+ On Error GoTo failed
+ Dim fixedStrings(0 To 0) As String
+ Dim dynamicStrings() As String
+ Dim variantElements(0 To 0) As Variant
+ Dim value As Variant, item As Variant, text As String
+ Select Case mode
+  Case 0
+   text = "source=" & CStr(StrPtr(fixedStrings(0)) = 0) & "|byval_index=" & CStr(ArrayPointer(fixedStrings))
+   For Each item In fixedStrings
+    text = text & "|foreach=" & CStr(StrPtr(item) = 0) & "|foreach_byval=" & CStr(ScalarPointer(item))
+   Next item
+   text = text & "|after_source=" & CStr(StrPtr(fixedStrings(0)) = 0)
+  Case 1
+   ReDim dynamicStrings(0 To 0)
+   text = "source=" & CStr(StrPtr(dynamicStrings(0)) = 0) & "|byval_index=" & CStr(ArrayPointer(dynamicStrings))
+   For Each item In dynamicStrings
+    text = text & "|foreach=" & CStr(StrPtr(item) = 0) & "|foreach_byval=" & CStr(ScalarPointer(item))
+   Next item
+   text = text & "|after_source=" & CStr(StrPtr(dynamicStrings(0)) = 0)
+  Case 2
+   variantElements(0) = vbNullString
+   text = "source=" & CStr(StrPtr(variantElements(0)) = 0) & "|byval_index=" & CStr(ArrayPointer(variantElements))
+   For Each item In variantElements
+    text = text & "|foreach=" & CStr(StrPtr(item) = 0) & "|foreach_byval=" & CStr(ScalarPointer(item))
+   Next item
+   text = text & "|after_source=" & CStr(StrPtr(variantElements(0)) = 0)
+  Case 3
+   value = Array(vbNullString)
+   text = "source=" & CStr(StrPtr(value(0)) = 0) & "|byval_index=" & CStr(ArrayPointer(value))
+   For Each item In value
+    text = text & "|foreach=" & CStr(StrPtr(item) = 0) & "|foreach_byval=" & CStr(ScalarPointer(item))
+   Next item
+   text = text & "|after_source=" & CStr(StrPtr(value(0)) = 0)
+  Case 4
+   value = fixedStrings
+   text = "source=" & CStr(StrPtr(value(0)) = 0) & "|byval_index=" & CStr(ArrayPointer(value))
+   For Each item In value
+    text = text & "|foreach=" & CStr(StrPtr(item) = 0) & "|foreach_byval=" & CStr(ScalarPointer(item))
+   Next item
+   text = text & "|after_source=" & CStr(StrPtr(value(0)) = 0)
+  Case 5
+   value = vbNullString
+   text = "scalar=" & CStr(StrPtr(value) = 0) & "|byval_scalar=" & CStr(ScalarPointer(value))
+  Case 6
+   fixedStrings(0) = ""
+   text = "source=" & CStr(StrPtr(fixedStrings(0)) = 0) & "|byval_index=" & CStr(ArrayPointer(fixedStrings))
+   For Each item In fixedStrings
+    text = text & "|foreach=" & CStr(StrPtr(item) = 0) & "|foreach_byval=" & CStr(ScalarPointer(item))
+   Next item
+   text = text & "|after_source=" & CStr(StrPtr(fixedStrings(0)) = 0)
+ End Select
+ TypedScalarDriver = text
+ Exit Function
+failed:
+ TypedScalarDriver = text & "|error=" & CStr(Err.Number)
+End Function
+Public Function ArrayPointer(ByVal value As Variant) As Boolean
+ ArrayPointer = (StrPtr(value(0)) = 0)
+End Function
+Public Function ScalarPointer(ByVal value As Variant) As Boolean
+ ScalarPointer = (StrPtr(value) = 0)
+End Function
+"####).unwrap();
+            let cases: Vec<(&str, Vec<crate::Value>, &str)> = vec![
+                ("TypedScalarDriver", vec![crate::Value::Integer(0)], r####"source=True|byval_index=True|foreach=False|foreach_byval=False|after_source=True"####),
+                ("TypedScalarDriver", vec![crate::Value::Integer(1)], r####"source=True|byval_index=True|foreach=False|foreach_byval=False|after_source=True"####),
+                ("TypedScalarDriver", vec![crate::Value::Integer(2)], r####"source=True|byval_index=False|foreach=True|foreach_byval=True|after_source=True"####),
+                ("TypedScalarDriver", vec![crate::Value::Integer(3)], r####"source=True|byval_index=False|foreach=True|foreach_byval=True|after_source=True"####),
+                ("TypedScalarDriver", vec![crate::Value::Integer(4)], r####"source=True|byval_index=True|foreach=False|foreach_byval=False|after_source=True"####),
+                ("TypedScalarDriver", vec![crate::Value::Integer(5)], r####"scalar=True|byval_scalar=True"####),
+                ("TypedScalarDriver", vec![crate::Value::Integer(6)], r####"source=False|byval_index=False|foreach=False|foreach_byval=False|after_source=False"####),
+            ];
+            for (procedure, args, expected) in cases {
+                let mut runtime = crate::Runtime::new(&module).with_error_environment(
+                    crate::ErrorEnvironment { language: crate::ErrorLanguage::Japanese, help_file: String::new() });
+                let actual = runtime.call(procedure, args).unwrap();
+                assert_eq!(actual, crate::Value::String(expected.into()), "procedure: {procedure}");
+            }
+        }
+        {
+            let module = crate::parse_module(r####"Public Function TypedArrayDriver(ByVal mode As Long, ByVal action As Long) As String
+ On Error GoTo failed
+ Dim value As Variant
+ Dim longs(-2 To 0) As Long
+ Dim dynLongs() As Long
+ Dim fixedGrid(1 To 2, 4 To 6) As Integer
+ Dim grid() As Long
+ Dim strings() As String
+ Dim bytes() As Byte
+ Dim singles() As Single
+ Dim doubles() As Double
+ Dim dates() As Date
+ Dim money() As Currency
+ Dim erased() As Long
+ Dim wide() As LongLong
+ Dim flags() As Boolean
+ Dim i As Long, j As Long
+ Select Case mode
+  Case 0: value = Array()
+  Case 1: value = Array(CInt(-3), CLng(8), "A")
+  Case 2
+   longs(-2) = 11: longs(-1) = 22: longs(0) = 33
+   TypedArrayDriver = DescribeTypedArray(longs, action): Exit Function
+  Case 3
+   ReDim dynLongs(-2 To 0)
+   dynLongs(-2) = 11: dynLongs(-1) = 22: dynLongs(0) = 33
+   TypedArrayDriver = DescribeTypedArray(dynLongs, action): Exit Function
+  Case 4
+   For i = 1 To 2
+    For j = 4 To 6
+     fixedGrid(i, j) = i * 10 + j
+    Next j
+   Next i
+   TypedArrayDriver = DescribeTypedArray(fixedGrid, action): Exit Function
+  Case 5
+   ReDim grid(1 To 2, 4 To 6)
+   For i = 1 To 2
+    For j = 4 To 6
+     grid(i, j) = i * 10 + j
+    Next j
+   Next i
+   TypedArrayDriver = DescribeTypedArray(grid, action): Exit Function
+  Case 6
+   ReDim strings(5 To 6): strings(6) = ""
+   TypedArrayDriver = DescribeTypedArray(strings, action): Exit Function
+  Case 7
+   ReDim bytes(0 To 1): bytes(0) = 0: bytes(1) = 255
+   TypedArrayDriver = DescribeTypedArray(bytes, action): Exit Function
+  Case 8
+   ReDim singles(0 To 1): singles(0) = CSng(0.1): singles(1) = CSng(-0.25)
+   TypedArrayDriver = DescribeTypedArray(singles, action): Exit Function
+  Case 9
+   ReDim doubles(0 To 1): doubles(0) = 0.1#: doubles(1) = -0.25#
+   TypedArrayDriver = DescribeTypedArray(doubles, action): Exit Function
+  Case 10
+   ReDim dates(0 To 1): dates(0) = CDate(45291.25): dates(1) = CDate(-0.75)
+   TypedArrayDriver = DescribeTypedArray(dates, action): Exit Function
+  Case 11
+   ReDim money(0 To 1)
+   money(0) = CCur("922337203685477.5807"): money(1) = CCur("-922337203685477.5808")
+   TypedArrayDriver = DescribeTypedArray(money, action): Exit Function
+  Case 12
+   value = Array(CDec("79228162514264337593543950335"), Null, Empty, CVErr(2007), ChrW$(-10240))
+  Case 13
+   TypedArrayDriver = DescribeTypedArray(dynLongs, action): Exit Function
+  Case 14
+   ReDim erased(-2 To 0): Erase erased
+   TypedArrayDriver = DescribeTypedArray(erased, action): Exit Function
+  Case 15: value = Split("", ",")
+  Case 16: value = Array(Array(1, 2), Array(3, 4))
+  Case 17
+   ReDim dates(0 To 1)
+   dates(0) = 1# + CDate(2958465): dates(1) = CLng(2000000000) + #1/2/2000#
+   TypedArrayDriver = DescribeTypedArray(dates, action): Exit Function
+  Case 18: value = Array(vbNullString, "", "A" & Chr$(0) & "B")
+  Case 19
+   ReDim wide(-1 To 0)
+   wide(-1) = -CLngLng(4611686018427387904#) - CLngLng(4611686018427387904#)
+   wide(0) = CLngLng(4611686018427387904#) - CLngLng(1) + CLngLng(4611686018427387904#)
+   TypedArrayDriver = DescribeTypedArray(wide, action): Exit Function
+  Case 20
+   ReDim flags(1 To 2): flags(1) = True: flags(2) = False
+   TypedArrayDriver = DescribeTypedArray(flags, action): Exit Function
+  Case 21: value = Array(CByte(5), CInt(6), CLng(7), CSng(0.1), 0.1#, CDate(0))
+ End Select
+ TypedArrayDriver = DescribeTypedArray(value, action)
+ Exit Function
+failed:
+ TypedArrayDriver = "constructor_error=" & CStr(Err.Number)
+End Function
+
+Public Function DescribeTypedArray(ByVal value As Variant, ByVal action As Long) As String
+ Dim original As String, number As Long
+ original = DescribeArrayState(value)
+ On Error Resume Next
+ If action = 1 Then Erase value
+ If action = 2 Then
+  Dim lo As Long, hi As Long
+  lo = LBound(value): hi = UBound(value)
+  If Err.Number = 0 Then ReDim Preserve value(lo To hi + 1)
+ End If
+ number = Err.Number
+ Err.Clear
+ On Error GoTo 0
+ DescribeTypedArray = original & "|action=" & CStr(action) & "|error=" & CStr(number) & "|after=" & DescribeArrayState(value)
+End Function
+
+Public Function DescribeArrayState(ByVal value As Variant) As String
+ Dim text As String, dimIndex As Long, lo As Long, hi As Long, number As Long
+ text = TypeName(value) & "|" & CStr(VarType(value))
+ If Not IsArray(value) Then
+  DescribeArrayState = text & "|not_array": Exit Function
+ End If
+ For dimIndex = 1 To 4
+  On Error Resume Next
+  Err.Clear
+  lo = LBound(value, dimIndex): hi = UBound(value, dimIndex): number = Err.Number
+  On Error GoTo 0
+  If number <> 0 Then Exit For
+  text = text & "|d" & CStr(dimIndex) & "=" & CStr(lo) & ":" & CStr(hi)
+ Next dimIndex
+ text = text & "|each="
+ Dim item As Variant, count As Long
+ On Error GoTo iterationFailed
+ For Each item In value
+  If count > 0 Then text = text & ";"
+  If IsArray(item) Then
+   text = text & "[" & DescribeArrayState(item) & "]"
+  Else
+   text = text & DescribeArrayElement(item)
+  End If
+  count = count + 1
+ Next item
+ DescribeArrayState = text: Exit Function
+iterationFailed:
+ DescribeArrayState = text & "|iterate_error=" & CStr(Err.Number)
+End Function
+
+Public Function DescribeArrayElement(ByVal value As Variant) As String
+ Dim text As String, index As Long
+ On Error GoTo failed
+ text = TypeName(value) & ":" & CStr(VarType(value)) & ":"
+ If IsNull(value) Then
+  text = text & "null"
+ ElseIf IsEmpty(value) Then
+  text = text & "empty"
+ ElseIf VarType(value) = vbString Then
+  text = text & "null_bstr=" & CStr(StrPtr(value) = 0) & ",units="
+  For index = 1 To Len(value)
+   If index > 1 Then text = text & ","
+   text = text & CStr(AscW(Mid$(value, index, 1)) And 65535)
+  Next index
+ ElseIf VarType(value) = vbDate Then
+  text = text & CStr(CDbl(value))
+ Else
+  text = text & CStr(value)
+ End If
+ DescribeArrayElement = text: Exit Function
+failed:
+ DescribeArrayElement = text & "error=" & CStr(Err.Number)
+End Function
+
+Public Function ArrayInteropShape(ByVal value As Variant) As String
+ Dim text As String, dimension As Long, rank As Long, lo As Long, hi As Long, number As Long
+ text = TypeName(value) & "|" & CStr(VarType(value))
+ For dimension = 1 To 128
+  On Error Resume Next
+  Err.Clear
+  lo = LBound(value, dimension): hi = UBound(value, dimension): number = Err.Number
+  On Error GoTo 0
+  If number <> 0 Then Exit For
+  rank = dimension
+  If dimension = 1 Or dimension = 60 Or dimension = 61 Then text = text & "|d" & CStr(dimension) & "=" & CStr(lo) & ":" & CStr(hi)
+ Next dimension
+ ArrayInteropShape = text & "|rank=" & CStr(rank)
+End Function
+Public Function ArrayInteropRead(ByVal value As Variant) As String
+ Dim text As String, item As Variant
+ On Error GoTo failed
+ text = TypeName(value) & "|" & CStr(VarType(value))
+ If IsObject(value(LBound(value))) Then
+  Set item = value(LBound(value))
+ Else
+  item = value(LBound(value))
+ End If
+ text = text & "|element=" & TypeName(item) & ":" & CStr(VarType(item))
+ If IsObject(item) Then
+  ArrayInteropRead = text & "|nothing=" & CStr(item Is Nothing)
+ Else
+  ArrayInteropRead = text & "|value=" & CStr(item)
+ End If
+ Exit Function
+failed:
+ ArrayInteropRead = text & "|error=" & CStr(Err.Number)
+End Function
+"####).unwrap();
+            let cases: Vec<(&str, Vec<crate::Value>, &str)> = vec![
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(0)], r####"Long()|8195|d1=0:1|each=Long:3:-3;Long:3:8|action=0|error=0|after=Long()|8195|d1=0:1|each=Long:3:-3;Long:3:8"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(1)], r####"Long()|8195|d1=0:1|each=Long:3:-3;Long:3:8|action=1|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(2)], r####"Long()|8195|d1=0:1|each=Long:3:-3;Long:3:8|action=2|error=0|after=Long()|8195|d1=0:2|each=Long:3:-3;Long:3:8;Long:3:0"####),
+                ("ArrayInteropShape", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true })], r####"Long()|8195|d1=0:1|rank=1"####),
+                ("ArrayInteropRead", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true })], r####"Long()|8195|element=Long:3|value=-3"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(0)], r####"Error()|8202|d1=0:1|each=|iterate_error=13|action=0|error=0|after=Error()|8202|d1=0:1|each=|iterate_error=13"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(1)], r####"Error()|8202|d1=0:1|each=|iterate_error=13|action=1|error=0|after=Error()|8202|each=|iterate_error=92"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(2)], r####"Error()|8202|d1=0:1|each=|iterate_error=13|action=2|error=0|after=Error()|8202|d1=0:2|each=|iterate_error=13"####),
+                ("ArrayInteropShape", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true })], r####"Error()|8202|d1=0:1|rank=1"####),
+                ("ArrayInteropRead", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true })], r####"Error()|8202|error=13"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Nothing, crate::Value::Nothing], element_default: Box::new(crate::Value::Nothing), resizable: true }), crate::Value::Integer(0)], r####"Object()|8201|d1=0:1|each=Nothing:9:error=91;Nothing:9:error=91|action=0|error=0|after=Object()|8201|d1=0:1|each=Nothing:9:error=91;Nothing:9:error=91"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Nothing, crate::Value::Nothing], element_default: Box::new(crate::Value::Nothing), resizable: true }), crate::Value::Integer(1)], r####"Object()|8201|d1=0:1|each=Nothing:9:error=91;Nothing:9:error=91|action=1|error=0|after=Object()|8201|each=|iterate_error=92"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Nothing, crate::Value::Nothing], element_default: Box::new(crate::Value::Nothing), resizable: true }), crate::Value::Integer(2)], r####"Object()|8201|d1=0:1|each=Nothing:9:error=91;Nothing:9:error=91|action=2|error=0|after=Object()|8201|d1=0:2|each=Nothing:9:error=91;Nothing:9:error=91;Nothing:9:error=91"####),
+                ("ArrayInteropShape", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Nothing, crate::Value::Nothing], element_default: Box::new(crate::Value::Nothing), resizable: true })], r####"Object()|8201|d1=0:1|rank=1"####),
+                ("ArrayInteropRead", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Nothing, crate::Value::Nothing], element_default: Box::new(crate::Value::Nothing), resizable: true })], r####"Object()|8201|element=Nothing:9|nothing=True"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Boolean(true), crate::Value::Boolean(false)], element_default: Box::new(crate::Value::Boolean(false)), resizable: true }), crate::Value::Integer(0)], r####"Boolean()|8203|d1=0:1|each=Boolean:11:True;Boolean:11:False|action=0|error=0|after=Boolean()|8203|d1=0:1|each=Boolean:11:True;Boolean:11:False"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Boolean(true), crate::Value::Boolean(false)], element_default: Box::new(crate::Value::Boolean(false)), resizable: true }), crate::Value::Integer(1)], r####"Boolean()|8203|d1=0:1|each=Boolean:11:True;Boolean:11:False|action=1|error=0|after=Boolean()|8203|each=|iterate_error=92"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Boolean(true), crate::Value::Boolean(false)], element_default: Box::new(crate::Value::Boolean(false)), resizable: true }), crate::Value::Integer(2)], r####"Boolean()|8203|d1=0:1|each=Boolean:11:True;Boolean:11:False|action=2|error=0|after=Boolean()|8203|d1=0:2|each=Boolean:11:True;Boolean:11:False;Boolean:11:False"####),
+                ("ArrayInteropShape", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Boolean(true), crate::Value::Boolean(false)], element_default: Box::new(crate::Value::Boolean(false)), resizable: true })], r####"Boolean()|8203|d1=0:1|rank=1"####),
+                ("ArrayInteropRead", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Boolean(true), crate::Value::Boolean(false)], element_default: Box::new(crate::Value::Boolean(false)), resizable: true })], r####"Boolean()|8203|element=Boolean:11|value=True"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }; 60], values: vec![crate::Value::Integer(1)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(0)], r####"Long()|8195|d1=0:0|d2=0:0|d3=0:0|d4=0:0|each=Long:3:1|action=0|error=0|after=Long()|8195|d1=0:0|d2=0:0|d3=0:0|d4=0:0|each=Long:3:1"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }; 60], values: vec![crate::Value::Integer(1)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(1)], r####"Long()|8195|d1=0:0|d2=0:0|d3=0:0|d4=0:0|each=Long:3:1|action=1|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }; 60], values: vec![crate::Value::Integer(1)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(2)], r####"Long()|8195|d1=0:0|d2=0:0|d3=0:0|d4=0:0|each=Long:3:1|action=2|error=9|after=Long()|8195|d1=0:0|d2=0:0|d3=0:0|d4=0:0|each=Long:3:1"####),
+                ("ArrayInteropShape", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }; 60], values: vec![crate::Value::Integer(1)], element_default: Box::new(crate::Value::Integer(0)), resizable: true })], r####"Long()|8195|d1=0:0|d60=0:0|rank=60"####),
+                ("ArrayInteropRead", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }; 60], values: vec![crate::Value::Integer(1)], element_default: Box::new(crate::Value::Integer(0)), resizable: true })], r####"Long()|8195|error=9"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }; 61], values: vec![crate::Value::Integer(1)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(0)], r####"Long()|8195|d1=0:0|d2=0:0|d3=0:0|d4=0:0|each=Long:3:1|action=0|error=0|after=Long()|8195|d1=0:0|d2=0:0|d3=0:0|d4=0:0|each=Long:3:1"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }; 61], values: vec![crate::Value::Integer(1)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(1)], r####"Long()|8195|d1=0:0|d2=0:0|d3=0:0|d4=0:0|each=Long:3:1|action=1|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }; 61], values: vec![crate::Value::Integer(1)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(2)], r####"Long()|8195|d1=0:0|d2=0:0|d3=0:0|d4=0:0|each=Long:3:1|action=2|error=9|after=Long()|8195|d1=0:0|d2=0:0|d3=0:0|d4=0:0|each=Long:3:1"####),
+                ("ArrayInteropShape", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }; 61], values: vec![crate::Value::Integer(1)], element_default: Box::new(crate::Value::Integer(0)), resizable: true })], r####"Long()|8195|d1=0:0|d60=0:0|d61=0:0|rank=61"####),
+                ("ArrayInteropRead", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }; 61], values: vec![crate::Value::Integer(1)], element_default: Box::new(crate::Value::Integer(0)), resizable: true })], r####"Long()|8195|error=9"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }, crate::ArrayDimension { lower_bound: 0, length: 1 }, crate::ArrayDimension { lower_bound: 0, length: 0 }], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(0)], r####"Long()|8195|d1=0:0|d2=0:0|d3=0:-1|each=|action=0|error=0|after=Long()|8195|d1=0:0|d2=0:0|d3=0:-1|each="####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }, crate::ArrayDimension { lower_bound: 0, length: 1 }, crate::ArrayDimension { lower_bound: 0, length: 0 }], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(1)], r####"Long()|8195|d1=0:0|d2=0:0|d3=0:-1|each=|action=1|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }, crate::ArrayDimension { lower_bound: 0, length: 1 }, crate::ArrayDimension { lower_bound: 0, length: 0 }], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(2)], r####"Long()|8195|d1=0:0|d2=0:0|d3=0:-1|each=|action=2|error=9|after=Long()|8195|d1=0:0|d2=0:0|d3=0:-1|each="####),
+                ("ArrayInteropShape", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }, crate::ArrayDimension { lower_bound: 0, length: 1 }, crate::ArrayDimension { lower_bound: 0, length: 0 }], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true })], r####"Long()|8195|d1=0:0|rank=3"####),
+                ("ArrayInteropRead", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 1 }, crate::ArrayDimension { lower_bound: 0, length: 1 }, crate::ArrayDimension { lower_bound: 0, length: 0 }], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true })], r####"Long()|8195|error=9"####),
+            ];
+            for (procedure, args, expected) in cases {
+                let mut runtime = crate::Runtime::new(&module).with_error_environment(
+                    crate::ErrorEnvironment { language: crate::ErrorLanguage::Japanese, help_file: String::new() });
+                let actual = runtime.call(procedure, args).unwrap();
+                assert_eq!(actual, crate::Value::String(expected.into()), "procedure: {procedure}");
+            }
+        }
+        {
+            let module = crate::parse_module(r####"Public Function TypedArrayDriver(ByVal mode As Long, ByVal action As Long) As String
+ On Error GoTo failed
+ Dim value As Variant
+ Dim longs(-2 To 0) As Long
+ Dim dynLongs() As Long
+ Dim fixedGrid(1 To 2, 4 To 6) As Integer
+ Dim grid() As Long
+ Dim strings() As String
+ Dim bytes() As Byte
+ Dim singles() As Single
+ Dim doubles() As Double
+ Dim dates() As Date
+ Dim money() As Currency
+ Dim erased() As Long
+ Dim wide() As LongLong
+ Dim flags() As Boolean
+ Dim i As Long, j As Long
+ Select Case mode
+  Case 0: value = Array()
+  Case 1: value = Array(CInt(-3), CLng(8), "A")
+  Case 2
+   longs(-2) = 11: longs(-1) = 22: longs(0) = 33
+   TypedArrayDriver = DescribeTypedArray(longs, action): Exit Function
+  Case 3
+   ReDim dynLongs(-2 To 0)
+   dynLongs(-2) = 11: dynLongs(-1) = 22: dynLongs(0) = 33
+   TypedArrayDriver = DescribeTypedArray(dynLongs, action): Exit Function
+  Case 4
+   For i = 1 To 2
+    For j = 4 To 6
+     fixedGrid(i, j) = i * 10 + j
+    Next j
+   Next i
+   TypedArrayDriver = DescribeTypedArray(fixedGrid, action): Exit Function
+  Case 5
+   ReDim grid(1 To 2, 4 To 6)
+   For i = 1 To 2
+    For j = 4 To 6
+     grid(i, j) = i * 10 + j
+    Next j
+   Next i
+   TypedArrayDriver = DescribeTypedArray(grid, action): Exit Function
+  Case 6
+   ReDim strings(5 To 6): strings(6) = ""
+   TypedArrayDriver = DescribeTypedArray(strings, action): Exit Function
+  Case 7
+   ReDim bytes(0 To 1): bytes(0) = 0: bytes(1) = 255
+   TypedArrayDriver = DescribeTypedArray(bytes, action): Exit Function
+  Case 8
+   ReDim singles(0 To 1): singles(0) = CSng(0.1): singles(1) = CSng(-0.25)
+   TypedArrayDriver = DescribeTypedArray(singles, action): Exit Function
+  Case 9
+   ReDim doubles(0 To 1): doubles(0) = 0.1#: doubles(1) = -0.25#
+   TypedArrayDriver = DescribeTypedArray(doubles, action): Exit Function
+  Case 10
+   ReDim dates(0 To 1): dates(0) = CDate(45291.25): dates(1) = CDate(-0.75)
+   TypedArrayDriver = DescribeTypedArray(dates, action): Exit Function
+  Case 11
+   ReDim money(0 To 1)
+   money(0) = CCur("922337203685477.5807"): money(1) = CCur("-922337203685477.5808")
+   TypedArrayDriver = DescribeTypedArray(money, action): Exit Function
+  Case 12
+   value = Array(CDec("79228162514264337593543950335"), Null, Empty, CVErr(2007), ChrW$(-10240))
+  Case 13
+   TypedArrayDriver = DescribeTypedArray(dynLongs, action): Exit Function
+  Case 14
+   ReDim erased(-2 To 0): Erase erased
+   TypedArrayDriver = DescribeTypedArray(erased, action): Exit Function
+  Case 15: value = Split("", ",")
+  Case 16: value = Array(Array(1, 2), Array(3, 4))
+  Case 17
+   ReDim dates(0 To 1)
+   dates(0) = 1# + CDate(2958465): dates(1) = CLng(2000000000) + #1/2/2000#
+   TypedArrayDriver = DescribeTypedArray(dates, action): Exit Function
+  Case 18: value = Array(vbNullString, "", "A" & Chr$(0) & "B")
+  Case 19
+   ReDim wide(-1 To 0)
+   wide(-1) = -CLngLng(4611686018427387904#) - CLngLng(4611686018427387904#)
+   wide(0) = CLngLng(4611686018427387904#) - CLngLng(1) + CLngLng(4611686018427387904#)
+   TypedArrayDriver = DescribeTypedArray(wide, action): Exit Function
+  Case 20
+   ReDim flags(1 To 2): flags(1) = True: flags(2) = False
+   TypedArrayDriver = DescribeTypedArray(flags, action): Exit Function
+  Case 21: value = Array(CByte(5), CInt(6), CLng(7), CSng(0.1), 0.1#, CDate(0))
+ End Select
+ TypedArrayDriver = DescribeTypedArray(value, action)
+ Exit Function
+failed:
+ TypedArrayDriver = "constructor_error=" & CStr(Err.Number)
+End Function
+
+Public Function DescribeTypedArray(ByVal value As Variant, ByVal action As Long) As String
+ Dim original As String, number As Long
+ original = DescribeArrayState(value)
+ On Error Resume Next
+ If action = 1 Then Erase value
+ If action = 2 Then
+  Dim lo As Long, hi As Long
+  lo = LBound(value): hi = UBound(value)
+  If Err.Number = 0 Then ReDim Preserve value(lo To hi + 1)
+ End If
+ number = Err.Number
+ Err.Clear
+ On Error GoTo 0
+ DescribeTypedArray = original & "|action=" & CStr(action) & "|error=" & CStr(number) & "|after=" & DescribeArrayState(value)
+End Function
+
+Public Function DescribeArrayState(ByVal value As Variant) As String
+ Dim text As String, dimIndex As Long, lo As Long, hi As Long, number As Long
+ text = TypeName(value) & "|" & CStr(VarType(value))
+ If Not IsArray(value) Then
+  DescribeArrayState = text & "|not_array": Exit Function
+ End If
+ For dimIndex = 1 To 4
+  On Error Resume Next
+  Err.Clear
+  lo = LBound(value, dimIndex): hi = UBound(value, dimIndex): number = Err.Number
+  On Error GoTo 0
+  If number <> 0 Then Exit For
+  text = text & "|d" & CStr(dimIndex) & "=" & CStr(lo) & ":" & CStr(hi)
+ Next dimIndex
+ text = text & "|each="
+ Dim item As Variant, count As Long
+ On Error GoTo iterationFailed
+ For Each item In value
+  If count > 0 Then text = text & ";"
+  If IsArray(item) Then
+   text = text & "[" & DescribeArrayState(item) & "]"
+  Else
+   text = text & DescribeArrayElement(item)
+  End If
+  count = count + 1
+ Next item
+ DescribeArrayState = text: Exit Function
+iterationFailed:
+ DescribeArrayState = text & "|iterate_error=" & CStr(Err.Number)
+End Function
+
+Public Function DescribeArrayElement(ByVal value As Variant) As String
+ Dim text As String, index As Long
+ On Error GoTo failed
+ text = TypeName(value) & ":" & CStr(VarType(value)) & ":"
+ If IsNull(value) Then
+  text = text & "null"
+ ElseIf IsEmpty(value) Then
+  text = text & "empty"
+ ElseIf VarType(value) = vbString Then
+  text = text & "null_bstr=" & CStr(StrPtr(value) = 0) & ",units="
+  For index = 1 To Len(value)
+   If index > 1 Then text = text & ","
+   text = text & CStr(AscW(Mid$(value, index, 1)) And 65535)
+  Next index
+ ElseIf VarType(value) = vbDate Then
+  text = text & CStr(CDbl(value))
+ Else
+  text = text & CStr(value)
+ End If
+ DescribeArrayElement = text: Exit Function
+failed:
+ DescribeArrayElement = text & "error=" & CStr(Err.Number)
+End Function
+
+Public Function ArrayInteropShape(ByVal value As Variant) As String
+ Dim text As String, dimension As Long, rank As Long, lo As Long, hi As Long, number As Long
+ text = TypeName(value) & "|" & CStr(VarType(value))
+ For dimension = 1 To 128
+  On Error Resume Next
+  Err.Clear
+  lo = LBound(value, dimension): hi = UBound(value, dimension): number = Err.Number
+  On Error GoTo 0
+  If number <> 0 Then Exit For
+  rank = dimension
+  If dimension = 1 Or dimension = 60 Or dimension = 61 Then text = text & "|d" & CStr(dimension) & "=" & CStr(lo) & ":" & CStr(hi)
+ Next dimension
+ ArrayInteropShape = text & "|rank=" & CStr(rank)
+End Function
+Public Function ArrayInteropRead(ByVal value As Variant) As String
+ Dim text As String, item As Variant
+ On Error GoTo failed
+ text = TypeName(value) & "|" & CStr(VarType(value))
+ If IsObject(value(LBound(value))) Then
+  Set item = value(LBound(value))
+ Else
+  item = value(LBound(value))
+ End If
+ text = text & "|element=" & TypeName(item) & ":" & CStr(VarType(item))
+ If IsObject(item) Then
+  ArrayInteropRead = text & "|nothing=" & CStr(item Is Nothing)
+ Else
+  ArrayInteropRead = text & "|value=" & CStr(item)
+ End If
+ Exit Function
+failed:
+ ArrayInteropRead = text & "|error=" & CStr(Err.Number)
+End Function
+
+Public Function ArrayInteropReadAt(ByVal value As Variant, ByVal index As Long) As String
+ Dim text As String, item As Variant
+ On Error GoTo failed
+ text = TypeName(value) & "|" & CStr(VarType(value))
+ item = value(index)
+ text = text & "|element=" & TypeName(item) & ":" & CStr(VarType(item))
+ ArrayInteropReadAt = text & "|value=" & CStr(item)
+ Exit Function
+failed:
+ ArrayInteropReadAt = text & "|error=" & CStr(Err.Number)
+End Function
+"####).unwrap();
+            let cases: Vec<(&str, Vec<crate::Value>, &str)> = vec![
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(0)], r####"Long()|8195|d1=0:1|each=Long:3:-3;Long:3:8|action=0|error=0|after=Long()|8195|d1=0:1|each=Long:3:-3;Long:3:8"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(1)], r####"Long()|8195|d1=0:1|each=Long:3:-3;Long:3:8|action=1|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(2)], r####"Long()|8195|d1=0:1|each=Long:3:-3;Long:3:8|action=2|error=0|after=Long()|8195|d1=0:2|each=Long:3:-3;Long:3:8;Long:3:0"####),
+                ("ArrayInteropShape", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true })], r####"Long()|8195|d1=0:1|rank=1"####),
+                ("ArrayInteropRead", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true })], r####"Long()|8195|element=Long:3|value=-3"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(-1)], r####"Long()|8195|error=9"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(0)], r####"Long()|8195|element=Long:3|value=-3"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(1)], r####"Long()|8195|element=Long:3|value=8"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Integer(-3), crate::Value::Integer(8)], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(2)], r####"Long()|8195|error=9"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(0)], r####"Error()|8202|d1=0:1|each=|iterate_error=13|action=0|error=0|after=Error()|8202|d1=0:1|each=|iterate_error=13"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(1)], r####"Error()|8202|d1=0:1|each=|iterate_error=13|action=1|error=0|after=Error()|8202|each=|iterate_error=92"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(2)], r####"Error()|8202|d1=0:1|each=|iterate_error=13|action=2|error=0|after=Error()|8202|d1=0:2|each=|iterate_error=13"####),
+                ("ArrayInteropShape", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true })], r####"Error()|8202|d1=0:1|rank=1"####),
+                ("ArrayInteropRead", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true })], r####"Error()|8202|error=13"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(-1)], r####"Error()|8202|error=9"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(0)], r####"Error()|8202|error=13"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(1)], r####"Error()|8202|error=13"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 2 }; 1], values: vec![crate::Value::Error(2007), crate::Value::Error(2042)], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(2)], r####"Error()|8202|error=9"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(0)], r####"Error()|8202|d1=0:-1|each=|action=0|error=0|after=Error()|8202|d1=0:-1|each="####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(1)], r####"Error()|8202|d1=0:-1|each=|action=1|error=0|after=Error()|8202|each=|iterate_error=92"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(2)], r####"Error()|8202|d1=0:-1|each=|action=2|error=0|after=Error()|8202|d1=0:0|each=|iterate_error=13"####),
+                ("ArrayInteropShape", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Error(0)), resizable: true })], r####"Error()|8202|d1=0:-1|rank=1"####),
+                ("ArrayInteropRead", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Error(0)), resizable: true })], r####"Error()|8202|error=9"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(-1)], r####"Error()|8202|error=9"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(0)], r####"Error()|8202|error=9"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(1)], r####"Error()|8202|error=9"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Error(0)), resizable: true }), crate::Value::Integer(2)], r####"Error()|8202|error=9"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(0)], r####"Long()|8195|d1=0:-1|each=|action=0|error=0|after=Long()|8195|d1=0:-1|each="####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(1)], r####"Long()|8195|d1=0:-1|each=|action=1|error=0|after=Long()|8195|each=|iterate_error=92"####),
+                ("DescribeTypedArray", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(2)], r####"Long()|8195|d1=0:-1|each=|action=2|error=0|after=Long()|8195|d1=0:0|each=Long:3:0"####),
+                ("ArrayInteropShape", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true })], r####"Long()|8195|d1=0:-1|rank=1"####),
+                ("ArrayInteropRead", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true })], r####"Long()|8195|error=9"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(-1)], r####"Long()|8195|error=9"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(0)], r####"Long()|8195|error=9"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(1)], r####"Long()|8195|error=9"####),
+                ("ArrayInteropReadAt", vec![crate::Value::Array(crate::ArrayValue { dimensions: vec![crate::ArrayDimension { lower_bound: 0, length: 0 }; 1], values: vec![], element_default: Box::new(crate::Value::Integer(0)), resizable: true }), crate::Value::Integer(2)], r####"Long()|8195|error=9"####),
+            ];
+            for (procedure, args, expected) in cases {
+                let mut runtime = crate::Runtime::new(&module).with_error_environment(
+                    crate::ErrorEnvironment { language: crate::ErrorLanguage::Japanese, help_file: String::new() });
+                let actual = runtime.call(procedure, args).unwrap();
+                assert_eq!(actual, crate::Value::String(expected.into()), "procedure: {procedure}");
             }
         }
     }

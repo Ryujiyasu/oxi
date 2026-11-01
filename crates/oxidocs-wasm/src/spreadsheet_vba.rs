@@ -37908,7 +37908,204 @@ impl TryFrom<InputValue> for Value {
 }
 
 
+fn decode_vba_input_scalar_descriptor(value: &JsValue, tag: &str) -> Result<Value, JsError> {
+    let invalid = |message: &str| JsError::new(&format!("invalid VBA argument: {message}"));
+    let descriptor = if matches!(tag, "empty" | "missing" | "null" | "nothing" | "null_string") {
+        if js_sys::Object::keys(&js_sys::Object::from(value.clone())).length() != 1 {
+            return Err(invalid("unit scalar has an unexpected value"));
+        }
+        serde_json::json!({"type": tag})
+    } else {
+        let payload = vba_input_property(value, "value")?;
+        let payload = match tag {
+            "boolean" => serde_json::Value::Bool(payload.as_bool()
+                .ok_or_else(|| invalid("expected a boolean"))?),
+            "byte" | "integer" | "long" | "error" => {
+                let number = payload.as_f64().filter(|value| value.is_finite() && value.fract() == 0.0
+                    && *value >= f64::from(i32::MIN) && *value <= f64::from(i32::MAX))
+                    .ok_or_else(|| invalid("expected an in-range integral payload"))?;
+                serde_json::Value::from(number as i64)
+            }
+            "long_long" | "currency" | "decimal" => serde_json::Value::String(payload.as_string()
+                .ok_or_else(|| invalid("expected an exact decimal string"))?),
+            "utf16" => {
+                if !js_sys::Array::is_array(&payload) { return Err(invalid("expected UTF-16 units")); }
+                let units = js_sys::Array::from(&payload).iter().map(|unit|
+                    unit.as_f64().filter(|value| value.is_finite() && value.fract() == 0.0
+                        && *value >= 0.0 && *value <= 65535.0)
+                        .map(|value| serde_json::Value::from(value as u16))
+                        .ok_or_else(|| invalid("invalid UTF-16 unit"))
+                ).collect::<Result<Vec<_>, _>>()?;
+                serde_json::Value::Array(units)
+            }
+            _ => return Err(invalid("unsupported typed scalar")),
+        };
+        serde_json::json!({"type": tag, "value": payload})
+    };
+    decode_typed_scalar(&descriptor).map_err(|message| invalid(&message))
+}
+
+struct VbaInputArraySchema {
+    dimensions: Vec<ArrayDimension>,
+    element_type: String,
+    element_default: Value,
+    resizable: bool,
+}
+
+fn decode_vba_input_array_schema(
+    metadata: &serde_json::Value,
+    value_count: usize,
+) -> Result<VbaInputArraySchema, String> {
+    let object = metadata.as_object().ok_or("array metadata must be an object")?;
+    if object.keys().any(|key| !matches!(key.as_str(), "dimensions" | "element_type" | "resizable")) {
+        return Err("unknown array metadata field".into());
+    }
+    let kind = object.get("element_type").and_then(|value| value.as_str())
+        .ok_or("array has no element type")?;
+    let element_default = match kind {
+        "variant" => Value::Empty,
+        "boolean" => Value::Boolean(false),
+        "byte" => Value::Byte(0),
+        "integer" => Value::Int16(0),
+        "long" => Value::Integer(0),
+        "long_long" => Value::LongLong(0),
+        "single" => Value::Single(0.0),
+        "double" => Value::Double(0.0),
+        "date" => Value::Date(0.0),
+        "currency" => Value::Currency(0),
+        "decimal" => return Err("Excel Automation does not accept Decimal element arrays; use a Variant array".into()),
+        "error" => Value::Error(0),
+        "string" => Value::NullString,
+        "object" => Value::Nothing,
+        _ => return Err(format!("unsupported array element type {kind}")),
+    };
+    let resizable = object.get("resizable").map_or(Ok(true), |value|
+        value.as_bool().ok_or("array resizable must be boolean"))?;
+    let bounds = object.get("dimensions").and_then(|value| value.as_array())
+        .ok_or("array dimensions must be an array")?;
+    if bounds.len() > usize::from(u16::MAX) { return Err("array rank exceeds the Automation descriptor limit".into()); }
+    let dimensions = bounds.iter().map(|bound| {
+        let fields = bound.as_object().ok_or("array dimension must be an object")?;
+        if fields.len() != 2 || !fields.contains_key("lower_bound") || !fields.contains_key("length") {
+            return Err("array dimension requires lower_bound and length".to_string());
+        }
+        let lower_bound = fields["lower_bound"].as_i64()
+            .and_then(|value| i32::try_from(value).ok()).ok_or("array lower bound is out of range")?;
+        let length = fields["length"].as_u64()
+            .and_then(|value| u32::try_from(value).ok()).ok_or("array length is out of range")?;
+        let length = usize::try_from(length).map_err(|_| "array length exceeds address space")?;
+        Ok(ArrayDimension { lower_bound: i64::from(lower_bound), length })
+    }).collect::<Result<Vec<_>, String>>()?;
+    let count = if dimensions.is_empty() || dimensions.iter().any(|dimension| dimension.length == 0) {
+        0
+    } else {
+        dimensions.iter().try_fold(1usize, |count, dimension| count.checked_mul(dimension.length))
+            .ok_or("array dimension product exceeds address space")?
+    };
+    if count != value_count { return Err("array shape does not match supplied values".into()); }
+    Ok(VbaInputArraySchema { dimensions, element_type: kind.into(), element_default, resizable })
+}
+
+fn finish_vba_input_array(schema: VbaInputArraySchema, values: Vec<Value>) -> Result<Value, String> {
+    for (index, value) in values.iter().enumerate() {
+        let matched = match &schema.element_default {
+            Value::Empty => true,
+            Value::NullString => matches!(value, Value::String(_) | Value::Utf16(_) | Value::NullString),
+            Value::Nothing => matches!(value, Value::Object(_) | Value::Nothing),
+            Value::Integer(_) => matches!(value, Value::Integer(value) if i32::try_from(*value).is_ok()),
+            Value::Error(_) => matches!(value, Value::Error(value) if i32::try_from(*value).is_ok()),
+            expected => std::mem::discriminant(value) == std::mem::discriminant(expected),
+        };
+        if !matched { return Err(format!("array element {} does not match {}", index + 1, schema.element_type)); }
+    }
+    Ok(Value::Array(ArrayValue {
+        dimensions: schema.dimensions, values,
+        element_default: Box::new(schema.element_default), resizable: schema.resizable,
+    }))
+}
+
+fn vba_input_property(value: &JsValue, name: &str) -> Result<JsValue, JsError> {
+    js_sys::Reflect::get(value, &JsValue::from_str(name))
+        .map_err(|_| JsError::new("invalid VBA argument: cannot read array property"))
+}
+
+fn vba_input_fields(value: &JsValue, required: &[&str], optional: &[&str]) -> Result<(), JsError> {
+    if !value.is_object() || value.is_null() || js_sys::Array::is_array(value) {
+        return Err(JsError::new("invalid VBA argument: array descriptor must be an object"));
+    }
+    let keys = js_sys::Object::keys(&js_sys::Object::from(value.clone())).iter()
+        .filter_map(|value| value.as_string()).collect::<Vec<_>>();
+    if required.iter().any(|key| !keys.iter().any(|actual| actual == key))
+        || keys.iter().any(|key| !required.contains(&key.as_str()) && !optional.contains(&key.as_str())) {
+        return Err(JsError::new("invalid VBA argument: unknown or missing array field"));
+    }
+    Ok(())
+}
+
+fn decode_vba_input_array(value: &JsValue, ancestors: &mut Vec<JsValue>) -> Result<Value, JsError> {
+    vba_input_fields(value, &["type", "value"], &[])?;
+    let payload = vba_input_property(value, "value")?;
+    vba_input_fields(&payload, &["dimensions", "element_type", "values"], &["resizable"])?;
+    let kind = vba_input_property(&payload, "element_type")?.as_string()
+        .ok_or_else(|| JsError::new("invalid VBA argument: array element type must be a string"))?;
+    let bounds = vba_input_property(&payload, "dimensions")?;
+    let items = vba_input_property(&payload, "values")?;
+    if !js_sys::Array::is_array(&bounds) || !js_sys::Array::is_array(&items) {
+        return Err(JsError::new("invalid VBA argument: array dimensions and values must be arrays"));
+    }
+    let resizable = vba_input_property(&payload, "resizable")?;
+    let resizable = if resizable.is_undefined() {
+        true
+    } else {
+        resizable.as_bool().ok_or_else(|| JsError::new("invalid VBA argument: array resizable must be boolean"))?
+    };
+    let mut dimensions = Vec::new();
+    for dimension in js_sys::Array::from(&bounds).iter() {
+        vba_input_fields(&dimension, &["lower_bound", "length"], &[])?;
+        let lower = vba_input_property(&dimension, "lower_bound")?.as_f64()
+            .filter(|value| value.is_finite() && value.fract() == 0.0
+                && *value >= f64::from(i32::MIN) && *value <= f64::from(i32::MAX))
+            .ok_or_else(|| JsError::new("invalid VBA argument: array lower bound is out of range"))?;
+        let length = vba_input_property(&dimension, "length")?.as_f64()
+            .filter(|value| value.is_finite() && value.fract() == 0.0
+                && *value >= 0.0 && *value <= f64::from(u32::MAX))
+            .ok_or_else(|| JsError::new("invalid VBA argument: array length is out of range"))?;
+        dimensions.push(serde_json::json!({"lower_bound": lower as i64, "length": length as u64}));
+    }
+    let items = js_sys::Array::from(&items);
+    let metadata = serde_json::json!({"dimensions": dimensions, "element_type": kind, "resizable": resizable});
+    let schema = decode_vba_input_array_schema(&metadata, items.length() as usize)
+        .map_err(|message| JsError::new(&format!("invalid VBA argument: {message}")))?;
+    let mut values = Vec::with_capacity(items.length() as usize);
+    for item in items.iter() {
+        let item = if !item.is_object() && !item.is_bigint() && !matches!(kind.as_str(), "variant" | "object") {
+            let descriptor = js_sys::Object::new();
+            js_sys::Reflect::set(&descriptor, &JsValue::from_str("type"), &JsValue::from_str(&kind))
+                .map_err(|_| JsError::new("invalid VBA argument: cannot construct typed array element"))?;
+            js_sys::Reflect::set(&descriptor, &JsValue::from_str("value"), &item)
+                .map_err(|_| JsError::new("invalid VBA argument: cannot construct typed array element"))?;
+            descriptor.into()
+        } else { item };
+        values.push(decode_vba_input_argument_inner(item, ancestors)?);
+    }
+    finish_vba_input_array(schema, values)
+        .map_err(|message| JsError::new(&format!("invalid VBA argument: {message}")))
+}
+
 fn decode_vba_input_argument(value: JsValue) -> Result<Value, JsError> {
+    decode_vba_input_argument_inner(value, &mut Vec::new())
+}
+
+fn decode_vba_input_argument_inner(value: JsValue, ancestors: &mut Vec<JsValue>) -> Result<Value, JsError> {
+    if value.is_bigint() {
+        let integer = js_sys::BigInt::new(&value)
+            .map_err(|_| JsError::new("invalid VBA argument: expected a BigInt"))?;
+        let text = integer.to_string(10)
+            .map_err(|_| JsError::new("invalid VBA argument: cannot read BigInt"))?
+            .as_string().ok_or_else(|| JsError::new("invalid VBA argument: cannot read BigInt digits"))?;
+        return text.parse::<i64>().map(Value::LongLong)
+            .map_err(|_| JsError::new("invalid VBA argument: BigInt is outside LongLong range"));
+    }
     let bstr = |value: JsValue| {
         let text = js_sys::JsString::from(value);
         let units = (0..text.length()).map(|index| text.char_code_at(index) as u16).collect();
@@ -37917,9 +38114,22 @@ fn decode_vba_input_argument(value: JsValue) -> Result<Value, JsError> {
     if value.is_string() {
         return Ok(bstr(value));
     }
+    if js_sys::Array::is_array(&value) {
+        return Err(JsError::new("invalid VBA argument: array arguments require a typed descriptor"));
+    }
     if value.is_object() && !value.is_null() && !js_sys::Array::is_array(&value) {
+        vba_input_fields(&value, &["type"], &["value"])?;
         let tag = js_sys::Reflect::get(&value, &JsValue::from_str("type"))
             .map_err(|_| JsError::new("invalid VBA argument: cannot read type"))?.as_string();
+        if tag.as_deref() == Some("array") {
+            if ancestors.iter().any(|parent| js_sys::Object::is(parent, &value)) {
+                return Err(JsError::new("invalid VBA argument: recursive array descriptor"));
+            }
+            ancestors.push(value.clone());
+            let result = decode_vba_input_array(&value, ancestors);
+            ancestors.pop();
+            return result;
+        }
         if matches!(tag.as_deref(), Some("string" | "single" | "double" | "date")) {
             let keys = js_sys::Object::keys(&js_sys::Object::from(value.clone()));
             if keys.length() != 2 || keys.iter().any(|key|
@@ -37941,11 +38151,13 @@ fn decode_vba_input_argument(value: JsValue) -> Result<Value, JsError> {
             return decode_typed_scalar(&descriptor)
                 .map_err(|error| JsError::new(&format!("invalid VBA argument: {error}")));
         }
+        return decode_vba_input_scalar_descriptor(&value, tag.as_deref().unwrap_or(""));
     }
     let input = serde_wasm_bindgen::from_value::<InputValue>(value)
         .map_err(|error| JsError::new(&format!("invalid VBA argument: {error}")))?;
     Value::try_from(input).map_err(|error| JsError::new(&format!("invalid VBA argument: {error}")))
 }
+
 
 fn serialize_vba_signed_integer<S: serde::Serializer>(value: &i64, serializer: S) -> Result<S::Ok, S::Error> {
     const LIMIT: i64 = 9_007_199_254_740_991;

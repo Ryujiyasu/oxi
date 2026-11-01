@@ -152,8 +152,7 @@ export function parseVbaArguments(text) {
     if (!Array.isArray(args)) {
         throw new Error('VBA arguments must be a JSON array.');
     }
-    args.forEach((value, index) => {
-        const typedScalar = () => {
+        const typedScalar = value => {
             if (!value || typeof value !== 'object' || Array.isArray(value)
                 || typeof value.type !== 'string'
                 || Object.keys(value).some(key => key !== 'type' && key !== 'value')) return false;
@@ -176,16 +175,36 @@ export function parseVbaArguments(text) {
                 case 'string': return typeof payload === 'string';
                 case 'utf16': return Array.isArray(payload)
                     && payload.every(unit => Number.isInteger(unit) && unit >= 0 && unit <= 65535);
+                case 'array': {
+                    if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+                        || Object.keys(payload).some(key => !['dimensions', 'values', 'element_type', 'resizable'].includes(key))
+                        || !Array.isArray(payload.dimensions) || !Array.isArray(payload.values)
+                        || payload.dimensions.length > 65535
+                        || !['variant', 'boolean', 'byte', 'integer', 'long', 'long_long', 'single', 'double', 'currency', 'date', 'error', 'string', 'object'].includes(payload.element_type)
+                        || (Object.hasOwn(payload, 'resizable') && typeof payload.resizable !== 'boolean')) return false;
+                    for (const dimension of payload.dimensions) {
+                        if (!dimension || typeof dimension !== 'object' || Array.isArray(dimension)
+                            || Object.keys(dimension).length !== 2
+                            || !Object.hasOwn(dimension, 'lower_bound') || !Object.hasOwn(dimension, 'length')
+                            || !Number.isInteger(dimension.lower_bound) || dimension.lower_bound < -2147483648 || dimension.lower_bound > 2147483647
+                            || !Number.isInteger(dimension.length) || dimension.length < 0 || dimension.length > 4294967295) return false;
+                    }
+                    const count = !payload.dimensions.length || payload.dimensions.some(dimension => dimension.length === 0)
+                        ? 0 : payload.dimensions.reduce((total, dimension) => total * dimension.length, 1);
+                    return Number.isSafeInteger(count) && count === payload.values.length && payload.values.every(supportedValue);
+                }
                 default: return false;
             }
         };
-        const supported = value === null
+        const supportedValue = value => value === null
             || typeof value === 'boolean'
             || typeof value === 'string'
             || (typeof value === 'number' && Number.isFinite(value))
-            || typedScalar();
+            || typedScalar(value);
+    args.forEach((value, index) => {
+        const supported = supportedValue(value);
         if (!supported) {
-            throw new Error(`VBA argument ${index + 1} must be null, a boolean, a number, a string, or a typed VBA scalar.`);
+            throw new Error(`VBA argument ${index + 1} must be null, a boolean, a number, a string, or a typed VBA scalar or array.`);
         }
     });
     return args;
