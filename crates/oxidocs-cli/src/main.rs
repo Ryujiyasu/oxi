@@ -1193,7 +1193,8 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
     let registry = FontMetricsRegistry::load();
 
     // Build embedded fonts for CJK text
-    let embedded_fonts = build_embedded_fonts(doc, &layout_result);
+    let mut embedded_fonts = build_embedded_fonts(doc, &layout_result);
+    embed_fallback_faces(&layout_result, &mut embedded_fonts);
 
     // Convert LayoutResult pages → PDF pages
     let pages: Vec<Page> = layout_result.pages.iter().map(|lp| {
@@ -1237,73 +1238,24 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
 
                     // Resolve font name for PDF (map to Type1 base fonts or CJK)
                     let font_name = resolve_font_styled(font_family.as_deref(), *bold, *italic);
-
-                    // Split text into ASCII (Type1) and CJK (embedded) segments
-                    // When font_name IS a CJK font, use it for all characters (no splitting).
-                    let is_cjk_font_name = font_name.contains("Gothic") || font_name.contains("Mincho") || font_name.contains("ゴシック") || font_name.contains("明朝")
-                        || font_name.contains("游") || font_name.contains("ＭＳ")
-                        || font_name.contains("ゴシック") || font_name.contains("明朝")
-                        || font_name.contains("メイリオ") || font_name.contains("Meiryo");
+                    let text = &symbol_text(font_family.as_deref(), &font_name, text, &embedded_fonts);
                     let chars: Vec<char> = text.chars().collect();
                     let mut seg_x = x;
                     let mut segments: Vec<(String, String, f64, f64)> = Vec::new();
 
-                    // Route a character to the CJK font only when the resolved
-                    // face has no glyph for it. The old test was "codepoint >
-                    // 0x7F", which sent curly quotes, dashes and accented Latin
-                    // — all present in the Latin face — into a Japanese Gothic
-                    // font. Without an embedded face there is no cmap to ask,
-                    // so the codepoint test remains the fallback.
-                    let latin_face = embedded_fonts.get(&font_name);
-                    // Only divert to a font that was actually loaded. The
-                    // decision to load one is made from the document's text;
-                    // this decision was made per character, and the two
-                    // disagreed — a bullet or a non-breaking hyphen missing
-                    // from the Latin subset sent a run to OxiCJK in a document
-                    // with no East Asian text in it, naming a font the PDF
-                    // never carried, and taking the ordinary English after it
-                    // along for the ride.
-                    let cjk_loaded = embedded_fonts.contains_key("OxiCJK-Regular");
-                    let needs_cjk = |c: char| {
-                        if !cjk_loaded {
-                            return false;
-                        }
-                        // A tab carries no glyph and is in no font's cmap, so
-                        // "the face does not cover it" is true of every face —
-                        // which used to hand a plain English document to the
-                        // East Asian font on the strength of one indent.
-                        if (c as u32) < 0x20 {
-                            return false;
-                        }
-                        match latin_face {
-                            Some(face) => !face.unicode_to_gid.contains_key(&(c as u32)),
-                            // With no face to ask, only real East Asian text is
-                            // worth diverting; a curly quote or an accented
-                            // letter is representable where it already is.
-                            None => is_cjk_char(c),
-                        }
-                    };
-
+                    // Consecutive characters drawn with the same face make one
+                    // segment: the run's own face, the East Asian face for what
+                    // a Latin face lacks, a fallback face for what both lack.
                     let mut raw_segments: Vec<(String, String, f64)> = Vec::new();
                     let mut total_est = 0.0_f64;
                     let mut i = 0;
                     while i < chars.len() {
-                        let is_cjk = needs_cjk(chars[i]);
+                        let seg_font = pdf_face_for(chars[i], &font_name, *bold, &embedded_fonts);
                         let mut j = i + 1;
-                        // If using a CJK font, don't split — keep everything in one segment
-                        if !is_cjk_font_name {
-                            while j < chars.len() && needs_cjk(chars[j]) == is_cjk {
-                                j += 1;
-                            }
-                        } else {
-                            j = chars.len(); // entire text as one segment
+                        while j < chars.len() && pdf_face_for(chars[j], &font_name, *bold, &embedded_fonts) == seg_font {
+                            j += 1;
                         }
                         let seg_text: String = chars[i..j].iter().collect();
-                        let seg_font = if is_cjk_font_name {
-                            font_name.clone()
-                        } else if is_cjk {
-                            if *bold { "OxiCJK-Bold".to_string() } else { "OxiCJK-Regular".to_string() }
-                        } else { font_name.clone() };
                         let seg_w: f64 = seg_text.chars()
                             .map(|c| char_width(c, fs))
                             .sum();
@@ -2571,6 +2523,150 @@ const CJK_FONT_PATHS_BOLD: &[&str] = &[
 /// Path to Python3 for font subsetting (requires fonttools)
 const PYTHON3: &str = "python3";
 
+/// Faces asked, in order, for a character no face of the document has: the
+/// check boxes, ≒ and Wingdings bullets of a Japanese form drawn in a stand-in
+/// Gothic that lacks them. Read off the machine, never shipped: DejaVu and the
+/// Noto symbol faces are in the Debian images a server runs (Gotenberg ships
+/// both), Segoe UI Symbol on Windows.
+const FALLBACK_FACES: &[&str] = &[
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansMath-Regular.ttf",
+    "C:\\Windows\\Fonts\\seguisym.ttf",
+];
+
+/// PDF font name of the `n`th fallback face that was embedded.
+fn fallback_face_name(n: usize) -> String {
+    format!("OxiFallback-{n}")
+}
+
+/// Whether `font_name` is an East Asian face, which then draws every
+/// character of its run rather than handing the Latin ones to another face.
+fn is_cjk_pdf_font(font_name: &str) -> bool {
+    ["Gothic", "Mincho", "ゴシック", "明朝", "游", "ＭＳ", "メイリオ", "Meiryo"]
+        .iter()
+        .any(|k| font_name.contains(k))
+}
+
+/// `text` with a symbol font's codes turned into the Unicode symbols they
+/// draw, for each code the face embedded under the font's name has no glyph
+/// for. The real Wingdings maps its codes (at U+F0xx, however the run spells
+/// them) and keeps drawing them; the face a machine without it substitutes
+/// under the same name does not.
+fn symbol_text(family: Option<&str>, font_name: &str, text: &str, fonts: &HashMap<String, EmbeddedFont>) -> String {
+    let Some(family) = family else { return text.to_string() };
+    let face = fonts.get(font_name);
+    text.chars()
+        .map(|c| match oxidocs_fonts::symbol_font_to_unicode(family, c) {
+            Some(u) if face.map_or(true, |f| !f.unicode_to_gid.contains_key(&(0xF000 | (c as u32 & 0xFF)))) => u,
+            _ => c,
+        })
+        .collect()
+}
+
+/// The face a character of a run in `font_name` is drawn with, before any
+/// fallback: the run's face, or the East Asian face for what a Latin face
+/// lacks.
+fn primary_face_for(c: char, font_name: &str, bold: bool, fonts: &HashMap<String, EmbeddedFont>) -> String {
+    // An East Asian face draws its whole run.
+    if is_cjk_pdf_font(font_name) {
+        return font_name.to_string();
+    }
+    // Only divert to a font that was actually loaded. The decision to load one
+    // is made from the document's text; this one is made per character, and
+    // when the two disagreed a bullet missing from the Latin subset sent a run
+    // to OxiCJK in a document with no East Asian text, naming a font the PDF
+    // never carried.
+    // A tab carries no glyph and is in no font's cmap, so "the face does not
+    // cover it" is true of every face -- which used to hand a plain English
+    // document to the East Asian font on the strength of one indent.
+    if !fonts.contains_key("OxiCJK-Regular") || (c as u32) < 0x20 {
+        return font_name.to_string();
+    }
+    // Route to the CJK font only when the resolved face has no glyph for the
+    // character. The old test was "codepoint > 0x7F", which sent curly quotes,
+    // dashes and accented Latin into a Japanese Gothic font. With no face to
+    // ask, only real East Asian text is worth diverting.
+    let needs_cjk = match fonts.get(font_name) {
+        Some(face) => !face.unicode_to_gid.contains_key(&(c as u32)),
+        None => is_cjk_char(c),
+    };
+    if !needs_cjk {
+        font_name.to_string()
+    } else if bold {
+        "OxiCJK-Bold".to_string()
+    } else {
+        "OxiCJK-Regular".to_string()
+    }
+}
+
+/// Whether the face `name` is embedded and has no glyph for `c` -- the case a
+/// fallback face exists for. Spaces and control characters draw nothing and
+/// need no glyph.
+fn lacks_glyph(name: &str, c: char, fonts: &HashMap<String, EmbeddedFont>) -> bool {
+    !c.is_whitespace()
+        && (c as u32) >= 0x20
+        && fonts.get(name).is_some_and(|face| !face.unicode_to_gid.contains_key(&(c as u32)))
+}
+
+/// The face a character is drawn with: its primary face, or the first
+/// embedded fallback face that has the glyph the primary one lacks.
+fn pdf_face_for(c: char, font_name: &str, bold: bool, fonts: &HashMap<String, EmbeddedFont>) -> String {
+    let primary = primary_face_for(c, font_name, bold, fonts);
+    if lacks_glyph(&primary, c, fonts) {
+        for n in 0.. {
+            let Some(face) = fonts.get(&fallback_face_name(n)) else { break };
+            if face.unicode_to_gid.contains_key(&(c as u32)) {
+                return fallback_face_name(n);
+            }
+        }
+    }
+    primary
+}
+
+/// Embed, from `FALLBACK_FACES`, the glyphs of every character whose primary
+/// face lacks it, so it is drawn instead of left as .notdef.
+fn embed_fallback_faces(layout: &oxidocs_core::layout::LayoutResult, fonts: &mut HashMap<String, EmbeddedFont>) {
+    let mut missing: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
+    for page in &layout.pages {
+        for elem in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Text { text, font_family, bold, italic, .. } = &elem.content {
+                let font_name = resolve_font_styled(font_family.as_deref(), *bold, *italic);
+                for c in symbol_text(font_family.as_deref(), &font_name, text, fonts).chars() {
+                    if lacks_glyph(&primary_face_for(c, &font_name, *bold, fonts), c, fonts) {
+                        missing.insert(c);
+                    }
+                }
+            }
+        }
+    }
+    let mut n = 0;
+    for path in FALLBACK_FACES {
+        if missing.is_empty() {
+            break;
+        }
+        if !std::path::Path::new(path).exists() {
+            continue;
+        }
+        let Some(face) = subset_font_file(path, &missing, &format!("fallback{n}")) else { continue };
+        let covered: Vec<char> = missing.iter().copied().filter(|c| face.unicode_to_gid.contains_key(&(*c as u32))).collect();
+        if covered.is_empty() {
+            continue;
+        }
+        eprintln!("Embedding fallback face {} for {} character(s) no document face has", path, covered.len());
+        for c in covered {
+            missing.remove(&c);
+        }
+        fonts.insert(fallback_face_name(n), face);
+        n += 1;
+    }
+    if !missing.is_empty() {
+        let list: String = missing.iter().collect();
+        eprintln!("Warning: no face on this machine has {list:?} - drawn as missing glyphs");
+    }
+}
+
 /// True for characters that actually need an East Asian face.
 ///
 /// The test used to be `c > 0x7F`, which is true of a curly quote, an en dash
@@ -2787,8 +2883,11 @@ fn build_embedded_fonts(
     let mut drawn_chars: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
     for page in &layout.pages {
         for elem in &page.elements {
-            if let oxidocs_core::layout::LayoutContent::Text { text, .. } = &elem.content {
+            if let oxidocs_core::layout::LayoutContent::Text { text, font_family, bold, italic, .. } = &elem.content {
                 drawn_chars.extend(text.chars());
+                // and the Unicode a symbol font's codes are drawn as without it
+                let font_name = resolve_font_styled(font_family.as_deref(), *bold, *italic);
+                drawn_chars.extend(symbol_text(font_family.as_deref(), &font_name, text, &fonts).chars());
             }
         }
     }

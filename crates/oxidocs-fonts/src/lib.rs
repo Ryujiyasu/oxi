@@ -27,6 +27,9 @@
 
 pub use oxidocs_fonts_jp::{OXI_GOTHIC, OXI_MINCHO};
 
+mod symbol_map;
+pub use symbol_map::symbol_font_to_unicode;
+
 /// Every face, under the key the renderer asks for it by and the file name it
 /// is stored under: the Latin ones first, then the Japanese pair.
 pub fn faces() -> impl Iterator<Item = &'static (&'static str, &'static str, &'static [u8])> {
