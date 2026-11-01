@@ -785,6 +785,10 @@ pub struct RunStyle {
     /// the run's U+FFFC object fragment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub form_checkbox: Option<bool>,
+    /// OXI_INLINE_GROUP_LINE: the run's U+FFFC object is a chart or SmartArt
+    /// group drawn on its line; its line grows and snaps like an inline picture.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inline_group_object: bool,
     /// S1252: a STRUCTURED inline `<m:oMath>` that flows in its host line.
     /// Carried on the same run whose `inline_object_extent` reserves the
     /// maths box (advance × ascent+descent); the emit draws the expression
@@ -880,6 +884,7 @@ impl Default for RunStyle {
             run_border: None,
             inline_object_extent: None,
             inline_object_image: None,
+            inline_group_object: false,
             hr_rule: None,
             form_checkbox: None,
             inline_math: None,

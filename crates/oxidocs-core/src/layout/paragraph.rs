@@ -2174,9 +2174,19 @@ impl<'a> ParagraphLayouter<'a> {
                     .fragments
                     .iter()
                     .filter_map(|f| {
+                        // OXI_INLINE_GROUP_LINE (2026-11-01, default ON, opt-out
+                        // _DISABLE): an inline chart / SmartArt group grows its line
+                        // like a picture (bottom on the baseline, the line's descent
+                        // below) and takes whole grid cells (S1418 below). ja/
+                        // educational__1dadc175 (docGrid lines 18, a 148.5pt inline
+                        // chart alone in its paragraph): the next line sits at 675.8
+                        // when the chart was a picture placeholder (Word's page
+                        // break), 662.2 when 05801b2a drew it as a group -- the
+                        // group's line took only its extent.
                         if f.style.inline_object_image.is_some()
                             || f.style.hr_rule.is_some()
                             || f.style.inline_math.is_some()
+                            || f.style.inline_group_object
                         {
                             f.style.inline_object_extent.map(|(_, oh)| oh)
                         } else {
@@ -2355,7 +2365,7 @@ impl<'a> ParagraphLayouter<'a> {
                             0.0
                         };
                         let object_ascent = if picture_only {
-                            line.fragments.iter().filter(|f| f.style.inline_object_image.is_some())
+                            line.fragments.iter().filter(|f| f.style.inline_object_image.is_some() || f.style.inline_group_object)
                                 .filter_map(|f| f.style.inline_object_extent.map(|(_, h)|
                                     (h + f.style.position.unwrap_or(0.0)).max(0.0)))
                                 .fold(0.0_f32, f32::max)
@@ -2390,13 +2400,13 @@ impl<'a> ParagraphLayouter<'a> {
                         && line.fragments.iter().any(|f| f.style.inline_math.is_some());
                     let target = if !crate::env_flag!("OXI_INLINE_IMAGE_GRID_DISABLE")
                         && !page.doc_grid_no_type && para.style.snap_to_grid
-                        && (line.fragments.iter().any(|f| f.style.inline_object_image.is_some()) || s1596_math)
+                        && (line.fragments.iter().any(|f| f.style.inline_object_image.is_some() || f.style.inline_group_object) || s1596_math)
                     {
                         // Raised/lowered objects contribute to opposite sides
                         // of the baseline. Quantize that occupied box, rather
                         // than treating a lowered object's full height as ascent.
                         let object_ascent = line.fragments.iter()
-                            .filter(|f| f.style.inline_object_image.is_some()
+                            .filter(|f| f.style.inline_object_image.is_some() || f.style.inline_group_object
                                 || f.style.hr_rule.is_some() || f.style.inline_math.is_some())
                             .filter_map(|f| f.style.inline_object_extent.map(|(_, h)|
                                 (h + f.style.position.unwrap_or(0.0)).max(0.0)))

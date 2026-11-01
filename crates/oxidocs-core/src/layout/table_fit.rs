@@ -10936,7 +10936,20 @@ impl<'a> TableFitLayouter<'a> {
                         row_declared_top_edges.push(edge.clone());
                         let inherited_only = cell_borders.and_then(|b| b.top.as_ref()).is_none()
                             && inherited_top_rule.is_some();
-                        if (!use_collapsed || row_idx == 0)
+                        // OXI_NIL_ABOVE_EDGE (2026-11-01, default ON, opt-out _DISABLE): the
+                        // collapsed model paints a shared edge as the row above's bottom; when
+                        // that cell declares bottom nil, the edge is still this cell's top.
+                        // `_pb_nil_edge_gen.py` (compat 15, tblBorders single): upper bottom nil
+                        // -> Word draws the edge, lower top nil -> drawn, both nil -> gone.
+                        // ja/forms__031af703 p1: the «使用する麻酔薬…» box under the «記» row
+                        // (bottom nil) had no top rule in Oxi.
+                        let above_bottom_nil = row_idx > 0
+                            && std::env::var_os("OXI_NIL_ABOVE_EDGE_DISABLE").is_none()
+                            && LayoutEngine::s1192_cell_at(&table.rows[row_idx - 1], grid_idx, true)
+                                .and_then(|c| c.borders.as_ref())
+                                .and_then(|b| b.bottom.as_ref())
+                                .map_or(false, |b| matches!(b.style.as_str(), "nil" | "none"));
+                        if (!use_collapsed || row_idx == 0 || above_bottom_nil)
                             && (!inherited_only || row_idx == 0 || pages.len() > inherited_outer_page_before_row) {
                             elements.push(edge);
                         }

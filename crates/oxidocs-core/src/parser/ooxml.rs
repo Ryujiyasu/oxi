@@ -3821,6 +3821,8 @@ fn parse_paragraph_with_inline_images_impl(
                                     })
                                 {
                                     run.style.inline_object_extent = Some((tb.width, tb.height));
+                                    run.style.inline_group_object = tb.children_on_line
+                                        && std::env::var_os("OXI_INLINE_GROUP_LINE_DISABLE").is_none();
                                 }
                             }
                             let drawing_source_page_offset = preceding_page_boundaries(&runs);
@@ -3914,6 +3916,8 @@ fn parse_paragraph_with_inline_images_impl(
                                     {
                                         run.style.inline_object_extent =
                                             Some((tb.width, tb.height));
+                                        run.style.inline_group_object = tb.children_on_line
+                                            && std::env::var_os("OXI_INLINE_GROUP_LINE_DISABLE").is_none();
                                     }
                                 }
                             }

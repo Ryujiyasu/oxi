@@ -8460,13 +8460,30 @@ cells={} pitch={:.2} text={:?}",
                             _ => segs.push((f.run_index, f.text.clone())),
                         }
                     }
+                    // OXI_VERT_JC (2026-11-01, default ON, opt-out _DISABLE): a centred /
+                    // right-aligned paragraph is aligned along the column, line by line.
+                    // `_pb_eavert_jc_gen.py` (eaVert box 200pt, insets 3.6, ＭＳ 明朝 11):
+                    // «あいうえお» starts at 125.90 / 194.54 / 263.30 for left / center /
+                    // right = (192.8 - 55) x 0 / 0.5 / 1; a 30-character paragraph centres
+                    // its 17- and 13-character lines separately (+2.6 / +24.7).
+                    // ja/reports__67cf8704's eaVert section labels are centred.
+                    let line_start = (s1331_left + if li == 0 { s1331_first } else { 0.0 }).max(0.0);
+                    let jc_shift = if std::env::var_os("OXI_VERT_JC_DISABLE").is_none() {
+                        let w: f32 = line.fragments.iter().map(|f| f.width).sum();
+                        let room = (band_h - line_start - para.style.indent_right.unwrap_or(0.0).max(0.0) - w).max(0.0);
+                        match para.alignment {
+                            Alignment::Center => room * 0.5,
+                            Alignment::Right => room,
+                            _ => 0.0,
+                        }
+                    } else { 0.0 };
                     if let (Some(a), Some(b)) = (segs.first(), segs.last()) {
                         cols.push(VertColumn {
                             recipe,
                             text: segs.iter().map(|(_, s)| s.as_str()).collect(),
                             pitch: col_pitch(a.0, b.0),
                             segs,
-                            top: (s1331_left + if li == 0 { s1331_first } else { 0.0 }).max(0.0),
+                            top: line_start + jc_shift,
                             blank: false,
                             hard_break: hard_break && li == 0,
                             image: false, spacer: false,
