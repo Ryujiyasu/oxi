@@ -69,5 +69,5 @@ pub use runtime::{
     execute, execute_with_host, host_error, host_error_described, host_error_explained, host_error_from, is_builtin_function, vba_date_text, vba_number_text,
     ArrayDimension,
     ArrayValue, Host, ObjectRef,
-    ProjectState, Runtime, RuntimeError, RuntimeErrorKind, Value,
+    ApplicationStorage, ProjectState, Runtime, RuntimeError, RuntimeErrorKind, Value,
 };

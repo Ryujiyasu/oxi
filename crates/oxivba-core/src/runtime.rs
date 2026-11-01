@@ -671,6 +671,18 @@ struct ApplicationHeap<'a> {
 }
 
 
+/// Lifetime-independent ownership of the one Application graph and its projects.
+pub struct ApplicationStorage {
+    files:crate::files::Files,
+    objects:BTreeMap<u64,InternalObject>,
+    next:u64,
+    pointers:BTreeMap<(u64,String,Option<String>),i64>,
+    literals:BTreeMap<Vec<u16>,bstr::Allocation>,
+    due:Rc<RefCell<Vec<u64>>>,
+    object_projects:BTreeMap<u64,u64>,
+    projects:BTreeMap<u64,ProjectState>,
+}
+
 /// Owned project storage between invocations. Move this together with the
 /// host's object storage and restore it against compatible project declarations
 /// (see `project_edit_requires_reset` when the source changes).
@@ -1264,6 +1276,7 @@ impl<'a> Runtime<'a> {
                     }
                 }
                 self.document_instances.insert(object.handle);
+                if self.project_identity!=0 {self.object_projects.insert(object.handle,self.project_identity);}
             }
             self.document_globals.insert(name,object);
         }
@@ -1280,7 +1293,10 @@ impl<'a> Runtime<'a> {
 
     /// Resume storage returned by `into_project_state`. Procedure references
     /// and compilation caches belong to this runtime's parsed source instead.
-    pub fn with_project_state(mut self, state: ProjectState) -> Self {
+    pub fn with_project_state(mut self,state:ProjectState)->Self {
+        self.install_project_state(state);self
+    }
+    fn install_project_state(&mut self,state:ProjectState){
         self.standard_name = state.standard_name;
         self.standard_states = state.standard_states;
         self.module = self.standard_module(&self.standard_name).unwrap_or(self.main_module);
@@ -1296,7 +1312,6 @@ impl<'a> Runtime<'a> {
             self.random_state = state.random_state;
             self.random_entropy = state.random_entropy;
         }
-        self
     }
 
     /// Release borrowed module/host references while retaining the project's
@@ -1635,7 +1650,6 @@ impl<'a> Runtime<'a> {
             return self.in_application_project(project,|runtime|runtime.instance_member(receiver, name, args, line));
         }
 
-        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
         if let Some(view) = receiver.dispatch_view.as_deref() {
             let class = match self.internal_objects.get(&receiver.handle) {
@@ -1732,19 +1746,20 @@ impl<'a> Runtime<'a> {
         module.items.iter().any(|item|matches!(item,ModuleItem::Variables(declaration) if matches!(declaration.visibility,Visibility::Public|Visibility::Global) && declaration.items.iter().any(|field|field.name.eq_ignore_ascii_case(name))))
     }
 
+
     fn instance_handles_member(&self, receiver:&ObjectRef, name:&str) -> bool {
         let Some(InternalObject::Instance(instance))=self.internal_objects.get(&receiver.handle) else {return false;};
-        if !self.document_instances.contains(&receiver.handle) { return true; }
-        self.classes.get(&key(&instance.class)).is_some_and(|module| module.items.iter().any(|item| match item {
+        let context=self.foreign_project(receiver).and_then(|id|self.projects.get(&id).map(Box::as_ref)).unwrap_or(self);
+        if !context.document_instances.contains(&receiver.handle) {return true;}
+        context.classes.get(&key(&instance.class)).is_some_and(|module|module.items.iter().any(|item|match item {
             ModuleItem::Procedure(procedure)=>procedure.name.eq_ignore_ascii_case(name),
             ModuleItem::Variables(declaration)=>declaration.items.iter().any(|field|field.name.eq_ignore_ascii_case(name)),
-            _=>false,
+            _=>false
         }))
     }
-
     fn implicit_document_receiver(&self,name:&str) -> Option<ObjectRef> {
         let receiver=self.me.as_ref()?;
-        if !self.document_instances.contains(&receiver.handle) { return None; }
+        if !self.application_document_instance(&receiver.handle) { return None; }
         let InternalObject::Instance(instance)=self.internal_objects.get(&receiver.handle)? else {return None;};
         let references=self.document_references.as_ref()?;
         let (_,base)=references.document_modules.iter().find(|(name,_)|name.eq_ignore_ascii_case(&instance.class))?;
@@ -1768,7 +1783,6 @@ impl<'a> Runtime<'a> {
             return self.in_application_project(project,|runtime|runtime.instance_member_named(receiver, name, args, argument_names, line));
         }
 
-        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
         let class = match self.internal_objects.get(&receiver.handle) {
             Some(InternalObject::Instance(instance)) => instance.class.to_ascii_lowercase(),
@@ -1847,7 +1861,6 @@ impl<'a> Runtime<'a> {
             return self.in_application_project(project,|runtime|runtime.call_instance_source(receiver, name, args, force_by_value, evaluated, view, frame, line));
         }
 
-        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
         let class = match self.internal_objects.get(&receiver.handle) {
             Some(InternalObject::Instance(instance)) => Some(instance.class.clone()),
@@ -1996,7 +2009,7 @@ impl<'a> Runtime<'a> {
     }
 
     fn object_matches_type(&self, object: &ObjectRef, declared: &str) -> bool {
-        if !declared.eq_ignore_ascii_case("Object") && self.source_class_key(declared).is_some() && self.foreign_project(object).is_some(){return false;}
+        if self.project_identity!=0 && !declared.eq_ignore_ascii_case("Object") && self.source_class_key(declared).is_some() && self.foreign_project(object).is_some(){return false;}
 
         if declared.eq_ignore_ascii_case("Object") { return true; }
         let instance = match self.internal_objects.get(&object.handle) {
@@ -2012,7 +2025,7 @@ impl<'a> Runtime<'a> {
         }
         let expected = self.canonical_object_type(declared);
         if let Some(instance) = instance {
-            if self.document_instances.contains(&object.handle) {
+            if self.application_document_instance(&object.handle) {
                 if let Some(references) = &self.document_references {
                     if let Some((_, base)) = references.document_modules.iter()
                         .find(|(name, _)| name.eq_ignore_ascii_case(&instance.class))
@@ -2036,7 +2049,7 @@ impl<'a> Runtime<'a> {
         line: u32,
         this_year: i64,
     ) -> Result<Value, RuntimeError> {
-        if self.source_class_key(declared).is_some() && matches!(&value,Value::Object(object) if self.foreign_project(object).is_some()) {return Err(language_error(13,"class identity belongs to a different project",line));}
+        if self.project_identity!=0 && self.source_class_key(declared).is_some() && matches!(&value,Value::Object(object) if self.foreign_project(object).is_some()) {return Err(language_error(13,"class identity belongs to a different project",line));}
 
         let generic_object = declared.eq_ignore_ascii_case("Object");
         let specific_object = !generic_object && self.is_specific_object_type(declared);
@@ -2445,7 +2458,6 @@ impl<'a> Runtime<'a> {
             return self.in_application_project(project,|runtime|runtime.call_instance_set_source(receiver, name, args, evaluated, value, view, frame, line));
         }
 
-        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
         let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&receiver.handle)
         else {
@@ -2821,7 +2833,6 @@ impl<'a> Runtime<'a> {
             return self.in_application_project(project,|runtime|runtime.instance_assign(receiver, name, args, value, line));
         }
 
-        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
         if let Some(view) = receiver.dispatch_view.as_deref() {
             let class = match self.internal_objects.get(&receiver.handle) {
@@ -3125,7 +3136,7 @@ impl<'a> Runtime<'a> {
             if let Some(module) = self.standard_module(scope) {
                 standard = find(module, procedure).map(|(procedure, missing)| (scope.to_string(), procedure, missing));
             } else if let (Some(object), Some(module)) = (self.document_globals.get(&key(scope)), self.classes.get(&key(scope))) {
-                if self.document_instances.contains(&object.handle) {
+                if self.application_document_instance(&object.handle) {
                     document = find(module, procedure).map(|(procedure, missing)| (object.clone(), procedure, missing));
                 }
             }
@@ -3264,6 +3275,101 @@ impl<'a> Runtime<'a> {
         self.reset_source_after_end()?;
         let mut state=self.into_project_state();state.source_was_reset=true;Ok(state)
     }
+
+    fn application_document_instance(&self,handle:&u64)->bool{
+        self.document_instances.contains(handle) || self.project_identity!=0 &&
+            self.object_projects.get(handle).and_then(|id|self.projects.get(id))
+                .is_some_and(|runtime|runtime.document_instances.contains(handle))
+    }
+    fn pristine_document_objects(&self)->bool{
+        self.internal_objects.len()==self.document_instances.len()
+            && self.next_internal_handle==1u64<<63
+            && self.internal_objects.iter().all(|(handle,object)|
+                self.document_instances.contains(handle)
+                    && matches!(object,InternalObject::Instance(instance) if instance.state.is_none() && !instance.terminated)
+                    && self.object_projects.get(handle)==Some(&self.project_identity))
+            && self.object_projects.len()==self.internal_objects.len()
+    }
+
+
+    /// Suspend all loaded projects without borrowing their parsed code or hosts.
+    /// Rejection returns the actual runtime and graph to the caller.
+    pub fn into_application_storage(mut self)->Result<ApplicationStorage,Box<(Self,RuntimeError)>> {
+        if self.project_identity==0 || self.depth!=0 || self.owner.is_some()
+            || self.projects.values().any(|r|r.depth!=0 || r.owner.is_some()) {
+            return Err(Box::new((self,Self::context_error("Suspend Application storage outside all VBA frames"))));
+        }
+        if let Err(failure)=self.reset_ended_application_projects() {return Err(Box::new((self,failure)))}
+        let id=self.project_identity;
+        let source_was_reset=self.project_ended;
+        let heap=self.take_object_heap();
+        let mut projects=BTreeMap::new();
+        for (id,runtime) in heap.projects {
+            let source_was_reset=runtime.project_ended;
+            let mut state=runtime.into_project_state();
+            state.source_was_reset=source_was_reset;
+            projects.insert(id,state);
+        }
+        let mut state=self.into_project_state();state.source_was_reset=source_was_reset;
+        projects.insert(id,state);
+        Ok(ApplicationStorage{
+            files:heap.files,objects:heap.objects,next:heap.next,pointers:heap.pointers,
+            literals:heap.literals,due:heap.due,object_projects:heap.object_projects,projects
+        })
+    }
+
+    /// Restore against a freshly registered, compatible set of code/host contexts.
+    /// Validate the complete owner set before moving anything out of storage.
+    pub fn restore_application_storage(&mut self,storage:&mut ApplicationStorage)->Result<(),RuntimeError>{
+
+        let fresh=|runtime:&Self|runtime.owner.is_none() && runtime.depth==0 && !runtime.module_initialized
+            && !runtime.project_ended && runtime.next_internal_handle==1u64<<63
+            && runtime.files.pristine_application_context() && runtime.due.borrow().is_empty();
+        if self.project_identity==0 || !fresh(self) || self.projects.values().any(|r|!fresh(r)) {
+            return Err(Self::context_error("Resume storage only into fresh code/host contexts"));
+        }
+        let owners:BTreeSet<_>=self.projects.keys().copied().chain(std::iter::once(self.project_identity)).collect();
+        if owners!=storage.projects.keys().copied().collect() {
+            return Err(Self::context_error("Every stored owner requires exactly one compatible code/host context"));
+        }
+        let mut documents=BTreeMap::new();
+        for (id,context) in self.projects.iter().map(|(id,r)|(*id,r.as_ref())).chain(std::iter::once((self.project_identity,&*self))) {
+            for (name,object) in &context.document_globals {
+                if !context.document_instances.contains(&object.handle) {continue;}
+                if documents.insert(object.handle,(id,name.clone())).is_some() {
+                    return Err(Self::context_error("Document identities must be distinct across code projects"));
+                }
+            }
+        }
+        if self.internal_objects.len()!=documents.len() || self.object_projects.len()!=documents.len() {
+            return Err(Self::context_error("Fresh contexts may contain only their document placeholders"));
+        }
+        for (handle,(id,class)) in &documents {
+            let placeholder=matches!(self.internal_objects.get(handle),Some(InternalObject::Instance(instance))
+                if instance.state.is_none() && !instance.terminated && instance.class.eq_ignore_ascii_case(class));
+            let retained=matches!(storage.objects.get(handle),Some(InternalObject::Instance(instance))
+                if instance.class.eq_ignore_ascii_case(class));
+            if !placeholder || !retained || self.object_projects.get(handle)!=Some(id) || storage.object_projects.get(handle)!=Some(id) {
+                return Err(Self::context_error("Document declarations or native identities changed without a project reset"));
+            }
+        }
+        for (id,state) in std::mem::take(&mut storage.projects) {
+            if id==self.project_identity {self.install_project_state(state);}
+            else if let Some(runtime)=self.projects.get_mut(&id) {runtime.install_project_state(state);}
+        }
+        let projects=std::mem::take(&mut self.projects);
+        self.install_object_heap(ApplicationHeap{
+            files:std::mem::take(&mut storage.files),
+            objects:std::mem::take(&mut storage.objects),
+            next:std::mem::replace(&mut storage.next,1u64<<63),
+            pointers:std::mem::take(&mut storage.pointers),
+            literals:std::mem::take(&mut storage.literals),
+            due:std::mem::replace(&mut storage.due,Rc::new(RefCell::new(Vec::new()))),
+            object_projects:std::mem::take(&mut storage.object_projects),projects
+        });
+        Ok(())
+    }
+
     fn context_error(message:&str)->RuntimeError {
         error(RuntimeErrorKind::Unsupported,message.to_string(),None)
     }
@@ -3277,14 +3383,17 @@ impl<'a> Runtime<'a> {
     }
     /// Register a fresh code/host context. Rejection returns the unchanged context.
     /// Mount files and create objects in the shared Application after registration.
-    pub fn register_application_project(&mut self,context:Self)->Result<(),Box<(Self,RuntimeError)>>{
+    pub fn register_application_project(&mut self,mut context:Self)->Result<(),Box<(Self,RuntimeError)>>{
         let id=context.project_identity;
         if self.project_identity==0 || id==0 || id==self.project_identity || self.projects.contains_key(&id) ||
-           !context.internal_objects.is_empty() || !context.projects.is_empty() ||
+           !context.pristine_document_objects() || !context.projects.is_empty() ||
+           context.internal_objects.keys().any(|handle|self.internal_objects.contains_key(handle)) ||
            context.owner.is_some() || context.depth!=0 ||
            !context.files.pristine_application_context() || !context.due.borrow().is_empty() {
             return Err(Box::new((context,Self::context_error("Register a distinct fresh project before creating application objects or mounting files"))));
         }
+        self.internal_objects.append(&mut context.internal_objects);
+        self.object_projects.append(&mut context.object_projects);
         self.projects.insert(id,Box::new(context));Ok(())
     }
     fn take_object_heap(&mut self)->ApplicationHeap<'a>{
@@ -3306,6 +3415,7 @@ impl<'a> Runtime<'a> {
         self.due=heap.due;self.object_projects=heap.object_projects;self.projects=heap.projects;
     }
     fn foreign_project(&self,receiver:&ObjectRef)->Option<u64>{
+        if self.project_identity==0 {return None;}
         self.object_projects.get(&receiver.handle).copied().filter(|id|*id!=self.project_identity)
     }
     /// Run with the target project's declarations, variables and host while moving
@@ -9205,7 +9315,6 @@ impl<'a> Runtime<'a> {
             return self.in_application_project(project,|runtime|runtime.instance_automation_member(receiver, name, kind, args, frame, line, source));
         }
 
-        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
         let class = match self.internal_objects.get(&receiver.handle) {
             Some(InternalObject::Instance(instance)) => instance.class.as_str(),
@@ -9717,7 +9826,7 @@ impl<'a> Runtime<'a> {
             if self.instance_handles_member(receiver,name) {
                 return self.instance_member(receiver, name, args, line).map(Some);
             }
-            if self.internal_objects.contains_key(&receiver.handle) && !self.document_instances.contains(&receiver.handle) {
+            if self.internal_objects.contains_key(&receiver.handle) && !self.application_document_instance(&receiver.handle) {
                 return self.internal_call(receiver, name, args, line).map(Some);
             }
         }
@@ -9820,7 +9929,7 @@ impl<'a> Runtime<'a> {
                 }
                 return self.instance_member(receiver, name, args, line).map(Some);
             }
-            if self.internal_objects.contains_key(&receiver.handle) && !self.document_instances.contains(&receiver.handle) {
+            if self.internal_objects.contains_key(&receiver.handle) && !self.application_document_instance(&receiver.handle) {
                 // A named argument goes to its own place: measured,
                 // `c.Add "w", After:="kx"` puts w after kx rather than
                 // keying it "kx".
@@ -9886,7 +9995,7 @@ impl<'a> Runtime<'a> {
         if self.instance_handles_member(receiver,name) {
             return self.instance_member(receiver, name, &[], line).map(Some);
         }
-        if let Some(object) = self.internal_objects.get(&receiver.handle).filter(|_|!self.document_instances.contains(&receiver.handle)) {
+        if let Some(object) = self.internal_objects.get(&receiver.handle).filter(|_|!self.application_document_instance(&receiver.handle)) {
             return match (object, name.to_ascii_lowercase().as_str()) {
                 (InternalObject::Collection(entries), "count") => {
                     Ok(Some(Value::Integer(entries.len() as i64)))
@@ -9988,7 +10097,8 @@ impl<'a> Runtime<'a> {
                 return Ok(true);
             }
         }
-        if let Some(object) = self.internal_objects.get_mut(&receiver.handle).filter(|_|!self.document_instances.contains(&receiver.handle)) {
+        let document=self.application_document_instance(&receiver.handle);
+        if let Some(object) = self.internal_objects.get_mut(&receiver.handle).filter(|_|!document) {
             return match object {
                 InternalObject::Dictionary(dictionary)
                     if name.eq_ignore_ascii_case("comparemode") =>
@@ -10044,7 +10154,7 @@ impl<'a> Runtime<'a> {
         if self.instance_handles_member(receiver,name) {
             return self.instance_assign(receiver, name, args, value, line);
         }
-        if self.internal_objects.contains_key(&receiver.handle) && !self.document_instances.contains(&receiver.handle) {
+        if self.internal_objects.contains_key(&receiver.handle) && !self.application_document_instance(&receiver.handle) {
             return self.internal_set_indexed(receiver, name, args, value, line);
         }
         if let Some(host) = self.host.as_deref_mut() { host.begin_member_set(receiver, name); }
@@ -10071,7 +10181,7 @@ impl<'a> Runtime<'a> {
         receiver: &ObjectRef,
         line: u32,
     ) -> Result<Option<Vec<Value>>, RuntimeError> {
-        if let Some(object) = self.internal_objects.get(&receiver.handle).filter(|_|!self.document_instances.contains(&receiver.handle)) {
+        if let Some(object) = self.internal_objects.get(&receiver.handle).filter(|_|!self.application_document_instance(&receiver.handle)) {
             return Ok(Some(match object {
                 InternalObject::Collection(entries) => {
                     entries.iter().map(|entry| entry.value.clone()).collect()
@@ -28444,6 +28554,137 @@ End Function
         assert_eq!(application.file_system_mut().project_scope(),1);
         assert!(context.set_application_project_identity(3).is_err());
         application.call("Main",vec![]).unwrap();
+    }
+
+
+    #[test]
+    fn application_document_fields_and_native_identity_survive_storage_and_rejected_restore() {
+        const SOURCE:&str=r#"Attribute VB_Name = "Driver"
+Option Explicit
+Private Held As Object
+Public Function Document() As Object
+ Set Document = ThisWorkbook
+End Function
+Public Sub Hold(ByVal target As Object)
+ Set Held = target
+End Sub
+Public Function NativeName() As String
+ NativeName = Held.Name
+End Function
+Public Function Own() As String
+ Own = ThisWorkbook.Touch("own")
+End Function
+Public Function Invoke(ByVal route As Long) As String
+ If route = 0 Then
+  Invoke = Held.Touch("held")
+ Else
+  Invoke = CallByName(Held, "Touch", 1, "held")
+ End If
+End Function
+Public Sub SetCount(ByVal value As Long)
+ CallByName Held, "Count", 4, value
+End Sub
+Public Function Read() As Long
+ Read = ThisWorkbook.Count
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "ThisWorkbook"
+Attribute VB_PredeclaredId = True
+Public Count As Long
+Public Function Touch(ByVal tag As String) As String
+ Count = Count + 1
+ Touch = tag & "|" & CStr(Count) & "|" & Me.Name & "|" & ThisWorkbook.Name & "|" & ActiveWorkbook.Name
+End Function
+"#;
+        struct BookHost(u64);
+        impl Host for BookHost {
+            fn call(&mut self,receiver:Option<&ObjectRef>,name:&str,_:&[Value])->Result<Option<Value>,String>{
+                if receiver.is_none() {
+                    let owner=if name.eq_ignore_ascii_case("ThisWorkbook"){self.0}
+                        else if name.eq_ignore_ascii_case("ActiveWorkbook"){3}else{return Ok(None)};
+                    return Ok(Some(Value::Object(ObjectRef::new((owner<<32)|1,"Workbook"))));
+                }
+                Ok(None)
+            }
+            fn get(&mut self,receiver:&ObjectRef,name:&str)->Result<Option<Value>,String>{
+                if receiver.kind=="Workbook" && name.eq_ignore_ascii_case("Name"){
+                    let letter=(b'A'+((receiver.handle>>32)-1) as u8) as char;
+                    return Ok(Some(Value::String(format!("{letter}.xlsm"))));
+                }
+                Ok(None)
+            }
+            fn set(&mut self,_:&ObjectRef,_:&str,_:Value)->Result<bool,String>{Ok(false)}
+        }
+        fn call(r:&mut Runtime,id:u64,name:&str,args:Vec<Value>)->Value {
+            r.in_application_project(id,|r|r.call(&format!("Driver.{name}"),args)).unwrap()
+        }
+        fn suspend(runtime:Runtime)->ApplicationStorage {
+            match runtime.into_application_storage(){
+                Ok(storage)=>storage,Err(rejected)=>panic!("{:?}",rejected.1)
+            }
+        }
+        fn epoch<T:'static>(mut storage:Option<&mut ApplicationStorage>,bad_binding:bool,
+            action:impl FnOnce(Runtime<'_>)->T)->T {
+            let (module,classes)=crate::parse_project(SOURCE).unwrap();
+            let references=crate::CompileReferences {
+                document_modules:vec![("ThisWorkbook".into(),"Workbook".into())],
+                types:vec![("Workbook".into(),false)],
+                library:std::sync::Arc::new(crate::CompileReferenceLibrary::from_tsv(
+                    "I\tWorkbook\t1\nM\tWorkbook\tName\t2\tString\t0\t\nG\tActiveWorkbook\tWorkbook\t1\nG\tThisWorkbook\tWorkbook\t1\n"
+                ).unwrap()),
+                ..Default::default()
+            };
+            let references=std::sync::Arc::new(references);
+            let mut ha=BookHost(1);let mut hb=BookHost(2);let mut hc=BookHost(3);
+            let mut a=Runtime::new(&module).with_classes(&classes).with_host(&mut ha);
+            let mut b=Runtime::new(&module).with_classes(&classes).with_host(&mut hb);
+            let mut c=Runtime::new(&module).with_classes(&classes).with_host(&mut hc);
+            a.set_application_project_identity(1).unwrap();
+            b.set_application_project_identity(2).unwrap();
+            c.set_application_project_identity(3).unwrap();
+            let a_handle=(1<<32)|if bad_binding{2}else{1};
+            let a=a.with_document_objects(vec![("ThisWorkbook".into(),ObjectRef::new(a_handle,"Workbook"))],references.clone()).unwrap();
+            let b=b.with_document_objects(vec![("ThisWorkbook".into(),ObjectRef::new((2<<32)|1,"Workbook"))],references.clone()).unwrap();
+            let mut c=c.with_document_objects(vec![("ThisWorkbook".into(),ObjectRef::new((3<<32)|1,"Workbook"))],references).unwrap();
+            if let Some(storage)=storage.as_deref_mut(){
+                // An incomplete context set must not consume stored owners or fields.
+                assert!(c.restore_application_storage(storage).is_err());
+            }
+            assert!(c.register_application_project(a).is_ok());
+            assert!(c.register_application_project(b).is_ok());
+            if let Some(storage)=storage {
+                let result=c.restore_application_storage(storage);
+                if bad_binding{assert!(result.is_err());}else{result.unwrap();}
+            }
+            action(c)
+        }
+        let (mut storage,document)=epoch(None,false,|mut r|{
+            for (id,letter) in [(1,"A"),(2,"B"),(3,"C")] {
+                assert_eq!(call(&mut r,id,"Own",vec![]),
+                    Value::String(format!("own|1|{letter}.xlsm|{letter}.xlsm|C.xlsm")));
+            }
+            let document=call(&mut r,1,"Document",vec![]);
+            call(&mut r,2,"Hold",vec![document.clone()]);
+            (suspend(r),document)
+        });
+        // All of the original parsed modules, references and hosts are gone.
+        let mut storage=epoch(Some(&mut storage),false,|mut r|{
+            assert_eq!(call(&mut r,2,"NativeName",vec![]),Value::String("A.xlsm".into()));
+            assert_eq!(call(&mut r,2,"Invoke",vec![Value::Integer(0)]),
+                Value::String("held|2|A.xlsm|A.xlsm|C.xlsm".into()));
+            assert_eq!(call(&mut r,2,"Invoke",vec![Value::Integer(1)]),
+                Value::String("held|3|A.xlsm|A.xlsm|C.xlsm".into()));
+            call(&mut r,2,"SetCount",vec![Value::Integer(99)]);
+            suspend(r)
+        });
+        // A changed native document identity also rejects without losing storage.
+        epoch(Some(&mut storage),true,|_|());
+        epoch(Some(&mut storage),false,move |mut r|{
+            assert_eq!(call(&mut r,1,"Read",vec![]),Value::Integer(99));
+            assert_eq!(call(&mut r,2,"Read",vec![]),Value::Integer(1));
+            assert_eq!(call(&mut r,3,"Read",vec![]),Value::Integer(1));
+            assert_eq!(call(&mut r,1,"Document",vec![]),document);
+        });
     }
 
 }
