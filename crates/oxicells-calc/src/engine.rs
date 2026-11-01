@@ -21,6 +21,7 @@ use crate::functions::{self, block_of, reach, Arg, RangeData};
 pub(crate) enum LocalBinding {
     Value { value: std::sync::Arc<Arg>, self_read: Option<(String, (u32, u32))> },
     Reference { sheet: String, range: RangeRef },
+    Expression { id: u64, source: std::sync::Arc<Expr>, sheet: String, at: At, scope: std::sync::Arc<Vec<(String, LocalBinding)>> },
     Omitted,
 }
 
@@ -38,6 +39,43 @@ impl LocalBinding {
             Self::Value { value, .. } => match value.as_ref() { Arg::Range(block) => block.cell_reference(), _ => None },
             _ => None,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EvaluationLambda {
+    owner: u64,
+    node: usize,
+    sheet: String,
+    at: At,
+    scope: std::sync::Arc<Vec<(String, LocalBinding)>>,
+    value: Arg,
+}
+
+#[derive(Debug, Clone)]
+struct EvaluationBinding {
+    owner: u64,
+    node: usize,
+    position: usize,
+    scope: std::sync::Arc<Vec<(String, LocalBinding)>>,
+    value: LocalBinding,
+}
+
+#[derive(Debug, Clone, Default)]
+struct EvaluationInputs {
+    sources: BTreeMap<u64, std::sync::Arc<Expr>>,
+    nodes: BTreeSet<(u64, usize)>,
+    owned_nodes: BTreeSet<(u64, usize)>,
+    definitions: BTreeMap<(u64, usize), Vec<std::sync::Arc<Expr>>>,
+    lambdas: Vec<EvaluationLambda>,
+    bindings: Vec<EvaluationBinding>,
+    positions: BTreeMap<(u64, usize), usize>,
+    answers: BTreeMap<(u64, usize, usize), Arg>,
+}
+
+impl EvaluationInputs {
+    fn restart(&mut self, id: u64) {
+        self.positions.retain(|(owner, _), _| *owner != id);
     }
 }
 
@@ -164,6 +202,56 @@ pub type UserCaller = Option<(String, u32, u32)>;
 
 pub type FormulaCell = (String, (u32, u32));
 
+fn macro_value_result(expr: &Expr) -> bool {
+    match expr {
+        Expr::Function { name, args } if name == "LET" => args.last().is_some_and(macro_value_result),
+        Expr::Function { name, args } if name == "IF" => match args.first() {
+            Some(Expr::Literal(condition)) => match condition.to_logical() {
+                Ok(true) => args.get(1).is_none_or(macro_value_result),
+                Ok(false) => args.get(2).is_none_or(macro_value_result),
+                Err(_) => true,
+            },
+            _ => false,
+        },
+        Expr::Function { name, args } if name == "_INVOKE" => match args.first() {
+            Some(Expr::Function { name, args }) if name == "LAMBDA" => args.last().is_some_and(macro_value_result),
+            _ => false,
+        },
+        Expr::Unary { .. } | Expr::Binary { .. } | Expr::Literal(_) | Expr::Array(_) => true,
+        Expr::Function { name, .. } => functions::is_known_function(name) && !expr.can_return_reference(),
+        _ => false,
+    }
+}
+
+struct CellStateScope<'a, T: Copy> {
+    cell: &'a std::cell::Cell<T>,
+    previous: T,
+}
+
+impl<'a, T: Copy> CellStateScope<'a, T> {
+    fn set(cell: &'a std::cell::Cell<T>, value: T) -> Self {
+        Self { cell, previous: cell.replace(value) }
+    }
+}
+
+impl<T: Copy> Drop for CellStateScope<'_, T> {
+    fn drop(&mut self) { self.cell.set(self.previous); }
+}
+
+thread_local! {
+    static VBA_EVALUATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Apply macro Evaluate semantics only while the callback runs.
+pub fn with_vba_evaluation<T>(evaluate: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) { VBA_EVALUATION.with(|held| held.set(self.0)); }
+    }
+    let _scope = Restore(VBA_EVALUATION.with(|held| held.replace(true)));
+    evaluate()
+}
+
 /// The workbook view used by formula metadata that follows the active cell.
 pub struct CellEvaluationContext {
     pub workbook_name: String,
@@ -179,6 +267,7 @@ thread_local! {
 /// Restore the enclosing view when an evaluation returns or unwinds.
 pub struct CellEvaluationScope {
     previous: Option<CellEvaluationContext>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
 impl Drop for CellEvaluationScope {
@@ -191,6 +280,7 @@ impl Drop for CellEvaluationScope {
 pub fn enter_cell_evaluation_context(context: CellEvaluationContext) -> CellEvaluationScope {
     CellEvaluationScope {
         previous: CELL_EVALUATION_CONTEXT.with(|held| held.replace(Some(context))),
+        _thread: std::marker::PhantomData,
     }
 }
 
@@ -727,6 +817,13 @@ pub struct Workbook {
     /// The names a LET is binding while its last argument is worked out,
     /// innermost last. Asked before the workbook's own names.
     let_scope: std::cell::RefCell<Vec<(String, LocalBinding)>>,
+    macro_evaluation: std::cell::Cell<Option<bool>>,
+    macro_reference_selectors: std::cell::Cell<bool>,
+    next_evaluation_binding: std::cell::Cell<u64>,
+    evaluation_bindings: std::cell::RefCell<BTreeMap<(u64, bool), Arg>>,
+    active_evaluation_binding: std::cell::Cell<Option<u64>>,
+    active_evaluation_node: std::cell::Cell<Option<usize>>,
+    evaluation_inputs: std::cell::RefCell<EvaluationInputs>,
     /// The state RAND draws from: seeded from the moment on first use, and
     /// moved on by every draw.
     rand_state: std::cell::Cell<u64>,
@@ -1170,6 +1267,12 @@ impl Workbook {
 
     pub fn evaluate_argument(&self, sheet: &str, formula: &str) -> Result<Arg, CalcError> {
         let expr = parse(formula)?;
+        let requested = VBA_EVALUATION.with(std::cell::Cell::get);
+        if requested && self.macro_evaluation.get().is_none() {
+            self.evaluation_bindings.borrow_mut().clear();
+            self.evaluation_inputs.replace(EvaluationInputs::default());
+        }
+        let _evaluation = CellStateScope::set(&self.macro_evaluation, requested.then_some(false));
         let mut scope: Vec<_> = self.let_scope.borrow().iter().map(|(name, _)| name.clone()).collect();
         if self.evaluate_name_resolution_fails(&expr, sheet, &mut scope, &mut false) {
             return Ok(Arg::Value(Value::Error(ExcelError::Name)));
@@ -3066,6 +3169,7 @@ impl Workbook {
     }
 
     fn eval_value_arg(&self, expr: &Expr, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        let _value = CellStateScope::set(&self.macro_evaluation, self.macro_evaluation.get().map(|_| true));
         let answer = self.eval_nonbinding_arg(expr, sheet, depth, skip, at);
         self.note_argument_metadata_read(&answer, MetadataRead::Value);
         functions::consume_external_references(answer)
@@ -3073,7 +3177,39 @@ impl Workbook {
 
     /// `skip_subtotals` drops cells that are themselves `SUBTOTAL` formulas when
     /// materialising a range. See the `SUBTOTAL` arm below for why.
-    fn eval_arg_inner(
+    fn eval_arg_inner(&self, expr: &Expr, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        let owner = self.active_evaluation_binding.get().and_then(|id| {
+            let node = expr as *const Expr as usize;
+            self.evaluation_inputs.borrow().owned_nodes.contains(&(id, node)).then_some(node)
+        }).or(self.active_evaluation_node.get());
+        let _node = CellStateScope::set(&self.active_evaluation_node, owner);
+        // Captured inputs belong to the retained syntax tree. A value/reference
+        // view change recomputes its consumers without invoking those inputs again.
+        let key = self.active_evaluation_binding.get().and_then(|id| {
+            let node = expr as *const Expr as usize;
+            let mut inputs = self.evaluation_inputs.borrow_mut();
+            if !inputs.nodes.contains(&(id, node)) { return None; }
+            let position = inputs.positions.entry((id, node)).or_default();
+            let key = (id, node, *position);
+            *position += 1;
+            Some(key)
+        });
+        if let Some(value) = key.and_then(|key| self.evaluation_inputs.borrow().answers.get(&key).cloned()) {
+            if let Arg::Range(block) = &value {
+                if let Some((sheet, range)) = block.cell_reference() {
+                    return self.reference_arg(&sheet, &range, skip);
+                }
+            }
+            return value;
+        }
+        let answer = self.eval_arg_inner_uncached(expr, sheet, depth, skip, at);
+        if let Some(key) = key.filter(|_| !user_function_pending() && !self.value_deferred.get()) {
+            self.evaluation_inputs.borrow_mut().answers.insert(key, answer.clone());
+        }
+        answer
+    }
+
+    fn eval_arg_inner_uncached(
         &self,
         expr: &Expr,
         sheet: &str,
@@ -3085,6 +3221,17 @@ impl Workbook {
         if depth > MAX_EVAL_DEPTH {
             return Arg::Value(Value::Error(ExcelError::Num));
         }
+
+        let demand = if at.is_some() { None } else { self.macro_evaluation.get() };
+        let value_consumer = macro_value_result(expr);
+        let _value = CellStateScope::set(&self.macro_evaluation,
+            demand.map(|held| held || value_consumer));
+        let reference_selection = demand == Some(false) && matches!(expr,
+            Expr::Function { name, args } if name == "INDEX" && args.first().is_some_and(|source|
+                self.stored_reference(source, sheet, depth + 1, at).is_some()
+                || matches!(source, Expr::Function { name, .. } if matches!(name.as_str(), "OFFSET" | "INDIRECT"))));
+        let _selectors = CellStateScope::set(&self.macro_reference_selectors,
+            self.macro_reference_selectors.get() || reference_selection);
 
         match expr {
             Expr::Literal(v) => Arg::Value(v.clone()),
@@ -3158,6 +3305,7 @@ impl Workbook {
                             }
                             value.as_ref().clone()
                         },
+                        LocalBinding::Expression { id, source, sheet, at, scope } => self.eval_expression_binding(id, &source, &scope, (&sheet, at), depth, skip),
                         LocalBinding::Reference { sheet, range } => self.reference_arg(&sheet, &range, skip),
                         LocalBinding::Omitted => Arg::Value(Value::Number(0.0)),
                     };
@@ -3752,6 +3900,8 @@ impl Workbook {
                     };
                     let value = if self.is_omitted_binding(&pair[1]) {
                         LocalBinding::Omitted
+                    } else if let Some(binding) = self.deferred_evaluation_binding(&pair[1], sheet, depth, skip, at) {
+                        binding
                     } else if let Some((sheet, range)) = self.stored_reference(&pair[1], sheet, depth + 1, at) {
                         LocalBinding::Reference { sheet, range }
                     } else {
@@ -4883,6 +5033,14 @@ impl Workbook {
     }
 
     fn capture_lambda(&self, args: &[Expr], sheet: &str, at: At) -> Arg {
+        let key = self.active_evaluation_binding.get().zip(self.active_evaluation_node.get());
+        let captured = std::sync::Arc::new(self.let_scope.borrow().clone());
+        if let Some((owner, node)) = key {
+            let cached = self.evaluation_inputs.borrow().lambdas.iter().find(|held|
+                held.owner == owner && held.node == node && held.sheet == sheet && held.at == at
+                    && held.scope.as_ref() == captured.as_ref()).map(|held| held.value.clone());
+            if let Some(cached) = cached { return cached; }
+        }
         let Some((body, parameters)) = args.split_last() else {
             return Arg::Value(Value::Error(ExcelError::Value));
         };
@@ -4898,26 +5056,173 @@ impl Workbook {
             };
             labels.push(label);
         }
-        Arg::Value(Value::Lambda(std::sync::Arc::new(functions::LambdaValue {
+        let parameters: Vec<_> = labels.iter().map(|(label, _)| label.clone()).collect();
+        let value = Arg::Value(Value::Lambda(std::sync::Arc::new(functions::LambdaValue {
             definition: functions::LambdaDefinition::Closure {
-                parameters: labels, body: body.clone(), scope: self.let_scope.borrow().clone(),
+                parameters: labels, body: body.clone(), scope: captured.as_ref().clone(),
                 sheet: sheet.to_string(), at,
             },
-        })))
+        })));
+        if let Some((owner, node)) = key {
+            if let Arg::Value(Value::Lambda(function)) = &value {
+                if let functions::LambdaDefinition::Closure { body, .. } = &function.definition {
+                    self.retain_evaluation_tree(owner, body, sheet, at, &parameters);
+                }
+            }
+            self.evaluation_inputs.borrow_mut().lambdas.push(EvaluationLambda {
+                owner, node, sheet: sheet.to_string(), at, scope: captured, value: value.clone(),
+            });
+        }
+        value
+    }
+
+    fn retain_evaluation_tree(&self, id: u64, source: &Expr, sheet: &str, at: At, parameters: &[String]) {
+        let mut owned = Vec::new();
+        let mut effects = Vec::new();
+        source.visit(&mut |node| {
+            let pointer = node as *const Expr as usize;
+            owned.push((id, pointer));
+            let mut parameter = false;
+            node.visit(&mut |part| {
+                if matches!(part, Expr::Name(name) if parameters.iter().any(|label| label.eq_ignore_ascii_case(name))) {
+                    parameter = true;
+                }
+            });
+            if !parameter && matches!(node, Expr::Function { name, .. }
+                if (!functions::is_known_function(name) || matches!(name.as_str(), "RAND" | "RANDBETWEEN" | "RANDARRAY"))
+                    && name != "_INVOKE") && !self.expression_has_indirect(node, sheet, at) {
+                effects.push((id, pointer));
+            }
+        });
+        let mut inputs = self.evaluation_inputs.borrow_mut();
+        inputs.owned_nodes.extend(owned);
+        inputs.nodes.extend(effects);
+    }
+
+    fn retain_evaluation_definition(&self, source: &Expr, sheet: &str, at: At) -> std::sync::Arc<Expr> {
+        let key = self.active_evaluation_binding.get().zip(self.active_evaluation_node.get());
+        if let Some(key) = key {
+            let cached = self.evaluation_inputs.borrow().definitions.get(&key)
+                .and_then(|items| items.iter().find(|item| item.as_ref() == source)).cloned();
+            if let Some(cached) = cached { return cached; }
+            let source = std::sync::Arc::new(source.clone());
+            self.retain_evaluation_tree(key.0, &source, sheet, at, &[]);
+            self.evaluation_inputs.borrow_mut().definitions.entry(key).or_default().push(source.clone());
+            source
+        } else { std::sync::Arc::new(source.clone()) }
+    }
+
+    fn expression_has_indirect(&self, expr: &Expr, sheet: &str, at: At) -> bool {
+        let mut pending = vec![expr.clone()];
+        let mut names = BTreeSet::new();
+        let mut indirect = false;
+        while let Some(expression) = pending.pop() {
+            expression.visit(&mut |node| {
+                if matches!(node, Expr::Function { name, .. } if name == "INDIRECT") { indirect = true; }
+                let label = match node {
+                    Expr::Name(label) => Some(label),
+                    Expr::Function { name, .. } if !functions::is_known_function(name) => Some(name),
+                    _ => None,
+                };
+                if let Some(label) = label.filter(|label| names.insert((*label).clone())) {
+                    let scope = self.let_scope.borrow();
+                    if let Some((_, binding)) = scope.iter().rev().find(|(name, _)| name.eq_ignore_ascii_case(label)) {
+                        if matches!(binding, LocalBinding::Expression { .. }) { indirect = true; }
+                    } else if let Some(bound) = self.name_bound(label, sheet, at) { pending.push(bound); }
+                }
+            });
+            if indirect { break; }
+        }
+        indirect
+    }
+
+    fn deferred_evaluation_binding(&self, expr: &Expr, sheet: &str, depth: u32, skip: Skip, at: At) -> Option<LocalBinding> {
+        if at.is_some() || self.macro_evaluation.get().is_none() { return None; }
+        if !self.expression_has_indirect(expr, sheet, at) { return None; }
+        let scope = std::sync::Arc::new(self.let_scope.borrow().clone());
+        let position = self.active_evaluation_binding.get().and_then(|owner| {
+            let node = expr as *const Expr as usize;
+            let mut inputs = self.evaluation_inputs.borrow_mut();
+            if !inputs.owned_nodes.contains(&(owner, node)) { return None; }
+            let index = inputs.positions.entry((owner, node)).or_default();
+            let key = (owner, node, *index);
+            *index += 1;
+            Some(key)
+        });
+        if let Some((owner, node, position)) = position {
+            let cached = self.evaluation_inputs.borrow().bindings.iter().find(|held|
+                held.owner == owner && held.node == node && held.position == position
+                    && held.scope.as_ref() == scope.as_ref()).map(|held| held.value.clone());
+            if let Some(binding) = cached {
+                if let LocalBinding::Expression { id, source, sheet, at, scope } = &binding {
+                    self.eval_expression_binding(*id, source, scope, (sheet, *at), depth, skip);
+                }
+                return Some(binding);
+            }
+        }
+        let id = self.next_evaluation_binding.get();
+        self.next_evaluation_binding.set(id.wrapping_add(1));
+        let source = std::sync::Arc::new(expr.clone());
+        self.retain_evaluation_tree(id, &source, sheet, at, &[]);
+        {
+            let mut inputs = self.evaluation_inputs.borrow_mut();
+            inputs.sources.insert(id, source.clone());
+            inputs.restart(id);
+        }
+        let _binding = CellStateScope::set(&self.active_evaluation_binding, Some(id));
+        let value = self.eval_arg_inner(&source, sheet, depth + 1, skip, at);
+        if !user_function_pending() && !self.value_deferred.get() {
+            let value_context = self.macro_evaluation.get() == Some(true) && !self.macro_reference_selectors.get();
+            self.evaluation_bindings.borrow_mut().insert((id, value_context), value);
+        }
+        let binding = LocalBinding::Expression {
+            id, source, sheet: sheet.to_string(), at, scope: scope.clone(),
+        };
+        if let Some((owner, node, position)) = position {
+            self.evaluation_inputs.borrow_mut().bindings.push(EvaluationBinding {
+                owner, node, position, scope, value: binding.clone(),
+            });
+        }
+        Some(binding)
+    }
+
+    fn eval_expression_binding(&self, id: u64, source: &Expr, scope: &[(String, LocalBinding)], origin: (&str, At), depth: u32, skip: Skip) -> Arg {
+        let (sheet, at) = origin;
+        let value_context = self.macro_evaluation.get() == Some(true) && !self.macro_reference_selectors.get();
+        let cached = self.evaluation_bindings.borrow().get(&(id, value_context)).cloned();
+        if let Some(value) = cached {
+            if let Arg::Range(block) = &value {
+                if let Some((sheet, range)) = block.cell_reference() {
+                    return self.reference_arg(&sheet, &range, skip);
+                }
+            }
+            return value;
+        }
+        let caller = self.let_scope.replace(scope.to_vec());
+        self.evaluation_inputs.borrow_mut().restart(id);
+        let _binding = CellStateScope::set(&self.active_evaluation_binding, Some(id));
+        let answer = self.eval_arg_inner(source, sheet, depth + 1, skip, at);
+        self.let_scope.replace(caller);
+        if !user_function_pending() && !self.value_deferred.get() {
+            self.evaluation_bindings.borrow_mut().insert((id, value_context), answer.clone());
+        }
+        answer
     }
 
     fn eval_defined_name(&self, bound: &Expr, sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
         // Defined names have workbook/sheet scope, independent of the caller's
         // LET variables. A factory or alias can return a captured function too.
         let caller_scope = self.let_scope.replace(Vec::new());
-        let answer = self.eval_arg_inner(bound, sheet, depth + 1, skip, at);
+        let bound = self.retain_evaluation_definition(bound, sheet, at);
+        let answer = self.eval_arg_inner(&bound, sheet, depth + 1, skip, at);
         self.let_scope.replace(caller_scope);
         answer
     }
 
     fn named_lambda(&self, name: &str, sheet: &str, depth: u32, skip: Skip, at: At) -> Option<Arg> {
-        if let Some((_, binding)) = self.let_scope.borrow().iter().rev()
-            .find(|(held, _)| held.eq_ignore_ascii_case(name)) {
+        let binding = self.let_scope.borrow().iter().rev()
+            .find(|(held, _)| held.eq_ignore_ascii_case(name)).map(|(_, binding)| binding.clone());
+        if let Some(binding) = binding {
             return Some(match binding {
                 LocalBinding::Value { value, self_read } => {
                             if self_read.as_ref().is_some_and(|read| self.watched.borrow().as_ref() == Some(read)) {
@@ -4926,6 +5231,7 @@ impl Workbook {
                             }
                     value.as_ref().clone()
                 },
+                LocalBinding::Expression { id, source, sheet, at, scope } => self.eval_expression_binding(id, &source, &scope, (&sheet, at), depth, skip),
                 LocalBinding::Reference { .. } => Arg::Value(Value::Error(ExcelError::Ref)),
                 LocalBinding::Omitted => Arg::Value(Value::Error(ExcelError::Value)),
             });
@@ -4944,6 +5250,7 @@ impl Workbook {
         args.iter().map(|expr| {
             if matches!(expr, Expr::Literal(Value::Blank)) { None }
             else if self.is_omitted_binding(expr) { Some(LocalBinding::Omitted) }
+            else if let Some(binding) = self.deferred_evaluation_binding(expr, sheet, depth, skip, at) { Some(binding) }
             else if let Some((sheet, range)) = self.stored_reference(expr, sheet, depth + 1, at) {
                 Some(LocalBinding::Reference { sheet, range })
             }
@@ -5002,6 +5309,16 @@ impl Workbook {
     }
 
     fn invoke_lambda_expressions(&self, lambda: &Arg, args: &[Expr], sheet: &str, depth: u32, skip: Skip, at: At) -> Arg {
+        let value_result = match lambda {
+            Arg::Value(Value::Lambda(function)) => match &function.definition {
+                functions::LambdaDefinition::Closure { body, .. } => macro_value_result(body),
+                functions::LambdaDefinition::Builtin(name) => macro_value_result(&Expr::Function { name: name.clone(), args: Vec::new() }),
+                _ => false,
+            },
+            _ => false,
+        };
+        let _value = CellStateScope::set(&self.macro_evaluation,
+            self.macro_evaluation.get().map(|held| held || value_result));
         if let Arg::Value(Value::Lambda(function)) = lambda {
             if let functions::LambdaDefinition::Builtin(name) = &function.definition {
                 return self.eval_arg_inner(&Expr::Function { name: name.clone(), args: args.to_vec() }, sheet, depth + 1, skip, at);
@@ -5447,8 +5764,7 @@ impl Workbook {
         }
     }
 
-    /// `INDIRECT(ref_text, [a1])`: read a reference out of text. Only A1-style
-    /// text is understood; R1C1 (a1 = FALSE) is #REF! here.
+    /// Resolve A1 or R1C1 reference text, or a stored defined name.
     fn indirect_range(
         &self,
         args: &[Expr],
@@ -5474,31 +5790,44 @@ impl Workbook {
                 argument.scalar().to_logical().unwrap_or(true)
             },
         };
+        if at.is_none() && self.macro_evaluation.get() == Some(true) && !self.macro_reference_selectors.get() {
+            return Err(ExcelError::Ref);
+        }
         let (target, address) = match text.rfind('!') {
             Some(pos) => {
                 let raw = text[..pos].trim();
-                let name = if raw.len() >= 2 && raw.starts_with('\'') && raw.ends_with('\'') {
+                let quoted = raw.len() >= 2 && raw.starts_with('\'') && raw.ends_with('\'');
+                let mut name = if quoted {
                     raw[1..raw.len() - 1].replace("''", "'")
-                } else {
-                    raw.to_string()
-                };
+                } else { raw.to_string() };
+                if name.starts_with('[') {
+                    let end = name.find(']').ok_or(ExcelError::Ref)?;
+                    let book = &name[1..end];
+                    let current = evaluation_workbook_name().ok_or(ExcelError::Ref)?;
+                    let current = current.rsplit(['\\', '/']).next().unwrap_or(&current);
+                    if book.is_empty() || !book.eq_ignore_ascii_case(current)
+                        || (!quoted && crate::reference::needs_quoting(book)) {
+                        return Err(ExcelError::Ref);
+                    }
+                    name = name[end + 1..].to_string();
+                }
                 (name, text[pos + 1..].trim().to_string())
             }
             None => (sheet.to_string(), text.trim().to_string()),
         };
-        if !self.sheets.contains_key(&target) {
-            return Err(ExcelError::Ref);
+        let target = self.sheets.keys().find(|name| name.eq_ignore_ascii_case(&target))
+            .cloned().ok_or(ExcelError::Ref)?;
+        // Text can name a stored reference, but a calculated name is not
+        // another INDIRECT expression to execute on behalf of its caller.
+        if let Some(bound) = self.name_bound(&address, &target, at) {
+            let caller_scope = self.let_scope.replace(Vec::new());
+            let reference = self.stored_reference(&bound, &target, depth + 1, at);
+            self.let_scope.replace(caller_scope);
+            return reference.ok_or(ExcelError::Ref);
         }
-        // R1C1 text is read from where the formula stands: measured,
-        // `INDIRECT("R2C1",FALSE)` is A2.
-        let address = if a1 {
-            address
-        } else {
+        let address = if a1 { address } else {
             let (col, row) = at.unwrap_or((0, 0));
-            crate::formula_from_r1c1(&format!("={address}"), row, col)
-                .map_err(|_| ExcelError::Ref)?
-                .trim_start_matches('=')
-                .to_string()
+            crate::r1c1::reference_from_r1c1(&address, row, col).map_err(|_| ExcelError::Ref)?
         };
         let range = parse_range_string(&address).ok_or(ExcelError::Ref)?;
         Ok((target, range))

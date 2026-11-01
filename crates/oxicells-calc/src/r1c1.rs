@@ -160,6 +160,23 @@ pub fn formula_from_r1c1(formula: &str, row: u32, column: u32) -> Result<String,
     Ok(output)
 }
 
+/// Read only a complete reference, rejecting names and formula fragments.
+pub(crate) fn reference_from_r1c1(source: &str, row: u32, column: u32) -> Result<String, String> {
+    let (reference, end) = match_reference(source, 0)
+        .ok_or_else(|| "expected an R1C1 reference".to_string())?;
+    let cells = reference.row.is_some() && reference.column.is_some();
+    let (first, end) = render_reference(source, reference, end, row, column)?;
+    if end == source.len() { return Ok(first); }
+    if cells && source.as_bytes().get(end) == Some(&b':') {
+        let (last, after) = match_reference(source, end + 1)
+            .filter(|(last, _)| last.row.is_some() && last.column.is_some())
+            .ok_or_else(|| "expected a second R1C1 cell".to_string())?;
+        let (last, after) = render_reference(source, last, after, row, column)?;
+        if after == source.len() { return Ok(format!("{first}:{last}")); }
+    }
+    Err("unexpected text after an R1C1 reference".to_string())
+}
+
 fn cell_to_r1c1(cell: CellRef, row: u32, column: u32) -> String {
     format!(
         "{}{}",
@@ -523,6 +540,19 @@ mod tests {
         // Reading never wraps: the offset is the plain difference.
         assert_eq!(formula_to_r1c1("=XFD20", 19, 0).unwrap(), "=RC[16383]");
         assert_eq!(formula_to_r1c1("=A1048576", 20, 0).unwrap(), "=R[1048555]C");
+    }
+
+    #[test]
+    fn indirect_r1c1_text_must_be_a_complete_reference() {
+        for (source, expected) in [
+            ("R2C4", "$D$2"), ("R[1]C[3]", "D2"), ("RC", "A1"),
+            ("R1C1:R3C4", "$A$1:$D$3"), ("C1:C3", "$A:$C"), ("R1:R3", "$1:$3"),
+        ] {
+            assert_eq!(reference_from_r1c1(source, 0, 0).unwrap(), expected, "{source}");
+        }
+        for source in ["D2", "$D$2", "R2C4+0", "R2C4suffix", "R2C4:R3", "R2C4 R3C4", "R0C1", ""] {
+            assert!(reference_from_r1c1(source, 0, 0).is_err(), "{source}");
+        }
     }
 
     #[test]

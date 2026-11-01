@@ -15442,7 +15442,8 @@ impl<'a> WorkbookHost<'a> {
         // Work out the expression once. A selected reference, an array
         // value of one, and a scalar have different VBA representations.
         oxicells_calc::set_digit_width(f64::from(self.digit_width()));
-        let answer = oxicells_core::formula::evaluate_expression_argument(self.workbook, sheet, reference, self.now);
+        let answer = oxicells_calc::engine::with_vba_evaluation(||
+            oxicells_core::formula::evaluate_expression_argument(self.workbook, sheet, reference, self.now));
         let scalar = match answer {
             Some(oxicells_calc::functions::Arg::Range(block)) => {
                 if let Some((target, range)) = block.cell_reference() {
@@ -64360,6 +64361,317 @@ End Function
                 if actual != *expected {
                     mismatches.push(format!("{label}, mode{version}: expected {expected}, got {actual}"));
                 }
+            }
+        }
+        assert!(mismatches.is_empty(), "{} mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+    }
+
+
+
+    #[test]
+    fn native_indirect_evaluate_callback_counts_match_excel() {
+        let source = format!("Attribute VB_Name = \"IndexDriver\"\n{}\n{}",
+            include_str!("../../../tests/fixtures/vba/worksheet_index_contexts.bas"),
+            r#"Public Function IndirectCallbackProbe(ByVal expression As String, ByVal mode As Long) As String
+ Driver
+ ThisWorkbook.Names.Add Name:="ProbeCountingRef", RefersTo:="=INDIRECT(""D""&CounterTick())"
+ Application.CalculateFull
+ Application.Calculation=-4135
+ IndirectCallbackProbe=ReferenceTrace(expression,mode)
+End Function"#);
+        let cases = [
+            ("SUM(INDIRECT(\"D\"&CounterTick()))", 0i32, "0|V|E:4|calls:2"),
+            ("SUM(INDIRECT(\"D\"&CounterTick()))", 1i32, "0|V|E:4|calls:1"),
+            ("SUM(INDIRECT(\"D\"&CounterTick()))", 2i32, "0|V|5:2|calls:2"),
+            ("INDIRECT(\"D\"&CounterTick())", 0i32, "0|V|5:1|calls:1"),
+            ("INDIRECT(\"D\"&CounterTick())", 1i32, "0|V|5:1|calls:1"),
+            ("INDIRECT(\"D\"&CounterTick())", 2i32, "0|V|5:2|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),SUM(x)+SUM(x))", 0i32, "0|V|E:4|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),SUM(x)+SUM(x))", 1i32, "0|V|E:4|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),SUM(x)+SUM(x))", 2i32, "0|V|5:4|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(TRUE,x,SUM(x)))", 0i32, "0|V|5:1|calls:1"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(TRUE,x,SUM(x)))", 1i32, "0|V|5:1|calls:1"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(TRUE,x,SUM(x)))", 2i32, "0|V|5:2|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),SUM(x)+IFERROR(SUM(x),0))", 0i32, "0|V|E:4|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),SUM(x)+IFERROR(SUM(x),0))", 1i32, "0|V|E:4|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),SUM(x)+IFERROR(SUM(x),0))", 2i32, "0|V|5:4|calls:2"),
+            ("LET(x,IF(FALSE,INDIRECT(\"D\"&CounterTick()),D2),SUM(x)+SUM(x))", 0i32, "0|V|5:4|calls:0"),
+            ("LET(x,IF(FALSE,INDIRECT(\"D\"&CounterTick()),D2),SUM(x)+SUM(x))", 1i32, "0|V|5:4|calls:0"),
+            ("LET(x,IF(FALSE,INDIRECT(\"D\"&CounterTick()),D2),SUM(x)+SUM(x))", 2i32, "0|V|5:4|calls:0"),
+            ("LET(x,INDEX(D1:D3,IFERROR(N(INDIRECT(\"D\"&CounterTick())),1),1),SUM(x))", 0i32, "0|V|5:1|calls:2"),
+            ("LET(x,INDEX(D1:D3,IFERROR(N(INDIRECT(\"D\"&CounterTick())),1),1),SUM(x))", 1i32, "0|V|5:1|calls:2"),
+            ("LET(x,INDEX(D1:D3,IFERROR(N(INDIRECT(\"D\"&CounterTick())),1),1),SUM(x))", 2i32, "0|V|5:2|calls:2"),
+            ("LET(x,INDEX(D1:D3,N(INDIRECT(\"D\"&CounterTick())),1),SUM(x)+SUM(x))", 0i32, "0|V|E:4|calls:2"),
+            ("LET(x,INDEX(D1:D3,N(INDIRECT(\"D\"&CounterTick())),1),SUM(x)+SUM(x))", 1i32, "0|V|E:4|calls:2"),
+            ("LET(x,INDEX(D1:D3,N(INDIRECT(\"D\"&CounterTick())),1),SUM(x)+SUM(x))", 2i32, "0|V|5:4|calls:2"),
+            ("LAMBDA(x,SUM(x)+SUM(x))(INDIRECT(\"D\"&CounterTick()))", 0i32, "0|V|E:4|calls:2"),
+            ("LAMBDA(x,SUM(x)+SUM(x))(INDIRECT(\"D\"&CounterTick()))", 1i32, "0|V|E:4|calls:2"),
+            ("LAMBDA(x,SUM(x)+SUM(x))(INDIRECT(\"D\"&CounterTick()))", 2i32, "0|V|5:4|calls:2"),
+            ("LET(x,INDIRECT(\"D2\"),SelectionTick(x)+SelectionTick(x))", 0i32, "0|V|E:4|calls:4"),
+            ("LET(x,INDIRECT(\"D2\"),SelectionTick(x)+SelectionTick(x))", 1i32, "0|V|E:4|calls:4"),
+            ("LET(x,INDIRECT(\"D2\"),SelectionTick(x)+SelectionTick(x))", 2i32, "0|V|5:4|calls:4"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),7)", 0i32, "0|V|5:7|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),7)", 1i32, "0|V|5:7|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),7)", 2i32, "0|V|5:7|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),x)", 0i32, "0|V|5:1|calls:1"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),x)", 1i32, "0|V|5:1|calls:1"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),x)", 2i32, "0|V|5:2|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(TRUE,SUM(x),x))", 0i32, "0|V|E:4|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(TRUE,SUM(x),x))", 1i32, "0|V|E:4|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(TRUE,SUM(x),x))", 2i32, "0|V|5:2|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(B1,SUM(x),x))", 0i32, "0|V|E:4|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(B1,SUM(x),x))", 1i32, "0|V|E:4|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(B1,SUM(x),x))", 2i32, "0|V|5:2|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),CHOOSE(1,SUM(x),x))", 0i32, "0|V|E:4|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),CHOOSE(1,SUM(x),x))", 1i32, "0|V|E:4|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),CHOOSE(1,SUM(x),x))", 2i32, "0|V|5:2|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),CHOOSE(B4,SUM(x),x))", 0i32, "0|V|5:1|calls:1"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),CHOOSE(B4,SUM(x),x))", 1i32, "0|V|5:1|calls:1"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),CHOOSE(B4,SUM(x),x))", 2i32, "0|V|5:2|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(SelectionTick(TRUE),SUM(x),x))", 0i32, "0|V|E:4|calls:4"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(SelectionTick(TRUE),SUM(x),x))", 1i32, "0|V|E:4|calls:4"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(SelectionTick(TRUE),SUM(x),x))", 2i32, "0|V|5:3|calls:4"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(SelectionTick(FALSE),SUM(x),x))", 0i32, "0|V|5:1|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(SelectionTick(FALSE),SUM(x),x))", 1i32, "0|V|5:1|calls:2"),
+            ("LET(x,INDIRECT(\"D\"&CounterTick()),IF(SelectionTick(FALSE),SUM(x),x))", 2i32, "0|V|5:3|calls:4"),
+            ("LET(x,LAMBDA(INDIRECT(\"D\"&CounterTick()))(),IF(B1,SUM(x),x))", 0i32, "0|V|E:4|calls:2"),
+            ("LET(x,LAMBDA(INDIRECT(\"D\"&CounterTick()))(),IF(B1,SUM(x),x))", 1i32, "0|V|E:4|calls:2"),
+            ("LET(x,LAMBDA(INDIRECT(\"D\"&CounterTick()))(),IF(B1,SUM(x),x))", 2i32, "0|V|5:2|calls:2"),
+            ("LET(x,ProbeCountingRef,IF(B1,SUM(x),x))", 0i32, "0|V|E:4|calls:2"),
+            ("LET(x,ProbeCountingRef,IF(B1,SUM(x),x))", 1i32, "0|V|E:4|calls:2"),
+            ("LET(x,ProbeCountingRef,IF(B1,SUM(x),x))", 2i32, "0|V|5:2|calls:2"),
+            ("LET(x,LAMBDA(INDIRECT(\"D\"&CounterTick()))(),IF(SelectionTick(TRUE),SUM(x),x))", 0i32, "0|V|E:4|calls:4"),
+            ("LET(x,LAMBDA(INDIRECT(\"D\"&CounterTick()))(),IF(SelectionTick(TRUE),SUM(x),x))", 1i32, "0|V|E:4|calls:4"),
+            ("LET(x,LAMBDA(INDIRECT(\"D\"&CounterTick()))(),IF(SelectionTick(TRUE),SUM(x),x))", 2i32, "0|V|5:3|calls:4"),
+            ("LET(x,CounterTick()+N(INDIRECT(\"D\"&CounterTick())),IF(B1,SUM(x),x))", 0i32, "0|V|E:4|calls:4"),
+            ("LET(x,CounterTick()+N(INDIRECT(\"D\"&CounterTick())),IF(B1,SUM(x),x))", 1i32, "0|V|E:4|calls:4"),
+            ("LET(x,CounterTick()+N(INDIRECT(\"D\"&CounterTick())),IF(B1,SUM(x),x))", 2i32, "0|V|5:3|calls:4"),
+            ("LET(x,INDEX(D1:D3,CounterTick()+IFERROR(N(INDIRECT(\"D\"&CounterTick())),0),1),IF(B1,SUM(x),x))", 0i32, "0|V|5:3|calls:4"),
+            ("LET(x,INDEX(D1:D3,CounterTick()+IFERROR(N(INDIRECT(\"D\"&CounterTick())),0),1),IF(B1,SUM(x),x))", 1i32, "0|V|5:3|calls:4"),
+            ("LET(x,INDEX(D1:D3,CounterTick()+IFERROR(N(INDIRECT(\"D\"&CounterTick())),0),1),IF(B1,SUM(x),x))", 2i32, "0|V|5:3|calls:4"),
+            ("LET(x,IF(FALSE,INDIRECT(\"D2\"),LAMBDA(CounterTick())())+INDIRECT(\"D2\"),IF(B1,SUM(x),x))", 0i32, "0|V|E:4|calls:2"),
+            ("LET(x,IF(FALSE,INDIRECT(\"D2\"),LAMBDA(CounterTick())())+INDIRECT(\"D2\"),IF(B1,SUM(x),x))", 1i32, "0|V|E:4|calls:2"),
+            ("LET(x,IF(FALSE,INDIRECT(\"D2\"),LAMBDA(CounterTick())())+INDIRECT(\"D2\"),IF(B1,SUM(x),x))", 2i32, "0|V|5:4|calls:2"),
+            ("LET(x,LET(y,INDIRECT(\"D\"&CounterTick()),y),IF(B1,SUM(x),x))", 0i32, "0|V|E:4|calls:2"),
+            ("LET(x,LET(y,INDIRECT(\"D\"&CounterTick()),y),IF(B1,SUM(x),x))", 1i32, "0|V|E:4|calls:2"),
+            ("LET(x,LET(y,INDIRECT(\"D\"&CounterTick()),y),IF(B1,SUM(x),x))", 2i32, "0|V|5:2|calls:2"),
+            ("LET(x,LAMBDA(y,y)(INDIRECT(\"D\"&CounterTick())),IF(B1,SUM(x),x))", 0i32, "0|V|E:4|calls:2"),
+            ("LET(x,LAMBDA(y,y)(INDIRECT(\"D\"&CounterTick())),IF(B1,SUM(x),x))", 1i32, "0|V|E:4|calls:2"),
+            ("LET(x,LAMBDA(y,y)(INDIRECT(\"D\"&CounterTick())),IF(B1,SUM(x),x))", 2i32, "0|V|5:2|calls:2"),
+        ];
+        let mut mismatches = Vec::new();
+        for version in [1u8, 2] {
+            for (expression, mode, expected) in cases {
+                let mut book = workbook();
+                book.calculation.compatibility_version = version;
+                let mut context = failure_context();
+                context.file_name = Some("vba-let-cycle-probe.xlsm".into());
+                let mut session = None;
+                let outcome = execute_workbook_action_in_session(book, &source,
+                    Some("IndexDriver.IndirectCallbackProbe"),
+                    vec![Value::String(expression.into()), Value::Integer(i64::from(mode))], 0,
+                    context, &mut session).unwrap();
+                let actual = if let Some(error) = outcome.error {
+                    format!("ERROR: {}", error.message)
+                } else {
+                    serde_json::to_value(&outcome.result).unwrap().get("value")
+                        .and_then(|value| value.as_str()).unwrap_or("<not a string>").to_string()
+                };
+                if actual != expected {
+                    mismatches.push(format!("{expression}, stage{mode}, mode{version}: expected {expected}, got {actual}"));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{} mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+    }
+
+    #[test]
+    fn native_indirect_evaluation_and_reference_resolution_match_excel() {
+        let source = format!("Attribute VB_Name = \"IndexDriver\"\n{}\n{}",
+            include_str!("../../../tests/fixtures/vba/worksheet_index_contexts.bas"),
+            r#"
+Public Function IndirectSelectorProbe(ByVal expression As String, ByVal selected As String) As String
+ Dim result As String
+ Application.Calculation=-4105
+ Range("M1").ClearContents
+ Range("D1").Value2=1
+ Range("D2").Value2=2
+ Range("D3").Value2=3
+ Application.CalculateFull
+ Range(selected).Select
+ Application.Calculation=-4135
+ result=ScalarReport(Application.Evaluate(expression)) & "|" & ScalarReport(ActiveSheet.Evaluate(expression))
+ Range("M1").Formula="=" & expression
+ result=result & "|" & ScalarReport(Range("M1").Value2)
+ Range("M1").ClearContents
+ Range("M1").Formula2="=" & expression
+ IndirectSelectorProbe=result & "|" & ScalarReport(Range("M1").Value2)
+End Function
+
+
+Public Function IndirectBoundaryProbe(ByVal expression As String) As String
+ Dim held As String
+ Application.Calculation=-4105
+ Driver
+ Range("M1").ClearContents
+ Range("A1").Select
+ ThisWorkbook.Names.Add Name:="ProbeDirectRef", RefersTo:="='Sheet1'!$D$2"
+ ThisWorkbook.Names.Add Name:="ProbeIndirectRef", RefersTo:="=INDIRECT(""D2"")"
+ ThisWorkbook.Names.Add Name:="ProbeIndirectLambda", RefersTo:="=LAMBDA(INDIRECT(""D2""))"
+ Range("J1").Formula2="=INDIRECT(""D2"")"
+ Application.CalculateFull
+ Application.Calculation=-4135
+ held=ByteArrayCase(expression)
+ Range("M1").Formula2="=" & expression
+ IndirectBoundaryProbe=held & "~" & ArrayReport(Range("M1").Value2)
+End Function
+
+
+Public Function IndirectResolutionProbe(ByVal expression As String, ByVal selected As String) As String
+ Dim held As String
+ Application.Calculation=-4105
+ Driver
+ Range("M1").ClearContents
+ Range("G3").Value2=17
+ Range(selected).Select
+ ThisWorkbook.Names.Add Name:="ProbeDirectRef", RefersTo:="='Sheet1'!$D$2"
+ ThisWorkbook.Names.Add Name:="ProbeIndirectRef", RefersTo:="=INDIRECT(""D2"")"
+ ThisWorkbook.Names.Add Name:="ProbeIndirectLambda", RefersTo:="=LAMBDA(INDIRECT(""D2""))"
+ Range("J1").Formula2="=INDIRECT(""D2"")"
+ Application.CalculateFull
+ Application.Calculation=-4135
+ held=ByteArrayCase(expression)
+ Range("M1").Formula2="=" & expression
+ IndirectResolutionProbe=held & "~" & ArrayReport(Range("M1").Value2)
+End Function
+"#);
+        let cases: Vec<(&str, &str, Vec<Value>, &str, &str)> = vec![
+            ("selector:SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\")),1)):A1", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\")),1))".into()), Value::String("A1".into())], "E:4|E:4|5:1|5:1", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,N(D1:D3),1)):A1", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,N(D1:D3),1))".into()), Value::String("A1".into())], "5:1|5:1|5:1|5:1", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,N(OFFSET(D1,0,0,3,1)),1)):A1", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,N(OFFSET(D1,0,0,3,1)),1))".into()), Value::String("A1".into())], "5:1|5:1|5:1|5:1", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,INDIRECT(\"D1:D3\"),1)):A1", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,INDIRECT(\"D1:D3\"),1))".into()), Value::String("A1".into())], "E:4|E:4|5:1|5:6", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,0+INDIRECT(\"D1:D3\"),1)):A1", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,0+INDIRECT(\"D1:D3\"),1))".into()), Value::String("A1".into())], "E:4|E:4|5:1|5:6", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\"))+0,1)):A1", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\"))+0,1))".into()), Value::String("A1".into())], "E:4|E:4|5:1|5:1", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,IF(TRUE,N(INDIRECT(\"D1:D3\")),1),1)):A1", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,IF(TRUE,N(INDIRECT(\"D1:D3\")),1),1))".into()), Value::String("A1".into())], "E:4|E:4|5:1|5:1", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,IFERROR(N(INDIRECT(\"D1:D3\")),1),1)):A1", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,IFERROR(N(INDIRECT(\"D1:D3\")),1),1))".into()), Value::String("A1".into())], "5:1|5:1|5:1|5:1", "Sheet1"),
+            ("selector:SUM(N(INDIRECT(\"D1:D3\"))):A1", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(N(INDIRECT(\"D1:D3\")))".into()), Value::String("A1".into())], "E:4|E:4|5:1|5:1", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,N(INDIRECT(\"D2\")),1)):A1", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,N(INDIRECT(\"D2\")),1))".into()), Value::String("A1".into())], "E:4|E:4|5:2|5:2", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\")),1)):D2", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\")),1))".into()), Value::String("D2".into())], "E:4|E:4|5:1|5:1", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,N(D1:D3),1)):D2", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,N(D1:D3),1))".into()), Value::String("D2".into())], "5:1|5:1|5:1|5:1", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,N(OFFSET(D1,0,0,3,1)),1)):D2", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,N(OFFSET(D1,0,0,3,1)),1))".into()), Value::String("D2".into())], "5:1|5:1|5:1|5:1", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,INDIRECT(\"D1:D3\"),1)):D2", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,INDIRECT(\"D1:D3\"),1))".into()), Value::String("D2".into())], "E:4|E:4|5:1|5:6", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,0+INDIRECT(\"D1:D3\"),1)):D2", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,0+INDIRECT(\"D1:D3\"),1))".into()), Value::String("D2".into())], "E:4|E:4|5:1|5:6", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\"))+0,1)):D2", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,N(INDIRECT(\"D1:D3\"))+0,1))".into()), Value::String("D2".into())], "E:4|E:4|5:1|5:1", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,IF(TRUE,N(INDIRECT(\"D1:D3\")),1),1)):D2", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,IF(TRUE,N(INDIRECT(\"D1:D3\")),1),1))".into()), Value::String("D2".into())], "E:4|E:4|5:1|5:1", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,IFERROR(N(INDIRECT(\"D1:D3\")),1),1)):D2", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,IFERROR(N(INDIRECT(\"D1:D3\")),1),1))".into()), Value::String("D2".into())], "5:1|5:1|5:1|5:1", "Sheet1"),
+            ("selector:SUM(N(INDIRECT(\"D1:D3\"))):D2", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(N(INDIRECT(\"D1:D3\")))".into()), Value::String("D2".into())], "E:4|E:4|5:1|5:1", "Sheet1"),
+            ("selector:SUM(INDEX(D1:D3,N(INDIRECT(\"D2\")),1)):D2", "IndexDriver.IndirectSelectorProbe", vec![Value::String("SUM(INDEX(D1:D3,N(INDIRECT(\"D2\")),1))".into()), Value::String("D2".into())], "E:4|E:4|5:2|5:2", "Sheet1"),
+            ("native_indirect_evaluate_boundaries_controls:D2:A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("D2".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:INDIRECT(\"D2\"):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("INDIRECT(\"D2\")".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:SUM(INDIRECT(\"D2\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("SUM(INDIRECT(\"D2\"))".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:SUM(INDIRECT(\"D1:D3\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("SUM(INDIRECT(\"D1:D3\"))".into())], "V|E:4~V|5:6", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:N(INDIRECT(\"D2\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("N(INDIRECT(\"D2\"))".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:TYPE(INDIRECT(\"D2\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("TYPE(INDIRECT(\"D2\"))".into())], "V|5:16~V|5:1", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:ISREF(INDIRECT(\"D2\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("ISREF(INDIRECT(\"D2\"))".into())], "V|11:False~V|11:True", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:ISERROR(INDIRECT(\"D2\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("ISERROR(INDIRECT(\"D2\"))".into())], "V|11:True~V|11:False", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:ROW(INDIRECT(\"D2\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("ROW(INDIRECT(\"D2\"))".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:ROWS(INDIRECT(\"D1:D3\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("ROWS(INDIRECT(\"D1:D3\"))".into())], "V|E:4~V|5:3", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:COLUMN(INDIRECT(\"D2\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("COLUMN(INDIRECT(\"D2\"))".into())], "V|E:4~V|5:4", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:INDIRECT(\"D2\")+0:A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("INDIRECT(\"D2\")+0".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:IFERROR(INDIRECT(\"D2\"),99):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("IFERROR(INDIRECT(\"D2\"),99)".into())], "V|5:99~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:IFNA(INDIRECT(\"D2\"),99):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("IFNA(INDIRECT(\"D2\"),99)".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:IF(FALSE,INDIRECT(\"D2\"),7):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("IF(FALSE,INDIRECT(\"D2\"),7)".into())], "V|5:7~V|5:7", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:IF(TRUE,7,INDIRECT(\"D2\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("IF(TRUE,7,INDIRECT(\"D2\"))".into())], "V|5:7~V|5:7", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:IF(TRUE,INDIRECT(\"D2\"),7):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("IF(TRUE,INDIRECT(\"D2\"),7)".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:CHOOSE(1,7,INDIRECT(\"D2\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("CHOOSE(1,7,INDIRECT(\"D2\"))".into())], "V|5:7~V|5:7", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:CHOOSE(2,7,INDIRECT(\"D2\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("CHOOSE(2,7,INDIRECT(\"D2\"))".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:IFERROR(SUM(INDIRECT(\"D2\")),99):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("IFERROR(SUM(INDIRECT(\"D2\")),99)".into())], "V|5:99~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:SUM(IFERROR(INDIRECT(\"D1:D3\"),99)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("SUM(IFERROR(INDIRECT(\"D1:D3\"),99))".into())], "V|5:99~V|5:6", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:LET(x,INDIRECT(\"D2\"),7):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LET(x,INDIRECT(\"D2\"),7)".into())], "V|5:7~V|5:7", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:LET(x,INDIRECT(\"D2\"),x):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LET(x,INDIRECT(\"D2\"),x)".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:LET(x,INDIRECT(\"D1:D3\"),SUM(x)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LET(x,INDIRECT(\"D1:D3\"),SUM(x))".into())], "V|E:4~V|5:6", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:LAMBDA(INDIRECT(\"D2\"))():A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LAMBDA(INDIRECT(\"D2\"))()".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:LAMBDA(x,SUM(x))(INDIRECT(\"D1:D3\")):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LAMBDA(x,SUM(x))(INDIRECT(\"D1:D3\"))".into())], "V|E:4~V|5:6", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:LAMBDA(x,INDIRECT(x))(\"D2\"):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LAMBDA(x,INDIRECT(x))(\"D2\")".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:SUM(ProbeDirectRef):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("SUM(ProbeDirectRef)".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:SUM(ProbeIndirectRef):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("SUM(ProbeIndirectRef)".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:ProbeIndirectRef:A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("ProbeIndirectRef".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:ProbeIndirectLambda():A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("ProbeIndirectLambda()".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:SUM(J1):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("SUM(J1)".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:SUM(OFFSET(D1,0,0,3,1)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("SUM(OFFSET(D1,0,0,3,1))".into())], "V|5:6~V|5:6", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:IFERROR(INDEX(D1:D3,N(INDIRECT(\"D2\")),1),99):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("IFERROR(INDEX(D1:D3,N(INDIRECT(\"D2\")),1),99)".into())], "V|5:99~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:INDEX(D1:D3,IFERROR(N(INDIRECT(\"D2\")),1),1):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("INDEX(D1:D3,IFERROR(N(INDIRECT(\"D2\")),1),1)".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:SUM(INDEX(D1:D3,N(INDIRECT(\"D2\")),1)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("SUM(INDEX(D1:D3,N(INDIRECT(\"D2\")),1))".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:SUM(INDEX(D1:D3,N(D2),1)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("SUM(INDEX(D1:D3,N(D2),1))".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_evaluate_boundaries_controls:\"INDIRECT(\"\"D2\"\")\":A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("\"INDIRECT(\"\"D2\"\")\"".into())], "V|S:14:73:78:68:73:82:69:67:84:40:34:68:50:34:41~V|S:14:73:78:68:73:82:69:67:84:40:34:68:50:34:41", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"D2\"):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"D2\")".into()), Value::String("A1".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"Sheet1!D2\"):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"Sheet1!D2\")".into()), Value::String("A1".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"'Sheet1'!D2\"):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"'Sheet1'!D2\")".into()), Value::String("A1".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"[vba-let-cycle-probe.xlsm]Sheet1!D2\"):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"[vba-let-cycle-probe.xlsm]Sheet1!D2\")".into()), Value::String("A1".into())], "V|E:4~V|E:4", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"'[vba-let-cycle-probe.xlsm]Sheet1'!D2\"):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"'[vba-let-cycle-probe.xlsm]Sheet1'!D2\")".into()), Value::String("A1".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"'[not-this-book.xlsx]Sheet1'!D2\"):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"'[not-this-book.xlsx]Sheet1'!D2\")".into()), Value::String("A1".into())], "V|E:4~V|E:4", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"R[1]C[3]\",FALSE):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"R[1]C[3]\",FALSE)".into()), Value::String("A1".into())], "V|5:2~V|5:0", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"R2C4\",FALSE):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"R2C4\",FALSE)".into()), Value::String("A1".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"D2\",FALSE):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"D2\",FALSE)".into()), Value::String("A1".into())], "V|E:4~V|E:4", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"ProbeDirectRef\"):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"ProbeDirectRef\")".into()), Value::String("A1".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"ProbeIndirectRef\"):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"ProbeIndirectRef\")".into()), Value::String("A1".into())], "V|E:4~V|E:4", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:SUM(INDIRECT(\"ProbeDirectRef\")):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("SUM(INDIRECT(\"ProbeDirectRef\"))".into()), Value::String("A1".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"D2:D2\"):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"D2:D2\")".into()), Value::String("A1".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"D2 D2\"):A1", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"D2 D2\")".into()), Value::String("A1".into())], "V|E:4~V|E:4", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"D2\"):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"D2\")".into()), Value::String("D2".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"Sheet1!D2\"):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"Sheet1!D2\")".into()), Value::String("D2".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"'Sheet1'!D2\"):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"'Sheet1'!D2\")".into()), Value::String("D2".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"[vba-let-cycle-probe.xlsm]Sheet1!D2\"):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"[vba-let-cycle-probe.xlsm]Sheet1!D2\")".into()), Value::String("D2".into())], "V|E:4~V|E:4", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"'[vba-let-cycle-probe.xlsm]Sheet1'!D2\"):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"'[vba-let-cycle-probe.xlsm]Sheet1'!D2\")".into()), Value::String("D2".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"'[not-this-book.xlsx]Sheet1'!D2\"):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"'[not-this-book.xlsx]Sheet1'!D2\")".into()), Value::String("D2".into())], "V|E:4~V|E:4", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"R[1]C[3]\",FALSE):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"R[1]C[3]\",FALSE)".into()), Value::String("D2".into())], "V|5:2~V|5:0", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"R2C4\",FALSE):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"R2C4\",FALSE)".into()), Value::String("D2".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"D2\",FALSE):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"D2\",FALSE)".into()), Value::String("D2".into())], "V|E:4~V|E:4", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"ProbeDirectRef\"):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"ProbeDirectRef\")".into()), Value::String("D2".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"ProbeIndirectRef\"):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"ProbeIndirectRef\")".into()), Value::String("D2".into())], "V|E:4~V|E:4", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:SUM(INDIRECT(\"ProbeDirectRef\")):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("SUM(INDIRECT(\"ProbeDirectRef\"))".into()), Value::String("D2".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"D2:D2\"):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"D2:D2\")".into()), Value::String("D2".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_reference_resolution_controls:INDIRECT(\"D2 D2\"):D2", "IndexDriver.IndirectResolutionProbe", vec![Value::String("INDIRECT(\"D2 D2\")".into()), Value::String("D2".into())], "V|E:4~V|E:4", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_binding_projection_controls:LET(x,INDEX(D1:D3,N(INDIRECT(\"D2\")),1),SUM(x)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LET(x,INDEX(D1:D3,N(INDIRECT(\"D2\")),1),SUM(x))".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_binding_projection_controls:LET(x,INDEX(INDIRECT(\"D1:D3\"),2),SUM(x)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LET(x,INDEX(INDIRECT(\"D1:D3\"),2),SUM(x))".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_binding_projection_controls:LET(x,INDIRECT(\"D2\"),N(x)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LET(x,INDIRECT(\"D2\"),N(x))".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_binding_projection_controls:LET(x,INDIRECT(\"D2\"),IFERROR(x,99)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LET(x,INDIRECT(\"D2\"),IFERROR(x,99))".into())], "V|5:99~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_binding_projection_controls:LET(x,INDIRECT(\"D2\"),IF(TRUE,x,0)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LET(x,INDIRECT(\"D2\"),IF(TRUE,x,0))".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_binding_projection_controls:SUM(LET(x,INDIRECT(\"D2\"),x)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("SUM(LET(x,INDIRECT(\"D2\"),x))".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_binding_projection_controls:SUM(LAMBDA(INDIRECT(\"D2\"))()):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("SUM(LAMBDA(INDIRECT(\"D2\"))())".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_binding_projection_controls:LET(x,OFFSET(D1,1,0),SUM(x)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LET(x,OFFSET(D1,1,0),SUM(x))".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_binding_projection_controls:LAMBDA(x,SUM(x))(INDEX(D1:D3,N(INDIRECT(\"D2\")),1)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LAMBDA(x,SUM(x))(INDEX(D1:D3,N(INDIRECT(\"D2\")),1))".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_binding_projection_controls:LAMBDA(x,SUM(x))(INDEX(INDIRECT(\"D1:D3\"),2)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("LAMBDA(x,SUM(x))(INDEX(INDIRECT(\"D1:D3\"),2))".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_binding_projection_controls:INDEX(D1:D3,IF(TRUE,N(INDIRECT(\"D2\")),1),1):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("INDEX(D1:D3,IF(TRUE,N(INDIRECT(\"D2\")),1),1)".into())], "V|5:2~V|5:2", "vba-let-cycle-probe.xlsm"),
+            ("native_indirect_binding_projection_controls:SUM(INDEX(D1:D3,IF(TRUE,N(INDIRECT(\"D2\")),1),1)):A1", "IndexDriver.IndirectBoundaryProbe", vec![Value::String("SUM(INDEX(D1:D3,IF(TRUE,N(INDIRECT(\"D2\")),1),1))".into())], "V|E:4~V|5:2", "vba-let-cycle-probe.xlsm"),
+        ];
+        assert_eq!(cases.len(), 98);
+        let mut mismatches = Vec::new();
+        for version in [1u8, 2] {
+            for (label, procedure, args, expected, filename) in &cases {
+                let mut book = workbook();
+                book.calculation.compatibility_version = version;
+                let mut context = failure_context();
+                context.file_name = Some((*filename).into());
+                let mut session = None;
+                let outcome = execute_workbook_action_in_session(
+                    book, &source, Some(procedure), args.clone(), 0, context, &mut session,
+                ).unwrap();
+                let actual = if let Some(error) = outcome.error {
+                    format!("ERROR: {}", error.message)
+                } else {
+                    serde_json::to_value(&outcome.result).unwrap().get("value")
+                        .and_then(|value| value.as_str()).unwrap_or("<not a string>").to_string()
+                };
+                if actual != *expected {
+                    mismatches.push(format!("{label}, mode{version}: expected {expected}, got {actual}"));
+                }
+                let mut detached = oxicells_calc::Workbook::new();
+                detached.add_sheet("Sheet1");
+                detached.set_value("Sheet1", "D2", oxicells_calc::Value::Number(2.0)).unwrap();
+                assert_eq!(detached.evaluate_argument("Sheet1", "SUM(INDIRECT(\"D2\"))").unwrap().scalar(),
+                    oxicells_calc::Value::Number(2.0),
+                    "VBA Evaluate state escaped its scope: {label}, mode{version}");
             }
         }
         assert!(mismatches.is_empty(), "{} mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
