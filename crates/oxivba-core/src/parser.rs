@@ -1162,6 +1162,9 @@ impl<'a> Parser<'a> {
             }
             break;
         }
+        if bounds.len() > 60 {
+            self.syntax_errors.push(span);
+        }
         bounds
     }
 

@@ -409,6 +409,9 @@ pub trait Host {
         Ok(None)
     }
 
+    /// Check a snapshot entry again before assigning the next loop variable.
+    fn enumeration_item_is_live(&self, _receiver: &ObjectRef, _value: &Value) -> bool { true }
+
     fn enumerate(&mut self, _receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
         Ok(None)
     }
@@ -5119,6 +5122,15 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
     ) -> Result<Flow, RuntimeError> {
         let collection = self.eval_expr(&loop_.collection, frame)?;
+        let enumeration_owner = match &collection {
+            Value::Object(object) => Some(ObjectRef {
+                handle: object.handle,
+                kind: object.kind.clone(),
+                dispatch_view: object.dispatch_view.clone(),
+                life: None,
+            }),
+            _ => None,
+        };
         let values = match collection {
             Value::Array(array) => {
                 if array.dimensions.is_empty() {
@@ -5159,6 +5171,9 @@ impl<'a> Runtime<'a> {
         let mut last_was_object = None;
         for value in values {
             self.tick(Some(loop_.span.line))?;
+            if enumeration_owner.as_ref().is_some_and(|receiver| {
+                self.host.as_deref().is_some_and(|host| !host.enumeration_item_is_live(receiver, &value))
+            }) { continue; }
             last_was_object = Some(matches!(value, Value::Object(_)));
             self.assign(&loop_.item, value, frame, loop_.span.line)?;
             match self.exec_body(&loop_.body, frame)? {
@@ -11954,7 +11969,7 @@ pub(crate) fn call_builtin(
                     line,
                 )
             })?;
-            return Ok(Value::Integer(bound));
+            return Ok(Value::Integer(i64::from(bound as i32)));
         }
         if args.len() != 1 {
             return Err(error(
@@ -26263,6 +26278,200 @@ End Function
                     crate::ErrorEnvironment { language: crate::ErrorLanguage::Japanese, help_file: String::new() });
                 let actual = runtime.call(procedure, args).unwrap();
                 assert_eq!(actual, crate::Value::String(expected.into()), "procedure: {procedure}");
+            }
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod array_bound_declaration_native_regressions {
+    use super::*;
+    #[test]
+    fn bounds_and_source_dimensions_match_native() {
+        let source = r####"Public Function ArrayLongBoundsProbe(ByVal value As Variant) As String
+ Dim text As String, bound As Long, item As Variant, count As Long
+ On Error Resume Next
+ text = TypeName(value) & "|" & CStr(VarType(value))
+ Err.Clear
+ bound = LBound(value)
+ text = text & "|lower=" & CStr(bound) & "|lower_error=" & CStr(Err.Number)
+ Err.Clear
+ bound = 123
+ bound = UBound(value)
+ text = text & "|upper=" & CStr(bound) & "|upper_error=" & CStr(Err.Number)
+ Err.Clear
+ text = text & "|upper_direct="
+ text = text & CStr(UBound(value))
+ text = text & "|upper_direct_error=" & CStr(Err.Number)
+ Err.Clear
+ text = text & "|upper_type="
+ text = text & TypeName(UBound(value))
+ text = text & "|upper_type_error=" & CStr(Err.Number)
+ Err.Clear
+ count = 0
+ For Each item In value
+  count = count + 1
+  If count > 8 Then Exit For
+ Next
+ text = text & "|count=" & CStr(count) & "|each_error=" & CStr(Err.Number)
+ ArrayLongBoundsProbe = text
+End Function
+"####;
+        let module = crate::parse_module(source).unwrap();
+        for (lower, length, expected) in [
+            (-2147483648i64, 0usize, r####"Long()|8195|lower=-2147483648|lower_error=0|upper=2147483647|upper_error=0|upper_direct=2147483647|upper_direct_error=0|upper_type=Long|upper_type_error=0|count=0|each_error=0"####),
+            (-2147483648i64, 1usize, r####"Long()|8195|lower=-2147483648|lower_error=0|upper=-2147483648|upper_error=0|upper_direct=-2147483648|upper_direct_error=0|upper_type=Long|upper_type_error=0|count=1|each_error=0"####),
+            (2147483647i64, 0usize, r####"Long()|8195|lower=2147483647|lower_error=0|upper=2147483646|upper_error=0|upper_direct=2147483646|upper_direct_error=0|upper_type=Long|upper_type_error=0|count=0|each_error=0"####),
+            (2147483647i64, 1usize, r####"Long()|8195|lower=2147483647|lower_error=0|upper=2147483647|upper_error=0|upper_direct=2147483647|upper_direct_error=0|upper_type=Long|upper_type_error=0|count=1|each_error=0"####),
+            (2147483647i64, 2usize, r####"Long()|8195|lower=2147483647|lower_error=0|upper=-2147483648|upper_error=0|upper_direct=-2147483648|upper_direct_error=0|upper_type=Long|upper_type_error=0|count=2|each_error=0"####),
+            (-1i64, 0usize, r####"Long()|8195|lower=-1|lower_error=0|upper=-2|upper_error=0|upper_direct=-2|upper_direct_error=0|upper_type=Long|upper_type_error=0|count=0|each_error=0"####),
+            (0i64, 0usize, r####"Long()|8195|lower=0|lower_error=0|upper=-1|upper_error=0|upper_direct=-1|upper_direct_error=0|upper_type=Long|upper_type_error=0|count=0|each_error=0"####),
+            (0i64, 2usize, r####"Long()|8195|lower=0|lower_error=0|upper=1|upper_error=0|upper_direct=1|upper_direct_error=0|upper_type=Long|upper_type_error=0|count=2|each_error=0"####),
+        ] {
+            let argument = Value::Array(ArrayValue { dimensions: vec![ArrayDimension { lower_bound: lower, length }], values: vec![Value::Integer(0); length], element_default: Box::new(Value::Integer(0)), resizable: true });
+            let mut runtime = Runtime::new(&module);
+            assert_eq!(runtime.call("ArrayLongBoundsProbe", vec![argument]).unwrap(), Value::String(expected.to_string()), "bounds {lower}/{length}");
+        }
+        for (name, source, compile_error, expected) in [
+            (r####"local_dim_59"####, r####"Public Function Probe() As String
+ On Error GoTo failed
+ Dim a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 59)) & "|rank=59"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, false, r####"Long()|0|rank=59"####),
+            (r####"local_dim_60"####, r####"Public Function Probe() As String
+ On Error GoTo failed
+ Dim a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 60)) & "|rank=60"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, false, r####"Long()|0|rank=60"####),
+            (r####"local_dim_61"####, r####"Public Function Probe() As String
+ On Error GoTo failed
+ Dim a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 61)) & "|rank=61"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, true, r####"構文エラー"####),
+            (r####"module_dim_59"####, r####"Private a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+Public Function Probe() As String
+ On Error GoTo failed
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 59)) & "|rank=59"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, false, r####"Long()|0|rank=59"####),
+            (r####"module_dim_60"####, r####"Private a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+Public Function Probe() As String
+ On Error GoTo failed
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 60)) & "|rank=60"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, false, r####"Long()|0|rank=60"####),
+            (r####"redim_long_59"####, r####"Public Function Probe() As String
+ On Error GoTo failed
+ Dim a() As Long
+ ReDim a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 59)) & "|rank=59"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, false, r####"Long()|0|rank=59"####),
+            (r####"redim_long_60"####, r####"Public Function Probe() As String
+ On Error GoTo failed
+ Dim a() As Long
+ ReDim a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 60)) & "|rank=60"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, false, r####"Long()|0|rank=60"####),
+            (r####"redim_long_61"####, r####"Public Function Probe() As String
+ On Error GoTo failed
+ Dim a() As Long
+ ReDim a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 61)) & "|rank=61"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, true, r####"構文エラー"####),
+            (r####"redim_variant_59"####, r####"Public Function Probe() As String
+ On Error GoTo failed
+ Dim a As Variant
+ ReDim a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 59)) & "|rank=59"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, false, r####"Long()|0|rank=59"####),
+            (r####"redim_variant_60"####, r####"Public Function Probe() As String
+ On Error GoTo failed
+ Dim a As Variant
+ ReDim a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 60)) & "|rank=60"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, false, r####"Long()|0|rank=60"####),
+            (r####"redim_variant_61"####, r####"Public Function Probe() As String
+ On Error GoTo failed
+ Dim a As Variant
+ ReDim a(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+ Probe = TypeName(a) & "|" & CStr(UBound(a, 61)) & "|rank=61"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, true, r####"構文エラー"####),
+            (r####"type_field_59"####, r####"Private Type Holder
+ values(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+End Type
+Public Function Probe() As String
+ On Error GoTo failed
+ Dim h As Holder
+ Probe = TypeName(h.values) & "|" & CStr(UBound(h.values, 59)) & "|rank=59"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, false, r####"Long()|0|rank=59"####),
+            (r####"type_field_60"####, r####"Private Type Holder
+ values(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) As Long
+End Type
+Public Function Probe() As String
+ On Error GoTo failed
+ Dim h As Holder
+ Probe = TypeName(h.values) & "|" & CStr(UBound(h.values, 60)) & "|rank=60"
+ Exit Function
+failed:
+ Probe = "error=" & CStr(Err.Number)
+End Function
+"####, false, r####"Long()|0|rank=60"####),
+        ] {
+            let compilation = crate::compile_project(source);
+            if compile_error {
+                assert_eq!(compilation.unwrap_err().error.description(crate::ErrorLanguage::Japanese), expected, "{name}");
+            } else {
+                compilation.unwrap();
+                let module = crate::parse_module(source).unwrap();
+                let mut runtime = Runtime::new(&module);
+                assert_eq!(runtime.call("Probe", vec![]).unwrap(), Value::String(expected.to_string()), "{name}");
             }
         }
     }

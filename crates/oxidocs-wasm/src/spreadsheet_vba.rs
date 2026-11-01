@@ -31299,6 +31299,10 @@ impl Host for WorkbookHost<'_> {
         self.drawing_set_range(part, name, range)
     }
 
+    fn enumeration_item_is_live(&self, receiver: &ObjectRef, value: &Value) -> bool {
+        !(self.is_worksheets(receiver) && matches!(value, Value::Object(object) if self.gone(object)))
+    }
+
     fn enumerate(&mut self, receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
@@ -64751,6 +64755,95 @@ End Function
     }
 
 
+
+    #[test]
+    fn worksheet_enumeration_mutations_match_native() {
+        let source = r####"Public Function WorksheetMutationProbe(ByVal mode As Long) As String
+ Dim book As Workbook, item As Worksheet, created As Worksheet
+ Dim index As Long, visits As Long, text As String, phase As String
+ On Error GoTo failed
+ phase = "setup"
+ Set book = ThisWorkbook
+ Application.DisplayAlerts = False
+ For index = book.Worksheets.Count To 2 Step -1
+  book.Worksheets(index).Delete
+ Next
+ book.Worksheets(1).Name = "A"
+ For index = 1 To 3
+  Set created = book.Worksheets.Add(After:=book.Worksheets(book.Worksheets.Count))
+  Select Case index
+  Case 1: created.Name = "B"
+  Case 2: created.Name = "C"
+  Case 3: created.Name = "D"
+  End Select
+ Next
+ text = "mode=" & CStr(mode)
+ phase = "iteration"
+ For Each item In book.Worksheets
+  text = text & "|" & item.Name
+  visits = visits + 1
+  If visits > 8 Then
+   text = text & "|bounded"
+   Exit For
+  End If
+  If mode = 9 Then
+   If book.Worksheets.Count > 1 Then item.Delete
+  ElseIf item.Name = "B" Then
+   Select Case mode
+   Case 1: item.Delete
+   Case 2: book.Worksheets("C").Delete
+   Case 3: book.Worksheets("A").Delete
+   Case 4
+    Set created = book.Worksheets.Add(After:=book.Worksheets(book.Worksheets.Count))
+    created.Name = "E"
+   Case 5
+    Set created = book.Worksheets.Add(Before:=book.Worksheets(1))
+    created.Name = "E"
+   Case 6: book.Worksheets("D").Move Before:=book.Worksheets("A")
+   Case 7: book.Worksheets("A").Move After:=book.Worksheets("D")
+   Case 8: book.Worksheets("C").Name = "Z"
+   Case 10
+    book.Worksheets("C").Delete
+    book.Worksheets("D").Delete
+   Case 11
+    Set created = book.Worksheets.Add(After:=item)
+    created.Name = "E"
+   End Select
+  End If
+ Next
+ text = text & "|visits=" & CStr(visits) & "|tail_nothing=" & CStr(item Is Nothing)
+ phase = "final_collection"
+ text = text & "|final="
+ For Each item In book.Worksheets
+  text = text & item.Name & ","
+ Next
+ WorksheetMutationProbe = text
+ Exit Function
+failed:
+ WorksheetMutationProbe = text & "|error_phase=" & phase & "|error=" & CStr(Err.Number)
+End Function
+"####;
+        let module = parse_module(source).unwrap();
+        for (mode, expected) in [
+            (0i64, r####"mode=0|A|B|C|D|visits=4|tail_nothing=True|final=A,B,C,D,"####),
+            (1i64, r####"mode=1|A|B|C|D|visits=4|tail_nothing=True|final=A,C,D,"####),
+            (2i64, r####"mode=2|A|B|D|visits=3|tail_nothing=True|final=A,B,D,"####),
+            (3i64, r####"mode=3|A|B|C|D|visits=4|tail_nothing=True|final=B,C,D,"####),
+            (4i64, r####"mode=4|A|B|C|D|visits=4|tail_nothing=True|final=A,B,C,D,E,"####),
+            (5i64, r####"mode=5|A|B|C|D|visits=4|tail_nothing=True|final=E,A,B,C,D,"####),
+            (6i64, r####"mode=6|A|B|C|D|visits=4|tail_nothing=True|final=D,A,B,C,"####),
+            (7i64, r####"mode=7|A|B|C|D|visits=4|tail_nothing=True|final=B,C,D,A,"####),
+            (8i64, r####"mode=8|A|B|Z|D|visits=4|tail_nothing=True|final=A,B,Z,D,"####),
+            (9i64, r####"mode=9|A|B|C|D|visits=4|tail_nothing=True|final=D,"####),
+            (10i64, r####"mode=10|A|B|visits=2|tail_nothing=True|final=A,B,"####),
+            (11i64, r####"mode=11|A|B|C|D|visits=4|tail_nothing=True|final=A,B,E,C,D,"####),
+        ] {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            let result = execute_with_host(&module, "WorksheetMutationProbe", vec![Value::Integer(mode)], &mut host).unwrap();
+            assert_eq!(result, Value::String(expected.to_string()), "worksheet mutation mode {mode}");
+        }
+    }
 
     #[test]
     fn native_workbooks_enumeration_and_index_arguments_match_excel() {
