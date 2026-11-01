@@ -2,6 +2,21 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+/// Whether the environment variable `$name` is set, read once per call site.
+///
+/// The layout checks its OXI_* opt-out switches inside per-character and
+/// per-line loops. `std::env::var_os` locks the environment, allocates the
+/// key and scans every variable, and those reads were a quarter of laying a
+/// page out. A switch is fixed for the life of a process, so each site reads
+/// it the first time and keeps the answer.
+macro_rules! env_flag {
+    ($name:literal) => {{
+        static SET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *SET.get_or_init(|| std::env::var_os($name).is_some())
+    }};
+}
+pub(crate) use env_flag;
+
 pub mod editor;
 pub mod font;
 pub mod ir;

@@ -198,7 +198,7 @@ pub fn ruby_position(
             // First char's left edge has half-spacing as offset.
             if ruby_char_count == 0 {
                 ((base_w_pt - ruby_w_pt) / 2.0, 0.0)
-            } else if ruby_char_count >= 2 && std::env::var_os("OXI_S1648_DISABLE").is_none() {
+            } else if ruby_char_count >= 2 && !crate::env_flag!("OXI_S1648_DISABLE") {
                 // S1648 (2026-10-02): Word aligns the first and last ruby
                 // characters with the base's ends and spreads the rest between
                 // them — no half-padding. `_pb_bodyruby_gen.py BR_ALIGN=
@@ -225,7 +225,7 @@ pub fn ruby_position(
             } else {
                 let field_w = base_w_pt.max(ruby_w_pt);
                 let extra_total = field_w - ruby_w_pt;
-                if std::env::var_os("OXI_S1646_DISABLE").is_none() {
+                if !crate::env_flag!("OXI_S1646_DISABLE") {
                     // S1646 (2026-10-02): Word's distributeSpace puts a HALF gap at
                     // each end and a whole gap between the ruby characters (2n
                     // half-units), not n+1 equal gaps. `_pb_bodyruby_gen.py` BR_X=1,

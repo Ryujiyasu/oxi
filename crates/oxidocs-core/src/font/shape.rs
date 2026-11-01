@@ -55,7 +55,7 @@ impl Drop for DocumentFontScope {
 pub(crate) fn enter_document_fonts(doc: &crate::ir::Document) -> DocumentFontScope {
     let styles = &doc.styles;
     let mut current = HashMap::new();
-    if std::env::var_os("OXI_EMBEDDED_FONTS_DISABLE").is_none() {
+    if !crate::env_flag!("OXI_EMBEDDED_FONTS_DISABLE") {
         let usable = super::usable_embedded_families(doc);
         for (name, info) in &styles.font_table {
             if !usable.contains(&name.to_lowercase()) {

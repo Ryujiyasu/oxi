@@ -121,7 +121,7 @@ fn face_matches(font: &skrifa::FontRef, family: &str, bold: bool, italic: bool) 
     // never resolved; Tahoma Bold's £ fell to the 0.5em default (4.00 vs 5.09 at
     // 8pt, en/reports__001f1397's «award (£)» cell kept on one line). Read the
     // English (0x409) record when there is one, else any record naming the style.
-    let all_records = std::env::var_os("OXI_FACE_ALL_SUBFAMILY_DISABLE").is_none();
+    let all_records = !crate::env_flag!("OXI_FACE_ALL_SUBFAMILY_DISABLE");
     let recs: Vec<String> = font
         .localized_strings(skrifa::string::StringId::SUBFAMILY_NAME)
         .map(|r| r.to_string().to_ascii_lowercase())
@@ -245,7 +245,7 @@ fn load_from_disk(family: &str, bold: bool, italic: bool) -> Option<&'static Fon
                     continue;
                 }
                 if let Some(m) = metrics_from(&font, family) {
-                    if std::env::var("OXI_DBG_FONTRT").is_ok() {
+                    if crate::env_flag!("OXI_DBG_FONTRT") {
                         eprintln!(
                             "[FONTRT] resolved {:?} bold={} italic={} from {}",
                             family,
@@ -268,7 +268,7 @@ fn load_from_disk(family: &str, bold: bool, italic: bool) -> Option<&'static Fon
 /// exists for -- the caller must keep that fallback.
 pub fn resolve(family: &str, bold: bool, italic: bool) -> Option<FontMetricsRef<'static>> {
     if let Some(font) = memory_font(family, bold, italic) { return Some(font.metrics.into()); }
-    if std::env::var("OXI_S1171_DISABLE").is_ok() {
+    if crate::env_flag!("OXI_S1171_DISABLE") {
         return None;
     }
     let key = (family.to_ascii_lowercase(), bold, italic);
@@ -465,7 +465,14 @@ pub fn clear_memory_fonts() {
 }
 
 fn memory_font(family: &str, bold: bool, italic: bool) -> Option<MemoryFont> {
-    memory_fonts().read().ok()?.get(&memory_key(family, bold, italic)).cloned()
+    let fonts = memory_fonts().read().ok()?;
+    // Nothing registered -- every native build, which never registers a face.
+    // This sits on the path of every metrics lookup, and building the key
+    // (whitespace folding, lowercasing) was 40% of laying a page out.
+    if fonts.is_empty() {
+        return None;
+    }
+    fonts.get(&memory_key(family, bold, italic)).cloned()
 }
 
 /// Explicitly registered face only. It outranks a shipped metric table for an

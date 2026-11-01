@@ -251,7 +251,7 @@ pub fn compute_compression_floor(
             // 92.0 budget → compute_compression falsely reported !fits → Oxi wrapped
             // the 10th char "称" → row 1 rendered 2 lines (24.5pt) vs Word's 1 (20.3pt).
             let snapped = snap_15tw(new_adv);
-            final_adv[i] = if std::env::var("OXI_S665_DISABLE").is_err() {
+            final_adv[i] = if !crate::env_flag!("OXI_S665_DISABLE") {
                 snapped.min(chars[i].natural_advance)
             } else {
                 snapped
