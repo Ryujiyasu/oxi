@@ -3332,7 +3332,16 @@ impl<'a> Runtime<'a> {
     /// Run every Class_Terminate that is due: the objects whose last
     /// reference was dropped since the last look ([`LifeToken`] queued them).
     /// Terminating one may free others, which queue themselves in turn.
+    #[inline(always)]
     fn collect_instances(&mut self, line: u32) -> Result<(), RuntimeError> {
+        if self.due.borrow().is_empty() {
+            return Ok(());
+        }
+        self.collect_due_instances(line)
+    }
+
+    #[inline(never)]
+    fn collect_due_instances(&mut self, line: u32) -> Result<(), RuntimeError> {
         loop {
             // Take the queue and let go of it before anything is dropped:
             // dropping an object below queues what it alone held.
