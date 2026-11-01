@@ -3875,7 +3875,47 @@ impl<'a> TableFitLayouter<'a> {
                                     para.style.after_autospacing,
                                     para.style.num_id.as_deref(),
                                 ));
+                                // OXI_CELL_PBDR (2026-11-01, default ON, opt-out _DISABLE): a cell
+                                // paragraph's top / bottom border, as in the body (S1504): the
+                                // rule sits after the before (above the after) and the text
+                                // moves by space + the rule's width (double = 3 widths); a run
+                                // of paragraphs with the same borders is one group (the rule
+                                // above the first, below the last). en/reference__00f45b1b p2
+                                // (Quote style, top/bottom sz 4 space 14, before/after 24 in a
+                                // layout-table cell): Word's rules 240.2 / 367.0 around the
+                                // quote and «Anonymous Adam», first line top 254.7 = rule
+                                // + 0.5 + 14; Oxi drew neither rule and set the quote 14.5 high.
+                                let cell_pbdr_on = std::env::var_os("OXI_CELL_PBDR_DISABLE").is_none();
+                                let cell_pbdr_same = |b: Option<&Block>| matches!(b,
+                                    Some(Block::Paragraph(q)) if q.style.borders.is_some() && q.style.borders == para.style.borders);
+                                let cell_pbdr_edge = |pick: fn(&crate::ir::ParagraphBorders) -> Option<&crate::ir::BorderDef>| {
+                                    para.style.borders.as_ref().and_then(pick).cloned()
+                                        .filter(|d| !matches!(d.style.as_str(), "nil" | "none") && d.width > 0.0)
+                                };
+                                let cell_pbdr_rule = |d: &crate::ir::BorderDef, y: f32, cpi: usize, out: &mut Vec<LayoutElement>| {
+                                    let x0 = cell_x + pad_l + para.style.indent_left.unwrap_or(0.0).max(0.0);
+                                    let x1 = cell_x + cell_w - pad_r - para.style.indent_right.unwrap_or(0.0).max(0.0);
+                                    let color = d.color.as_deref().filter(|c| *c != "auto")
+                                        .map(|c| format!("#{}", c.trim_start_matches('#'))).unwrap_or_else(|| "#000000".to_string());
+                                    let lines: Vec<f32> = if d.style == "double" { vec![y, y + 2.0 * d.width] } else { vec![y] };
+                                    for ly in lines {
+                                        let mut e = LayoutElement::new(x0, ly, (x1 - x0).max(0.0), d.width,
+                                            LayoutContent::BoxRect { fill: Some(color.clone()), stroke_color: None, stroke_width: 0.0, corner_radius: 0.0 });
+                                        e.paragraph_index = block_idx;
+                                        e.cell_paragraph_index = Some(cpi);
+                                        e.cell_row_index = Some(row_idx);
+                                        e.cell_col_index = Some(cell_idx);
+                                        out.push(e);
+                                    }
+                                };
+                                let cell_pbdr_extent = |d: &crate::ir::BorderDef| if d.style == "double" { 3.0 * d.width } else { d.width };
                                 content_h += effective_space_before;
+                                if cell_pbdr_on && !(block_pos > 0 && cell_pbdr_same(cell.blocks.get(block_pos - 1))) {
+                                    if let Some(d) = cell_pbdr_edge(|b| b.top.as_ref()) {
+                                        cell_pbdr_rule(&d, content_h, cell_para_counter, &mut cell_elements);
+                                        content_h += cell_pbdr_extent(&d) + d.space.max(0.0);
+                                    }
+                                }
                                 s1431_cell_para_sb.insert((cell_idx, cell_para_counter), carry_space_before);
                                 if cell_float_flow {
                                     let floor = float_replay.and_then(|r| r.origins.get(&(row_idx, cell_idx, block_pos)))
@@ -10026,6 +10066,13 @@ impl<'a> TableFitLayouter<'a> {
                                             }
                                         } else { content_h += lh; }
                                     }
+                                    if cell_pbdr_on && !cell_pbdr_same(cell.blocks.get(block_pos + 1)) {
+                                        if let Some(d) = cell_pbdr_edge(|b| b.bottom.as_ref()) {
+                                            content_h += d.space.max(0.0);
+                                            cell_pbdr_rule(&d, content_h, cell_para_counter, &mut cell_elements);
+                                            content_h += cell_pbdr_extent(&d);
+                                        }
+                                    }
                                     content_h += effective_space_after.unwrap_or(0.0);
                                     // S427: record this paragraph's space_after so the next
                                     // cell paragraph can collapse its space_before against it.
@@ -11012,6 +11059,16 @@ impl<'a> TableFitLayouter<'a> {
                             }
                         };
                         let tb_elems = self.layout_text_box_at(tb, page, &[], &[], Some((abs_x, abs_y)));
+                        // The S1644 overflow clip reaches 2000pt below the box; inside a
+                        // table the row splitter reads it as content and spread
+                        // en/reference__00f45b1b's layout-table text box over four blank
+                        // pages. Keep the clip to the box.
+                        let mut tb_elems = tb_elems;
+                        for e in &mut tb_elems {
+                            if matches!(e.content, LayoutContent::ClipStart) {
+                                e.height = e.height.min(tb.height);
+                            }
+                        }
                         // Defer (not `elements.extend`) so the box paints on top of the
                         // whole table grid — see deferred_cell_textboxes declaration.
                         deferred_cell_textboxes.extend(tb_elems);
