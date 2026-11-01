@@ -27,6 +27,15 @@ fn main() {
             let output = paths.get(1).expect(usage);
             docx_to_pdf(input, output, strict);
         }
+        Some("serve") => {
+            let threads = args[2..]
+                .windows(2)
+                .find(|w| w[0] == "--threads")
+                .and_then(|w| w[1].parse::<usize>().ok())
+                .unwrap_or(1)
+                .max(1);
+            serve(threads);
+        }
         Some("fonts-index") => {
             // Instrument for the font resolver: report what the machine
             // actually offers, so a substitution decision can be read
@@ -130,6 +139,9 @@ fn main() {
             eprintln!();
             eprintln!("Usage:");
             eprintln!("  oxi docx-to-pdf [--strict] <input.docx> <output.pdf>");
+            eprintln!("  oxi serve [--threads N]");
+            eprintln!("      one JSON request per stdin line, {{\"input\", \"output\", \"strict\", \"id\"}};");
+            eprintln!("      one JSON answer per stdout line, in completion order");
             eprintln!("      --strict: write nothing and exit {EXIT_UNSUPPORTED} when the document holds");
             eprintln!("                content Oxi does not draw (listed as JSON on stderr)");
             eprintln!("  oxi vba-analyze <input.xlsm>");
@@ -148,9 +160,28 @@ fn main() {
 /// tell "use another engine" from "this file is broken".
 const EXIT_UNSUPPORTED: i32 = 3;
 
-fn docx_to_pdf(input: &str, output: &str, strict: bool) {
-    let data = fs::read(input).expect("Failed to read input file");
-    let doc = oxidocs_core::parse_docx(&data).expect("Failed to parse docx");
+/// `docx-to-pdf` exit status when the input cannot be read or parsed.
+const EXIT_FAILED: i32 = 2;
+
+/// Why a conversion produced no PDF.
+enum ConvertError {
+    /// `strict` was asked and the document holds content Oxi does not draw.
+    Unsupported(Vec<oxidocs_core::ir::UnsupportedContent>),
+    /// The input could not be read or parsed, or the output not written.
+    Failed(String),
+}
+
+/// What a conversion wrote.
+struct Converted {
+    bytes: usize,
+    pages: usize,
+}
+
+/// Convert `input` to the PDF at `output`. Shared by `docx-to-pdf` and every
+/// request `serve` handles, so neither exits the process on a bad document.
+fn convert(input: &str, output: &str, strict: bool) -> Result<Converted, ConvertError> {
+    let data = fs::read(input).map_err(|e| ConvertError::Failed(format!("read {input}: {e}")))?;
+    let doc = oxidocs_core::parse_docx(&data).map_err(|e| ConvertError::Failed(format!("parse {input}: {e}")))?;
 
     eprintln!("Parsed: {} section(s), {} blocks total",
         doc.pages.len(),
@@ -159,8 +190,7 @@ fn docx_to_pdf(input: &str, output: &str, strict: bool) {
     if !doc.unsupported.is_empty() {
         if strict {
             // Checked before layout, so a caller falling back loses no time.
-            eprintln!("{}", serde_json::json!({ "unsupported": doc.unsupported }));
-            std::process::exit(EXIT_UNSUPPORTED);
+            return Err(ConvertError::Unsupported(doc.unsupported));
         }
         for u in &doc.unsupported {
             eprintln!("Warning: {} x{} in {} is not drawn - the PDF is missing it", u.kind, u.count, u.part);
@@ -170,9 +200,94 @@ fn docx_to_pdf(input: &str, output: &str, strict: bool) {
     let pdf_doc = doc_to_pdf(&doc);
     let pdf_bytes = oxipdf_core::write_pdf(&pdf_doc);
 
-    fs::write(output, &pdf_bytes).expect("Failed to write output file");
-    println!("Converted {} -> {} ({} bytes, {} pages)",
-        input, output, pdf_bytes.len(), pdf_doc.pages.len());
+    fs::write(output, &pdf_bytes).map_err(|e| ConvertError::Failed(format!("write {output}: {e}")))?;
+    Ok(Converted { bytes: pdf_bytes.len(), pages: pdf_doc.pages.len() })
+}
+
+fn docx_to_pdf(input: &str, output: &str, strict: bool) {
+    match convert(input, output, strict) {
+        Ok(c) => println!("Converted {} -> {} ({} bytes, {} pages)", input, output, c.bytes, c.pages),
+        Err(ConvertError::Unsupported(u)) => {
+            eprintln!("{}", serde_json::json!({ "unsupported": u }));
+            std::process::exit(EXIT_UNSUPPORTED);
+        }
+        Err(ConvertError::Failed(why)) => {
+            eprintln!("Error: {why}");
+            std::process::exit(EXIT_FAILED);
+        }
+    }
+}
+
+/// Convert documents for as long as stdin stays open, one request per line:
+/// `{"input": "a.docx", "output": "a.pdf", "strict": true, "id": 7}` (strict
+/// and id optional). One answer per line goes to stdout as each finishes,
+/// carrying the request's id:
+/// `{"id":7,"ok":true,"pages":3,"bytes":51234,"ms":412.5}`, or `"ok":false`
+/// with `"exit"` -- the status `docx-to-pdf` would have exited with (3 with
+/// `"unsupported"`, 2 or 101 with `"error"`) -- so a caller treats both the
+/// same way. A panic fails its own request and the server goes on.
+///
+/// Fonts, metrics and the font index load once and stay warm, which is the
+/// point: a process per document pays for them every time. `threads` workers
+/// convert side by side.
+fn serve(threads: usize) {
+    use std::io::{BufRead, Write};
+    use std::sync::{mpsc, Arc, Mutex};
+
+    let (jobs_tx, jobs_rx) = mpsc::channel::<String>();
+    let jobs_rx = Arc::new(Mutex::new(jobs_rx));
+    let out = Arc::new(Mutex::new(std::io::stdout()));
+    let workers: Vec<_> = (0..threads)
+        .map(|_| {
+            let jobs_rx = Arc::clone(&jobs_rx);
+            let out = Arc::clone(&out);
+            std::thread::spawn(move || loop {
+                let Ok(line) = jobs_rx.lock().expect("job queue").recv() else { break };
+                let answer = serve_one(&line);
+                let mut out = out.lock().expect("stdout");
+                let _ = writeln!(out, "{answer}");
+                let _ = out.flush();
+            })
+        })
+        .collect();
+    for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+        if !line.trim().is_empty() && jobs_tx.send(line).is_err() {
+            break;
+        }
+    }
+    drop(jobs_tx);
+    for w in workers {
+        let _ = w.join();
+    }
+}
+
+fn serve_one(line: &str) -> serde_json::Value {
+    use serde_json::json;
+    let req: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => return json!({ "ok": false, "exit": EXIT_FAILED, "error": format!("request: {e}") }),
+    };
+    let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let (Some(input), Some(output)) = (req["input"].as_str(), req["output"].as_str()) else {
+        return json!({ "id": id, "ok": false, "exit": EXIT_FAILED, "error": "request needs input and output" });
+    };
+    let strict = req["strict"].as_bool().unwrap_or(false);
+    let start = std::time::Instant::now();
+    let result = std::panic::catch_unwind(|| convert(input, output, strict));
+    let ms = start.elapsed().as_secs_f64() * 1000.0;
+    match result {
+        Ok(Ok(c)) => json!({ "id": id, "ok": true, "pages": c.pages, "bytes": c.bytes, "ms": ms }),
+        Ok(Err(ConvertError::Unsupported(u))) => json!({ "id": id, "ok": false, "exit": EXIT_UNSUPPORTED, "unsupported": u, "ms": ms }),
+        Ok(Err(ConvertError::Failed(why))) => json!({ "id": id, "ok": false, "exit": EXIT_FAILED, "error": why, "ms": ms }),
+        Err(panic) => {
+            let why = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "panic".into());
+            json!({ "id": id, "ok": false, "exit": 101, "error": why, "ms": ms })
+        }
+    }
 }
 
 // --- Direct Document IR → PDF conversion (no LayoutEngine) ---
@@ -3225,7 +3340,10 @@ fn subset_font_file(font_path: &str, chars: &std::collections::BTreeSet<char>, l
     // write the same three files and read back each other's subset, producing
     // a PDF built from another document's glyph set with no error anywhere.
     let scratch = std::env::temp_dir();
-    let stem = format!("oxi-font-{}-{}", label, std::process::id());
+    // and a counter: `serve` runs conversions side by side in one process.
+    static SCRATCH_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let seq = SCRATCH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stem = format!("oxi-font-{}-{}-{}", label, std::process::id(), seq);
     let subset_path = scratch.join(format!("{stem}.otf")).to_string_lossy().replace('\\', "/");
     let cidmap_path = scratch.join(format!("{stem}-cidmap.json")).to_string_lossy().replace('\\', "/");
     let widths_path = scratch.join(format!("{stem}-widths.json")).to_string_lossy().replace('\\', "/");
@@ -3872,4 +3990,26 @@ fn extract_cff_from_otf(data: &[u8]) -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod serve_tests {
+    use super::*;
+
+    /// A bad request, a missing file and a document the strict check refuses
+    /// each answer with the status `docx-to-pdf` would exit with, and carry
+    /// their id back.
+    #[test]
+    fn requests_answer_with_docx_to_pdf_statuses() {
+        let bad = serve_one("not json");
+        assert_eq!((bad["ok"].as_bool(), bad["exit"].as_i64()), (Some(false), Some(EXIT_FAILED as i64)));
+
+        let missing = serve_one(r#"{"id": 7, "input": "/no/such.docx", "output": "/tmp/x.pdf"}"#);
+        assert_eq!(missing["id"], 7);
+        assert_eq!(missing["exit"].as_i64(), Some(EXIT_FAILED as i64));
+
+        let no_output = serve_one(r#"{"id": "a", "input": "x.docx"}"#);
+        assert_eq!(no_output["id"], "a");
+        assert_eq!(no_output["ok"].as_bool(), Some(false));
+    }
 }
