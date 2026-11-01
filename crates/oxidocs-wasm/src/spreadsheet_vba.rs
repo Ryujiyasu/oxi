@@ -37818,6 +37818,23 @@ impl From<InputValue> for Value {
     }
 }
 
+fn serialize_vba_signed_integer<S: serde::Serializer>(value: &i64, serializer: S) -> Result<S::Ok, S::Error> {
+    const LIMIT: i64 = 9_007_199_254_740_991;
+    if (-LIMIT..=LIMIT).contains(value) {
+        serializer.serialize_i64(*value)
+    } else {
+        serializer.serialize_str(&value.to_string())
+    }
+}
+fn serialize_vba_object_handle<S: serde::Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+    const LIMIT: u64 = 9_007_199_254_740_991;
+    if *value <= LIMIT {
+        serializer.serialize_u64(*value)
+    } else {
+        serializer.serialize_str(&value.to_string())
+    }
+}
+
 #[derive(Serialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 enum OutputValue {
@@ -37826,7 +37843,7 @@ enum OutputValue {
     Nothing,
     Null,
     Boolean(bool),
-    Integer(i64),
+    Integer(#[serde(serialize_with = "serialize_vba_signed_integer")] i64),
     Double(f64),
     Error(i64),
     String(String),
@@ -37842,6 +37859,7 @@ enum OutputValue {
         fields: Vec<(String, OutputValue)>,
     },
     Object {
+        #[serde(serialize_with = "serialize_vba_object_handle")]
         handle: u64,
         kind: String,
     },
