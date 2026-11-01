@@ -9128,8 +9128,10 @@ cells={} pitch={:.2} text={:?}",
                     }
                 }
             }
-            // OXI_WPG_TEXT_CHILDREN: the group's text members, over its shapes
-            for child in &text_box.children {
+            // OXI_WPG_TEXT_CHILDREN: the group's text members, over its shapes.
+            // An inline group whose members ride its line is drawn there.
+            let on_line = is_inline_sig && text_box.children_on_line;
+            for child in text_box.children.iter().filter(|_| !on_line) {
                 let (cx, cy) = child.position.as_ref().map_or((0.0, 0.0), |p| (p.x, p.y));
                 elements.extend(self.layout_text_box_at(
                     child, page, block_y_positions, block_col_x, Some((abs_x + cx, abs_y + cy))));

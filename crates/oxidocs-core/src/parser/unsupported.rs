@@ -59,6 +59,12 @@ pub(crate) fn census<'a>(parts: impl IntoIterator<Item = (&'a str, &'a str)>) ->
 }
 
 fn graphic_kind(uri: &str) -> Option<String> {
+    // Strict OOXML (ISO/IEC 29500 Strict) names the same graphic types under
+    // purl.oclc.org; the parser reads them by local name all the same.
+    let transitional = uri
+        .strip_prefix("http://purl.oclc.org/ooxml/drawingml/")
+        .map(|kind| format!("http://schemas.openxmlformats.org/drawingml/2006/{kind}"));
+    let uri = transitional.as_deref().unwrap_or(uri);
     if DRAWN_GRAPHICS.contains(&uri) {
         return None;
     }
@@ -242,6 +248,18 @@ mod tests {
         assert_eq!(found.get("chart"), Some(&2));
         assert_eq!(found.get("smartart"), Some(&1));
         assert_eq!(found.get("graphic:http://schemas.microsoft.com/office/drawing/2017/model3d"), Some(&1));
+    }
+
+    #[test]
+    fn strict_ooxml_names_the_same_graphics() {
+        let body = format!(
+            "<w:p><w:r>{}</w:r><w:r>{}</w:r></w:p>",
+            drawing("http://purl.oclc.org/ooxml/drawingml/picture"),
+            drawing("http://purl.oclc.org/ooxml/drawingml/chart"),
+        );
+        let found = scan(&body);
+        assert_eq!(found.get("chart"), Some(&1));
+        assert_eq!(found.len(), 1, "a Strict picture is drawn: {found:?}");
     }
 
     #[test]

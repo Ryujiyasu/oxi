@@ -7,6 +7,7 @@ mod ooxml;
 mod xml_space;
 pub mod omml;
 pub mod relationships;
+mod smartart;
 mod styles;
 pub mod theme;
 mod unsupported;

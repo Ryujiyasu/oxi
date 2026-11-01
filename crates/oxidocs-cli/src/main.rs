@@ -1538,7 +1538,30 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                 oxidocs_core::layout::LayoutContent::Balloon { .. } => {}
                 oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => {}
                 // S1120 custGeom paths: not surfaced in the CLI page model yet
-                oxidocs_core::layout::LayoutContent::VectorPath { .. } => {}
+                oxidocs_core::layout::LayoutContent::VectorPath { segs, fill, stroke_color, stroke_width } => {
+                    // A group member's outline (custGeom curves, presets, SmartArt
+                    // shapes), its points normalized 0..1 over the element box.
+                    // This arm drew nothing, so every such outline was missing
+                    // from docx-to-pdf while the screen renderers drew it.
+                    use oxidocs_core::ir::PathSeg;
+                    let px = |u: f32| x + u as f64 * ew;
+                    let py = |v: f32| y + v as f64 * eh;
+                    let ops: Vec<PathOp> = segs.iter().map(|seg| match *seg {
+                        PathSeg::M(a, b) => PathOp::MoveTo(px(a), py(b)),
+                        PathSeg::L(a, b) => PathOp::LineTo(px(a), py(b)),
+                        PathSeg::C(a, b, c, d, e, f) => PathOp::CurveTo(px(a), py(b), px(c), py(d), px(e), py(f)),
+                        PathSeg::Z => PathOp::ClosePath,
+                    }).collect();
+                    let fill_color = fill.as_deref().and_then(parse_hex_color);
+                    let stroke = stroke_color.as_deref().and_then(parse_hex_color)
+                        .filter(|_| *stroke_width > 0.0)
+                        .map(|color| StrokeStyle {
+                            color, width: *stroke_width as f64, line_cap: LineCap::Butt, line_join: LineJoin::Round,
+                        });
+                    if !ops.is_empty() && (fill_color.is_some() || stroke.is_some()) {
+                        contents.push(ContentElement::Path(PathData { operations: ops, stroke, fill: fill_color }));
+                    }
+                }
             }
         }
 

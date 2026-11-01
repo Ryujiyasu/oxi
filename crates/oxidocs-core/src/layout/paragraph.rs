@@ -8605,6 +8605,20 @@ impl<'a> ParagraphLayouter<'a> {
                                 elements.push(e);
                             }
                         }
+                        // A SmartArt's text members, from the origin its shapes
+                        // were drawn at (the page-level pass leaves them to us).
+                        if tb.children_on_line {
+                            for child in &tb.children {
+                                let (cx, cy) = child.position.as_ref().map_or((0.0, 0.0), |p| (p.x, p.y));
+                                let mut els = self.layout_text_box_at(child, page, &[], &[], Some((el_x + cx, oy + cy)));
+                                if let Some(pi) = body_para_index {
+                                    for e in &mut els {
+                                        e.paragraph_index = Some(pi);
+                                    }
+                                }
+                                elements.extend(els);
+                            }
+                        }
                     }
                     x += adjusted_width + frag_spacing_after[frag_idx];
                     continue;

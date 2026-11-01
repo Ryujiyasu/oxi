@@ -1342,6 +1342,11 @@ pub struct TextBox {
     /// plus that offset. Empty for every non-group drawing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<TextBox>,
+    /// The text members are drawn with the shapes on the host line, from the
+    /// same origin, instead of by the page-level text box pass (whose origin
+    /// is the column, not where the line put the group). Set for SmartArt.
+    #[serde(default)]
+    pub children_on_line: bool,
     /// S1270 (2026-09-02): the host paragraph ends with an explicit page break
     /// that sits AFTER this drawing's run.
     ///

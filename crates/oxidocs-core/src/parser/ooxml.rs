@@ -78,6 +78,9 @@ struct ParseContext {
     comments: HashMap<String, Comment>,
     /// Theme colors from theme1.xml
     theme: ThemeColors,
+    /// diagramData relationship ID -> the SmartArt's laid-out drawing
+    /// (`diagrams/drawingN.xml`), which is what Word draws.
+    diagram_drawings: HashMap<String, String>,
 }
 
 
@@ -1498,6 +1501,38 @@ impl OoxmlParser {
     }
 
     /// Resolve resources in the relationship namespace of one XML part.
+    /// The laid-out drawing of every SmartArt the part references, keyed by
+    /// the diagramData relationship ID its `dgm:relIds r:dm` names. The data
+    /// part points at the drawing through `dsp:dataModelExt relId`, an ID in
+    /// this same relationship set.
+    fn load_diagram_drawings(
+        &mut self,
+        base_dir: &str,
+        rels: &HashMap<String, Relationship>,
+    ) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        for (id, rel) in rels {
+            if !rel.rel_type.ends_with("/diagramData") {
+                continue;
+            }
+            let Ok(data_path) = oxidocs_common::security::sanitize_rel_target(base_dir, &rel.target) else { continue };
+            let Ok(data) = self.read_part(&data_path) else { continue };
+            let Some(drawing_id) = data
+                .find("dataModelExt")
+                .and_then(|i| data[i..].find("relId=\"").map(|j| i + j + 7))
+                .and_then(|start| data[start..].find('"').map(|end| data[start..start + end].to_string()))
+            else {
+                continue;
+            };
+            let Some(drawing_rel) = rels.get(&drawing_id).filter(|r| r.rel_type.ends_with("/diagramDrawing")) else { continue };
+            let Ok(path) = oxidocs_common::security::sanitize_rel_target(base_dir, &drawing_rel.target) else { continue };
+            if let Ok(xml) = self.read_part(&path) {
+                out.insert(id.clone(), xml);
+            }
+        }
+        out
+    }
+
     fn load_relationship_resources(
         &mut self,
         base_dir: &str,
@@ -1588,6 +1623,7 @@ impl OoxmlParser {
                         .and_then(|s| parse_relationships(&s).ok()).unwrap_or_default();
                     let (media, media_types, hyperlinks) =
                         self.load_relationship_resources(base_dir, &rels);
+                    let diagram_drawings = self.load_diagram_drawings(base_dir, &rels);
                     let part_ctx = ParseContext {
                         _rels: rels,
                         media,
@@ -1601,6 +1637,7 @@ impl OoxmlParser {
                         endnotes: ctx.endnotes.clone(),
                         comments: ctx.comments.clone(),
                         theme: ctx.theme.clone(),
+                        diagram_drawings,
                     };
                     if let Ok(parsed) = parse_header_footer_xml(&xml, &part_ctx, styles) {
                         blocks.extend(parsed);
@@ -1624,7 +1661,19 @@ impl OoxmlParser {
             .into_iter()
             .filter_map(|n| self.read_part(&n).ok().map(|xml| (n, xml)))
             .collect();
-        super::unsupported::census(parts.iter().map(|(n, x)| (n.as_str(), x.as_str())))
+        let mut found = super::unsupported::census(parts.iter().map(|(n, x)| (n.as_str(), x.as_str())));
+        // A SmartArt is drawn from the laid-out drawing Word saves with it
+        // (OXI_SMARTART); one without that part is still a hole.
+        let drawings = self
+            .archive
+            .file_names()
+            .filter(|n| n.starts_with("word/diagrams/drawing") && n.ends_with(".xml"))
+            .count();
+        let smartart: usize = found.iter().filter(|u| u.kind == "smartart").map(|u| u.count).sum();
+        if smartart > 0 && smartart <= drawings && std::env::var_os("OXI_SMARTART_DISABLE").is_none() {
+            found.retain(|u| u.kind != "smartart");
+        }
+        found
     }
 
     fn read_part(&mut self, name: &str) -> Result<String, ParseError> {
@@ -1670,6 +1719,7 @@ impl OoxmlParser {
 
         let (media, media_types, hyperlinks) =
             self.load_relationship_resources("word", &rels);
+        let diagram_drawings = self.load_diagram_drawings("word", &rels);
 
         // Parse footnotes (Round 29: pass styles for pStyle inheritance —
         // footnote text style "a8" sets snapToGrid=0, which without
@@ -1746,6 +1796,7 @@ impl OoxmlParser {
             endnotes,
             comments,
             theme,
+            diagram_drawings,
         })
     }
 
@@ -7497,6 +7548,7 @@ fn parse_notes_xml(
         // Word's PDF), Oxi set them in Times New Roman 8 (9.2) and the notes
         // that overflow onto Word's page 4 fitted on page 3.
         theme: if std::env::var_os("OXI_S1599_DISABLE").is_none() { theme.clone() } else { ThemeColors::default() },
+        diagram_drawings: HashMap::new(),
     };
 
     loop {
@@ -7639,7 +7691,7 @@ impl DrawingResult {
 
 /// Parse DrawingML color modifier child elements (lumMod, lumOff, tint, shade, etc.)
 /// and apply them to a base hex color. Consumes elements until the closing tag.
-fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, end_tag: &str) -> String {
+pub(super) fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, end_tag: &str) -> String {
     let mut lum_mod: Option<f32> = None;
     let mut lum_off: Option<f32> = None;
     let mut tint: Option<f32> = None;
@@ -7653,7 +7705,13 @@ fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, end_tag: &s
                 for attr in e.attributes().flatten() {
                     if local_name(attr.key.as_ref()) == "val" {
                         let val = String::from_utf8_lossy(&attr.value);
-                        let v = val.parse::<f32>().unwrap_or(0.0) / 100000.0;
+                        // Strict OOXML writes a percentage as "60%"; Transitional
+                        // as 60000. Read as 0, the Strict form washed every tinted
+                        // colour out to white.
+                        let v = match val.strip_suffix('%') {
+                            Some(pct) => pct.trim().parse::<f32>().unwrap_or(0.0) / 100.0,
+                            None => val.parse::<f32>().unwrap_or(0.0) / 100000.0,
+                        };
                         match local.as_str() {
                             "lumMod" => lum_mod = Some(v),
                             "lumOff" => lum_off = Some(v),
@@ -7855,6 +7913,8 @@ fn parse_drawing(
     let mut text_wrap_none = false;
     // S537b: wordprocessingCanvas marker (wpc:wpc child of graphicData).
     let mut is_canvas = false;
+    // The diagramData relationship of a SmartArt (`dgm:relIds r:dm`).
+    let mut smartart_dm: Option<String> = None;
     // S839 (2026-07-14): wpg vector-group per-shape extraction. The main
     // loop keeps ALL its existing (last-win, global) prop semantics; the
     // S839 state only PIGGYBACKS per-shape records so a visual-only group
@@ -8808,6 +8868,13 @@ fn parse_drawing(
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "relIds" => {
+                        smartart_dm = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| local_name(a.key.as_ref()) == "dm")
+                            .map(|a| String::from_utf8_lossy(&a.value).into_owned());
+                    }
                     "start" | "lineTo" if in_wrapping_polygon => {
                         let mut x = None;
                         let mut y = None;
@@ -9521,6 +9588,7 @@ fn parse_drawing(
                                     host_break_after: false,
                                     children: Vec::new(),
                                     body_wrap_none: text_wrap_none,
+                                    children_on_line: false,
                                 });
                             }
                             if (stroke.is_some() || fill.is_some()) && (is_line || is_rect)
@@ -9637,6 +9705,7 @@ fn parse_drawing(
                                     host_break_after: false,
                                     children: Vec::new(),
                                     body_wrap_none: false,
+                                    children_on_line: false,
                                 });
                             }
                         }
@@ -9937,6 +10006,19 @@ fn parse_drawing(
     // textbox and suppresses the legacy whole-extent outline (border came from
     // the group members' a:ln via the generic last-win extraction). Text-
     // bearing groups (framework cover pages) attach nothing → byte-identical.
+    // OXI_SMARTART (2026-11-01, default ON, opt-out _DISABLE): a SmartArt is
+    // drawn from the laid-out shapes Word saved with it, as the shapes and
+    // text members of a group (see parser::smartart).
+    let smartart = smartart_dm
+        .as_ref()
+        .filter(|_| std::env::var_os("OXI_SMARTART_DISABLE").is_none())
+        .and_then(|id| ctx.diagram_drawings.get(id))
+        .and_then(|xml| super::smartart::from_drawing(xml, &ctx.theme));
+    let smartart_drawn = smartart.is_some();
+    if let Some(art) = smartart {
+        s839_vector_shapes = art.shapes;
+        s839_text_children = art.texts;
+    }
     let s839_attach = !s839_vector_shapes.is_empty()
         && shape_text_blocks.is_empty()
         && std::env::var("OXI_S839_DISABLE").is_err();
@@ -9945,7 +10027,7 @@ fn parse_drawing(
             font_ref_color, shape_fill, shape_text_blocks.len(), is_outline_shape, has_visual);
     }
     let text_box = if !is_outline_shape
-        && (!shape_text_blocks.is_empty() || has_visual || !s839_text_children.is_empty())
+        && (!shape_text_blocks.is_empty() || has_visual || !s839_text_children.is_empty() || smartart_drawn)
     {
         Some(TextBox {
             wrap_polygon: wrapping_points.clone(),
@@ -10014,6 +10096,7 @@ fn parse_drawing(
             host_break_after: false,
             children: std::mem::take(&mut s839_text_children),
             body_wrap_none: text_wrap_none,
+            children_on_line: smartart_drawn,
         })
     } else {
         None
@@ -10051,9 +10134,13 @@ fn parse_drawing(
     // No text_box requirement: creative's specimen is a noFill/noStroke rect
     // (an INVISIBLE inline object, descr="Inline image") — Word reserves the
     // wp:extent regardless of visibility.
+    // A SmartArt stays in its paragraph as an inline object, drawn by the
+    // line like any inline vector group: a placeholder would take the
+    // paragraph's place and leave the group nowhere to be drawn.
     let s1182_visual = image.is_none()
         && inline_tb
         && !is_canvas
+        && !smartart_drawn
         && !s741_has_txbx_text
         && width > 0.0
         && height > 0.0
@@ -10220,6 +10307,7 @@ fn vml_shape_text_box(sh: &Shape) -> TextBox {
         host_break_after: false,
         children: Vec::new(),
         body_wrap_none: false,
+        children_on_line: false,
     }
 }
 
@@ -11084,6 +11172,7 @@ fn parse_vml_pict(
             host_break_after: false,
             children: Vec::new(),
             body_wrap_none: false,
+            children_on_line: false,
         });
         return Ok(DrawingResult {
             symbol_text: None,
@@ -11156,6 +11245,7 @@ fn parse_vml_pict(
             host_break_after: false,
             children: Vec::new(),
             body_wrap_none: false,
+            children_on_line: false,
         });
         let placeholder = Some(Image {
             rotation: 0.0,
@@ -15619,6 +15709,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
         endnotes: HashMap::new(),
         comments: HashMap::new(),
         theme: ThemeColors::default(),
+        diagram_drawings: HashMap::new(),
     };
     let empty_styles = StyleSheet::default();
 
@@ -16376,7 +16467,7 @@ mod tests {
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
-            comments: HashMap::new(), theme: ThemeColors::default(),
+            comments: HashMap::new(), theme: ThemeColors::default(), diagram_drawings: HashMap::new(),
         };
         ctx.media.insert("rId1".into(), vec![1, 2, 3]);
         for (picture, painted, expect_shape) in [(true, false, false), (true, true, true), (false, false, true)] {
@@ -16401,7 +16492,7 @@ mod tests {
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
-            comments: HashMap::new(), theme: ThemeColors::default(),
+            comments: HashMap::new(), theme: ThemeColors::default(), diagram_drawings: HashMap::new(),
         };
         ctx.media.insert("rId1".into(), vec![1, 2, 3]);
         for (value, expected) in [("0", true), ("false", true), ("1", false), ("true", false)] {
@@ -16431,7 +16522,7 @@ mod tests {
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
-            comments: HashMap::new(), theme: ThemeColors::default(),
+            comments: HashMap::new(), theme: ThemeColors::default(), diagram_drawings: HashMap::new(),
         };
         ctx.media.insert("rId1".into(), vec![1, 2, 3]);
         for (kind, expected) in [("square", WrapType::Square), ("tight", WrapType::Tight),
@@ -16463,7 +16554,7 @@ mod tests {
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
-            comments: HashMap::new(), theme: ThemeColors::default(),
+            comments: HashMap::new(), theme: ThemeColors::default(), diagram_drawings: HashMap::new(),
         };
         let para = |text: &str| format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>");
         for root in ["hdr", "ftr"] {
@@ -16787,6 +16878,7 @@ mod tests {
             endnotes: HashMap::new(),
             comments: HashMap::new(),
             theme: ThemeColors::default(),
+            diagram_drawings: HashMap::new(),
         };
         let styles = StyleSheet::default();
         let mut reader = Reader::from_str(xml);
@@ -16827,6 +16919,7 @@ mod tests {
             endnotes: HashMap::new(),
             comments: HashMap::new(),
             theme: ThemeColors::default(),
+            diagram_drawings: HashMap::new(),
         };
         let styles = StyleSheet::default();
         let mut reader = Reader::from_str(xml);
@@ -16862,6 +16955,7 @@ mod tests {
             endnotes: HashMap::new(),
             comments: HashMap::new(),
             theme: ThemeColors::default(),
+            diagram_drawings: HashMap::new(),
         };
         let styles = StyleSheet::default();
         let mut reader = Reader::from_str(xml);
@@ -17233,7 +17327,7 @@ fn s1598_val_off(e: &quick_xml::events::BytesStart) -> bool {
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
-            comments: HashMap::new(), theme: ThemeColors::default(),
+            comments: HashMap::new(), theme: ThemeColors::default(), diagram_drawings: HashMap::new(),
         };
         ctx.media.insert("rId1".into(), vec![1,2,3]);
         let drawing = r#"<w:drawing><wp:anchor><wp:extent cx="127000" cy="127000"/><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:wrapSquare/><a:blip r:embed="rId1"/></wp:anchor></w:drawing>"#;
@@ -17266,7 +17360,7 @@ fn s1598_val_off(e: &quick_xml::events::BytesStart) -> bool {
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
-            comments: HashMap::new(), theme: ThemeColors::default(),
+            comments: HashMap::new(), theme: ThemeColors::default(), diagram_drawings: HashMap::new(),
         };
         ctx.media.insert("rId1".into(), vec![1,2,3]);
         let drawing = r#"<w:drawing><wp:anchor><wp:extent cx="127000" cy="127000"/><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:wrapSquare/><a:blip r:embed="rId1"/></wp:anchor></w:drawing>"#;
@@ -17296,7 +17390,7 @@ fn floating_source_point_survives_text_and_run_transformations(){
         _rels:HashMap::new(),media:HashMap::new(),media_types:HashMap::new(),hyperlinks:HashMap::new(),
         numbering:NumberingDefinitions::default(),list_counters:std::cell::RefCell::new(HashMap::new()),
         fields:std::cell::RefCell::new(Vec::new()),paragraph_base:std::cell::RefCell::new(RunStyle::default()),
-        footnotes:HashMap::new(),endnotes:HashMap::new(),comments:HashMap::new(),theme:ThemeColors::default(),
+        footnotes:HashMap::new(),endnotes:HashMap::new(),comments:HashMap::new(),theme:ThemeColors::default(),diagram_drawings:HashMap::new(),
     };
     ctx.media.insert("rId1".into(),vec![1,2,3]);
     let draw=r#"<w:drawing><wp:anchor><wp:extent cx="127000" cy="127000"/><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:wrapSquare/><a:blip r:embed="rId1"/></wp:anchor></w:drawing>"#;
@@ -17340,7 +17434,7 @@ fn math_run_properties_use_the_package_font_and_style_context() {
             font_family_east_asia:Some("Inherited EA face".into()),
             font_hint_east_asia:Some(true),font_size:Some(10.5), ..RunStyle::default()
         }),
-        footnotes:HashMap::new(),endnotes:HashMap::new(),comments:HashMap::new(),theme:ThemeColors::default(),
+        footnotes:HashMap::new(),endnotes:HashMap::new(),comments:HashMap::new(),theme:ThemeColors::default(),diagram_drawings:HashMap::new(),
     };
     let styles=StyleSheet::default();
     for prefix in ["w", "ns7"] {
@@ -17375,7 +17469,7 @@ fn math_operator_control_color_uses_package_context_without_coloring_leaves() {
         numbering: NumberingDefinitions::default(), list_counters: std::cell::RefCell::new(HashMap::new()),
         fields: std::cell::RefCell::new(Vec::new()), paragraph_base: std::cell::RefCell::new(RunStyle {
             color: Some("00FF00".into()), ..RunStyle::default()
-        }), footnotes: HashMap::new(), endnotes: HashMap::new(), comments: HashMap::new(), theme: ThemeColors::default(),
+        }), footnotes: HashMap::new(), endnotes: HashMap::new(), comments: HashMap::new(), theme: ThemeColors::default(), diagram_drawings: HashMap::new(),
     };
     for prefix in ["w", "ns7"] {
         for (control, expected) in [(format!(r#"<m:ctrlPr><{prefix}:rPr><{prefix}:color {prefix}:val="FF0000"/></{prefix}:rPr></m:ctrlPr>"#), Some("FF0000")),
