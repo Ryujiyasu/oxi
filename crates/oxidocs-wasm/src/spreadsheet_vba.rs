@@ -24661,6 +24661,661 @@ impl<'a> WorkbookHost<'a> {
     }
 }
 
+// The registry owns real hosts. Project views only borrow it for one native
+// operation, so VBA callbacks can re-enter another view after that borrow ends.
+struct WorkbookApplication<'a> {
+    hosts: BTreeMap<u64, WorkbookHost<'a>>,
+    arena: std::rc::Rc<std::cell::RefCell<NativeObjectArena>>,
+    active: u64,
+    application: ObjectRef,
+    applications: BTreeMap<u64, ObjectRef>,
+    member_owners: Vec<u64>,
+    last_owner: u64,
+    next_callback: u64,
+    callbacks: BTreeMap<u64, (u64, u64)>,
+    callback_keys: BTreeMap<(u64, u64), u64>,
+    running_callbacks: Vec<(u64, u64)>,
+}
+
+impl<'a> WorkbookApplication<'a> {
+    fn new(mut host: WorkbookHost<'a>) -> Self {
+        let owner = host.objects.owner;
+        let arena = host.objects.arena.clone();
+        let Value::Object(application) = host.object(HostObject::Application) else {
+            unreachable!("Application has an Automation identity");
+        };
+        let mut registry = Self {
+            hosts: BTreeMap::new(),
+            arena,
+            active: owner,
+            application,
+            applications: BTreeMap::new(),
+            member_owners: Vec::new(),
+            last_owner: owner,
+            next_callback: 0,
+            callbacks: BTreeMap::new(),
+            callback_keys: BTreeMap::new(),
+            running_callbacks: Vec::new(),
+        };
+        assert!(
+            registry.insert(host).is_ok(),
+            "fresh registry accepts its first host"
+        );
+        registry
+    }
+
+    fn insert(
+        &mut self,
+        mut host: WorkbookHost<'a>,
+    ) -> Result<(), Box<(WorkbookHost<'a>, &'static str)>> {
+        let owner = host.objects.owner;
+        if self.hosts.contains_key(&owner) {
+            return Err(Box::new((host, "duplicate workbook owner")));
+        }
+        if !std::rc::Rc::ptr_eq(&self.arena, &host.objects.arena) {
+            return Err(Box::new((
+                host,
+                "workbooks must share the actual native identity arena",
+            )));
+        }
+        let Value::Object(application) = host.object(HostObject::Application) else {
+            unreachable!("Application has an Automation identity");
+        };
+        self.applications.insert(owner, application);
+        self.hosts.insert(owner, host);
+        Ok(())
+    }
+
+    fn native_owner(&self, object: &ObjectRef) -> Option<u64> {
+        if object.is_native_stream() || object.handle >= (1_u64 << 63) {
+            return None;
+        }
+        self.arena
+            .borrow()
+            .entries
+            .get(host_object_index(object.handle))
+            .map(|entry| entry.0)
+            .filter(|owner| self.hosts.contains_key(owner))
+    }
+
+    fn is_application(&self, object: &ObjectRef) -> bool {
+        self.native_owner(object)
+            .and_then(|owner| self.hosts.get(&owner))
+            .is_some_and(|host| host.is_application(object))
+    }
+
+    fn owner(
+        &self,
+        code_owner: u64,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        capture: bool,
+    ) -> u64 {
+        if receiver.is_some_and(|object| !self.is_application(object)) {
+            return self
+                .native_owner(receiver.expect("native receiver"))
+                .unwrap_or(code_owner);
+        }
+        if name.eq_ignore_ascii_case("ThisWorkbook") {
+            return code_owner;
+        }
+        if name.eq_ignore_ascii_case("Caller") {
+            if let Some((_, owner)) = self.running_callbacks.last() {
+                return *owner;
+            }
+        }
+        if capture {
+            if let Some(owner) = self.member_owners.last() {
+                return *owner;
+            }
+        }
+        self.active
+    }
+
+    fn local_receiver(&self, owner: u64, receiver: Option<&ObjectRef>) -> Option<ObjectRef> {
+        receiver
+            .filter(|object| self.is_application(object))
+            .and_then(|_| self.applications.get(&owner).cloned())
+    }
+
+    fn operation_owner(&self) -> u64 {
+        self.member_owners
+            .last()
+            .copied()
+            .unwrap_or(self.last_owner)
+    }
+
+    fn callback(&self, key: u64) -> (u64, u64) {
+        *self.callbacks.get(&key).expect("live application callback")
+    }
+}
+
+struct ApplicationHost<'a> {
+    application: std::rc::Rc<std::cell::RefCell<WorkbookApplication<'a>>>,
+    code_owner: u64,
+}
+
+struct ApplicationArrayAssignment {
+    owner: u64,
+    state: Box<dyn std::any::Any>,
+}
+
+impl<'a> ApplicationHost<'a> {
+    fn read<R>(
+        &self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        code_context: bool,
+        work: impl FnOnce(&WorkbookHost<'a>, Option<&ObjectRef>) -> R,
+    ) -> R {
+        let application = self.application.borrow();
+        let owner = if code_context {
+            self.code_owner
+        } else {
+            application.owner(self.code_owner, receiver, name, true)
+        };
+        let local = application.local_receiver(owner, receiver);
+        work(
+            application
+                .hosts
+                .get(&owner)
+                .expect("registered code owner"),
+            local.as_ref().or(receiver),
+        )
+    }
+
+    fn write<R>(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        code_context: bool,
+        work: impl FnOnce(&mut WorkbookHost<'a>, Option<&ObjectRef>) -> R,
+    ) -> R {
+        let mut application = self.application.borrow_mut();
+        let owner = if code_context {
+            self.code_owner
+        } else {
+            application.owner(self.code_owner, receiver, name, true)
+        };
+        let local = application.local_receiver(owner, receiver);
+        application.last_owner = owner;
+        work(
+            application
+                .hosts
+                .get_mut(&owner)
+                .expect("registered code owner"),
+            local.as_ref().or(receiver),
+        )
+    }
+
+    fn complete_call(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        result: &mut Result<Option<Value>, String>,
+    ) {
+        self.canonical_result(result);
+        if !name.eq_ignore_ascii_case("Activate") || !matches!(result, Ok(Some(_))) {
+            return;
+        }
+        let Some(receiver) = receiver else {
+            return;
+        };
+        let mut application = self.application.borrow_mut();
+        if let Some(owner) = application.native_owner(receiver) {
+            let host = application.hosts.get(&owner).expect("native workbook");
+            if host.is_workbook(receiver)
+                || matches!(
+                    host.objects.get(host_object_index(receiver.handle)),
+                    Some(HostObject::Worksheet(_))
+                )
+            {
+                application.active = owner;
+            }
+        }
+    }
+    fn canonical_result(&self, result: &mut Result<Option<Value>, String>) {
+        if let Ok(Some(Value::Object(object))) = result {
+            if object.kind == "Application" {
+                let application = self.application.borrow();
+                if application.is_application(object) {
+                    *object = application.application.clone();
+                }
+            }
+        }
+    }
+
+    fn begin_member(&mut self, receiver: Option<&ObjectRef>, name: &str, kind: u8) {
+        let mut application = self.application.borrow_mut();
+        let owner = application.owner(self.code_owner, receiver, name, false);
+        let local = application.local_receiver(owner, receiver);
+        application.member_owners.push(owner);
+        application.last_owner = owner;
+        let host = application
+            .hosts
+            .get_mut(&owner)
+            .expect("registered native owner");
+        match (kind, local.as_ref().or(receiver)) {
+            (1, receiver) => host.begin_member_call(receiver, name),
+            (2, Some(receiver)) => host.begin_member_get(receiver, name),
+            (4, Some(receiver)) => host.begin_member_set(receiver, name),
+            _ => unreachable!("member get/set needs its receiver"),
+        }
+    }
+
+    fn end_member(&mut self, receiver: Option<&ObjectRef>, name: &str, kind: u8) {
+        let mut application = self.application.borrow_mut();
+        let owner = application
+            .member_owners
+            .pop()
+            .expect("balanced application member call");
+        let local = application.local_receiver(owner, receiver);
+        let host = application
+            .hosts
+            .get_mut(&owner)
+            .expect("registered native owner");
+        match (kind, local.as_ref().or(receiver)) {
+            (1, receiver) => host.end_member_call(receiver, name),
+            (2, Some(receiver)) => host.end_member_get(receiver, name),
+            (4, Some(receiver)) => host.end_member_set(receiver, name),
+            _ => unreachable!("member get/set needs its receiver"),
+        }
+    }
+}
+
+impl Host for ApplicationHost<'_> {
+    fn begin_member_call(&mut self, receiver: Option<&ObjectRef>, name: &str) {
+        self.begin_member(receiver, name, 1);
+    }
+    fn end_member_call(&mut self, receiver: Option<&ObjectRef>, name: &str) {
+        self.end_member(receiver, name, 1);
+    }
+    fn begin_member_get(&mut self, receiver: &ObjectRef, name: &str) {
+        self.begin_member(Some(receiver), name, 2);
+    }
+    fn end_member_get(&mut self, receiver: &ObjectRef, name: &str) {
+        self.end_member(Some(receiver), name, 2);
+    }
+    fn begin_member_set(&mut self, receiver: &ObjectRef, name: &str) {
+        self.begin_member(Some(receiver), name, 4);
+    }
+    fn end_member_set(&mut self, receiver: &ObjectRef, name: &str) {
+        self.end_member(Some(receiver), name, 4);
+    }
+    fn begin_array_set(
+        &mut self,
+        receiver: &ObjectRef,
+        name: &str,
+        args: &[Value],
+        value: &Value,
+    ) -> Result<Option<Box<dyn std::any::Any>>, String> {
+        let mut application = self.application.borrow_mut();
+        let owner = application.owner(self.code_owner, Some(receiver), name, true);
+        let local = application.local_receiver(owner, Some(receiver));
+        application.last_owner = owner;
+        let state = application
+            .hosts
+            .get_mut(&owner)
+            .expect("registered native owner")
+            .begin_array_set(local.as_ref().unwrap_or(receiver), name, args, value)?;
+        Ok(state.map(|state| {
+            Box::new(ApplicationArrayAssignment { owner, state }) as Box<dyn std::any::Any>
+        }))
+    }
+    fn resume_array_set(
+        &mut self,
+        state: &mut dyn std::any::Any,
+        resolved: Option<Result<Value, String>>,
+    ) -> Result<Option<Value>, String> {
+        let state = state
+            .downcast_mut::<ApplicationArrayAssignment>()
+            .expect("application array assignment");
+        let mut application = self.application.borrow_mut();
+        application.last_owner = state.owner;
+        application
+            .hosts
+            .get_mut(&state.owner)
+            .expect("array assignment workbook")
+            .resume_array_set(state.state.as_mut(), resolved)
+    }
+    fn take_user_function_calls(&mut self) -> Vec<(u64, String, Vec<Value>)> {
+        let mut application = self.application.borrow_mut();
+        let owner = application.operation_owner();
+        let calls = application
+            .hosts
+            .get_mut(&owner)
+            .expect("calculation workbook")
+            .take_user_function_calls();
+        calls
+            .into_iter()
+            .map(|(local, name, args)| {
+                let identity = (owner, local);
+                let key = match application.callback_keys.get(&identity) {
+                    Some(key) => *key,
+                    None => {
+                        let key = application.next_callback;
+                        application.next_callback = key
+                            .checked_add(1)
+                            .expect("application callback identity overflow");
+                        application.callbacks.insert(key, identity);
+                        application.callback_keys.insert(identity, key);
+                        key
+                    }
+                };
+                (key, name, args)
+            })
+            .collect()
+    }
+    fn user_function_project(&self, key: u64) -> Option<u64> {
+        self.application
+            .borrow()
+            .callbacks
+            .get(&key)
+            .map(|(owner, _)| *owner)
+    }
+    fn enter_user_function(&mut self, key: u64) {
+        let mut application = self.application.borrow_mut();
+        let (owner, local) = application.callback(key);
+        application.running_callbacks.push((key, owner));
+        application
+            .hosts
+            .get_mut(&owner)
+            .expect("callback workbook")
+            .enter_user_function(local);
+    }
+    fn enter_user_function_body(&mut self, key: u64) {
+        let mut application = self.application.borrow_mut();
+        let (owner, local) = application.callback(key);
+        application
+            .hosts
+            .get_mut(&owner)
+            .expect("callback workbook")
+            .enter_user_function_body(local);
+    }
+    fn user_function_returns_reference(&self, key: u64, value: &Value) -> bool {
+        let application = self.application.borrow();
+        let (owner, local) = application.callback(key);
+        application
+            .hosts
+            .get(&owner)
+            .expect("callback workbook")
+            .user_function_returns_reference(local, value)
+    }
+    fn answer_user_function(&mut self, key: u64, value: Value) {
+        let mut application = self.application.borrow_mut();
+        let (owner, local) = application.callback(key);
+        application
+            .hosts
+            .get_mut(&owner)
+            .expect("callback workbook")
+            .answer_user_function(local, value);
+        assert_eq!(
+            application.running_callbacks.pop(),
+            Some((key, owner)),
+            "balanced application callback"
+        );
+    }
+    fn prioritize_user_function_calls(
+        &mut self,
+        completed: u64,
+        pending: &std::collections::BTreeSet<u64>,
+    ) -> Vec<u64> {
+        let mut application = self.application.borrow_mut();
+        let (owner, local) = application.callback(completed);
+        let pending = pending
+            .iter()
+            .filter_map(|key| application.callbacks.get(key))
+            .filter_map(|(book, local)| (*book == owner).then_some(*local))
+            .collect();
+        let priority = application
+            .hosts
+            .get_mut(&owner)
+            .expect("callback workbook")
+            .prioritize_user_function_calls(local, &pending);
+        let priority = priority
+            .iter()
+            .filter_map(|local| application.callback_keys.get(&(owner, *local)).copied())
+            .collect();
+        application.callbacks.remove(&completed);
+        application.callback_keys.remove(&(owner, local));
+        priority
+    }
+    fn resume_user_function_calculation(&mut self) -> Result<(), String> {
+        let mut application = self.application.borrow_mut();
+        let owner = application.operation_owner();
+        application
+            .hosts
+            .get_mut(&owner)
+            .expect("calculation workbook")
+            .resume_user_function_calculation()
+    }
+
+    fn automation_member_name(
+        &self,
+        _receiver: &ObjectRef,
+        requested: &str,
+        candidates: &[&str],
+    ) -> Option<String> {
+        self.read(Some(_receiver), "", false, |host, receiver| {
+            host.automation_member_name(receiver.expect("native receiver"), requested, candidates)
+        })
+    }
+    fn automation_invocation_allowed(&self, _receiver: &ObjectRef, _name: &str, _kind: u8) -> bool {
+        self.read(Some(_receiver), _name, false, |host, receiver| {
+            host.automation_invocation_allowed(receiver.expect("native receiver"), _name, _kind)
+        })
+    }
+    fn automation_invocation_error(
+        &self,
+        _receiver: &ObjectRef,
+        _name: &str,
+        _kind: u8,
+    ) -> Option<i64> {
+        self.read(Some(_receiver), _name, false, |host, receiver| {
+            host.automation_invocation_error(receiver.expect("native receiver"), _name, _kind)
+        })
+    }
+    fn property_assignment_error(
+        &self,
+        _receiver: Option<&ObjectRef>,
+        _name: &str,
+        _value: &Value,
+    ) -> Option<i64> {
+        self.read(_receiver, _name, false, |host, receiver| {
+            host.property_assignment_error(receiver, _name, _value)
+        })
+    }
+    fn property_assignment_value(
+        &self,
+        _receiver: Option<&ObjectRef>,
+        _name: &str,
+        _value: &Value,
+        _by_reference: bool,
+    ) -> Option<Value> {
+        self.read(_receiver, _name, false, |host, receiver| {
+            host.property_assignment_value(receiver, _name, _value, _by_reference)
+        })
+    }
+    fn default_member_error(&self, _receiver: &ObjectRef) -> Option<i64> {
+        self.read(Some(_receiver), "", false, |host, receiver| {
+            host.default_member_error(receiver.expect("native receiver"))
+        })
+    }
+    fn prepare_automation_get(
+        &self,
+        _receiver: &ObjectRef,
+        _name: &str,
+        _args: &[Value],
+    ) -> Result<Option<(String, Vec<Value>)>, String> {
+        self.read(Some(_receiver), _name, false, |host, receiver| {
+            host.prepare_automation_get(receiver.expect("native receiver"), _name, _args)
+        })
+    }
+    fn bind_indexed_assignment(
+        &self,
+        _receiver: &ObjectRef,
+        _name: &str,
+        args: &[Value],
+        names: &[Option<String>],
+    ) -> Result<Option<Vec<Value>>, String> {
+        self.read(Some(_receiver), _name, false, |host, receiver| {
+            host.bind_indexed_assignment(receiver.expect("native receiver"), _name, args, names)
+        })
+    }
+    fn assignment_global_type(&self, _name: &str) -> Option<String> {
+        self.read(None, _name, true, |host, _receiver| {
+            host.assignment_global_type(_name)
+        })
+    }
+    fn assignment_call_parameters(
+        &self,
+        _receiver_type: Option<&str>,
+        _name: &str,
+    ) -> Option<Vec<String>> {
+        self.read(None, _name, true, |host, _receiver| {
+            host.assignment_call_parameters(_receiver_type, _name)
+        })
+    }
+    fn assignment_call_result(&self, _receiver_type: Option<&str>, _name: &str) -> Option<String> {
+        self.read(None, _name, true, |host, _receiver| {
+            host.assignment_call_result(_receiver_type, _name)
+        })
+    }
+    fn assignment_indices_first(&self, _receiver_type: &str, _name: &str) -> bool {
+        self.read(None, _name, true, |host, _receiver| {
+            host.assignment_indices_first(_receiver_type, _name)
+        })
+    }
+    fn error_help(&self, _number: i64, _source: Option<&str>) -> Option<(String, i64)> {
+        self.read(None, "", true, |host, _receiver| {
+            host.error_help(_number, _source)
+        })
+    }
+    fn macro_reference(&self, requested: &str) -> Result<String, String> {
+        self.read(None, "", true, |host, _receiver| {
+            host.macro_reference(requested)
+        })
+    }
+    fn macro_unavailable(&self, requested: &str) -> String {
+        self.read(None, "", true, |host, _receiver| {
+            host.macro_unavailable(requested)
+        })
+    }
+    fn call(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        let mut result = self.write(receiver, name, false, |host, receiver| {
+            host.call(receiver, name, args)
+        });
+        self.complete_call(receiver, name, &mut result);
+        result
+    }
+    fn call_named(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+        _argument_names: &[Option<String>],
+    ) -> Result<Option<Value>, String> {
+        let mut result = self.write(receiver, name, false, |host, receiver| {
+            host.call_named(receiver, name, args, _argument_names)
+        });
+        self.complete_call(receiver, name, &mut result);
+        result
+    }
+    fn call_with_files(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+        _files: &mut oxivba_core::files::Files,
+    ) -> Result<Option<Value>, String> {
+        let mut result = self.write(receiver, name, false, |host, receiver| {
+            host.call_with_files(receiver, name, args, _files)
+        });
+        self.complete_call(receiver, name, &mut result);
+        result
+    }
+    fn call_named_with_files(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+        argument_names: &[Option<String>],
+        _files: &mut oxivba_core::files::Files,
+    ) -> Result<Option<Value>, String> {
+        let mut result = self.write(receiver, name, false, |host, receiver| {
+            host.call_named_with_files(receiver, name, args, argument_names, _files)
+        });
+        self.complete_call(receiver, name, &mut result);
+        result
+    }
+    fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+        let mut result = self.write(Some(receiver), name, false, |host, receiver| {
+            host.get(receiver.expect("native receiver"), name)
+        });
+        self.canonical_result(&mut result);
+        result
+    }
+    fn user_functions(&mut self, _names: &[String]) {
+        self.write(None, "", true, |host, _receiver| {
+            host.user_functions(_names)
+        })
+    }
+    fn user_function_reference_arguments(&mut self, _functions: &[(String, Vec<usize>)]) {
+        self.write(None, "", true, |host, _receiver| {
+            host.user_function_reference_arguments(_functions)
+        })
+    }
+    fn user_function_variant_arguments(&mut self, _functions: &[(String, Vec<usize>)]) {
+        self.write(None, "", true, |host, _receiver| {
+            host.user_function_variant_arguments(_functions)
+        })
+    }
+    fn finish_execution(&mut self) -> Result<(), String> {
+        self.write(None, "", true, |host, _receiver| host.finish_execution())
+    }
+    fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        self.write(Some(receiver), name, false, |host, receiver| {
+            host.set(receiver.expect("native receiver"), name, value)
+        })
+    }
+    fn set_indexed(
+        &mut self,
+        _receiver: &ObjectRef,
+        _name: &str,
+        _args: &[Value],
+        _value: Value,
+    ) -> Result<bool, String> {
+        self.write(Some(_receiver), _name, false, |host, receiver| {
+            host.set_indexed(receiver.expect("native receiver"), _name, _args, _value)
+        })
+    }
+    fn set_from_object(
+        &mut self,
+        _receiver: &ObjectRef,
+        _name: &str,
+        _object: &ObjectRef,
+    ) -> Result<Option<bool>, String> {
+        self.write(Some(_receiver), _name, false, |host, receiver| {
+            host.set_from_object(receiver.expect("native receiver"), _name, _object)
+        })
+    }
+    fn enumeration_item_is_live(&self, _receiver: &ObjectRef, _value: &Value) -> bool {
+        self.read(Some(_receiver), "", false, |host, receiver| {
+            host.enumeration_item_is_live(receiver.expect("native receiver"), _value)
+        })
+    }
+    fn enumerate(&mut self, _receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
+        self.write(Some(_receiver), "", false, |host, receiver| {
+            host.enumerate(receiver.expect("native receiver"))
+        })
+    }
+}
+
 impl Host for WorkbookHost<'_> {
     fn begin_array_set(&mut self, receiver: &ObjectRef, name: &str, args: &[Value], value: &Value)
         -> Result<Option<Box<dyn std::any::Any>>, String> {
@@ -39902,11 +40557,14 @@ fn execute_workbook_invocation(
             }
             std::sync::Arc::new(values)
         }).clone();
+        let code_owner = host.objects.owner;
+        let application = std::rc::Rc::new(std::cell::RefCell::new(WorkbookApplication::new(host)));
+        let mut application_host = ApplicationHost { application: application.clone(), code_owner };
         let mut runtime = Runtime::new(&module)
             .with_error_environment(context.environment)
             .with_project_name(context.project_name)
             .with_classes(&classes)
-            .with_host(&mut host)
+            .with_host(&mut application_host)
             .with_random_seed(context.random_seed)
             .with_current_time(context.current_time)
             .with_reference_constants(constants);
@@ -39960,6 +40618,8 @@ fn execute_workbook_invocation(
                 None
             } else { Some(runtime.into_project_state()) }
         };
+        drop(application_host);
+        host = application.borrow_mut().hosts.remove(&code_owner).expect("invoking workbook remains registered");
         result
     } else { Ok(Value::Empty) };
     host.file_io.files = file_system;
@@ -40063,98 +40723,78 @@ mod tests {
     #[test]
     fn actual_owned_books_share_native_ids_and_keep_code_and_data_owners() {
         use std::{cell::RefCell, rc::Rc};
-        struct Books {
-            hosts: BTreeMap<u64, WorkbookHost<'static>>,
-            arena: Rc<RefCell<NativeObjectArena>>,
-            active: u64,
-        }
-        impl Books {
-            fn receiver_owner(&self, object: &ObjectRef) -> Result<u64, String> {
-                self.arena
-                    .borrow()
-                    .entries
-                    .get(host_object_index(object.handle))
-                    .map(|entry| entry.0)
-                    .ok_or_else(|| "Unknown native object identity".into())
-            }
-        }
-        struct Proxy {
-            books: Rc<RefCell<Books>>,
-            code_owner: u64,
-        }
-        impl Host for Proxy {
-            fn call(
-                &mut self,
-                receiver: Option<&ObjectRef>,
-                name: &str,
-                args: &[Value],
-            ) -> Result<Option<Value>, String> {
-                let mut books = self.books.borrow_mut();
-                let owner = match receiver {
-                    Some(object) => books.receiver_owner(object)?,
-                    None if name.eq_ignore_ascii_case("ThisWorkbook") => self.code_owner,
-                    None => books.active,
-                };
-                let name = if receiver.is_none() && name.eq_ignore_ascii_case("ActiveWorkbook") {
-                    "ThisWorkbook"
-                } else {
-                    name
-                };
-                books
-                    .hosts
-                    .get_mut(&owner)
-                    .ok_or("Workbook is not open")?
-                    .call(receiver, name, args)
-            }
-            fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
-                let mut books = self.books.borrow_mut();
-                let owner = books.receiver_owner(receiver)?;
-                books
-                    .hosts
-                    .get_mut(&owner)
-                    .ok_or("Workbook is not open")?
-                    .get(receiver, name)
-            }
-            fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
-                let mut books = self.books.borrow_mut();
-                let owner = books.receiver_owner(receiver)?;
-                books
-                    .hosts
-                    .get_mut(&owner)
-                    .ok_or("Workbook is not open")?
-                    .set(receiver, name, value)
-            }
-        }
         const CODE: &str = r#"Attribute VB_Name = "Driver"
-    Private Count As Long
-    Public Sub Initial(ByVal number As Long)
-     ThisWorkbook.Worksheets(1).Range("A1").Value = number
-     Count = number
-    End Sub
-    Public Function MakeNative() As Object
-     Set MakeNative = ThisWorkbook.Worksheets(1).Range("A1")
-    End Function
-    Public Function ReadNative(ByVal target As Object) As String
-     ReadNative = CStr(target.Value) & "|" & ThisWorkbook.Name
-    End Function
-    Public Sub WriteNative(ByVal target As Object, ByVal number As Long)
-     target.Value = number
-    End Sub
-    Public Function Names() As String
-     Names = ThisWorkbook.Name & "|" & ActiveWorkbook.Name & "|" & CStr(Count)
-    End Function
-    Public Function NewWorker() As Object
-     Set NewWorker = New Worker
-    End Function
-    Public Function CallOwner(ByVal target As Object) As String
-     CallOwner = target.NameInfo()
-    End Function
-    VERSION 1.0 CLASS
-    Attribute VB_Name = "Worker"
-    Public Function NameInfo() As String
-     NameInfo = Driver.Names()
-    End Function
-    "#;
+Private Count As Long
+Public Sub Initial(ByVal number As Long)
+ ThisWorkbook.Worksheets(1).Range("A1").Value = number
+ Count = number
+End Sub
+Public Function MakeNative() As Object
+ Set MakeNative = ThisWorkbook.Worksheets(1).Range("A1")
+End Function
+Public Function ReadNative(ByVal target As Object) As String
+ ReadNative = CStr(target.Value) & "|" & ThisWorkbook.Name
+End Function
+Public Sub WriteNative(ByVal target As Object, ByVal number As Long)
+ target.Value = number
+End Sub
+Public Function Names() As String
+ Names = ThisWorkbook.Name & "|" & ActiveWorkbook.Name & "|" & CStr(Count)
+End Function
+Public Function NewWorker() As Object
+ Set NewWorker = New Worker
+End Function
+Public Function CallOwner(ByVal target As Object) As String
+ CallOwner = target.NameInfo()
+End Function
+Public Function App() As Object
+ Set App = ThisWorkbook.Application
+End Function
+Public Function ApplicationsMatch(ByVal other As Object) As String
+ ApplicationsMatch = CStr(Application Is other) & "|" & CStr(ObjPtr(Application) = ObjPtr(other))
+End Function
+Public Function ViaApplication() As String
+ ViaApplication = Application.ThisWorkbook.Name & "|" & Application.ActiveWorkbook.Name
+End Function
+Public Function ArrayDefault() As Long
+ ThisWorkbook.Activate
+ ArrayDefault = Count + 20
+End Function
+Public Sub WriteArray(ByVal target As Object)
+ Dim first As New Worker, second As New Worker
+ first.N = 1
+ second.N = 2
+ Dim values(1 To 2, 1 To 1) As Variant
+ Set values(1, 1) = first
+ Set values(2, 1) = second
+ target.Resize(RowSize:=2, ColumnSize:=1).Value = values
+End Sub
+Public Function SheetValue(ByVal number As Long) As Long
+ SheetValue = Count + number
+End Function
+Public Sub WriteFormula(ByVal target As Object)
+ target.Formula = "=SheetValue(1)"
+End Sub
+
+Public Function ApplicationsFromRange(ByVal target As Object) As String
+ ApplicationsFromRange = CStr(Application Is target.Application) & "|" & CStr(ObjPtr(Application) = ObjPtr(target.Application))
+End Function
+Public Function ActivateSelf() As String
+ ThisWorkbook.Activate
+ ActivateSelf = ActiveWorkbook.Name
+End Function
+
+VERSION 1.0 CLASS
+Attribute VB_Name = "Worker"
+Public N As Long
+Public Property Get ReadValue() As Long
+Attribute ReadValue.VB_UserMemId = 0
+ ReadValue = Driver.ArrayDefault() + N
+End Property
+Public Function NameInfo() As String
+ NameInfo = Driver.Names()
+End Function
+"#;
         fn call(runtime: &mut Runtime, id: u64, name: &str, args: Vec<Value>) -> Value {
             runtime
                 .in_application_project(id, |r| r.call(&format!("Driver.{name}"), args))
@@ -40163,19 +40803,17 @@ mod tests {
         let arena = Rc::new(RefCell::new(NativeObjectArena::default()));
         let mut a = WorkbookHost::new_owned_in(workbook(), 0, 1, arena.clone()).unwrap();
         let mut b = WorkbookHost::new_owned_in(workbook(), 0, 2, arena.clone()).unwrap();
-        a.file_name = Some("A.xlsx".into());
-        b.file_name = Some("B.xlsx".into());
-        let books = Rc::new(RefCell::new(Books {
-            hosts: BTreeMap::from([(1, a), (2, b)]),
-            arena: arena.clone(),
-            active: 2,
-        }));
-        let mut pa = Proxy {
-            books: books.clone(),
+        a.file_name = Some("A.xlsm".into());
+        b.file_name = Some("B.xlsm".into());
+        let books = Rc::new(RefCell::new(WorkbookApplication::new(a)));
+        assert!(books.borrow_mut().insert(b).is_ok());
+        books.borrow_mut().active = 2;
+        let mut pa = ApplicationHost {
+            application: books.clone(),
             code_owner: 1,
         };
-        let mut pb = Proxy {
-            books: books.clone(),
+        let mut pb = ApplicationHost {
+            application: books.clone(),
             code_owner: 2,
         };
         let (module, classes) = oxivba_core::parse_project(CODE).unwrap();
@@ -40215,16 +40853,16 @@ mod tests {
         );
         assert_eq!(
             call(&mut b, 1, "Names", vec![]),
-            Value::String("A.xlsx|B.xlsx|5".into())
+            Value::String("A.xlsm|B.xlsm|5".into())
         );
         assert_eq!(
             call(&mut b, 2, "Names", vec![]),
-            Value::String("B.xlsx|B.xlsx|17".into())
+            Value::String("B.xlsm|B.xlsm|17".into())
         );
         // B code reads/writes A's native range while retaining B's ThisWorkbook.
         assert_eq!(
             call(&mut b, 2, "ReadNative", vec![range_a.clone()]),
-            Value::String("5|B.xlsx".into())
+            Value::String("5|B.xlsm".into())
         );
         call(
             &mut b,
@@ -40234,18 +40872,44 @@ mod tests {
         );
         assert_eq!(
             call(&mut b, 1, "ReadNative", vec![range_a.clone()]),
-            Value::String("9|A.xlsx".into())
+            Value::String("9|A.xlsm".into())
         );
         assert_eq!(
             call(&mut b, 2, "ReadNative", vec![range_b.clone()]),
-            Value::String("17|B.xlsx".into())
+            Value::String("17|B.xlsm".into())
         );
         // A source class called from B still executes A code against the same actual hosts.
         let worker_a = call(&mut b, 1, "NewWorker", vec![]);
         assert_eq!(
             call(&mut b, 2, "CallOwner", vec![worker_a]),
-            Value::String("A.xlsx|B.xlsx|5".into())
+            Value::String("A.xlsm|B.xlsm|5".into())
         );
+
+        assert_eq!(call(&mut b, 1, "App", vec![]), call(&mut b, 2, "App", vec![]));
+        let application_a = call(&mut b, 1, "App", vec![]);
+        assert_eq!(call(&mut b, 2, "ApplicationsMatch", vec![application_a]), Value::String("True|True".into()));
+
+        assert_eq!(call(&mut b, 1, "ViaApplication", vec![]), Value::String("A.xlsm|B.xlsm".into()));
+        assert_eq!(call(&mut b, 2, "ApplicationsFromRange", vec![range_a.clone()]), Value::String("True|True".into()));
+        assert_eq!(call(&mut b, 1, "ActivateSelf", vec![]), Value::String("A.xlsm".into()));
+        assert_eq!(call(&mut b, 2, "ViaApplication", vec![]), Value::String("B.xlsm|A.xlsm".into()));
+        // Resolving B's default properties activates B while an A array write
+        // is suspended. Its actual continuation must still commit to A.
+        call(&mut b, 2, "WriteArray", vec![range_a.clone()]);
+        assert_eq!(books.borrow().active, 2);
+        let range_a2 = books.borrow_mut().hosts.get_mut(&1).unwrap()
+            .call(None, "Range", &[Value::String("A2".into())]).unwrap().unwrap();
+        assert_eq!(call(&mut b, 1, "ReadNative", vec![range_a2]), Value::String("39|A.xlsm".into()));
+
+        assert_eq!(call(&mut b, 1, "ReadNative", vec![range_a.clone()]), Value::String("38|A.xlsm".into()));
+        assert_eq!(call(&mut b, 2, "ReadNative", vec![range_b.clone()]), Value::String("17|B.xlsm".into()));
+        // B triggers recalculation in A; A's function must read A's Count.
+        call(&mut b, 2, "WriteFormula", vec![range_a.clone()]);
+        assert_eq!(call(&mut b, 2, "ReadNative", vec![range_a.clone()]), Value::String("6|B.xlsm".into()));
+        assert!(books.borrow().callbacks.is_empty());
+        assert!(books.borrow().callback_keys.is_empty());
+        assert!(books.borrow().running_callbacks.is_empty());
+        assert!(books.borrow().member_owners.is_empty());
         drop(b);
         let mut books = books.borrow_mut();
         let a = books.hosts.remove(&1).unwrap();

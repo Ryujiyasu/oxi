@@ -372,6 +372,11 @@ pub trait Host {
         Vec::new()
     }
 
+    /// The project whose code implements a queued worksheet callback. Native
+    /// hosts may calculate another open workbook without changing the caller's
+    /// project. Hosts serving one project can keep the default.
+    fn user_function_project(&self, _key: u64) -> Option<u64> { None }
+
     fn answer_user_function(&mut self, _key: u64, _value: Value) {}
 
     /// Whether a returned object can expose another worksheet callback.
@@ -9873,16 +9878,15 @@ impl<'a> Runtime<'a> {
             if let Some(host) = self.host.as_deref_mut() {
                 host.enter_user_function(key);
             }
-            let saved = (self.err_in.take(), self.err_out.take());
-            // Excel's worksheet callbacks can enter private standard-module
-            // functions, independently of the currently executing VBA module.
-            let previous_callback = self.worksheet_callback_key.replace(key);
-            let value = match self.call_macro_procedure(&name, args, None) {
-                Err(_) => Value::Error(2015),
-                Ok(value) => value,
+            let owner = self.host.as_deref().and_then(|host| host.user_function_project(key));
+            let value = if let Some(owner) = owner.filter(|owner|
+                self.project_identity != 0 && *owner != self.project_identity) {
+                self.in_application_project(owner, |runtime|
+                    Ok(runtime.call_worksheet_function(key, &name, args)))
+                    .unwrap_or(Value::Error(2015))
+            } else {
+                self.call_worksheet_function(key, &name, args)
             };
-            self.worksheet_callback_key = previous_callback;
-            (self.err_in, self.err_out) = saved;
             if let Some(host) = self.host.as_deref_mut() {
                 let returned_reference = host.user_function_returns_reference(key, &value);
                 host.answer_user_function(key, value);
@@ -9906,6 +9910,17 @@ impl<'a> Runtime<'a> {
             }
         }
         Ok(true)
+    }
+
+    fn call_worksheet_function(&mut self, key: u64, name: &str, args: Vec<Value>) -> Value {
+        let saved = (self.err_in.take(), self.err_out.take());
+        // Worksheet callbacks may enter private standard-module functions.
+        // Their access and error context belong to the defining project.
+        let previous_callback = self.worksheet_callback_key.replace(key);
+        let value = self.call_macro_procedure(name, args, None).unwrap_or(Value::Error(2015));
+        self.worksheet_callback_key = previous_callback;
+        (self.err_in, self.err_out) = saved;
+        value
     }
 
     fn host_call_named(
@@ -19270,6 +19285,121 @@ fn statement_name(statement: &Statement) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn worksheet_callbacks_dispatch_in_the_owning_application_project() {
+        struct SheetHost {
+            scheduled: bool,
+            pending: Vec<(u64, String, Vec<Value>)>,
+            answers: Rc<RefCell<Vec<(u64, Value)>>>,
+        }
+        impl Host for SheetHost {
+            fn call(
+                &mut self,
+                _: Option<&ObjectRef>,
+                name: &str,
+                _: &[Value],
+            ) -> Result<Option<Value>, String> {
+                if name.eq_ignore_ascii_case("Calculate") {
+                    if self.scheduled { return Ok(Some(Value::Empty)); }
+                    self.scheduled = true;
+                    self.pending = [7, 8, 9]
+                        .into_iter()
+                        .map(|key| {
+                            (
+                                key,
+                                "Driver.SheetValue".to_string(),
+                                vec![Value::Integer(1)],
+                            )
+                        })
+                        .collect();
+                    Ok(Some(Value::Empty))
+                } else {
+                    Ok(None)
+                }
+            }
+            fn get(&mut self, _: &ObjectRef, _: &str) -> Result<Option<Value>, String> {
+                Ok(None)
+            }
+            fn set(&mut self, _: &ObjectRef, _: &str, _: Value) -> Result<bool, String> {
+                Ok(false)
+            }
+            fn take_user_function_calls(&mut self) -> Vec<(u64, String, Vec<Value>)> {
+                std::mem::take(&mut self.pending)
+            }
+            fn user_function_project(&self, key: u64) -> Option<u64> {
+                Some(match key {
+                    7 => 1,
+                    8 => 2,
+                    _ => 999,
+                })
+            }
+            fn answer_user_function(&mut self, key: u64, value: Value) {
+                self.answers.borrow_mut().push((key, value));
+            }
+        }
+        let source = r#"Attribute VB_Name = "Driver"
+    Private Count As Long
+    Public Sub Initial(ByVal number As Long)
+     Count = number
+    End Sub
+    Private Function SheetValue(ByVal number As Long) As Long
+     SheetValue = Count + number
+    End Function
+    Public Function Trigger() As Long
+     On Error Resume Next
+     Err.Raise 321
+     Calculate
+     Trigger = Err.Number
+    End Function
+    Public Function Read() As Long
+     Read = Count
+    End Function
+    "#;
+        let (module, classes) = crate::parse_project(source).unwrap();
+        let answers = Rc::new(RefCell::new(Vec::new()));
+        let mut ha = SheetHost {
+            scheduled: false,
+            pending: Vec::new(),
+            answers: answers.clone(),
+        };
+        let mut hb = SheetHost {
+            scheduled: false,
+            pending: Vec::new(),
+            answers: answers.clone(),
+        };
+        let mut a = Runtime::new(&module)
+            .with_classes(&classes)
+            .with_host(&mut ha);
+        let mut b = Runtime::new(&module)
+            .with_classes(&classes)
+            .with_host(&mut hb);
+        a.set_application_project_identity(1).unwrap();
+        b.set_application_project_identity(2).unwrap();
+        assert!(b.register_application_project(a).is_ok());
+        b.in_application_project(1, |r| r.call("Driver.Initial", vec![Value::Integer(5)]))
+            .unwrap();
+        b.call("Driver.Initial", vec![Value::Integer(17)]).unwrap();
+        assert_eq!(
+            b.call("Driver.Trigger", vec![]).unwrap(),
+            Value::Integer(321)
+        );
+        assert_eq!(
+            *answers.borrow(),
+            vec![
+                (7, Value::Integer(6)),
+                (8, Value::Integer(18)),
+                (9, Value::Error(2015))
+            ]
+        );
+        assert_eq!(b.call("Driver.Read", vec![]).unwrap(), Value::Integer(17));
+        assert_eq!(
+            b.in_application_project(1, |r| r.call("Driver.Read", vec![]))
+                .unwrap(),
+            Value::Integer(5)
+        );
+    }
+
     #[test]
     fn file_copy_and_name_preserve_distinct_coercion_order() {
         let source=r#"
