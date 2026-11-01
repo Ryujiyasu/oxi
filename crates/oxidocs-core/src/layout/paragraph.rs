@@ -1494,7 +1494,8 @@ impl<'a> ParagraphLayouter<'a> {
         );
         self.s1636_lane_shift.set(0.0);
         // S-TWOSEG: replace the full-width break with one row per pair of strips.
-        if let Some((_, seg1_w, _, seg2_w)) = s758_two_seg {
+        if let Some((_, seg1_w, seg2_x, seg2_w)) = s758_two_seg {
+            self.twoseg_seg2_shift.set(Some(seg2_x - start_x - indent_left));
             let two = self.break_two_segment_lines(
                 &fragments,
                 seg1_w,
@@ -1510,6 +1511,7 @@ impl<'a> ParagraphLayouter<'a> {
                 para_has_lrpb,
                 caps_active,
             );
+            self.twoseg_seg2_shift.set(None);
             if !two.is_empty() {
                 lines = two;
             }
@@ -1715,12 +1717,16 @@ impl<'a> ParagraphLayouter<'a> {
                         (f.0.as_str(), &f.1, f.2.clone(), f.3, f.4)).collect();
                     let first_indent=if planned.is_empty() { effective_first_indent } else { 0.0 };
                     self.s1636_lane_shift.set(sh);
-                    let mut broken = if let Some((_,left_width,_,right_width))=row_two {
-                        self.break_two_segment_lines(&refs,left_width,right_width,first_indent,
+                    let mut broken = if let Some((_,left_width,right_x,right_width))=row_two {
+                        let row_x = col_x_positions.get(column % num_columns.max(1)).copied().unwrap_or(start_x);
+                        self.twoseg_seg2_shift.set(Some(right_x - row_x - indent_left));
+                        let two = self.break_two_segment_lines(&refs,left_width,right_width,first_indent,
                             &para.style,effective_char_pitch,effective_cw_ratio,
                             page.doc_grid_lines_and_chars,true,
                             matches!(para.alignment,Alignment::Justify|Alignment::Distribute),
-                            page.doc_grid_no_type,para_has_lrpb,caps_active)
+                            page.doc_grid_no_type,para_has_lrpb,caps_active);
+                        self.twoseg_seg2_shift.set(None);
+                        two
                     } else {
                         self.break_into_lines(&refs, width,first_indent,
                             &para.style, effective_char_pitch, effective_cw_ratio,

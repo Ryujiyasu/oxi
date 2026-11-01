@@ -3378,6 +3378,11 @@ pub struct LayoutEngine {
     /// the lane's left edge relative to the paragraph's own left edge, so that
     /// tab stops (explicit and the default grid) keep their margin origin.
     s1636_lane_shift: std::cell::Cell<f32>,
+    /// OXI_TWOSEG_TAB: the right strip's x measured from the paragraph's tab
+    /// origin (column left + indent), set by a caller of break_two_segment_lines.
+    twoseg_seg2_shift: std::cell::Cell<Option<f32>>,
+    /// OXI_TWOSEG_TAB: true while break_two_segment_lines fills the LEFT strip.
+    twoseg_left_strip: std::cell::Cell<bool>,
     default_font_family: Option<String>,
     default_font_family_east_asia: Option<String>,
     /// S1370: the face a CJK character takes when its eastAsia font is
@@ -4081,6 +4086,8 @@ impl LayoutEngine {
             doc_default_sz_declared: false,
             s1318_floor_slack: std::cell::Cell::new(0.0),
             s1636_lane_shift: std::cell::Cell::new(0.0),
+            twoseg_seg2_shift: std::cell::Cell::new(None),
+            twoseg_left_strip: std::cell::Cell::new(false),
             default_font_family: None,
             default_font_family_east_asia: None,
             cjk_substitute_face: "Yu Mincho".to_string(),
@@ -4301,6 +4308,8 @@ impl LayoutEngine {
                 .is_some(),
             s1318_floor_slack: std::cell::Cell::new(0.0),
             s1636_lane_shift: std::cell::Cell::new(0.0),
+            twoseg_seg2_shift: std::cell::Cell::new(None),
+            twoseg_left_strip: std::cell::Cell::new(false),
             default_font_family,
             default_font_family_east_asia,
             cjk_substitute_face,
@@ -5651,8 +5660,22 @@ impl LayoutEngine {
         }
         match text {
             Some(t) if !t.chars().any(|c| c.is_ascii_alphanumeric() || c == ' ') => self.doc_body_has_real_cjk,
-            _ => self.doc_aum_ja_lang,
+            _ => self.doc_aum_ja_lang || self.aum_charset_80_absent(),
         }
+    }
+
+    /// OXI_AUM_CHARSET80_LATIN (2026-11-01, default ON, opt-out _DISABLE): with Arial
+    /// Unicode MS absent, a document whose fontTable declares it charset 80 gets ＭＳ
+    /// 明朝 for its AUM Latin too -- the 2026-10-17 law (one Word process per
+    /// document: declared charset 80 -> ＭＳ 明朝, undeclared -> Arial), so far used
+    /// only for markers. en/forms__006c06b0 (Normal = AUM 9pt, charset 80, lang
+    /// en-CA): every AUM paragraph is MS-Mincho half-width in a fresh Word process
+    /// («Local» 22.5 wide); Oxi set Arial (21.5). reports__619945 declares charset 0
+    /// and stays Arial.
+    fn aum_charset_80_absent(&self) -> bool {
+        self.aum_charset_80
+            && std::env::var_os("OXI_AUM_CHARSET80_LATIN_DISABLE").is_none()
+            && crate::font::runtime::resolve("Arial Unicode MS", false, false).is_none()
     }
 
     /// S1614: the ascent (pt) of a numbering marker set in Arial Unicode MS in a
@@ -13374,6 +13397,28 @@ cells={} pitch={:.2} text={:?}",
                     .iter()
                     .map(|(t, st, ft, ri, co)| (t.as_str(), st, ft.clone(), *ri, *co))
                     .collect();
+                // OXI_TWOSEG_TAB (2026-11-01, default ON, opt-out _DISABLE): a default tab
+                // whose next stop lies past the left strip goes to the right strip and
+                // advances there -- from the strip's own start under legacy layout, to
+                // the paragraph's ordinary stops under compatibilityMode 15.
+                // `_pb_tab_float_cross_gen.py` (TNR 10 tabs, 36pt stops from 57, a
+                // wrapSquare picture keeping 288.0..434.2 clear), Word Information(5):
+                // tabs 57..237, the 7th at 434.2, then 470.2 / 506.2 (no settings and
+                // compat 14) or 453 / 489 (compat 15), and the tab that would pass the
+                // margin opens the next line. Oxi spent the 7th tab at the end of the
+                // left strip and counted the right strip's stops from its start in
+                // every mode. en/educational__0071453c p1: ten tabs beside the logo make
+                // two lines in Word (26.25) and one in Oxi; the page sat 11.65 high.
+                let twoseg_tab = std::env::var_os("OXI_TWOSEG_TAB_DISABLE").is_none();
+                let saved_shift = self.s1636_lane_shift.get();
+                if twoseg_tab {
+                    self.twoseg_left_strip.set(seg == 0);
+                    if seg == 1 && self.compat_mode >= 15 && self.compat_mode_explicit {
+                        if let Some(shift) = self.twoseg_seg2_shift.get() {
+                            self.s1636_lane_shift.set(shift);
+                        }
+                    }
+                }
                 let broken = self.break_into_lines(
                     &refs,
                     *width,
@@ -13391,6 +13436,8 @@ cells={} pitch={:.2} text={:?}",
                     caps_size_split,
                     false,
                 );
+                self.twoseg_left_strip.set(false);
+                self.s1636_lane_shift.set(saved_shift);
                 let Some(head) = broken.first() else { break };
                 if seg == 0 {
                     seam = head.fragments.len();
@@ -19372,9 +19419,34 @@ cells={} pitch={:.2} text={:?}",
                 } else {
                     margins.and_then(|m| m.left).unwrap_or(5.4) + margins.and_then(|m| m.right).unwrap_or(5.4)
                 };
+                // OXI_PCT_BORDER_BASE (2026-11-01, default ON, opt-out _DISABLE): under
+                // compatibilityMode 15 the percentage is taken of the text width less
+                // half of each outer side rule. `_pb_fixed_tblw_grid_gen.py` (text
+                // 415.65, grid 418.2, compat 15): 5043 pct -> 419.2 with no rule, 418.2
+                // with 1pt rules, 416.2 with 3pt; 4500 pct -> 374.1 / 373.2 / 371.4;
+                // tblInd moves the table and never its width. ja/policies__07543a6b
+                // p46 (cell tcBorders sz 8, 5043 pct): Word's first column 133.23,
+                // Oxi 133.58 -- the half point let «…この製品は2週間» keep «間»,
+                // which Word wraps, and the next row moved a page up.
+                let edge = |cell: Option<&crate::ir::TableCell>, left: bool| -> f32 {
+                    let own = cell.and_then(|c| c.borders.as_ref()).and_then(|b| if left { b.left.as_ref() } else { b.right.as_ref() });
+                    match own {
+                        Some(b) => if matches!(b.style.as_str(), "nil" | "none") { 0.0 } else { b.width },
+                        None => if table.style.border_style.as_deref().map_or(true, |s| matches!(s, "nil" | "none")) { 0.0 }
+                            else { table.style.border_width.unwrap_or(0.0) },
+                    }
+                };
+                let border_cut = if self.table_modern_compat()
+                    && std::env::var_os("OXI_PCT_BORDER_BASE_DISABLE").is_none()
+                {
+                    let row0 = table.rows.first();
+                    (edge(row0.and_then(|r| r.cells.first()), true) + edge(row0.and_then(|r| r.cells.last()), false)) * 0.5
+                } else {
+                    0.0
+                };
                 let share = table.style.width.unwrap_or(0.0);
                 let sum: f32 = grid_cols.iter().sum();
-                let target = (content_width + lr) * share / 100.0;
+                let target = (content_width + lr - border_cut) * share / 100.0;
                 if share > 0.0 && sum > 0.0 && target > 0.0 && (target - sum).abs() > 0.5 {
                     let k = target / sum;
                     for w in &mut grid_cols {

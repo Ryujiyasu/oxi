@@ -2619,6 +2619,9 @@ pub struct FontInfo {
     /// Supported code pages, first 32 bits of the font signature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_page_range: Option<u32>,
+    /// First 32 Unicode-range bits of the font signature (w:sig usb0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unicode_range0: Option<u32>,
     /// Font family: "roman", "swiss", "modern", "decorative", "script", "auto"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub family: Option<String>,

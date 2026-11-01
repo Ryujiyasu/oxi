@@ -1953,6 +1953,11 @@ impl OoxmlParser {
                                     &String::from_utf8_lossy(&attr.value), 16,
                                 ).ok();
                             }
+                            if local_name(attr.key.as_ref()) == "usb0" {
+                                current_info.unicode_range0 = u32::from_str_radix(
+                                    &String::from_utf8_lossy(&attr.value), 16,
+                                ).ok();
+                            }
                         }
                     }
                     if local == "font" {
@@ -2006,6 +2011,11 @@ impl OoxmlParser {
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "csb0" {
                                     current_info.code_page_range = u32::from_str_radix(
+                                        &String::from_utf8_lossy(&attr.value), 16,
+                                    ).ok();
+                                }
+                                if local_name(attr.key.as_ref()) == "usb0" {
+                                    current_info.unicode_range0 = u32::from_str_radix(
                                         &String::from_utf8_lossy(&attr.value), 16,
                                     ).ok();
                                 }
@@ -16084,6 +16094,32 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
     // family x pitch x name; the signature is the discriminator, the family
     // the only second term. policies__00602e8a's NTPreCursivef (script, sig)
     // renders in Calibri 14; Oxi's Cambria fallback was ~4% wider.
+    // OXI_SIG_SYLFAEN (2026-11-01, default ON, opt-out _DISABLE): a missing face whose
+    // signature declares Armenian (usb0 bit 10) or Georgian (bit 26) is drawn in
+    // Sylfaen, before the S1444 Calibri / Cambria split. `_pb_missing_sig_script_gen.py`
+    // (an invented face, charset 00, family auto, one Word process per arm): usb0
+    // E50002FF / E50000FF / 040000FF / 000004FF -> Sylfaen, E10002FF / 010000FF (Thai)
+    // / 000000FF -> Calibri; the real name «Helvetica Neue» with E50002FF -> Sylfaen, «Menlo» too.
+    // en/creative__04374e00's body (Helvetica Neue, E50002FF) is Sylfaen in Word.
+    if std::env::var_os("OXI_SIG_SYLFAEN_DISABLE").is_none() {
+        for (name, info) in &document.styles.font_table {
+            // (registry aliases such as S846's Helvetica Neue -> Arial do not count:
+            // the face itself is what is missing)
+            // Names Windows' FontSubstitutes maps (Helvetica -> Arial, Times -> Times
+            // New Roman) and Arial Unicode MS (its own charset law) keep their route:
+            // the same probe with those names and E50002FF draws Helvetica / Times /
+            // ArialMT, and «Menlo» draws Sylfaen.
+            if info.unicode_range0.map_or(false, |u| u & ((1 << 10) | (1 << 26)) != 0)
+                && !matches!(name.as_str(), "Helvetica" | "Helv" | "Times" | "Tms Rmn" | "Courier" | "Arial Unicode MS")
+                && crate::font::runtime::resolve(name, false, false).is_none()
+                && crate::font::runtime::resolve("Sylfaen", false, false).is_some()
+                && !registry.get(name).is_cjk_83_64_font()
+                && !alias.contains_key(name)
+            {
+                alias.insert(name.clone(), "Sylfaen".to_string());
+            }
+        }
+    }
     if std::env::var_os("OXI_S1444_DISABLE").is_none() {
         for (name, info) in &document.styles.font_table {
             let cambria_family = matches!(

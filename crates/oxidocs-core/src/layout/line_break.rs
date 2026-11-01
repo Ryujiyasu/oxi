@@ -4454,7 +4454,10 @@ impl<'a> LineBreaker<'a> {
                                 && !current_line.fragments.is_empty()
                                 && next_relative > available_tw as f32 / 20.0 + 0.01
                                 && (current_width >= available_tw as f32 / 20.0 - 0.01
-                                    || s1251_trailing_tab)
+                                    || s1251_trailing_tab
+                                    || (self.twoseg_left_strip.get()
+                                        && explicit_stop.is_none()
+                                        && implied_stop.is_none()))
                             {
                                 if std::env::var("OXI_DBG1044").is_ok() {
                                     let head: String = current_line

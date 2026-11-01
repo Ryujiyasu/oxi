@@ -1369,8 +1369,18 @@ impl<'a> PageLayouter<'a> {
         let s758_on = std::env::var("OXI_S758_DISABLE").is_err();
         let s758_squares: std::collections::HashMap<usize, Vec<usize>> = if s758_on {
             let mut m: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+            // OXI_TIGHT_IMAGE_BAND (2026-11-01, default ON, opt-out _DISABLE): a
+            // paragraph-relative wrapTight picture keeps the text off like a square
+            // one (S1635 already counts Tight for margin/page-relative pictures).
+            // `_pb_tab_float_cross_gen.py` c15_t10_tight / _tight_behind (a full-box
+            // polygon, behindDoc 0 and 1): Word's tabs are identical to the
+            // wrapSquare arm -- 237, then 434.2 past the picture, two lines; Oxi
+            // registered no band and ran the tabs over it on one line.
+            // en/educational__0071453c p1's logo (wrapTight, behindDoc 1).
+            let tight_band = std::env::var_os("OXI_TIGHT_IMAGE_BAND_DISABLE").is_none();
             for (ii, img) in page.floating_images.iter().enumerate() {
-                if img.wrap_type == Some(crate::ir::WrapType::Square)
+                if (img.wrap_type == Some(crate::ir::WrapType::Square)
+                    || (tight_band && img.wrap_type == Some(crate::ir::WrapType::Tight)))
                     && img
                         .position
                         .as_ref()
@@ -2311,7 +2321,15 @@ impl<'a> PageLayouter<'a> {
                                 ix - gl,
                                 ip.dist_l.unwrap_or(9.0),
                                 ip.dist_r.unwrap_or(9.0),
-                                false,
+                                // a behindDoc Tight picture is physical (may reach into
+                                // the bottom margin) like the S981 text box
+                                std::env::var("OXI_S981_DISABLE").is_err()
+                                    && img.behind_doc
+                                    && img.wrap_type == Some(crate::ir::WrapType::Tight),
+                                // the picture's band steps like a square one: Word sets
+                                // the first line under it at bottom + before
+                                // (ja/technical__a018fed7, wrapThrough full-width
+                                // figure: 568.5; the line-step rule gave 604.3)
                                 false,
                                 ip.h_relative.as_deref() == Some("column"),
                             ));
