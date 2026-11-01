@@ -12,123 +12,9 @@
 //! child text box over the shape's text rectangle (`dsp:txXfrm`) -- the same
 //! form a Word drawing group takes, so the layout draws it the same way.
 
-use quick_xml::events::Event;
-use quick_xml::Reader;
-
+use super::dml::{average, color_of, parse_tree, run, text_box, Group, Node, EMU_PER_PT};
 use super::theme::ThemeColors;
-use crate::ir::{
-    Alignment, Block, FloatingPosition, Paragraph, ParagraphStyle, PathSeg, Run, RunStyle, TextBox,
-    VectorShape, WrapType,
-};
-
-const EMU_PER_PT: f32 = 12700.0;
-
-/// The shapes and text boxes of one SmartArt, positioned relative to its
-/// frame's top-left in points.
-pub(super) struct SmartArt {
-    pub shapes: Vec<VectorShape>,
-    pub texts: Vec<TextBox>,
-}
-
-/// One element of the drawing part, with the byte span it came from (a colour
-/// element's modifiers are read again from its source by the shared colour
-/// parser).
-struct Node {
-    name: String,
-    attrs: Vec<(String, String)>,
-    children: Vec<Node>,
-    text: String,
-    span: (usize, usize),
-}
-
-impl Node {
-    fn attr(&self, key: &str) -> Option<&str> {
-        self.attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
-    }
-    fn child(&self, name: &str) -> Option<&Node> {
-        self.children.iter().find(|c| c.name == name)
-    }
-    fn path(&self, names: &[&str]) -> Option<&Node> {
-        names.iter().try_fold(self, |n, name| n.child(name))
-    }
-    fn num(&self, key: &str) -> Option<f32> {
-        self.attr(key)?.parse().ok()
-    }
-}
-
-fn local(name: &[u8]) -> String {
-    let s = String::from_utf8_lossy(name);
-    s.rsplit(':').next().unwrap_or_default().to_string()
-}
-
-fn parse_tree(xml: &str) -> Option<Node> {
-    let mut reader = Reader::from_str(xml);
-    let mut stack: Vec<Node> = vec![Node { name: String::new(), attrs: vec![], children: vec![], text: String::new(), span: (0, 0) }];
-    loop {
-        let start = reader.buffer_position() as usize;
-        match reader.read_event().ok()? {
-            Event::Start(e) => {
-                let attrs = e
-                    .attributes()
-                    .flatten()
-                    .map(|a| (local(a.key.as_ref()), String::from_utf8_lossy(&a.value).into_owned()))
-                    .collect();
-                stack.push(Node { name: local(e.name().as_ref()), attrs, children: vec![], text: String::new(), span: (start, 0) });
-            }
-            Event::Empty(e) => {
-                let attrs = e
-                    .attributes()
-                    .flatten()
-                    .map(|a| (local(a.key.as_ref()), String::from_utf8_lossy(&a.value).into_owned()))
-                    .collect();
-                let end = reader.buffer_position() as usize;
-                stack.last_mut()?.children.push(Node { name: local(e.name().as_ref()), attrs, children: vec![], text: String::new(), span: (start, end) });
-            }
-            Event::Text(t) => {
-                if let Ok(text) = t.unescape() {
-                    stack.last_mut()?.text.push_str(&text);
-                }
-            }
-            Event::End(_) => {
-                let mut node = stack.pop()?;
-                node.span.1 = reader.buffer_position() as usize;
-                stack.last_mut()?.children.push(node);
-            }
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-    stack.pop()?.children.into_iter().next()
-}
-
-/// The colour of a fill/line/font element: its srgbClr, schemeClr or sysClr
-/// child with modifiers applied. `None` for noFill or no colour at all.
-fn color_of(parent: &Node, xml: &str, theme: &ThemeColors) -> Option<String> {
-    let c = parent.children.iter().find(|c| matches!(c.name.as_str(), "srgbClr" | "schemeClr" | "sysClr" | "prstClr"))?;
-    let base = match c.name.as_str() {
-        "srgbClr" => c.attr("val")?.to_string(),
-        "sysClr" => c.attr("lastClr").unwrap_or("000000").to_string(),
-        "schemeClr" => theme.resolve(c.attr("val")?)?.clone(),
-        _ => match c.attr("val")? {
-            "white" => "FFFFFF".to_string(),
-            _ => "000000".to_string(),
-        },
-    };
-    if c.children.is_empty() {
-        return Some(base.to_ascii_uppercase());
-    }
-    // Re-read the element so the shared parser applies its modifiers exactly
-    // as it does for a Word drawing.
-    let mut reader = Reader::from_str(&xml[c.span.0..c.span.1]);
-    loop {
-        match reader.read_event().ok()? {
-            Event::Start(_) => break,
-            Event::Eof => return Some(base),
-            _ => {}
-        }
-    }
-    Some(super::ooxml::parse_color_modifiers(&mut reader, &base, &c.name))
-}
+use crate::ir::{Alignment, Block, Paragraph, ParagraphStyle, PathSeg, RunStyle, TextBox, VectorShape};
 
 /// A solid fill, from the shape's own properties or, without any, its style's
 /// fillRef. A gradient is drawn in its first stop's colour.
@@ -145,22 +31,6 @@ fn fill_of(sp: &Node, xml: &str, theme: &ThemeColors) -> Option<String> {
     }
     let r = sp.path(&["style", "fillRef"])?;
     (r.num("idx").unwrap_or(0.0) > 0.0).then(|| color_of(r, xml, theme)).flatten()
-}
-
-/// The mean of hex colours: a gradient drawn as one colour.
-fn average(colors: impl Iterator<Item = String>) -> Option<String> {
-    let rgb: Vec<[u32; 3]> = colors
-        .filter_map(|c| {
-            let v = u32::from_str_radix(c.get(..6)?, 16).ok()?;
-            Some([v >> 16, (v >> 8) & 0xFF, v & 0xFF])
-        })
-        .collect();
-    if rgb.is_empty() {
-        return None;
-    }
-    let n = rgb.len() as u32;
-    let mean = |i: usize| (rgb.iter().map(|c| c[i]).sum::<u32>() + n / 2) / n;
-    Some(format!("{:02X}{:02X}{:02X}", mean(0), mean(1), mean(2)))
 }
 
 /// The outline colour and width in points.
@@ -428,32 +298,19 @@ fn text_blocks(sp: &Node, xml: &str, theme: &ThemeColors) -> Vec<Block> {
                 _ => f,
             };
             let color = rpr.and_then(|pr| pr.child("solidFill")).and_then(|f| color_of(f, xml, theme)).or_else(|| default_color.clone());
-            runs.push(Run {
+            runs.push(run(
                 text,
-                style: RunStyle {
-                    font_size: Some(size_pt),
-                    bold: rpr.and_then(|pr| pr.attr("b")) == Some("1"),
-                    italic: rpr.and_then(|pr| pr.attr("i")) == Some("1"),
-                    underline: rpr.and_then(|pr| pr.attr("u")).is_some_and(|u| u != "none"),
-                    color,
-                    font_family: theme_face(face("latin"), &theme.minor_font),
-                    font_family_east_asia: theme_face(face("ea"), &theme.minor_font_ea),
-                    ..RunStyle::default()
-                },
-                url: None,
-                footnote_ref: None,
-                endnote_ref: None,
-                comment_range_start: Vec::new(),
-                comment_range_end: Vec::new(),
-                comment_references: Vec::new(),
-                tracked_change: None,
-                rpr_change: None,
-                ruby: None,
-                bookmark_name: None,
-                is_math: false,
-                field_type: None,
-                has_last_rendered_page_break: false,
-            });
+                RunStyle {
+                font_size: Some(size_pt),
+                bold: rpr.and_then(|pr| pr.attr("b")) == Some("1"),
+                italic: rpr.and_then(|pr| pr.attr("i")) == Some("1"),
+                underline: rpr.and_then(|pr| pr.attr("u")).is_some_and(|u| u != "none"),
+                color,
+                font_family: theme_face(face("latin"), &theme.minor_font),
+                font_family_east_asia: theme_face(face("ea"), &theme.minor_font_ea),
+                ..RunStyle::default()
+            },
+            ));
         }
         if runs.is_empty() {
             size_pt = p.child("endParaRPr").and_then(|e| e.num("sz")).map_or(size_pt, |s| s / 100.0);
@@ -485,65 +342,27 @@ fn text_blocks(sp: &Node, xml: &str, theme: &ThemeColors) -> Vec<Block> {
     blocks
 }
 
-fn text_box(blocks: Vec<Block>, body: Option<&Node>, (x, y, w, h): (f32, f32, f32, f32)) -> TextBox {
+fn body_text_box(blocks: Vec<Block>, body: Option<&Node>, rect: (f32, f32, f32, f32)) -> TextBox {
     let inset = |key: &str, default: f32| body.and_then(|b| b.num(key)).map_or(default, |v| v / EMU_PER_PT);
-    TextBox {
-        wrap_polygon: Vec::new(),
-        text_outline_inset: 0.0,
-        vertical_text: false,
+    let anchor = match body.and_then(|b| b.attr("anchor")) {
+        Some("ctr") => "middle",
+        Some("b") => "bottom",
+        _ => "top",
+    };
+    text_box(
         blocks,
-        inline: false,
-        font_ref_color: None,
-        auto_fit: false,
-        width: w,
-        height: h,
-        position: Some(FloatingPosition {
-            flow_page_offset: 0,
-            flow_boundary_offset: 0,
-            flow_source: None,
-            x,
-            y,
-            h_relative: Some("group".to_string()),
-            v_relative: Some("group".to_string()),
-            h_align: None,
-            v_align: None,
-            dist_l: None,
-            dist_r: None, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
-        }),
-        border: false,
-        stroke_color: None,
-        stroke_width: None,
-        fill: None,
-        anchor_block_index: 0,
-        corner_radius: None,
-        ellipse: false,
-        inset_left: Some(inset("lIns", 7.2)),
-        inset_right: Some(inset("rIns", 7.2)),
-        inset_top: Some(inset("tIns", 3.6)),
-        inset_bottom: Some(inset("bIns", 3.6)),
-        wrap_type: Some(WrapType::None),
-        v_text_anchor: match body.and_then(|b| b.attr("anchor")) {
-            Some("ctr") => Some("middle".to_string()),
-            Some("b") => Some("bottom".to_string()),
-            _ => Some("top".to_string()),
-        },
-        relative_height: 0,
-        behind_doc: false,
-        vert_overflow: None,
-        compat_line_spacing: false,
-        vector_shapes: Vec::new(),
-        host_break_after: false,
-        children: Vec::new(),
-        body_wrap_none: body.and_then(|b| b.attr("wrap")) == Some("none"),
-        children_on_line: false,
-    }
+        [inset("lIns", 7.2), inset("tIns", 3.6), inset("rIns", 7.2), inset("bIns", 3.6)],
+        anchor,
+        body.and_then(|b| b.attr("wrap")) == Some("none"),
+        rect,
+    )
 }
 
 /// The SmartArt drawn by `xml`, a `dsp:drawing` part.
-pub(super) fn from_drawing(xml: &str, theme: &ThemeColors) -> Option<SmartArt> {
+pub(super) fn from_drawing(xml: &str, theme: &ThemeColors) -> Option<Group> {
     let root = parse_tree(xml)?;
     let tree = root.child("spTree")?;
-    let mut art = SmartArt { shapes: Vec::new(), texts: Vec::new() };
+    let mut art = Group { shapes: Vec::new(), texts: Vec::new() };
     let mut stack: Vec<&Node> = tree.children.iter().rev().collect();
     while let Some(n) = stack.pop() {
         match n.name.as_str() {
@@ -581,7 +400,7 @@ pub(super) fn from_drawing(xml: &str, theme: &ThemeColors) -> Option<SmartArt> {
                 let has_text = blocks.iter().any(|b| matches!(b, Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.trim().is_empty())));
                 if has_text {
                     let area = n.child("txXfrm").and_then(xfrm).unwrap_or(rect);
-                    art.texts.push(text_box(blocks, n.path(&["txBody", "bodyPr"]), area));
+                    art.texts.push(body_text_box(blocks, n.path(&["txBody", "bodyPr"]), area));
                 }
             }
             _ => {}
