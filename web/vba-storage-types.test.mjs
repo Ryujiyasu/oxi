@@ -134,4 +134,53 @@ try {
       {applicationState:{},errorLanguage:'ja-JP'}));
 } finally { runner.closeVbaProject(); globalThis.Worker = priorWorker; }
 
+
+const exactNumericSource = "Public Type ExactNumericRecord\n CurrencyValue As Currency\n DecimalValue As Variant\nEnd Type\nPublic Function CurrencySmall() As Currency\n CurrencySmall = CCur(\"12.3456\")\nEnd Function\nPublic Function CurrencyMaximum() As Currency\n CurrencyMaximum = CCur(\"922337203685477.5807\")\nEnd Function\nPublic Function CurrencyMinimum() As Currency\n CurrencyMinimum = CCur(\"-922337203685477.5808\")\nEnd Function\nPublic Function DecimalTenth() As Variant\n DecimalTenth = CDec(\"0.1\")\nEnd Function\nPublic Function DecimalMaximum() As Variant\n DecimalMaximum = CDec(\"79228162514264337593543950335\")\nEnd Function\nPublic Function DecimalScaledMaximum() As Variant\n DecimalScaledMaximum = CDec(\"7922816251426433759354395033.5\")\nEnd Function\nPublic Function DescribeNumericTypes() As String\n DescribeNumericTypes = TypeName(CurrencyMaximum()) & \":\" & CStr(CurrencyMaximum()) & \"|\" & TypeName(DecimalMaximum()) & \":\" & CStr(DecimalMaximum()) & \"|\" & CStr(DecimalScaledMaximum())\nEnd Function\nPublic Function ExactNumericArray() As Variant\n ExactNumericArray = Array(CurrencyMaximum(), DecimalScaledMaximum(), CLngLng(42), 9007199254740992#)\nEnd Function\nPublic Function ExactNumericRecordResult() As ExactNumericRecord\n Dim entry As ExactNumericRecord\n entry.CurrencyValue = CurrencyMinimum()\n entry.DecimalValue = DecimalMaximum()\n ExactNumericRecordResult = entry\nEnd Function\nPublic Function DescribeExactNumericComposite() As String\n Dim entry As ExactNumericRecord\n entry = ExactNumericRecordResult()\n Dim values As Variant\n values = ExactNumericArray()\n DescribeExactNumericComposite = CStr(entry.CurrencyValue) & \"|\" & TypeName(entry.CurrencyValue) & \"|\" & CStr(entry.DecimalValue) & \"|\" & TypeName(entry.DecimalValue) & \"|\" & CStr(values(0)) & \"|\" & TypeName(values(0)) & \"|\" & CStr(values(1)) & \"|\" & TypeName(values(1))\nEnd Function\n";
+const exactNumericCases = [["CurrencySmall", {"type": "currency", "value": "12.3456"}], ["CurrencyMaximum", {"type": "currency", "value": "922337203685477.5807"}], ["CurrencyMinimum", {"type": "currency", "value": "-922337203685477.5808"}], ["DecimalTenth", {"type": "decimal", "value": "0.1"}], ["DecimalMaximum", {"type": "decimal", "value": "79228162514264337593543950335"}], ["DecimalScaledMaximum", {"type": "decimal", "value": "7922816251426433759354395033.5"}]];
+const exactNumericDescriptor = "Currency:922337203685477.5807|Decimal:79228162514264337593543950335|7922816251426433759354395033.5";
+const exactCompositeDescriptor = "-922337203685477.5808|Currency|79228162514264337593543950335|Decimal|922337203685477.5807|Currency|7922816251426433759354395033.5|Decimal";
+
+async function verifyExactNumericResults(invoke) {
+  let book=emptyBook();
+  async function run(procedure) {
+    const execution=await invoke(book,exactNumericSource,procedure);
+    assert.equal(execution.error,undefined,procedure);
+    book=execution.workbook;
+    assert.deepEqual(JSON.parse(JSON.stringify(execution.result)),execution.result,
+      procedure+': exact decimal result survives JSON');
+    return execution.result;
+  }
+  for(const [procedure,expected] of exactNumericCases) assert.deepEqual(await run(procedure),expected,procedure);
+  assert.deepEqual(await run('DescribeNumericTypes'),{type:'string',value:exactNumericDescriptor});
+  const array=await run('ExactNumericArray');
+  assert.equal(array.type,'array');
+  assert.deepEqual(array.value.values,[
+    {type:'currency',value:'922337203685477.5807'},
+    {type:'decimal',value:'7922816251426433759354395033.5'},
+    {type:'integer',value:42},
+    {type:'double',value:9007199254740992},
+  ]);
+  const record=await run('ExactNumericRecordResult');
+  assert.equal(record.type,'record');
+  assert.match(record.value.type_name,/(^|\.)ExactNumericRecord$/i);
+  const fields=new Map(record.value.fields.map(([name,value])=>[name.toLowerCase(),value]));
+  assert.deepEqual(fields.get('currencyvalue'),{type:'currency',value:'-922337203685477.5808'});
+  assert.deepEqual(fields.get('decimalvalue'),{type:'decimal',value:'79228162514264337593543950335'});
+  assert.deepEqual(await run('DescribeExactNumericComposite'),{type:'string',value:exactCompositeDescriptor});
+}
+{
+  const session=new wasm.SpreadsheetVbaSession();
+  try {
+    await verifyExactNumericResults((book,source,procedure)=>
+      session.run(book,source,procedure,[],0,'ExactNumeric.xlsm',{errorLanguage:'ja-JP'}));
+  } finally {session.free();}
+}
+try {
+  globalThis.Worker=BrowserWorker;
+  runner.closeVbaProject();
+  await verifyExactNumericResults((book,source,procedure)=>
+    runner.runVbaInWorker(book,source,procedure,[],0,'ExactNumeric.xlsm',
+      {applicationState:{},errorLanguage:'ja-JP'}));
+} finally {runner.closeVbaProject();globalThis.Worker=priorWorker;}
+
 console.log(JSON.stringify({excel_cases:cases.length,value_sequences:cases.filter(item=>item.outcome==='values').length,compile_cases:cases.filter(item=>item.outcome==='compile').length,value_steps:cases.filter(item=>item.outcome==='values').reduce((sum,item)=>sum+item.steps.length,0),direct_and_worker:true,passed:true}));

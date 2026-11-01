@@ -37845,6 +37845,8 @@ enum OutputValue {
     Boolean(bool),
     Integer(#[serde(serialize_with = "serialize_vba_signed_integer")] i64),
     Double(f64),
+    Currency(String),
+    Decimal(String),
     Error(i64),
     String(String),
     Utf16(Vec<u16>),
@@ -37903,8 +37905,15 @@ impl From<Value> for OutputValue {
             Value::Integer(value) => Self::Integer(value),
             Value::LongLong(value) => Self::Integer(value),
             Value::Single(value) => Self::Double(value as f64),
-            Value::Currency(value) => Self::Double(value as f64 / 10_000.0),
-            Value::Decimal(value) => Self::Double(value.to_f64()),
+            Value::Currency(value) => Self::Currency(
+                oxivba_core::decimal::Dec {
+                    negative: value < 0,
+                    magnitude: u128::from(value.unsigned_abs()),
+                    scale: 4,
+                }
+                .to_string(),
+            ),
+            Value::Decimal(value) => Self::Decimal(value.to_string()),
             Value::Date(value) => Self::Double(value),
             Value::Double(value) => Self::Double(value),
             Value::Error(value) => Self::Error(value),
