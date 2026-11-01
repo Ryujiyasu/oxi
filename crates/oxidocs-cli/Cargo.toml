@@ -17,6 +17,7 @@ oxidocs-fonts = { version = "0.8.9", path = "../oxidocs-fonts" }
 oxivba-core = { version = "0.8.9", path = "../oxivba-core" }
 oxipdf-core = { version = "0.8.9", path = "../oxipdf-core" }
 serde_json = "1"
+subsetter = "0.2.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
 ovba = "0.7.1"
 oxihanko = { version = "0.8.9", path = "../oxihanko", features = ["ring"] }

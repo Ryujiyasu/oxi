@@ -3116,6 +3116,59 @@ fn embed_whole_font(font_path: &str, label: &str) -> Option<EmbeddedFont> {
     Some(font)
 }
 
+enum NativeSubset {
+    /// The face draws none of the characters asked for.
+    NoGlyph,
+    /// The font is one the in-process subsetter cannot cut (CFF2, say).
+    Failed(String),
+}
+
+/// Subset the first face of `font_path` to `chars` in-process. Glyphs are
+/// renumbered from 1 in the order the characters come, and the new number is
+/// the CID for TrueType and CFF alike, which is what the PDF writer encodes
+/// with. The subset carries no cmap: `unicode_to_gid` is the mapping.
+///
+/// This replaced nine `python3 -c fontTools` runs per document -- three
+/// quarters of a conversion's time, and a dependency a server image need
+/// not have.
+fn subset_font_native(font_path: &str, chars: &std::collections::BTreeSet<char>) -> Result<EmbeddedFont, NativeSubset> {
+    use oxipdf_core::font_util;
+    let file = fs::read(font_path).map_err(|e| NativeSubset::Failed(e.to_string()))?;
+    let lifted = font_util::extract_ttc_face(&file, 0);
+    let data: &[u8] = lifted.as_deref().unwrap_or(&file);
+    // The best cmap, a symbol font's (3,0) table included, so a Wingdings
+    // code finds its glyph.
+    let cmap = font_util::parse_cmap_table(data);
+    let widths = font_util::parse_ttf_widths(data);
+
+    let mut remapper = subsetter::GlyphRemapper::new();
+    let mut unicode_to_gid = HashMap::new();
+    let mut cid_widths = HashMap::new();
+    for &c in chars {
+        let Some(&gid) = cmap.get(&(c as u32)) else { continue };
+        if gid == 0 {
+            continue;
+        }
+        let new = remapper.remap(gid);
+        unicode_to_gid.insert(c as u32, new);
+        if let Some(&w) = widths.get(&gid) {
+            cid_widths.insert(new, w);
+        }
+    }
+    if unicode_to_gid.is_empty() {
+        return Err(NativeSubset::NoGlyph);
+    }
+    let subset = subsetter::subset(data, 0, &remapper).map_err(|e| NativeSubset::Failed(e.to_string()))?;
+    let ps_name = font_util::parse_ps_name(data);
+    let (data, format) = if subset.starts_with(b"OTTO") || has_cff_table(&subset) {
+        let cff = extract_cff_from_otf(&subset).ok_or_else(|| NativeSubset::Failed("no CFF table in the subset".into()))?;
+        (cff, FontFormat::OpenTypeCff)
+    } else {
+        (subset, FontFormat::TrueType)
+    };
+    Ok(EmbeddedFont { ps_name, data, format, unicode_to_gid, cid_widths })
+}
+
 /// Subset a single font file and return EmbeddedFont. Falls back to embedding
 /// the whole file when the external subsetter is unavailable or fails.
 fn subset_font_file(font_path: &str, chars: &std::collections::BTreeSet<char>, label: &str) -> Option<EmbeddedFont> {
@@ -3124,6 +3177,22 @@ fn subset_font_file(font_path: &str, chars: &std::collections::BTreeSet<char>, l
     // block is an empty table used to take every Latin face down that way.
     if chars.is_empty() {
         return None;
+    }
+    // OXI_NATIVE_SUBSET_DISABLE: go straight to fontTools, to compare.
+    let native = if std::env::var_os("OXI_NATIVE_SUBSET_DISABLE").is_some() {
+        Err(NativeSubset::Failed("disabled".into()))
+    } else {
+        subset_font_native(font_path, chars)
+    };
+    match native {
+        Ok(font) => {
+            eprintln!("Font subset ({}): {} mappings, {} bytes", label, font.unicode_to_gid.len(), font.data.len());
+            return Some(font);
+        }
+        Err(NativeSubset::NoGlyph) => return None,
+        Err(NativeSubset::Failed(why)) => {
+            eprintln!("Font subset ({}) in-process failed ({}); trying fontTools", label, why);
+        }
     }
     let char_string: String = chars.iter()
         .filter(|c| { let cp = **c as u32; !(0xD800..=0xDFFF).contains(&cp) })
