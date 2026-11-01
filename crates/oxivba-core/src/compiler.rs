@@ -438,7 +438,7 @@ fn check_with_environment<'a>(
     let mut checker =
         Checker::for_context_with_references(module, globals, classes, Some(procedure), references);
     checker.project_name = project_name;
-    checker.array_declaration_dimensions()?;
+    checker.module_storage_syntax()?;
     if checker.known_types.is_some() && intrinsic_operator(&key(&procedure.name)) {
         return Err(checker.failure(CompileErrorKind::SyntaxError, procedure.span));
     }
@@ -508,6 +508,7 @@ fn reserved_declaration_name(name: &str) -> bool {
             | "type"
             | "next"
             | "debug"
+            | "scale"
             | "clng"
             | "len"
             | "abs"
@@ -963,7 +964,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn array_declaration_dimensions(&self) -> Result<(), CompileError> {
+    fn module_storage_syntax(&self) -> Result<(), CompileError> {
         for item in &self.module.items {
             let variables = match item {
                 ModuleItem::Variables(declaration) => declaration.items.as_slice(),
@@ -971,6 +972,14 @@ impl<'a> Checker<'a> {
                 _ => continue,
             };
             for variable in variables {
+                if variable.name.eq_ignore_ascii_case("scale") {
+                    let (kind, span) = match item {
+                        ModuleItem::Variables(declaration) => (CompileErrorKind::ExpectedIdentifier, declaration.span),
+                        ModuleItem::Type(record) => (CompileErrorKind::SyntaxError, record.span),
+                        _ => unreachable!(),
+                    };
+                    return Err(self.failure(kind, span));
+                }
                 if let Some(bounds) = &variable.array_bounds {
                     if bounds.len() > 60 {
                         return Err(self.failure(
@@ -988,7 +997,7 @@ impl<'a> Checker<'a> {
         if let Some(span) = self.module.syntax_errors.first() {
             return Err(self.failure(CompileErrorKind::SyntaxError, *span));
         }
-        self.array_declaration_dimensions()?;
+        self.module_storage_syntax()?;
         self.declaration_syntax()?;
         if let Some((name, _)) = self
             .classes

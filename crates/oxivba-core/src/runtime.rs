@@ -27124,3 +27124,330 @@ End Property
         }
     }
 }
+
+#[cfg(test)]
+mod reserved_scale_native_regressions {
+    use super::*;
+
+    #[test]
+    fn reserved_scale_declarations_match_native_execution_contexts() {
+        for (name, source, invalid, expected) in [
+            ("standard_param_Scale_unused", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Public Function Probe() As Long
+ Probe = F(2)
+End Function
+Public Function F(ByVal Scale As Long) As Long
+ F = 1
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, true, "Sub または Function が定義されていません。"),
+            ("class_param_Scale_unused", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Public Function Probe() As Long
+ Dim target As BoundClass
+ Set target = New BoundClass
+ Probe = target.Probe()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "BoundClass"
+Attribute VB_Exposed = False
+Option Explicit
+Public Function Probe() As Long
+ Probe = F(2)
+End Function
+Public Function F(ByVal Scale As Long) As Long
+ F = 1
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, true, "Sub または Function が定義されていません。"),
+            ("standard_param_Scale_used", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Public Function Probe() As Long
+ Probe = F(2)
+End Function
+Public Function F(ByVal Scale As Long) As Long
+ F = Scale
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, true, "Sub または Function が定義されていません。"),
+            ("class_param_Scale_used", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Public Function Probe() As Long
+ Dim target As BoundClass
+ Set target = New BoundClass
+ Probe = target.Probe()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "BoundClass"
+Attribute VB_Exposed = False
+Option Explicit
+Public Function Probe() As Long
+ Probe = F(2)
+End Function
+Public Function F(ByVal Scale As Long) As Long
+ F = Scale
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, true, "Sub または Function が定義されていません。"),
+            ("local_Scale_unused", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Public Function Probe() As Long
+ Dim Scale As Long
+ Probe = 1
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, true, "構文エラー"),
+            ("module_Scale_unused", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Private Scale As Long
+Public Function Probe() As Long
+ Probe = 1
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, true, "修正候補: 識別子"),
+            ("local_Scale_used", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Public Function Probe() As Long
+ Dim Scale As Long
+ Scale = 2
+ Probe = Scale
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, true, "構文エラー"),
+            ("module_Scale_used", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Private Scale As Long
+Public Function Probe() As Long
+ Scale = 2
+ Probe = Scale
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, true, "修正候補: 識別子"),
+            ("type_field_Scale_used", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Private Type Holder
+ Scale As Long
+End Type
+Public Function Probe() As Long
+ Dim entry As Holder
+ entry.Scale = 2
+ Probe = entry.Scale
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, true, "構文エラー"),
+            ("standard_param_factor_unused", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Public Function Probe() As Long
+ Probe = F(2)
+End Function
+Public Function F(ByVal factor As Long) As Long
+ F = 1
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, false, "1"),
+            ("class_param_factor_unused", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Public Function Probe() As Long
+ Dim target As BoundClass
+ Set target = New BoundClass
+ Probe = target.Probe()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "BoundClass"
+Attribute VB_Exposed = False
+Option Explicit
+Public Function Probe() As Long
+ Probe = F(2)
+End Function
+Public Function F(ByVal factor As Long) As Long
+ F = 1
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, false, "1"),
+            ("standard_param_factor_used", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Public Function Probe() As Long
+ Probe = F(2)
+End Function
+Public Function F(ByVal factor As Long) As Long
+ F = factor
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, false, "2"),
+            ("class_param_factor_used", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Public Function Probe() As Long
+ Dim target As BoundClass
+ Set target = New BoundClass
+ Probe = target.Probe()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "BoundClass"
+Attribute VB_Exposed = False
+Option Explicit
+Public Function Probe() As Long
+ Probe = F(2)
+End Function
+Public Function F(ByVal factor As Long) As Long
+ F = factor
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, false, "2"),
+            ("local_factor_unused", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Public Function Probe() As Long
+ Dim factor As Long
+ Probe = 1
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, false, "1"),
+            ("module_factor_unused", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Private factor As Long
+Public Function Probe() As Long
+ Probe = 1
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, false, "1"),
+            ("local_factor_used", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Public Function Probe() As Long
+ Dim factor As Long
+ factor = 2
+ Probe = factor
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, false, "2"),
+            ("module_factor_used", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Private factor As Long
+Public Function Probe() As Long
+ factor = 2
+ Probe = factor
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, false, "2"),
+            ("type_field_factor_used", r####"Attribute VB_Name = "EntryProbe"
+Option Explicit
+Private Type Holder
+ factor As Long
+End Type
+Public Function Probe() As Long
+ Dim entry As Holder
+ entry.factor = 2
+ Probe = entry.factor
+End Function
+
+Attribute VB_Name = "CompileDriver"
+Option Explicit
+Public Function InvokeProbe() As Long
+ InvokeProbe = EntryProbe.Probe()
+End Function
+"####, false, "2")
+        ] {
+            let (module, classes) = crate::parse_project(source).unwrap();
+            let mut runtime = Runtime::new(&module).with_classes(&classes)
+                .with_error_environment(ErrorEnvironment {
+                    language: crate::ErrorLanguage::Japanese, help_file: String::new(),
+                });
+            let result = runtime.call_macro("CompileDriver.InvokeProbe", vec![]);
+            if invalid {
+                let failure = result.unwrap_err();
+                assert_eq!(failure.kind, RuntimeErrorKind::Compile, "{name}");
+                assert!(failure.message.ends_with(expected), "{name}: {failure:?}");
+                // Whole-project compilation must reject the same invalid
+                // sources; its diagnostic priority is tested separately.
+                assert!(crate::compile_project(source).is_err(), "{name}");
+            } else {
+                assert_eq!(result.unwrap(), Value::Integer(expected.parse().unwrap()), "{name}");
+                crate::compile_project(source).unwrap();
+            }
+        }
+    }
+}
