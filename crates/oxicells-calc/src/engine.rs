@@ -164,6 +164,50 @@ pub type UserCaller = Option<(String, u32, u32)>;
 
 pub type FormulaCell = (String, (u32, u32));
 
+/// The workbook view used by formula metadata that follows the active cell.
+pub struct CellEvaluationContext {
+    pub workbook_name: String,
+    pub active_cell: Option<FormulaCell>,
+    pub unlocked: BTreeSet<FormulaCell>,
+}
+
+thread_local! {
+    static CELL_EVALUATION_CONTEXT: std::cell::RefCell<Option<CellEvaluationContext>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Restore the enclosing view when an evaluation returns or unwinds.
+pub struct CellEvaluationScope {
+    previous: Option<CellEvaluationContext>,
+}
+
+impl Drop for CellEvaluationScope {
+    fn drop(&mut self) {
+        CELL_EVALUATION_CONTEXT.with(|held| held.replace(self.previous.take()));
+    }
+}
+
+/// Apply a view only for the lifetime of the returned scope.
+pub fn enter_cell_evaluation_context(context: CellEvaluationContext) -> CellEvaluationScope {
+    CellEvaluationScope {
+        previous: CELL_EVALUATION_CONTEXT.with(|held| held.replace(Some(context))),
+    }
+}
+
+fn active_evaluation_cell() -> Option<FormulaCell> {
+    CELL_EVALUATION_CONTEXT.with(|held| held.borrow().as_ref().and_then(|view| view.active_cell.clone()))
+}
+
+fn evaluation_workbook_name() -> Option<String> {
+    CELL_EVALUATION_CONTEXT.with(|held| held.borrow().as_ref().map(|view| view.workbook_name.clone()))
+}
+
+fn evaluation_cell_unlocked(sheet: &str, col: u32, row: u32) -> Option<bool> {
+    CELL_EVALUATION_CONTEXT.with(|held| held.borrow().as_ref()
+        .map(|view| view.unlocked.contains(&(sheet.to_string(), (col, row)))))
+}
+
+
 #[derive(Debug, Clone, Copy)]
 pub struct UserFunctionCallContext { pub occurrence: u64, pub provisional: bool, pub provisional_indirect_text_value: bool, pub dynamic_reference_argument_mask: u64 }
 
@@ -545,6 +589,7 @@ struct Sheet {
     /// Each dressed cell's number format and horizontal alignment, by
     /// `(col, row)`, for CELL to read.
     dress: BTreeMap<(u32, u32), (Option<String>, Option<String>)>,
+    unlocked: BTreeSet<(u32, u32)>,
     /// The file's column widths, zero-based, and the width of any other.
     widths: (Vec<f32>, f32),
     custom_widths: BTreeMap<u32, bool>,
@@ -752,6 +797,13 @@ impl Workbook {
     pub fn set_cell_dress(&mut self, sheet: &str, col: u32, row: u32, format: Option<&str>, align: Option<&str>) {
         let held = self.sheets.entry(sheet.to_string()).or_default();
         held.dress.insert((col, row), (format.map(str::to_string), align.map(str::to_string)));
+    }
+
+    /// Record the protection style used by CELL for an explicit reference.
+    pub fn set_cell_unlocked(&mut self, sheet: &str, col: u32, row: u32, unlocked: bool) {
+        let held = self.sheets.entry(sheet.to_string()).or_default();
+        if unlocked { held.unlocked.insert((col, row)); }
+        else { held.unlocked.remove(&(col, row)); }
     }
 
     /// The sheet's column widths as the file keeps them, zero-based, and the
@@ -3168,8 +3220,8 @@ impl Workbook {
                         Some((target, range)) => (target, range.start),
                         None => return Arg::Value(Value::Error(ExcelError::Value)),
                     },
-                    None => match at {
-                        Some((col, row)) => (sheet.to_string(), CellRef::new(col, row)),
+                    None => match active_evaluation_cell().or_else(|| at.map(|cell| (sheet.to_string(), cell))) {
+                        Some((target, (col, row))) => (target, CellRef::new(col, row)),
                         None => return Arg::Value(Value::Error(ExcelError::Value)),
                     },
                 };
@@ -3201,8 +3253,14 @@ impl Workbook {
                             left = (left - 1) / 26;
                         }
                         let local = format!("${letters}${}", cell.row + 1);
-                        if target == sheet {
+                        if target.eq_ignore_ascii_case(sheet) {
                             Value::Text(local)
+                        } else if let Some(book) = evaluation_workbook_name() {
+                            let front = format!("[{book}]{target}");
+                            let front = if crate::reference::needs_quoting(&book)
+                                || crate::reference::needs_quoting(&target)
+                            { format!("'{}'", front.replace('\'', "''")) } else { front };
+                            Value::Text(format!("{front}!{local}"))
                         } else {
                             Value::Text(format!("'{}'!{local}", target.replace('\'', "''")))
                         }
@@ -3211,7 +3269,12 @@ impl Workbook {
                     "row" => Value::Number(f64::from(cell.row) + 1.0),
                     // An unsaved book has no file name: measured, "".
                     "filename" => Value::Text(String::new()),
-                    "protect" => Value::Number(1.0),
+                    "protect" => {
+                        let unlocked = evaluation_cell_unlocked(&target, cell.col, cell.row)
+                            .unwrap_or_else(|| self.sheets.get(&target)
+                                .is_some_and(|held| held.unlocked.contains(&(cell.col, cell.row))));
+                        Value::Number(if unlocked { 0.0 } else { 1.0 })
+                    },
                     "format" | "parentheses" | "color" => {
                         let format = self.dress_of(&target, cell.col, cell.row).0.unwrap_or_default();
                         let (code, parentheses, color) = cell_format_code(&format);

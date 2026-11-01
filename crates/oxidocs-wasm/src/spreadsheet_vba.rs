@@ -3494,6 +3494,13 @@ impl<'a> WorkbookHost<'a> {
                 "active sheet index is out of range: {active_sheet}"
             ));
         }
+        let unlocked = workbook.sheets.iter().enumerate().flat_map(|(sheet, held)| {
+            held.rows.iter().flat_map(move |row| row.cells.iter().filter_map(move |cell| {
+                cell.style.unlocked.then_some(CellAddress {
+                    sheet, row: row.index, column: cell.col,
+                })
+            }))
+        }).collect();
         Self::seed_compatibility_names(workbook);
         let notes = notes_pinned_open(workbook);
         let table_counter = last_table_number(workbook);
@@ -3574,7 +3581,7 @@ impl<'a> WorkbookHost<'a> {
             },
             screen_updating: true,
             protected: Vec::new(),
-            unlocked: std::collections::HashSet::new(),
+            unlocked,
             hidden_formulas: std::collections::HashSet::new(),
             notes,
             links,
@@ -3812,6 +3819,19 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    fn cell_evaluation_scope(&self) -> oxicells_calc::engine::CellEvaluationScope {
+        let active_cell = self.workbook.sheets.get(self.active_cell.sheet).map(|sheet| {
+            (sheet.name.clone(), (self.active_cell.column, self.active_cell.row.saturating_sub(1)))
+        });
+        let unlocked = self.unlocked.iter().filter_map(|at| self.workbook.sheets.get(at.sheet)
+            .map(|sheet| (sheet.name.clone(), (at.column, at.row.saturating_sub(1))))).collect();
+        oxicells_calc::engine::enter_cell_evaluation_context(oxicells_calc::engine::CellEvaluationContext {
+            workbook_name: self.file_name.clone().unwrap_or_else(|| "Book1".to_string()),
+            active_cell,
+            unlocked,
+        })
+    }
+
     fn automatic_calculation(&self) -> bool { matches!(self.calculation, -4105 | 2) }
 
     fn calculation_state(&mut self) -> i64 {
@@ -3868,6 +3888,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn calculate_input(&mut self, writes: &RangeInputWrite) {
+        let _cell_evaluation = self.cell_evaluation_scope();
         if writes.formulas.is_empty() {
             if self.automatic_calculation() {
                 if writes.dynamic_recalc { self.recalculate(); }
@@ -3912,6 +3933,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn calculate_assignment(&mut self, range: CellRange) {
+        let _cell_evaluation = self.cell_evaluation_scope();
         let cells = self.formula_locations(range);
         if !cells.is_empty() {
             self.lend_user_functions();
@@ -3954,6 +3976,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn calculate_dirty(&mut self, sheet: Option<usize>) {
+        let _cell_evaluation = self.cell_evaluation_scope();
         let sheet_scope = sheet.and_then(|index| self.workbook.sheets.get(index).map(|sheet| sheet.name.clone()));
         let pending_changes: Vec<_> = sheet_scope.as_ref().map(|scope| self.workbook.recalculation.changed.iter()
             .filter(|(name, _)| !same_sheet_name(name, scope)).cloned().collect()).unwrap_or_default();
@@ -3996,6 +4019,7 @@ impl<'a> WorkbookHost<'a> {
     // A previously observed fixed returned cell can order a nested reference
     // for this Full pass. It is a traversal hint, not a dirty dependency.
     fn full_calculation_reference_order(&self) -> Vec<oxicells_core::ir::FormulaLocation> {
+        let _cell_evaluation = self.cell_evaluation_scope();
         let mut order = self.workbook.recalculation.order.clone();
         if !oxicells_calc::engine::user_function_full_calculation() || oxicells_calc::engine::user_function_full_rebuild() { return order; }
         let mut hints: Vec<_> = {
@@ -4034,6 +4058,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn recalculate_all(&mut self) {
+        let _cell_evaluation = self.cell_evaluation_scope();
         let temporary_order = self.full_calculation_reference_order();
         self.lend_user_functions();
         self.user_functions.borrow_mut().calculation = Some(UserCalculation::All);
@@ -4057,6 +4082,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn recalculate_subset(&mut self, cells: Vec<(String, (u32, u32))>, changed: bool, clear_dirty: bool, reason: CalculationReason) {
+        let _cell_evaluation = self.cell_evaluation_scope();
         self.lend_user_functions();
         self.user_functions.borrow_mut().calculation = Some(UserCalculation::Cells {
             cells: cells.clone(), changed, clear_dirty, reason: reason.clone(),
@@ -4089,6 +4115,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn recalculate_range(&mut self, range: CellRange) {
+        let _cell_evaluation = self.cell_evaluation_scope();
         let mut cells = self.formula_locations(range);
         if self.automatic_calculation() {
             let dirty = &self.workbook.recalculation.dirty;
@@ -4404,6 +4431,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn recalculate(&mut self) {
+        let _cell_evaluation = self.cell_evaluation_scope();
         let temporary_order = self.full_calculation_reference_order();
         self.lend_user_functions();
         self.user_functions.borrow_mut().calculation = Some(UserCalculation::All);
@@ -4906,6 +4934,7 @@ impl<'a> WorkbookHost<'a> {
         name: &str,
         args: &[Value],
     ) -> Result<Value, String> {
+        let _cell_evaluation = self.cell_evaluation_scope();
         if vba_has_its_own(name) {
             return Err(format!(
                 "WorksheetFunction has no {name}; VBA has one of its own"
@@ -7390,6 +7419,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn show_table_headers(&mut self, id: u64, shown: bool) -> Result<(), String> {
+        let _cell_evaluation = self.cell_evaluation_scope();
         let (sheet, index) = self.table_at(id)?;
         let table = self.workbook.sheets[sheet].tables[index].clone();
         if (table.header_rows > 0) == shown { return Ok(()); }
@@ -9270,6 +9300,7 @@ impl<'a> WorkbookHost<'a> {
 
     /// Whether a condition holds for one cell.
     fn condition_holds(&self, condition: &Condition, at: CellAddress) -> bool {
+        let _cell_evaluation = self.cell_evaluation_scope();
         let cell = self.cell_here(at.sheet, at.row, at.column);
         let value = cell
             .as_ref()
@@ -10509,6 +10540,7 @@ impl<'a> WorkbookHost<'a> {
     /// written; `Between` takes its bounds either way round; a formula in
     /// Formula1 is worked out afresh.
     fn validation_passes(&self, at: CellAddress, validation: &Validation) -> bool {
+        let _cell_evaluation = self.cell_evaluation_scope();
         let cell = self.cell_here(at.sheet, at.row, at.column);
         let value = cell
             .as_ref()
@@ -14653,6 +14685,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn defined_name_dependents(&self, name: &str) -> Vec<oxicells_core::ir::FormulaLocation> {
+        let _cell_evaluation = self.cell_evaluation_scope();
         oxicells_core::formula::assemble_for_evaluation(&self.workbook.sheets, &self.workbook.defined_names, &self.workbook.external_books)
             .dependent_formulas_for_name(name)
     }
@@ -15340,6 +15373,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn evaluate_object_inner(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
+        let _cell_evaluation = self.cell_evaluation_scope();
         let [Value::String(expression)] = args else {
             return Err("Evaluate expects one String expression".to_string());
         };
@@ -16825,6 +16859,7 @@ impl<'a> WorkbookHost<'a> {
     /// every one of them. So the work is done once and this is where the
     /// answer is turned into a raise.
     fn worksheet_function(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        let _cell_evaluation = self.cell_evaluation_scope();
         // A sheet function name does not necessarily name a VBA member.
         if name.eq_ignore_ascii_case("error_type") {
             return Err(host_error(438, "Object doesn't support this property or method"));
@@ -16910,6 +16945,7 @@ impl<'a> WorkbookHost<'a> {
         name: &str,
         args: &[Value],
     ) -> Result<Value, String> {
+        let _cell_evaluation = self.cell_evaluation_scope();
         Ok(match self.worksheet_function_raw(name, args)? {
             Value::Integer(number) => Value::Double(number as f64),
             other => other,
@@ -16921,6 +16957,7 @@ impl<'a> WorkbookHost<'a> {
         name: &str,
         args: &[Value],
     ) -> Result<Value, String> {
+        let _cell_evaluation = self.cell_evaluation_scope();
         // These spellings name a sheet function, not an Automation member.
         if ["error_type", "errortype", "error.type"].iter().any(|member| name.eq_ignore_ascii_case(member)) {
             return Err(host_error(438, "Object doesn't support this property or method"));
@@ -25861,6 +25898,7 @@ impl Host for WorkbookHost<'_> {
                                     oxicells_calc::reference::CellRef::new(*right, *bottom),
                                 ))
                             }).collect::<Vec<_>>();
+                            let _cell_evaluation = self.cell_evaluation_scope();
                             let engine = oxicells_core::formula::assemble_for_evaluation(
                                 &self.workbook.sheets, &self.workbook.defined_names, &self.workbook.external_books,
                             );
@@ -64325,6 +64363,239 @@ End Function
             }
         }
         assert!(mismatches.is_empty(), "{} mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+    }
+
+    #[test]
+    fn native_cell_active_context_and_protection_match_excel() {
+        let source = format!("Attribute VB_Name = \"IndexDriver\"\n{}\n{}", include_str!("../../../tests/fixtures/vba/worksheet_index_contexts.bas"), r##"
+Public Function OmittedCellSelection(ByVal selectedSheet As String, ByVal address As String, ByVal info As String) As String
+ Dim primary As Worksheet
+ Dim other As Worksheet
+ Dim selected As Worksheet
+ Dim expression As String
+ Dim result As String
+ Application.Calculation=xlCalculationAutomatic
+ Set primary=Worksheets(1)
+ primary.Name="Primary"
+ Set other=Worksheets.Add(After:=primary)
+ other.Name="Other"
+ primary.Range("A1").Value2=11
+ primary.Range("B2").Value2=22
+ primary.Range("D5").Value2=55
+ primary.Range("B2").NumberFormat="0.00"
+ primary.Range("D5").NumberFormat="0%"
+ other.Range("C3").Value2="picked"
+ other.Range("D4").Value2=44
+ Application.CalculateFull
+ Set selected=Worksheets(selectedSheet)
+ selected.Activate
+ selected.Range(address).Select
+ expression="CELL(""" & info & """)"
+ result=ScalarReport(Application.Evaluate(expression)) & "|" & ScalarReport(primary.Evaluate(expression))
+ primary.Range("M1").Formula2="=" & expression
+ result=result & "|" & ScalarReport(primary.Range("M1").Value2)
+ primary.Activate
+ primary.Range("D5").Select
+ primary.Range("M1").Calculate
+ result=result & "|" & ScalarReport(primary.Range("M1").Value2)
+ primary.Calculate
+ result=result & "|" & ScalarReport(primary.Range("M1").Value2)
+ Application.CalculateFull
+ OmittedCellSelection=result & "|" & ScalarReport(primary.Range("M1").Value2)
+End Function
+Public Function CellAddressQualification(ByVal otherName As String) As String
+ Dim primary As Worksheet
+ Dim other As Worksheet
+ Dim omitted As String
+ Dim explicit As String
+ Dim owner As String
+ Dim result As String
+ Application.Calculation=xlCalculationAutomatic
+ Set primary=Worksheets(1)
+ primary.Name="Primary"
+ Set other=Worksheets.Add(After:=primary)
+ other.Name=otherName
+ primary.Range("B2").Value2=22
+ other.Range("C3").Value2=33
+ Application.CalculateFull
+ other.Activate
+ other.Range("C3").Select
+ omitted="CELL(""address"")"
+ explicit="CELL(""address""," & "'" & Replace(otherName,"'","''") & "'!C3)"
+ owner="CELL(""address"",Primary!B2)"
+ result=ScalarReport(Application.Evaluate(omitted)) & "|" & ScalarReport(primary.Evaluate(omitted))
+ result=result & "|" & ScalarReport(primary.Evaluate(explicit)) & "|" & ScalarReport(other.Evaluate(owner))
+ primary.Range("M1").Formula2="=" & omitted
+ result=result & "|" & ScalarReport(primary.Range("M1").Value2)
+ primary.Range("M1").Formula2="=" & explicit
+ result=result & "|" & ScalarReport(primary.Range("M1").Value2)
+ other.Range("M1").Formula2="=" & owner
+ result=result & "|" & ScalarReport(other.Range("M1").Value2)
+ CellAddressQualification=result & "|" & ScalarReport(other.Evaluate(explicit))
+End Function
+Public Function SelectedCellMetadata(ByVal selectedSheet As String, ByVal address As String, ByVal info As String) As String
+ Dim primary As Worksheet
+ Dim other As Worksheet
+ Dim selected As Worksheet
+ Dim expression As String
+ Dim result As String
+ Application.Calculation=xlCalculationAutomatic
+ Set primary=Worksheets(1)
+ primary.Name="Primary"
+ Set other=Worksheets.Add(After:=primary)
+ other.Name="Other"
+ primary.Range("A1").Value2="left"
+ primary.Range("B2").Value2=-22
+ primary.Range("D5").Value2=55
+ other.Range("C3").Value2="center"
+ other.Range("D4").Value2="right"
+ primary.Range("A1").Locked=False
+ primary.Range("B2").Locked=False
+ primary.Range("F6").Locked=False
+ other.Range("D4").Locked=False
+ primary.Range("A1").HorizontalAlignment=xlLeft
+ primary.Range("B2").HorizontalAlignment=xlRight
+ other.Range("C3").HorizontalAlignment=xlCenter
+ other.Range("D4").HorizontalAlignment=xlRight
+ primary.Range("B2").NumberFormat="0.00;(0.00)"
+ Application.CalculateFull
+ Set selected=Worksheets(selectedSheet)
+ selected.Activate
+ selected.Range(address).Select
+ expression="CELL(""" & info & """)"
+ result=ScalarReport(Application.Evaluate(expression)) & "|" & ScalarReport(primary.Evaluate(expression))
+ primary.Range("M1").Formula2="=" & expression
+ result=result & "|" & ScalarReport(primary.Range("M1").Value2)
+ primary.Activate
+ primary.Range("D5").Select
+ primary.Range("M1").Calculate
+ result=result & "|" & ScalarReport(primary.Range("M1").Value2)
+ primary.Calculate
+ result=result & "|" & ScalarReport(primary.Range("M1").Value2)
+ Application.CalculateFull
+ SelectedCellMetadata=result & "|" & ScalarReport(primary.Range("M1").Value2)
+End Function
+"##);
+        let cases: Vec<(&str, &str, Vec<Value>, &str)> = vec![
+            ("native_omitted_cell_selection_controls:Primary:A1:address", "IndexDriver.OmittedCellSelection", vec![Value::String("Primary".into()), Value::String("A1".into()), Value::String("address".into())], "S:4:36:65:36:49|S:4:36:65:36:49|S:4:36:65:36:49|S:4:36:68:36:53|S:4:36:68:36:53|S:4:36:68:36:53"),
+            ("native_omitted_cell_selection_controls:Primary:A1:row", "IndexDriver.OmittedCellSelection", vec![Value::String("Primary".into()), Value::String("A1".into()), Value::String("row".into())], "5:1|5:1|5:1|5:5|5:5|5:5"),
+            ("native_omitted_cell_selection_controls:Primary:A1:contents", "IndexDriver.OmittedCellSelection", vec![Value::String("Primary".into()), Value::String("A1".into()), Value::String("contents".into())], "5:11|5:11|5:11|5:55|5:55|5:55"),
+            ("native_omitted_cell_selection_controls:Primary:A1:format", "IndexDriver.OmittedCellSelection", vec![Value::String("Primary".into()), Value::String("A1".into()), Value::String("format".into())], "S:1:71|S:1:71|S:1:71|S:2:80:48|S:2:80:48|S:2:80:48"),
+            ("native_omitted_cell_selection_controls:Primary:B2:address", "IndexDriver.OmittedCellSelection", vec![Value::String("Primary".into()), Value::String("B2".into()), Value::String("address".into())], "S:4:36:66:36:50|S:4:36:66:36:50|S:4:36:66:36:50|S:4:36:68:36:53|S:4:36:68:36:53|S:4:36:68:36:53"),
+            ("native_omitted_cell_selection_controls:Primary:B2:row", "IndexDriver.OmittedCellSelection", vec![Value::String("Primary".into()), Value::String("B2".into()), Value::String("row".into())], "5:2|5:2|5:2|5:5|5:5|5:5"),
+            ("native_omitted_cell_selection_controls:Primary:B2:contents", "IndexDriver.OmittedCellSelection", vec![Value::String("Primary".into()), Value::String("B2".into()), Value::String("contents".into())], "5:22|5:22|5:22|5:55|5:55|5:55"),
+            ("native_omitted_cell_selection_controls:Primary:B2:format", "IndexDriver.OmittedCellSelection", vec![Value::String("Primary".into()), Value::String("B2".into()), Value::String("format".into())], "S:2:70:50|S:2:70:50|S:2:70:50|S:2:80:48|S:2:80:48|S:2:80:48"),
+            ("native_omitted_cell_selection_controls:Other:C3:address", "IndexDriver.OmittedCellSelection", vec![Value::String("Other".into()), Value::String("C3".into()), Value::String("address".into())], "S:4:36:67:36:51|S:18:91:83:104:101:101:116:49:93:79:116:104:101:114:33:36:67:36:51|S:18:91:83:104:101:101:116:49:93:79:116:104:101:114:33:36:67:36:51|S:4:36:68:36:53|S:4:36:68:36:53|S:4:36:68:36:53"),
+            ("native_omitted_cell_selection_controls:Other:C3:row", "IndexDriver.OmittedCellSelection", vec![Value::String("Other".into()), Value::String("C3".into()), Value::String("row".into())], "5:3|5:3|5:3|5:5|5:5|5:5"),
+            ("native_omitted_cell_selection_controls:Other:C3:contents", "IndexDriver.OmittedCellSelection", vec![Value::String("Other".into()), Value::String("C3".into()), Value::String("contents".into())], "S:6:112:105:99:107:101:100|S:6:112:105:99:107:101:100|S:6:112:105:99:107:101:100|5:55|5:55|5:55"),
+            ("native_omitted_cell_selection_controls:Other:C3:format", "IndexDriver.OmittedCellSelection", vec![Value::String("Other".into()), Value::String("C3".into()), Value::String("format".into())], "S:1:71|S:1:71|S:1:71|S:2:80:48|S:2:80:48|S:2:80:48"),
+            ("native_omitted_cell_selection_controls:Other:D4:address", "IndexDriver.OmittedCellSelection", vec![Value::String("Other".into()), Value::String("D4".into()), Value::String("address".into())], "S:4:36:68:36:52|S:18:91:83:104:101:101:116:49:93:79:116:104:101:114:33:36:68:36:52|S:18:91:83:104:101:101:116:49:93:79:116:104:101:114:33:36:68:36:52|S:4:36:68:36:53|S:4:36:68:36:53|S:4:36:68:36:53"),
+            ("native_omitted_cell_selection_controls:Other:D4:row", "IndexDriver.OmittedCellSelection", vec![Value::String("Other".into()), Value::String("D4".into()), Value::String("row".into())], "5:4|5:4|5:4|5:5|5:5|5:5"),
+            ("native_omitted_cell_selection_controls:Other:D4:contents", "IndexDriver.OmittedCellSelection", vec![Value::String("Other".into()), Value::String("D4".into()), Value::String("contents".into())], "5:44|5:44|5:44|5:55|5:55|5:55"),
+            ("native_omitted_cell_selection_controls:Other:D4:format", "IndexDriver.OmittedCellSelection", vec![Value::String("Other".into()), Value::String("D4".into()), Value::String("format".into())], "S:1:71|S:1:71|S:1:71|S:2:80:48|S:2:80:48|S:2:80:48"),
+            ("native_cell_address_qualification_controls:Other", "IndexDriver.CellAddressQualification", vec![Value::String("Other".into())], "S:4:36:67:36:51|S:18:91:83:104:101:101:116:49:93:79:116:104:101:114:33:36:67:36:51|S:18:91:83:104:101:101:116:49:93:79:116:104:101:114:33:36:67:36:51|S:20:91:83:104:101:101:116:49:93:80:114:105:109:97:114:121:33:36:66:36:50|S:18:91:83:104:101:101:116:49:93:79:116:104:101:114:33:36:67:36:51|S:18:91:83:104:101:101:116:49:93:79:116:104:101:114:33:36:67:36:51|S:20:91:83:104:101:101:116:49:93:80:114:105:109:97:114:121:33:36:66:36:50|S:4:36:67:36:51"),
+            ("native_cell_address_qualification_controls:With space", "IndexDriver.CellAddressQualification", vec![Value::String("With space".into())], "S:4:36:67:36:51|S:25:39:91:83:104:101:101:116:49:93:87:105:116:104:32:115:112:97:99:101:39:33:36:67:36:51|S:25:39:91:83:104:101:101:116:49:93:87:105:116:104:32:115:112:97:99:101:39:33:36:67:36:51|S:20:91:83:104:101:101:116:49:93:80:114:105:109:97:114:121:33:36:66:36:50|S:25:39:91:83:104:101:101:116:49:93:87:105:116:104:32:115:112:97:99:101:39:33:36:67:36:51|S:25:39:91:83:104:101:101:116:49:93:87:105:116:104:32:115:112:97:99:101:39:33:36:67:36:51|S:20:91:83:104:101:101:116:49:93:80:114:105:109:97:114:121:33:36:66:36:50|S:4:36:67:36:51"),
+            ("native_cell_address_qualification_controls:O'Brien", "IndexDriver.CellAddressQualification", vec![Value::String("O'Brien".into())], "S:4:36:67:36:51|S:23:39:91:83:104:101:101:116:49:93:79:39:39:66:114:105:101:110:39:33:36:67:36:51|S:23:39:91:83:104:101:101:116:49:93:79:39:39:66:114:105:101:110:39:33:36:67:36:51|S:20:91:83:104:101:101:116:49:93:80:114:105:109:97:114:121:33:36:66:36:50|S:23:39:91:83:104:101:101:116:49:93:79:39:39:66:114:105:101:110:39:33:36:67:36:51|S:23:39:91:83:104:101:101:116:49:93:79:39:39:66:114:105:101:110:39:33:36:67:36:51|S:20:91:83:104:101:101:116:49:93:80:114:105:109:97:114:121:33:36:66:36:50|S:4:36:67:36:51"),
+            ("native_cell_address_qualification_controls:日本", "IndexDriver.CellAddressQualification", vec![Value::String("日本".into())], "S:4:36:67:36:51|S:15:91:83:104:101:101:116:49:93:26085:26412:33:36:67:36:51|S:15:91:83:104:101:101:116:49:93:26085:26412:33:36:67:36:51|S:20:91:83:104:101:101:116:49:93:80:114:105:109:97:114:121:33:36:66:36:50|S:15:91:83:104:101:101:116:49:93:26085:26412:33:36:67:36:51|S:15:91:83:104:101:101:116:49:93:26085:26412:33:36:67:36:51|S:20:91:83:104:101:101:116:49:93:80:114:105:109:97:114:121:33:36:66:36:50|S:4:36:67:36:51"),
+            ("native_cell_selected_metadata_controls:Primary:A1:type", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("A1".into()), Value::String("type".into())], "S:1:108|S:1:108|S:1:108|S:1:118|S:1:118|S:1:118"),
+            ("native_cell_selected_metadata_controls:Primary:A1:protect", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("A1".into()), Value::String("protect".into())], "5:0|5:0|5:0|5:1|5:1|5:1"),
+            ("native_cell_selected_metadata_controls:Primary:A1:prefix", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("A1".into()), Value::String("prefix".into())], "S:1:39|S:1:39|S:1:39|S:0|S:0|S:0"),
+            ("native_cell_selected_metadata_controls:Primary:A1:color", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("A1".into()), Value::String("color".into())], "5:0|5:0|5:0|5:0|5:0|5:0"),
+            ("native_cell_selected_metadata_controls:Primary:A1:parentheses", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("A1".into()), Value::String("parentheses".into())], "5:0|5:0|5:0|5:0|5:0|5:0"),
+            ("native_cell_selected_metadata_controls:Primary:B2:type", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("B2".into()), Value::String("type".into())], "S:1:118|S:1:118|S:1:118|S:1:118|S:1:118|S:1:118"),
+            ("native_cell_selected_metadata_controls:Primary:B2:protect", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("B2".into()), Value::String("protect".into())], "5:0|5:0|5:0|5:1|5:1|5:1"),
+            ("native_cell_selected_metadata_controls:Primary:B2:prefix", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("B2".into()), Value::String("prefix".into())], "S:0|S:0|S:0|S:0|S:0|S:0"),
+            ("native_cell_selected_metadata_controls:Primary:B2:color", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("B2".into()), Value::String("color".into())], "5:0|5:0|5:0|5:0|5:0|5:0"),
+            ("native_cell_selected_metadata_controls:Primary:B2:parentheses", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("B2".into()), Value::String("parentheses".into())], "5:0|5:0|5:0|5:0|5:0|5:0"),
+            ("native_cell_selected_metadata_controls:Other:C3:type", "IndexDriver.SelectedCellMetadata", vec![Value::String("Other".into()), Value::String("C3".into()), Value::String("type".into())], "S:1:108|S:1:108|S:1:108|S:1:118|S:1:118|S:1:118"),
+            ("native_cell_selected_metadata_controls:Other:C3:protect", "IndexDriver.SelectedCellMetadata", vec![Value::String("Other".into()), Value::String("C3".into()), Value::String("protect".into())], "5:1|5:1|5:1|5:1|5:1|5:1"),
+            ("native_cell_selected_metadata_controls:Other:C3:prefix", "IndexDriver.SelectedCellMetadata", vec![Value::String("Other".into()), Value::String("C3".into()), Value::String("prefix".into())], "S:1:94|S:1:94|S:1:94|S:0|S:0|S:0"),
+            ("native_cell_selected_metadata_controls:Other:C3:color", "IndexDriver.SelectedCellMetadata", vec![Value::String("Other".into()), Value::String("C3".into()), Value::String("color".into())], "5:0|5:0|5:0|5:0|5:0|5:0"),
+            ("native_cell_selected_metadata_controls:Other:C3:parentheses", "IndexDriver.SelectedCellMetadata", vec![Value::String("Other".into()), Value::String("C3".into()), Value::String("parentheses".into())], "5:0|5:0|5:0|5:0|5:0|5:0"),
+            ("native_cell_selected_metadata_controls:Other:D4:type", "IndexDriver.SelectedCellMetadata", vec![Value::String("Other".into()), Value::String("D4".into()), Value::String("type".into())], "S:1:108|S:1:108|S:1:108|S:1:118|S:1:118|S:1:118"),
+            ("native_cell_selected_metadata_controls:Other:D4:protect", "IndexDriver.SelectedCellMetadata", vec![Value::String("Other".into()), Value::String("D4".into()), Value::String("protect".into())], "5:0|5:0|5:0|5:1|5:1|5:1"),
+            ("native_cell_selected_metadata_controls:Other:D4:prefix", "IndexDriver.SelectedCellMetadata", vec![Value::String("Other".into()), Value::String("D4".into()), Value::String("prefix".into())], "S:1:34|S:1:34|S:1:34|S:0|S:0|S:0"),
+            ("native_cell_selected_metadata_controls:Other:D4:color", "IndexDriver.SelectedCellMetadata", vec![Value::String("Other".into()), Value::String("D4".into()), Value::String("color".into())], "5:0|5:0|5:0|5:0|5:0|5:0"),
+            ("native_cell_selected_metadata_controls:Other:D4:parentheses", "IndexDriver.SelectedCellMetadata", vec![Value::String("Other".into()), Value::String("D4".into()), Value::String("parentheses".into())], "5:0|5:0|5:0|5:0|5:0|5:0"),
+            ("native_cell_selected_metadata_controls:Primary:F6:type", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("F6".into()), Value::String("type".into())], "S:1:98|S:1:98|S:1:98|S:1:118|S:1:118|S:1:118"),
+            ("native_cell_selected_metadata_controls:Primary:F6:protect", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("F6".into()), Value::String("protect".into())], "5:0|5:0|5:0|5:1|5:1|5:1"),
+            ("native_cell_selected_metadata_controls:Primary:F6:prefix", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("F6".into()), Value::String("prefix".into())], "S:0|S:0|S:0|S:0|S:0|S:0"),
+            ("native_cell_selected_metadata_controls:Primary:F6:color", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("F6".into()), Value::String("color".into())], "5:0|5:0|5:0|5:0|5:0|5:0"),
+            ("native_cell_selected_metadata_controls:Primary:F6:parentheses", "IndexDriver.SelectedCellMetadata", vec![Value::String("Primary".into()), Value::String("F6".into()), Value::String("parentheses".into())], "5:0|5:0|5:0|5:0|5:0|5:0"),
+        ];
+        assert_eq!(cases.len(), 45);
+        let mut mismatches = Vec::new();
+        for version in [1u8, 2] {
+            for (label, procedure, args, expected) in &cases {
+                let mut book = workbook();
+                book.calculation.compatibility_version = version;
+                let mut context = failure_context();
+                context.file_name = Some("Sheet1".into());
+                let mut session = None;
+                let outcome = execute_workbook_action_in_session(
+                    book, &source, Some(procedure), args.clone(), 0, context, &mut session,
+                ).unwrap();
+                let actual = if let Some(error) = outcome.error {
+                    format!("ERROR: {}", error.message)
+                } else {
+                    serde_json::to_value(&outcome.result).unwrap().get("value")
+                        .and_then(|value| value.as_str()).unwrap_or("<not a string>").to_string()
+                };
+                if actual != *expected {
+                    mismatches.push(format!("{label}, mode{version}: expected {expected}, got {actual}"));
+                }
+                let mut detached = oxicells_calc::Workbook::new();
+                detached.add_sheet("Detached");
+                assert_eq!(
+                    detached.evaluate("Detached", "CELL(\"row\")").unwrap(),
+                    oxicells_calc::Value::Error(oxicells_calc::ExcelError::Value),
+                    "active-cell context escaped the VBA evaluation: {label}, mode{version}",
+                );
+            }
+        }
+        assert!(mismatches.is_empty(), "{} mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+    }
+
+    #[test]
+    fn native_cell_imported_protection_and_macro_edits_share_one_view() {
+        let mut book = workbook();
+        book.sheets[0].rows.push(oxicells_core::ir::Row {
+            index: 1,
+            cells: vec![oxicells_core::ir::Cell {
+                col: 0, value: CellValue::Number(11.0),
+                style: oxicells_core::ir::CellStyle { unlocked: true, ..Default::default() },
+                formula: None, formula_utf16: None, runs: Vec::new(),
+                array_block: None, spill: Default::default(),
+            }],
+            height: None, custom_height: false, style_font: None,
+            thick_top: false, thick_bottom: false, hidden: false,
+        });
+        book.sheets[0].col_count = 1;
+        let calculator = oxicells_core::formula::assemble_for_evaluation(
+            &book.sheets, &book.defined_names, &book.external_books,
+        );
+        assert_eq!(calculator.evaluate("Sheet1", "CELL(\"protect\",A1)").unwrap(), oxicells_calc::Value::Number(0.0));
+        let source = r#"Public Function ImportedProtection() As String
+ Dim result As String
+ Range("A1").Select
+ result=CStr(Range("A1").Locked) & "|" & CStr(Application.Evaluate("CELL(""protect"",A1)"))
+ result=result & "|" & CStr(Application.Evaluate("CELL(""protect"")"))
+ Range("A1").Locked=True
+ result=result & "|" & CStr(Range("A1").Locked) & "|" & CStr(Application.Evaluate("CELL(""protect"",A1)"))
+ ImportedProtection=result & "|" & CStr(Application.Evaluate("CELL(""protect"")"))
+End Function"#;
+        for version in [1u8, 2] {
+            let mut held = book.clone();
+            held.calculation.compatibility_version = version;
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(
+                held, source, Some("ImportedProtection"), vec![], 0, failure_context(), &mut session,
+            ).unwrap();
+            assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap(), serde_json::json!({
+                "type": "string", "value": "False|0|0|True|1|1",
+            }));
+        }
     }
 
     #[test]

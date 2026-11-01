@@ -349,6 +349,9 @@ fn assemble_sheets(
         book.set_column_width_state(&sheet.name, sheet.default_col_width_explicit, sheet.hidden_cols.iter().copied().collect());
         for row in &sheet.rows {
             for cell in &row.cells {
+                if cell.style.unlocked {
+                    book.set_cell_unlocked(&sheet.name, cell.col, row.index.saturating_sub(1), true);
+                }
                 if cell.style.number_format.is_some() || cell.style.horizontal_align.is_some() {
                     book.set_cell_dress(
                         &sheet.name,
