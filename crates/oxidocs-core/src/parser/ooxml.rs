@@ -12634,6 +12634,9 @@ fn parse_table(
                 if style.bottom_border.is_none() {
                     style.bottom_border = tbl_style.bottom_border.clone();
                 }
+                if style.left_border.is_none() {
+                    style.left_border = tbl_style.left_border.clone();
+                }
             }
         }
     }
@@ -13140,7 +13143,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                     }
                                 }
                                 "sz" => {
-                                    border_sz_val = val.parse::<f32>().ok().map(|v| v / 8.0);
+                                    border_sz_val = val.parse::<f32>().ok().map(|v| crate::ir::table_border_twips(v / 8.0));
                                 }
                                 _ => {}
                             }
@@ -13185,7 +13188,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                         // border_width/_style cannot tell a sz4 top from a sz24
                         // bottom, and the row-0 pad and the below-table advance
                         // each need their own edge.
-                        if matches!(local.as_str(), "insideH" | "insideV" | "top" | "bottom") {
+                        if matches!(local.as_str(), "insideH" | "insideV" | "top" | "bottom" | "left" | "start") {
                             let border = BorderDef {
                                 style: if is_none {
                                     "none".to_string()
@@ -13202,6 +13205,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 "insideH" => style.inside_horizontal_border = Some(border),
                                 "insideV" => style.inside_vertical_border = Some(border),
                                 "top" => style.top_border = Some(border),
+                                "left" | "start" => style.left_border = Some(border),
                                 _ => style.bottom_border = Some(border),
                             }
                         }
@@ -13549,7 +13553,9 @@ fn parse_table_row(
                                             match reader.read_event() {
                                                 Ok(Event::Empty(be)) => {
                                                     let bl = local_name(be.name().as_ref());
-                                                    let bdr = parse_border_attrs(&be).or_else(|| {
+                                                    let bdr = parse_border_attrs(&be).map(|mut b| {
+                                                        b.width = crate::ir::table_border_twips(b.width); b
+                                                    }).or_else(|| {
                                                         let explicit_none = be.attributes().flatten().any(|a| {
                                                             local_name(a.key.as_ref()) == "val" && {
                                                                 let v = String::from_utf8_lossy(&a.value);
@@ -14185,7 +14191,9 @@ fn parse_cell_borders(reader: &mut Reader<&[u8]>) -> Result<CellBorders, ParseEr
         match reader.read_event()? {
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
-                let bdr = parse_border_attrs(&e);
+                let bdr = parse_border_attrs(&e).map(|mut b| {
+                    b.width = crate::ir::table_border_twips(b.width); b
+                });
                 // S482: a cell's EXPLICIT w:val="nil"/"none" edge SUPPRESSES the
                 // table-level border on that edge — it is NOT the same as an absent
                 // edge (which inherits the table border). parse_border_attrs returns

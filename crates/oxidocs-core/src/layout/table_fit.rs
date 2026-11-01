@@ -293,6 +293,27 @@ impl<'a> TableFitLayouter<'a> {
             }
         });
 
+        // OXI_C15_LEFT_HALF (2026-11-02, default ON, opt-out _DISABLE): in compat 15
+        // the table's left OUTER edge sits at the anchor; the column grid starts at
+        // the centre of the first row's first-cell left border, half its width in.
+        // `_pb_cell_border_inset_gen.py` (compat 15, tblInd 108, 3 rows): left
+        // border sz 4 / 12 / 24 on row 1 -> its rule from 77.42 (the edge), every
+        // other vertical rule and all cell text 0.24 / 0.72 / 1.5 right of Oxi's;
+        // compat 14 arms centre on the edge (no move). Real docs, Word rule centre
+        // minus Oxi: ja/forms__030ed901 (row-1 sz 12) +0.82, administrative__1c9d4bc0
+        // (sz 12) +0.85, forms__02dc500c (sz 4) +0.27, forms__02b9e225 +0.22;
+        // forms__02c99c04 (row-1 left nil) +0.06 -- the first cell decides.
+        // Left-anchored tables only: a centred / right table (jc, tblpXSpec) places
+        // its outer box (golden 459f05f1 tblpXSpec=center -0.0415, ohnoshugyo jc
+        // center, 1ec1 tblpXSpec=center lost with the shift).
+        let c15_left_anchored = !matches!(table.style.alignment.as_deref(), Some("center" | "right"))
+            && table.style.position.as_ref().map_or(true, |p| p.h_align.is_none());
+        let table_x = if self.table_modern_compat() && !is_nested && c15_left_anchored
+            && !crate::env_flag!("OXI_C15_LEFT_HALF_DISABLE")
+        {
+            table_x + self.c15_first_cell_left_width(table) * 0.5
+        } else { table_x };
+
         // Default cell padding from table style or OOXML default
         // COM-measured 2026-03-29: L/R=4.95pt (99tw), T/B=0pt
         let default_pad = &table.style.default_cell_margins;

@@ -14327,6 +14327,21 @@ cells={} pitch={:.2} text={:?}",
             && (self.compat_mode_explicit || crate::env_flag!("OXI_S1623_DISABLE"))
     }
 
+    /// OXI_C15_LEFT_HALF: the drawn width of the first row's leading cell's left
+    /// border (the cell's own tcBorders, else the table's lumped outer border).
+    fn c15_first_cell_left_width(&self, table: &Table) -> f32 {
+        let Some(row) = table.rows.first() else { return 0.0; };
+        if row.grid_before > 0 {
+            return 0.0;
+        }
+        let outer = table.style.left_border.as_ref()
+            .map_or(0.0, |d| self.s1188_drawn(&d.style, d.width));
+        row.cells.first().map_or(0.0, |cell| {
+            cell.borders.as_ref().and_then(|b| b.left.as_ref())
+                .map_or(outer, |d| self.s1188_drawn(&d.style, d.width))
+        })
+    }
+
     fn table_fragment_top_width(&self, table: &Table, row: &TableRow) -> f32 {
         let outer = match table.style.top_border.as_ref() {
             Some(d) => self.s1188_drawn(&d.style, d.width),

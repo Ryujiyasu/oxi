@@ -2074,6 +2074,21 @@ pub struct ParagraphBorders {
 }
 
 /// A single border definition
+
+/// OXI_TABLE_BORDER_TWIPS (2026-11-02, default ON, opt-out _DISABLE): Word keeps a
+/// table border's width in whole twips, flooring the eighth-point `w:sz` -- an
+/// odd sz loses half a twip. `_pb_thin_border_row_gen.py` (20 rows, trHeight 400
+/// atLeast, all borders sz 1..7, compat 12 and 15): Word's row pitch 20.0995 /
+/// 20.2511 / 20.3532 / 20.5047 / 20.6058 / 20.7574 / 20.8521 = 20 + 0.10 / 0.25 /
+/// 0.35 / 0.50 / 0.60 / 0.75 / 0.85, not sz/8's 0.125 / 0.375 / 0.625 / 0.875.
+/// en/reference__00f0e7f3 (sz 1 calendar rows): Oxi drifted 0.5pt by row 28.
+pub fn table_border_twips(width_pt: f32) -> f32 {
+    if std::env::var_os("OXI_TABLE_BORDER_TWIPS_DISABLE").is_some() {
+        return width_pt;
+    }
+    (width_pt * 20.0 + 1e-3).floor() / 20.0
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BorderDef {
     /// Border style (e.g. "single", "double", "dashed", "dotted", "thick")
@@ -2221,6 +2236,10 @@ pub struct TableStyle {
     pub top_border: Option<BorderDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bottom_border: Option<BorderDef>,
+    /// OXI_C15_LEFT_HALF: the table's outer LEFT edge (`w:left` / `w:start`),
+    /// kept apart for the same reason as `top_border`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_border: Option<BorderDef>,
     /// Border color (hex), e.g. "000000"
     #[serde(default)]
     pub border_color: Option<String>,
