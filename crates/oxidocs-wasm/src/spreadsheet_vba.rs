@@ -12040,7 +12040,7 @@ impl<'a> WorkbookHost<'a> {
     /// the one thing here that must refuse.
     fn workbooks_member(&mut self, args: &[Value]) -> Result<Value, String> {
         match args {
-            [] | [Value::Missing] => Ok(self.object(HostObject::Workbooks)),
+            [] => Ok(self.object(HostObject::Workbooks)),
             [index] => self.workbook_item(index),
             _ => Err("Workbooks takes one index".to_string()),
         }
@@ -12050,7 +12050,19 @@ impl<'a> WorkbookHost<'a> {
         let own = self.file_name.clone().unwrap_or_else(|| "Book1".to_string());
         let found = match index {
             Value::String(name) => name.eq_ignore_ascii_case(&own),
-            value => any_whole_number(value) == Some(1),
+            Value::Utf16(units) => String::from_utf16(units).is_ok_and(|name| name.eq_ignore_ascii_case(&own)),
+            Value::NullString | Value::Empty | Value::Boolean(_) => false,
+            value => {
+                let number = match value {
+                    Value::Decimal(number) => Some(number.to_f64()),
+                    value => any_number(value),
+                }.ok_or_else(|| host_error(13, "workbook index must be a name or number"))?;
+                let number = number.round_ties_even();
+                if !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&number) {
+                    return Err(host_error(6, "workbook index overflows a Long"));
+                }
+                number == 1.0
+            },
         };
         if found {
             Ok(self.object(HostObject::Workbook))
@@ -25285,6 +25297,9 @@ impl Host for WorkbookHost<'_> {
             if let Some(HostObject::SortFields(sheet)) = self.objects.get(host_object_index(receiver.handle)).copied() {
                 return self.sort_fields_call(sheet, name, args).map(Some);
             }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("workbooks") {
+                return self.workbooks_member(args).map(Some);
+            }
             if self.is_workbooks(receiver) {
                 return match name.to_ascii_lowercase().as_str() {
                     "item" => match args {
@@ -31287,6 +31302,9 @@ impl Host for WorkbookHost<'_> {
     fn enumerate(&mut self, receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
+        }
+        if self.is_workbooks(receiver) {
+            return Ok(Some(vec![self.object(HostObject::Workbook)]));
         }
         if let Some(HostObject::ColorScaleCriteria(id)) = self.scale_part(receiver) {
             let count = self.conditions[self.condition_index(id)?].color_scale_points;
@@ -64367,6 +64385,434 @@ End Function
     }
 
 
+
+    #[test]
+    fn native_workbooks_enumeration_and_index_arguments_match_excel() {
+        let source = r##"Attribute VB_Name = "EnumerationProbe"
+Option Explicit
+Private Function BookReport(ByVal book As Object) As String
+ BookReport=TypeName(book) & "|" & book.Name & "|" & CStr(book Is ThisWorkbook) & "|" & CStr(book.Parent Is Application)
+End Function
+Public Function EnumerationQuery(ByVal mode As Long) As String
+ Dim book As Object, other As Object, item As Variant, typed As Workbook, books As Object
+ Dim report As String, count As Long
+ Select Case mode
+ Case 0
+  For Each book In Workbooks
+   count=count+1
+   report=report & "|" & BookReport(book)
+  Next book
+ Case 1
+  For Each book In Application.Workbooks
+   count=count+1
+   report=report & "|" & BookReport(book)
+  Next book
+ Case 2
+  Set books=ThisWorkbook.Application.Workbooks
+  For Each book In books
+   count=count+1
+   report=report & "|" & BookReport(book)
+  Next book
+ Case 3
+  For Each typed In Workbooks
+   count=count+1
+   report=report & "|" & BookReport(typed)
+  Next typed
+ Case 4
+  For Each item In Workbooks
+   count=count+1
+   report=report & "|" & BookReport(item)
+  Next item
+ Case 5
+  For Each book In Workbooks
+   For Each other In Workbooks
+    count=count+1
+    report=report & "|" & CStr(book Is other) & "|" & BookReport(other)
+   Next other
+  Next book
+ Case 6
+  For Each book In Workbooks
+   count=count+1
+   report=report & "|" & BookReport(book)
+   Exit For
+  Next book
+ Case 7
+  Set books=Workbooks
+  For Each book In books
+   Set other=books.Item(book.Name)
+   count=count+1
+   report=report & "|" & CStr(book Is other) & "|" & BookReport(book)
+  Next book
+ End Select
+ EnumerationQuery=CStr(count) & report
+End Function
+
+Attribute VB_Name = "WorkbookItemRoutesProbe"
+Option Explicit
+Private Function ItemReport(Optional ByVal index As Variant, Optional ByVal style As Long=0) As String
+ Dim book As Workbook, failure As Long, report As String, books As Object
+ report=CStr(VarType(index)) & "|" & TypeName(index) & "|"
+ On Error Resume Next
+ Err.Clear
+ Select Case style
+ Case 0: Set book=Workbooks.Item(index)
+ Case 1: Set book=Workbooks(index)
+ Case 2: Set book=Application.Workbooks(index)
+ Case 3
+  Set books=Workbooks
+  Set book=books(index)
+ Case 4
+  Set books=Workbooks
+  Set book=books.Item(index)
+ End Select
+ failure=Err.Number
+ On Error GoTo 0
+ If failure<>0 Then
+  ItemReport=report & "E|" & CStr(failure)
+ Else
+  ItemReport=report & "OK|" & TypeName(book) & "|" & book.Name & "|" & CStr(book Is ThisWorkbook)
+ End If
+End Function
+Public Function ItemQuery(ByVal mode As Long, ByVal style As Long) As String
+ Dim index As Variant
+ Select Case mode
+ Case 0
+ Case 1: index=Null
+ Case 2: index=False
+ Case 3: index=True
+ Case 4: index=CInt(1)
+ Case 5: index=CByte(1)
+ Case 6: index=CLng(1)
+ Case 7: index=CDbl(1)
+ Case 8: index=CSng(1)
+ Case 9: index=1.4
+ Case 10: index=1.5
+ Case 11: index=1.9
+ Case 12: index=0.5
+ Case 13: index=0.6
+ Case 14: index=-1
+ Case 15: index="1"
+ Case 16: index=ThisWorkbook.Name
+ Case 17: index=UCase$(ThisWorkbook.Name)
+ Case 18: index=CVErr(2007)
+ Case 19: index=Array(1)
+ Case 20: index=CDate(1)
+ Case 21: index=CCur(1)
+ Case 22: index=CDec(1)
+ Case 23: Set index=ThisWorkbook
+ Case 24
+  ItemQuery=ItemReport(style:=style)
+  Exit Function
+ Case 25: Set index=Nothing
+ Case 26: index=CDec(1.4)
+ Case 27: index=CDec(0.6)
+ Case 28: index=CDec(0.5)
+ Case 29: index=CCur(1.4)
+ Case 30: index=CLngLng(1)
+ Case 31: index=1E+20
+ Case 32: index=CDec(1E+20)
+ Case 33: index="1.4"
+ Case 34: index=CDate(1.4)
+ End Select
+ ItemQuery=ItemReport(index,style)
+End Function
+
+Attribute VB_Name = "WorkbookIndexBoundsProbe"
+Option Explicit
+Private Function ItemReport(Optional ByVal index As Variant) As String
+ Dim book As Workbook, failure As Long, report As String
+ report=CStr(VarType(index)) & "|" & TypeName(index) & "|"
+ On Error Resume Next
+ Err.Clear
+ Set book=Workbooks.Item(index)
+ failure=Err.Number
+ On Error GoTo 0
+ If failure<>0 Then
+  ItemReport=report & "E|" & CStr(failure)
+ Else
+  ItemReport=report & "OK|" & TypeName(book) & "|" & book.Name & "|" & CStr(book Is ThisWorkbook)
+ End If
+End Function
+Public Function ItemQuery(ByVal mode As Long) As String
+ Dim index As Variant
+ Select Case mode
+ Case 0: index=2147483647#
+ Case 1: index=2147483647.4#
+ Case 2: index=2147483647.5#
+ Case 3: index=2147483648#
+ Case 4: index=-2147483648#
+ Case 5: index=-2147483648.4#
+ Case 6: index=-2147483648.5#
+ Case 7: index=-2147483648.6#
+ Case 8: index=CLngLng("2147483648")
+ Case 9: index=CDec("2147483647.5")
+ Case 10: index=CDec("-2147483648.5")
+ Case 11: index=CDec("2147483647.4")
+ End Select
+ ItemQuery=ItemReport(index)
+End Function
+
+Attribute VB_Name = "WorkbookIndexPrecisionProbe"
+Option Explicit
+Private Function ItemReport(Optional ByVal index As Variant) As String
+ Dim book As Workbook, failure As Long, report As String
+ report=CStr(VarType(index)) & "|" & TypeName(index) & "|"
+ On Error Resume Next
+ Err.Clear
+ Set book=Workbooks.Item(index)
+ failure=Err.Number
+ On Error GoTo 0
+ If failure<>0 Then
+  ItemReport=report & "E|" & CStr(failure)
+ Else
+  ItemReport=report & "OK|" & TypeName(book) & "|" & book.Name & "|" & CStr(book Is ThisWorkbook)
+ End If
+End Function
+Public Function ItemQuery(ByVal mode As Long) As String
+ Dim index As Variant
+ Select Case mode
+ Case 0: index=CDec("0.5000000000000000000000000001")
+ Case 1: index=CDec("0.4999999999999999999999999999")
+ Case 2: index=CDec("1.4999999999999999999999999999")
+ Case 3: index=CDec("1.5000000000000000000000000001")
+ Case 4: index=CDec("2147483647.4999999999999999999")
+ Case 5: index=CDec("2147483647.5000000000000000001")
+ Case 6: index=CDec("-2147483648.5000000000000000001")
+ Case 7: index=CDec("-2147483648.4999999999999999999")
+ End Select
+ ItemQuery=ItemReport(index)
+End Function
+"##;
+        let cases = [
+            ("native_oxi_generated_enumeration_controls:[0]", "EnumerationProbe.EnumerationQuery", vec![Value::Integer(0)], "1|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True|True"),
+            ("native_oxi_generated_enumeration_controls:[1]", "EnumerationProbe.EnumerationQuery", vec![Value::Integer(1)], "1|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True|True"),
+            ("native_oxi_generated_enumeration_controls:[2]", "EnumerationProbe.EnumerationQuery", vec![Value::Integer(2)], "1|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True|True"),
+            ("native_oxi_generated_enumeration_controls:[3]", "EnumerationProbe.EnumerationQuery", vec![Value::Integer(3)], "1|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True|True"),
+            ("native_oxi_generated_enumeration_controls:[4]", "EnumerationProbe.EnumerationQuery", vec![Value::Integer(4)], "1|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True|True"),
+            ("native_oxi_generated_enumeration_controls:[5]", "EnumerationProbe.EnumerationQuery", vec![Value::Integer(5)], "1|True|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True|True"),
+            ("native_oxi_generated_enumeration_controls:[6]", "EnumerationProbe.EnumerationQuery", vec![Value::Integer(6)], "1|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True|True"),
+            ("native_oxi_generated_enumeration_controls:[7]", "EnumerationProbe.EnumerationQuery", vec![Value::Integer(7)], "1|True|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True|True"),
+            ("native_oxi_generated_item_routes_controls:[0, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(0),Value::Integer(0)], "0|Empty|E|9"),
+            ("native_oxi_generated_item_routes_controls:[1, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(1),Value::Integer(0)], "1|Null|E|13"),
+            ("native_oxi_generated_item_routes_controls:[2, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(2),Value::Integer(0)], "11|Boolean|E|9"),
+            ("native_oxi_generated_item_routes_controls:[3, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(3),Value::Integer(0)], "11|Boolean|E|9"),
+            ("native_oxi_generated_item_routes_controls:[4, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(4),Value::Integer(0)], "2|Integer|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[5, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(5),Value::Integer(0)], "17|Byte|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[6, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(6),Value::Integer(0)], "3|Long|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[7, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(7),Value::Integer(0)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[8, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(8),Value::Integer(0)], "4|Single|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[9, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(9),Value::Integer(0)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[10, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(10),Value::Integer(0)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[11, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(11),Value::Integer(0)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[12, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(12),Value::Integer(0)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[13, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(13),Value::Integer(0)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[14, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(14),Value::Integer(0)], "2|Integer|E|9"),
+            ("native_oxi_generated_item_routes_controls:[15, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(15),Value::Integer(0)], "8|String|E|9"),
+            ("native_oxi_generated_item_routes_controls:[16, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(16),Value::Integer(0)], "8|String|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[17, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(17),Value::Integer(0)], "8|String|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[18, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(18),Value::Integer(0)], "10|Error|E|13"),
+            ("native_oxi_generated_item_routes_controls:[19, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(19),Value::Integer(0)], "8204|Variant()|E|13"),
+            ("native_oxi_generated_item_routes_controls:[20, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(20),Value::Integer(0)], "7|Date|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[21, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(21),Value::Integer(0)], "6|Currency|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[22, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(22),Value::Integer(0)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[23, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(23),Value::Integer(0)], "9|Workbook|E|13"),
+            ("native_oxi_generated_item_routes_controls:[24, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(24),Value::Integer(0)], "10|Error|E|13"),
+            ("native_oxi_generated_item_routes_controls:[25, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(25),Value::Integer(0)], "9|Nothing|E|13"),
+            ("native_oxi_generated_item_routes_controls:[26, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(26),Value::Integer(0)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[27, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(27),Value::Integer(0)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[28, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(28),Value::Integer(0)], "14|Decimal|E|9"),
+            ("native_oxi_generated_item_routes_controls:[29, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(29),Value::Integer(0)], "6|Currency|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[30, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(30),Value::Integer(0)], "20|LongLong|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[31, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(31),Value::Integer(0)], "5|Double|E|6"),
+            ("native_oxi_generated_item_routes_controls:[32, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(32),Value::Integer(0)], "14|Decimal|E|6"),
+            ("native_oxi_generated_item_routes_controls:[33, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(33),Value::Integer(0)], "8|String|E|9"),
+            ("native_oxi_generated_item_routes_controls:[34, 0]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(34),Value::Integer(0)], "7|Date|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[0, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(0),Value::Integer(1)], "0|Empty|E|9"),
+            ("native_oxi_generated_item_routes_controls:[1, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(1),Value::Integer(1)], "1|Null|E|13"),
+            ("native_oxi_generated_item_routes_controls:[2, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(2),Value::Integer(1)], "11|Boolean|E|9"),
+            ("native_oxi_generated_item_routes_controls:[3, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(3),Value::Integer(1)], "11|Boolean|E|9"),
+            ("native_oxi_generated_item_routes_controls:[4, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(4),Value::Integer(1)], "2|Integer|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[5, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(5),Value::Integer(1)], "17|Byte|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[6, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(6),Value::Integer(1)], "3|Long|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[7, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(7),Value::Integer(1)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[8, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(8),Value::Integer(1)], "4|Single|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[9, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(9),Value::Integer(1)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[10, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(10),Value::Integer(1)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[11, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(11),Value::Integer(1)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[12, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(12),Value::Integer(1)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[13, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(13),Value::Integer(1)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[14, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(14),Value::Integer(1)], "2|Integer|E|9"),
+            ("native_oxi_generated_item_routes_controls:[15, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(15),Value::Integer(1)], "8|String|E|9"),
+            ("native_oxi_generated_item_routes_controls:[16, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(16),Value::Integer(1)], "8|String|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[17, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(17),Value::Integer(1)], "8|String|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[18, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(18),Value::Integer(1)], "10|Error|E|13"),
+            ("native_oxi_generated_item_routes_controls:[19, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(19),Value::Integer(1)], "8204|Variant()|E|13"),
+            ("native_oxi_generated_item_routes_controls:[20, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(20),Value::Integer(1)], "7|Date|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[21, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(21),Value::Integer(1)], "6|Currency|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[22, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(22),Value::Integer(1)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[23, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(23),Value::Integer(1)], "9|Workbook|E|13"),
+            ("native_oxi_generated_item_routes_controls:[24, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(24),Value::Integer(1)], "10|Error|E|13"),
+            ("native_oxi_generated_item_routes_controls:[25, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(25),Value::Integer(1)], "9|Nothing|E|13"),
+            ("native_oxi_generated_item_routes_controls:[26, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(26),Value::Integer(1)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[27, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(27),Value::Integer(1)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[28, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(28),Value::Integer(1)], "14|Decimal|E|9"),
+            ("native_oxi_generated_item_routes_controls:[29, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(29),Value::Integer(1)], "6|Currency|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[30, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(30),Value::Integer(1)], "20|LongLong|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[31, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(31),Value::Integer(1)], "5|Double|E|6"),
+            ("native_oxi_generated_item_routes_controls:[32, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(32),Value::Integer(1)], "14|Decimal|E|6"),
+            ("native_oxi_generated_item_routes_controls:[33, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(33),Value::Integer(1)], "8|String|E|9"),
+            ("native_oxi_generated_item_routes_controls:[34, 1]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(34),Value::Integer(1)], "7|Date|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[0, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(0),Value::Integer(2)], "0|Empty|E|9"),
+            ("native_oxi_generated_item_routes_controls:[1, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(1),Value::Integer(2)], "1|Null|E|13"),
+            ("native_oxi_generated_item_routes_controls:[2, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(2),Value::Integer(2)], "11|Boolean|E|9"),
+            ("native_oxi_generated_item_routes_controls:[3, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(3),Value::Integer(2)], "11|Boolean|E|9"),
+            ("native_oxi_generated_item_routes_controls:[4, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(4),Value::Integer(2)], "2|Integer|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[5, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(5),Value::Integer(2)], "17|Byte|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[6, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(6),Value::Integer(2)], "3|Long|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[7, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(7),Value::Integer(2)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[8, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(8),Value::Integer(2)], "4|Single|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[9, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(9),Value::Integer(2)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[10, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(10),Value::Integer(2)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[11, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(11),Value::Integer(2)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[12, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(12),Value::Integer(2)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[13, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(13),Value::Integer(2)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[14, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(14),Value::Integer(2)], "2|Integer|E|9"),
+            ("native_oxi_generated_item_routes_controls:[15, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(15),Value::Integer(2)], "8|String|E|9"),
+            ("native_oxi_generated_item_routes_controls:[16, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(16),Value::Integer(2)], "8|String|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[17, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(17),Value::Integer(2)], "8|String|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[18, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(18),Value::Integer(2)], "10|Error|E|13"),
+            ("native_oxi_generated_item_routes_controls:[19, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(19),Value::Integer(2)], "8204|Variant()|E|13"),
+            ("native_oxi_generated_item_routes_controls:[20, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(20),Value::Integer(2)], "7|Date|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[21, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(21),Value::Integer(2)], "6|Currency|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[22, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(22),Value::Integer(2)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[23, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(23),Value::Integer(2)], "9|Workbook|E|13"),
+            ("native_oxi_generated_item_routes_controls:[24, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(24),Value::Integer(2)], "10|Error|E|13"),
+            ("native_oxi_generated_item_routes_controls:[25, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(25),Value::Integer(2)], "9|Nothing|E|13"),
+            ("native_oxi_generated_item_routes_controls:[26, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(26),Value::Integer(2)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[27, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(27),Value::Integer(2)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[28, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(28),Value::Integer(2)], "14|Decimal|E|9"),
+            ("native_oxi_generated_item_routes_controls:[29, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(29),Value::Integer(2)], "6|Currency|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[30, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(30),Value::Integer(2)], "20|LongLong|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[31, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(31),Value::Integer(2)], "5|Double|E|6"),
+            ("native_oxi_generated_item_routes_controls:[32, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(32),Value::Integer(2)], "14|Decimal|E|6"),
+            ("native_oxi_generated_item_routes_controls:[33, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(33),Value::Integer(2)], "8|String|E|9"),
+            ("native_oxi_generated_item_routes_controls:[34, 2]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(34),Value::Integer(2)], "7|Date|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[0, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(0),Value::Integer(3)], "0|Empty|E|9"),
+            ("native_oxi_generated_item_routes_controls:[1, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(1),Value::Integer(3)], "1|Null|E|13"),
+            ("native_oxi_generated_item_routes_controls:[2, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(2),Value::Integer(3)], "11|Boolean|E|9"),
+            ("native_oxi_generated_item_routes_controls:[3, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(3),Value::Integer(3)], "11|Boolean|E|9"),
+            ("native_oxi_generated_item_routes_controls:[4, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(4),Value::Integer(3)], "2|Integer|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[5, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(5),Value::Integer(3)], "17|Byte|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[6, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(6),Value::Integer(3)], "3|Long|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[7, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(7),Value::Integer(3)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[8, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(8),Value::Integer(3)], "4|Single|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[9, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(9),Value::Integer(3)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[10, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(10),Value::Integer(3)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[11, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(11),Value::Integer(3)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[12, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(12),Value::Integer(3)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[13, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(13),Value::Integer(3)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[14, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(14),Value::Integer(3)], "2|Integer|E|9"),
+            ("native_oxi_generated_item_routes_controls:[15, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(15),Value::Integer(3)], "8|String|E|9"),
+            ("native_oxi_generated_item_routes_controls:[16, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(16),Value::Integer(3)], "8|String|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[17, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(17),Value::Integer(3)], "8|String|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[18, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(18),Value::Integer(3)], "10|Error|E|13"),
+            ("native_oxi_generated_item_routes_controls:[19, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(19),Value::Integer(3)], "8204|Variant()|E|13"),
+            ("native_oxi_generated_item_routes_controls:[20, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(20),Value::Integer(3)], "7|Date|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[21, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(21),Value::Integer(3)], "6|Currency|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[22, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(22),Value::Integer(3)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[23, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(23),Value::Integer(3)], "9|Workbook|E|13"),
+            ("native_oxi_generated_item_routes_controls:[24, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(24),Value::Integer(3)], "10|Error|E|13"),
+            ("native_oxi_generated_item_routes_controls:[25, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(25),Value::Integer(3)], "9|Nothing|E|13"),
+            ("native_oxi_generated_item_routes_controls:[26, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(26),Value::Integer(3)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[27, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(27),Value::Integer(3)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[28, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(28),Value::Integer(3)], "14|Decimal|E|9"),
+            ("native_oxi_generated_item_routes_controls:[29, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(29),Value::Integer(3)], "6|Currency|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[30, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(30),Value::Integer(3)], "20|LongLong|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[31, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(31),Value::Integer(3)], "5|Double|E|6"),
+            ("native_oxi_generated_item_routes_controls:[32, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(32),Value::Integer(3)], "14|Decimal|E|6"),
+            ("native_oxi_generated_item_routes_controls:[33, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(33),Value::Integer(3)], "8|String|E|9"),
+            ("native_oxi_generated_item_routes_controls:[34, 3]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(34),Value::Integer(3)], "7|Date|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[0, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(0),Value::Integer(4)], "0|Empty|E|9"),
+            ("native_oxi_generated_item_routes_controls:[1, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(1),Value::Integer(4)], "1|Null|E|13"),
+            ("native_oxi_generated_item_routes_controls:[2, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(2),Value::Integer(4)], "11|Boolean|E|9"),
+            ("native_oxi_generated_item_routes_controls:[3, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(3),Value::Integer(4)], "11|Boolean|E|9"),
+            ("native_oxi_generated_item_routes_controls:[4, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(4),Value::Integer(4)], "2|Integer|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[5, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(5),Value::Integer(4)], "17|Byte|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[6, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(6),Value::Integer(4)], "3|Long|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[7, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(7),Value::Integer(4)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[8, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(8),Value::Integer(4)], "4|Single|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[9, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(9),Value::Integer(4)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[10, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(10),Value::Integer(4)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[11, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(11),Value::Integer(4)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[12, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(12),Value::Integer(4)], "5|Double|E|9"),
+            ("native_oxi_generated_item_routes_controls:[13, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(13),Value::Integer(4)], "5|Double|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[14, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(14),Value::Integer(4)], "2|Integer|E|9"),
+            ("native_oxi_generated_item_routes_controls:[15, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(15),Value::Integer(4)], "8|String|E|9"),
+            ("native_oxi_generated_item_routes_controls:[16, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(16),Value::Integer(4)], "8|String|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[17, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(17),Value::Integer(4)], "8|String|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[18, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(18),Value::Integer(4)], "10|Error|E|13"),
+            ("native_oxi_generated_item_routes_controls:[19, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(19),Value::Integer(4)], "8204|Variant()|E|13"),
+            ("native_oxi_generated_item_routes_controls:[20, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(20),Value::Integer(4)], "7|Date|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[21, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(21),Value::Integer(4)], "6|Currency|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[22, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(22),Value::Integer(4)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[23, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(23),Value::Integer(4)], "9|Workbook|E|13"),
+            ("native_oxi_generated_item_routes_controls:[24, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(24),Value::Integer(4)], "10|Error|E|13"),
+            ("native_oxi_generated_item_routes_controls:[25, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(25),Value::Integer(4)], "9|Nothing|E|13"),
+            ("native_oxi_generated_item_routes_controls:[26, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(26),Value::Integer(4)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[27, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(27),Value::Integer(4)], "14|Decimal|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[28, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(28),Value::Integer(4)], "14|Decimal|E|9"),
+            ("native_oxi_generated_item_routes_controls:[29, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(29),Value::Integer(4)], "6|Currency|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[30, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(30),Value::Integer(4)], "20|LongLong|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_routes_controls:[31, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(31),Value::Integer(4)], "5|Double|E|6"),
+            ("native_oxi_generated_item_routes_controls:[32, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(32),Value::Integer(4)], "14|Decimal|E|6"),
+            ("native_oxi_generated_item_routes_controls:[33, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(33),Value::Integer(4)], "8|String|E|9"),
+            ("native_oxi_generated_item_routes_controls:[34, 4]", "WorkbookItemRoutesProbe.ItemQuery", vec![Value::Integer(34),Value::Integer(4)], "7|Date|OK|Workbook|vba-binding-consumption-candidate-reopen.xlsm|True"),
+            ("native_oxi_generated_item_bounds_controls:[0]", "WorkbookIndexBoundsProbe.ItemQuery", vec![Value::Integer(0)], "5|Double|E|9"),
+            ("native_oxi_generated_item_bounds_controls:[1]", "WorkbookIndexBoundsProbe.ItemQuery", vec![Value::Integer(1)], "5|Double|E|9"),
+            ("native_oxi_generated_item_bounds_controls:[2]", "WorkbookIndexBoundsProbe.ItemQuery", vec![Value::Integer(2)], "5|Double|E|6"),
+            ("native_oxi_generated_item_bounds_controls:[3]", "WorkbookIndexBoundsProbe.ItemQuery", vec![Value::Integer(3)], "5|Double|E|6"),
+            ("native_oxi_generated_item_bounds_controls:[4]", "WorkbookIndexBoundsProbe.ItemQuery", vec![Value::Integer(4)], "5|Double|E|9"),
+            ("native_oxi_generated_item_bounds_controls:[5]", "WorkbookIndexBoundsProbe.ItemQuery", vec![Value::Integer(5)], "5|Double|E|9"),
+            ("native_oxi_generated_item_bounds_controls:[6]", "WorkbookIndexBoundsProbe.ItemQuery", vec![Value::Integer(6)], "5|Double|E|9"),
+            ("native_oxi_generated_item_bounds_controls:[7]", "WorkbookIndexBoundsProbe.ItemQuery", vec![Value::Integer(7)], "5|Double|E|6"),
+            ("native_oxi_generated_item_bounds_controls:[8]", "WorkbookIndexBoundsProbe.ItemQuery", vec![Value::Integer(8)], "20|LongLong|E|6"),
+            ("native_oxi_generated_item_bounds_controls:[9]", "WorkbookIndexBoundsProbe.ItemQuery", vec![Value::Integer(9)], "14|Decimal|E|6"),
+            ("native_oxi_generated_item_bounds_controls:[10]", "WorkbookIndexBoundsProbe.ItemQuery", vec![Value::Integer(10)], "14|Decimal|E|9"),
+            ("native_oxi_generated_item_bounds_controls:[11]", "WorkbookIndexBoundsProbe.ItemQuery", vec![Value::Integer(11)], "14|Decimal|E|9"),
+            ("native_decimal_index_precision:0", "WorkbookIndexPrecisionProbe.ItemQuery", vec![Value::Integer(0)], "14|Decimal|E|9"),
+            ("native_decimal_index_precision:1", "WorkbookIndexPrecisionProbe.ItemQuery", vec![Value::Integer(1)], "14|Decimal|E|9"),
+            ("native_decimal_index_precision:2", "WorkbookIndexPrecisionProbe.ItemQuery", vec![Value::Integer(2)], "14|Decimal|E|9"),
+            ("native_decimal_index_precision:3", "WorkbookIndexPrecisionProbe.ItemQuery", vec![Value::Integer(3)], "14|Decimal|E|9"),
+            ("native_decimal_index_precision:4", "WorkbookIndexPrecisionProbe.ItemQuery", vec![Value::Integer(4)], "14|Decimal|E|6"),
+            ("native_decimal_index_precision:5", "WorkbookIndexPrecisionProbe.ItemQuery", vec![Value::Integer(5)], "14|Decimal|E|6"),
+            ("native_decimal_index_precision:6", "WorkbookIndexPrecisionProbe.ItemQuery", vec![Value::Integer(6)], "14|Decimal|E|9"),
+            ("native_decimal_index_precision:7", "WorkbookIndexPrecisionProbe.ItemQuery", vec![Value::Integer(7)], "14|Decimal|E|9"),
+        ];
+        assert_eq!(cases.len(), 203);
+        let mut mismatches = Vec::new();
+        for version in [1u8, 2] {
+            for (label, procedure, args, expected) in &cases {
+                let mut book = workbook();
+                book.calculation.compatibility_version = version;
+                let mut context = failure_context();
+                context.file_name = Some("vba-binding-consumption-candidate-reopen.xlsm".into());
+                let mut session = None;
+                let outcome = execute_workbook_action_in_session(
+                    book, source, Some(procedure), args.clone(), 0, context, &mut session,
+                ).unwrap();
+                let actual = if let Some(error) = outcome.error {
+                    format!("ERROR: {}", error.message)
+                } else {
+                    serde_json::to_value(&outcome.result).unwrap().get("value")
+                        .and_then(|value| value.as_str()).unwrap_or("<not a string>").to_string()
+                };
+                if actual != *expected {
+                    mismatches.push(format!("{label}, mode{version}: expected {expected}, got {actual}"));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{} mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+    }
 
     #[test]
     fn native_indirect_evaluate_callback_counts_match_excel() {
