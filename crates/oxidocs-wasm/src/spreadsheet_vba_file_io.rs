@@ -421,7 +421,7 @@ impl WorkbookHost<'_> {
         self.sync_legacy_notes_for_save();
         self.sync_links_for_save();
         let mut editor = oxicells_core::XlsxEditor::new(&package).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
-        editor.apply_workbook(self.workbook).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
+        editor.apply_workbook(&self.workbook).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
         let mut bytes = editor.save().map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
         if crate::vba_project::read_project_source_with_code_page(&bytes, None).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?.is_some() {
             bytes = crate::vba_project::write_project_source(&bytes, &self.file_io.source, None).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;

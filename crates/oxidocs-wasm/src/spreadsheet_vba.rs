@@ -3201,8 +3201,99 @@ struct FindState {
     last_found: Option<CellAddress>,
 }
 
+
+
+// Native identities stay monotonic, including across local snapshot rollback.
+#[derive(Default)]
+struct NativeObjectArena {
+    entries: Vec<(u64, usize)>,
+}
+#[derive(Clone)]
+struct HostObjects {
+    owner: u64,
+    arena: std::rc::Rc<std::cell::RefCell<NativeObjectArena>>,
+    values: Vec<HostObject>,
+    global_ids: Vec<usize>,
+    // A standalone host can use direct indexing until another owner allocates.
+    contiguous: bool,
+}
+impl Default for HostObjects {
+    fn default() -> Self {
+        Self {
+            owner: 0,
+            arena: Default::default(),
+            values: Vec::new(),
+            global_ids: Vec::new(),
+            contiguous: true,
+        }
+    }
+}
+impl HostObjects {
+    fn insert(&mut self, object: HostObject) -> u64 {
+        let local = self.values.len();
+        let mut arena = self.arena.borrow_mut();
+        let index = arena.entries.len();
+        self.contiguous &= index == local;
+        arena.entries.push((self.owner, local));
+        self.global_ids.push(index);
+        self.values.push(object);
+        index as u64
+    }
+    #[inline]
+    fn get(&self, index: usize) -> Option<&HostObject> {
+        if self.contiguous {
+            return self.values.get(index);
+        }
+        let (owner, local) = self.arena.borrow().entries.get(index).copied()?;
+        if owner != self.owner || self.global_ids.get(local) != Some(&index) {
+            return None;
+        }
+        self.values.get(local)
+    }
+    fn iter(&self) -> impl Iterator<Item = &HostObject> {
+        self.values.iter()
+    }
+}
+impl<'a> IntoIterator for &'a mut HostObjects {
+    type Item = &'a mut HostObject;
+    type IntoIter = std::slice::IterMut<'a, HostObject>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.iter_mut()
+    }
+}
+
+enum WorkbookStorage<'a> {
+    Borrowed(&'a mut Workbook),
+    Owned(Box<Workbook>),
+}
+impl std::ops::Deref for WorkbookStorage<'_> {
+    type Target = Workbook;
+    fn deref(&self) -> &Workbook {
+        match self {
+            Self::Borrowed(book) => book,
+            Self::Owned(book) => book,
+        }
+    }
+}
+impl std::ops::DerefMut for WorkbookStorage<'_> {
+    fn deref_mut(&mut self) -> &mut Workbook {
+        match self {
+            Self::Borrowed(book) => book,
+            Self::Owned(book) => book,
+        }
+    }
+}
+impl WorkbookStorage<'_> {
+    fn into_owned(self) -> Result<Workbook, &'static str> {
+        match self {
+            Self::Owned(book) => Ok(*book),
+            Self::Borrowed(_) => Err("This host borrows its workbook"),
+        }
+    }
+}
+
 struct WorkbookHost<'a> {
-    workbook: &'a mut Workbook,
+    workbook: WorkbookStorage<'a>,
     active_sheet: usize,
     clipboard: Option<Clipboard>,
     /// The block a `Cut` set aside without saying where it goes. Excel holds
@@ -3364,7 +3455,7 @@ struct WorkbookHost<'a> {
     /// A macro turns this off to work undisturbed, and turns it back on.
     interactive: bool,
     last_find: Option<FindState>,
-    objects: Vec<HostObject>,
+    objects: HostObjects,
     /// Whether anything was written to a cell. Excel works the formulas out
     /// after a change; this build does it once, when the macro is done, so
     /// that a loop writing a hundred cells does not pay for a hundred passes.
@@ -3488,7 +3579,36 @@ impl<'a> WorkbookHost<'a> {
         Ok(host)
     }
 
+
+
+    #[cfg(test)]
+    fn new_owned_in(
+        workbook: Workbook,
+        active_sheet: usize,
+        owner: u64,
+        arena: std::rc::Rc<std::cell::RefCell<NativeObjectArena>>,
+    ) -> Result<Self, String> {
+        let mut host = Self::stand_up_storage(WorkbookStorage::Owned(Box::new(workbook)), active_sheet)?;
+        host.objects = HostObjects {
+            owner,
+            arena,
+            values: Vec::new(),
+            global_ids: Vec::new(),
+            contiguous: true,
+        };
+        host.adopt_drawings();
+        Ok(host)
+    }
+
+    fn new_owned(workbook: Workbook, active_sheet: usize) -> Result<Self, String> {
+        let mut host = Self::stand_up_storage(WorkbookStorage::Owned(Box::new(workbook)), active_sheet)?;
+        host.adopt_drawings();
+        Ok(host)
+    }
     fn stand_up(workbook: &'a mut Workbook, active_sheet: usize) -> Result<Self, String> {
+        Self::stand_up_storage(WorkbookStorage::Borrowed(workbook), active_sheet)
+    }
+    fn stand_up_storage(mut workbook:WorkbookStorage<'a>,active_sheet:usize)->Result<Self,String> {
         if active_sheet >= workbook.sheets.len() {
             return Err(format!(
                 "active sheet index is out of range: {active_sheet}"
@@ -3501,9 +3621,9 @@ impl<'a> WorkbookHost<'a> {
                 })
             }))
         }).collect();
-        Self::seed_compatibility_names(workbook);
-        let notes = notes_pinned_open(workbook);
-        let table_counter = last_table_number(workbook);
+        Self::seed_compatibility_names(&mut workbook);
+        let notes = notes_pinned_open(&workbook);
+        let table_counter = last_table_number(&workbook);
         let threaded_notes = workbook.sheets.iter().enumerate().flat_map(|(sheet_index, sheet)| {
             sheet.threaded_comments.iter().enumerate().map(move |(source_index, comment)| ThreadedNote {
                 at: CellAddress { sheet: sheet_index, row: comment.cell.0 + 1, column: comment.cell.1 },
@@ -3637,7 +3757,7 @@ impl<'a> WorkbookHost<'a> {
             cursor: CURSOR_DEFAULT,
             interactive: true,
             last_find: None,
-            objects: Vec::new(),
+            objects: HostObjects::default(),
             wrote: false,
             now: None,
             blocks: Vec::new(),
@@ -3842,7 +3962,7 @@ impl<'a> WorkbookHost<'a> {
             if !self.workbook.recalculation.changed.is_empty() {
                 self.queue_volatile_calculation();
             }
-            oxicells_core::recalculation::prepare(self.workbook);
+            oxicells_core::recalculation::prepare(&mut self.workbook);
         }
         let pending = self.workbook.recalculation.pending();
         let held = self.user_functions.borrow();
@@ -3918,8 +4038,8 @@ impl<'a> WorkbookHost<'a> {
         self.user_functions.borrow_mut().calculation = Some(UserCalculation::Cells {
             cells: cells.clone(), changed: false, clear_dirty, reason,
         });
-        if clear_dirty { oxicells_core::formula::evaluate_workbook_formula_automatic_entry(self.workbook, &cells, self.now); }
-        else { oxicells_core::formula::evaluate_workbook_formula_entry(self.workbook, &cells, self.now); }
+        if clear_dirty { oxicells_core::formula::evaluate_workbook_formula_automatic_entry(&mut self.workbook, &cells, self.now); }
+        else { oxicells_core::formula::evaluate_workbook_formula_entry(&mut self.workbook, &cells, self.now); }
         if clear_dirty {
             self.workbook.recalculation.changed.clear();
             self.workbook.recalculation.dirty.clear();
@@ -3940,14 +4060,13 @@ impl<'a> WorkbookHost<'a> {
             self.user_functions.borrow_mut().calculation = Some(UserCalculation::Cells {
                 cells: cells.clone(), changed: false, clear_dirty: false, reason: CalculationReason::Calculate,
             });
-            oxicells_core::formula::evaluate_workbook_formula_subset(self.workbook, &cells, false, self.now);
+            oxicells_core::formula::evaluate_workbook_formula_subset(&mut self.workbook, &cells, false, self.now);
         }
     }
 
     fn queue_volatile_calculation(&mut self) {
-        self.workbook.recalculation.dirty.extend(
-            oxicells_core::recalculation::volatile_dependents(self.workbook),
-        );
+        let volatile=oxicells_core::recalculation::volatile_dependents(&self.workbook);
+        self.workbook.recalculation.dirty.extend(volatile);
     }
 
     fn clear_contents_bounds(&self, range: CellRange) -> Result<Option<CellRange>, String> {
@@ -3980,7 +4099,7 @@ impl<'a> WorkbookHost<'a> {
         let sheet_scope = sheet.and_then(|index| self.workbook.sheets.get(index).map(|sheet| sheet.name.clone()));
         let pending_changes: Vec<_> = sheet_scope.as_ref().map(|scope| self.workbook.recalculation.changed.iter()
             .filter(|(name, _)| !same_sheet_name(name, scope)).cloned().collect()).unwrap_or_default();
-        oxicells_core::recalculation::prepare(self.workbook);
+        oxicells_core::recalculation::prepare(&mut self.workbook);
         if sheet_scope.as_ref().is_some_and(|scope| self.workbook.recalculation.dirty.iter()
             .any(|(name, _)| !same_sheet_name(name, scope))) {
             // Preparing a worksheet's dependency set does not calculate the
@@ -3991,7 +4110,7 @@ impl<'a> WorkbookHost<'a> {
         let mut dirty: Vec<_> = self.workbook.recalculation.dirty.iter().filter(|(name, _)| {
             sheet_scope.as_ref().is_none_or(|scope| same_sheet_name(name, scope))
         }).cloned().collect();
-        dirty.extend(oxicells_core::recalculation::volatile_dependents(self.workbook).into_iter()
+        dirty.extend(oxicells_core::recalculation::volatile_dependents(&self.workbook).into_iter()
             .filter(|(name, _)| sheet_scope.as_ref().is_none_or(|scope| same_sheet_name(name, scope))));
         dirty.sort();
         dirty.dedup();
@@ -4003,7 +4122,7 @@ impl<'a> WorkbookHost<'a> {
         self.user_functions.borrow_mut().calculation = Some(UserCalculation::Cells {
             cells: dirty.clone(), changed: false, clear_dirty: true, reason: CalculationReason::Dirty { sheet },
         });
-        let calculated = oxicells_core::formula::evaluate_workbook_formula_dirty(self.workbook, &dirty, self.now, sheet_scope.as_deref(), false);
+        let calculated = oxicells_core::formula::evaluate_workbook_formula_dirty(&mut self.workbook, &dirty, self.now, sheet_scope.as_deref(), false);
         self.retain_pending_calculation_cells(&calculated);
         if let Some(scope) = sheet_scope {
             for cell in calculated { self.workbook.recalculation.dirty.remove(&cell); }
@@ -4062,7 +4181,7 @@ impl<'a> WorkbookHost<'a> {
         let temporary_order = self.full_calculation_reference_order();
         self.lend_user_functions();
         self.user_functions.borrow_mut().calculation = Some(UserCalculation::All);
-        oxicells_core::formula::evaluate_workbook_formulas_in_order(self.workbook, &temporary_order, self.now);
+        oxicells_core::formula::evaluate_workbook_formulas_in_order(&mut self.workbook, &temporary_order, self.now);
         self.workbook.recalculation.changed.clear();
         self.workbook.recalculation.dirty.clear();
     }
@@ -4092,13 +4211,13 @@ impl<'a> WorkbookHost<'a> {
             _ => None,
         };
         let calculated = match reason {
-            CalculationReason::ManualEntry => oxicells_core::formula::evaluate_workbook_formula_entry(self.workbook, &cells, self.now),
-            CalculationReason::AutomaticEntry => oxicells_core::formula::evaluate_workbook_formula_automatic_entry(self.workbook, &cells, self.now),
-            CalculationReason::ArrayEntry => oxicells_core::formula::evaluate_workbook_formula_array_entry(self.workbook, &cells, self.now),
-            CalculationReason::Calculate => oxicells_core::formula::evaluate_workbook_formula_subset(self.workbook, &cells, changed, self.now),
+            CalculationReason::ManualEntry => oxicells_core::formula::evaluate_workbook_formula_entry(&mut self.workbook, &cells, self.now),
+            CalculationReason::AutomaticEntry => oxicells_core::formula::evaluate_workbook_formula_automatic_entry(&mut self.workbook, &cells, self.now),
+            CalculationReason::ArrayEntry => oxicells_core::formula::evaluate_workbook_formula_array_entry(&mut self.workbook, &cells, self.now),
+            CalculationReason::Calculate => oxicells_core::formula::evaluate_workbook_formula_subset(&mut self.workbook, &cells, changed, self.now),
             CalculationReason::Dirty { sheet } => {
                 let scope = sheet.and_then(|index| self.workbook.sheets.get(index).map(|sheet| sheet.name.clone()));
-                oxicells_core::formula::evaluate_workbook_formula_dirty(self.workbook, &cells, self.now, scope.as_deref(), false)
+                oxicells_core::formula::evaluate_workbook_formula_dirty(&mut self.workbook, &cells, self.now, scope.as_deref(), false)
             }
         };
         self.retain_pending_calculation_cells(&calculated);
@@ -4119,7 +4238,7 @@ impl<'a> WorkbookHost<'a> {
         let mut cells = self.formula_locations(range);
         if self.automatic_calculation() {
             let dirty = &self.workbook.recalculation.dirty;
-            let volatile = oxicells_core::recalculation::volatile_dependents(self.workbook);
+            let volatile = oxicells_core::recalculation::volatile_dependents(&self.workbook);
             cells.retain(|cell| dirty.contains(cell) || volatile.contains(cell));
         }
         if !cells.is_empty() {
@@ -4133,7 +4252,7 @@ impl<'a> WorkbookHost<'a> {
             self.user_functions.borrow_mut().calculation = Some(UserCalculation::Cells {
                 cells: cells.clone(), changed: false, clear_dirty: false, reason: CalculationReason::Calculate,
             });
-            oxicells_core::formula::evaluate_workbook_formula_subset(self.workbook, &cells, false, self.now);
+            oxicells_core::formula::evaluate_workbook_formula_subset(&mut self.workbook, &cells, false, self.now);
             if self.automatic_calculation() {
                 for cell in &cells {
                     if !dirty_before.contains(cell) { self.workbook.recalculation.dirty.remove(cell); }
@@ -4180,8 +4299,7 @@ impl<'a> WorkbookHost<'a> {
         let handle = match single.and_then(|key| self.singletons.get(&key)) {
             Some(handle) => *handle,
             None => {
-                let handle = self.objects.len() as u64;
-                self.objects.push(object);
+                let handle = self.objects.insert(object);
                 if let Some(key) = single {
                     self.singletons.insert(key, handle);
                 }
@@ -4436,7 +4554,7 @@ impl<'a> WorkbookHost<'a> {
         self.lend_user_functions();
         self.user_functions.borrow_mut().calculation = Some(UserCalculation::All);
         oxicells_calc::set_digit_width(f64::from(self.digit_width()));
-        oxicells_core::formula::evaluate_workbook_formulas_in_order(self.workbook, &temporary_order, self.now);
+        oxicells_core::formula::evaluate_workbook_formulas_in_order(&mut self.workbook, &temporary_order, self.now);
         self.wrote = false;
     }
 
@@ -7408,7 +7526,8 @@ impl<'a> WorkbookHost<'a> {
             for row in &mut self.workbook.sheets[sheet].rows {
                 if (first..=last).contains(&row.index) { row.hidden = false; }
             }
-            self.workbook.recalculation.change(self.workbook.sheets[sheet].name.clone(),
+            let sheet_name = self.workbook.sheets[sheet].name.clone();
+            self.workbook.recalculation.change(sheet_name,
                 (range.start_column, range.start_row - 1, range.end_column, range.end_row - 1));
             if !self.automatic_calculation() { self.workbook.calculation.completed = Some(false); }
         }
@@ -7435,7 +7554,7 @@ impl<'a> WorkbookHost<'a> {
         };
         // Capture both dependency graphs: #Headers loses its reference when
         // hidden, so the graph built after the change cannot find its readers.
-        let before = table_dependents(self.workbook);
+        let before = table_dependents(&self.workbook);
         if shown {
             if protected { return Err(host_error(1004, "Table features are unavailable on a protected worksheet")); }
             let above_empty = table.start_row > 1 && (table.start_col..=table.end_col).all(|column| {
@@ -7483,7 +7602,7 @@ impl<'a> WorkbookHost<'a> {
                 held.header_rows = 0;
             }
         }
-        let after = table_dependents(self.workbook);
+        let after = table_dependents(&self.workbook);
         self.workbook.recalculation.dirty.extend(before);
         self.workbook.recalculation.dirty.extend(after);
         self.wrote = true;
@@ -8673,7 +8792,7 @@ impl<'a> WorkbookHost<'a> {
         let condition = &self.conditions[index];
         let previous = data_bar_display(condition, if border { "negativebordertype" } else { "negativefilltype" })?;
         if previous == number { return Ok(true); }
-        let source = data_bar_color(condition, self.workbook, if border { 2 } else { 0 })?;
+        let source = data_bar_color(condition, &self.workbook, if border { 2 } else { 0 })?;
         let created = if condition.source_visual_extension_xml.is_none() { Some(self.make_data_bar_extension(id, condition)?) } else { None };
         let raw = condition.source_visual_extension_xml.as_deref().or_else(|| created.as_ref().map(|(_, raw)| raw.as_str())).ok_or_else(|| host_error(1004, "missing data bar extension"))?;
         let attribute = if border { "negativeBarBorderColorSameAsPositive" } else { "negativeBarColorSameAsPositive" };
@@ -8746,7 +8865,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn refresh_data_bar_color_snapshot(&mut self, id: u64, snapshot: usize, role: u8, color_override: Option<Value>) -> Result<(), String> {
-        let color = data_bar_color(&self.conditions[self.condition_index(id)?], self.workbook, role)?;
+        let color = data_bar_color(&self.conditions[self.condition_index(id)?], &self.workbook, role)?;
         let mut updated = match color { Some((color, theme, tint, _)) => DataBarColorSnapshot { color: Value::Integer(color), index: self.data_bar_color_index(color), theme, tint }, None => DataBarColorSnapshot { color: Value::Boolean(false), index: COLOUR_NONE, theme: None, tint: 0.0 } };
         if let Some(value) = color_override { updated.color = value; }
         *self.data_bar_color_snapshots.get_mut(snapshot).ok_or_else(|| host_error(1004, "missing data bar color"))? = updated;
@@ -8760,7 +8879,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn data_bar_color_object(&mut self, id: u64, role: u8) -> Result<Value, String> {
-        let color = data_bar_color(&self.conditions[self.condition_index(id)?], self.workbook, role)?;
+        let color = data_bar_color(&self.conditions[self.condition_index(id)?], &self.workbook, role)?;
         let snapshot = match color { Some((color, theme, tint, _)) => DataBarColorSnapshot { color: Value::Integer(color), index: self.data_bar_color_index(color), theme, tint }, None => DataBarColorSnapshot { color: Value::Boolean(false), index: COLOUR_NONE, theme: None, tint: 0.0 } };
         let at = self.data_bar_color_snapshots.len(); self.data_bar_color_snapshots.push(snapshot);
         Ok(self.object(HostObject::DataBarFormatColor(id, at, role)))
@@ -9319,7 +9438,7 @@ impl<'a> WorkbookHost<'a> {
             )
             .unwrap_or_else(|_| expression.to_string());
             match oxicells_core::formula::evaluate_expression(
-                self.workbook,
+                &self.workbook,
                 at.sheet,
                 &moved,
                 self.now,
@@ -10552,7 +10671,7 @@ impl<'a> WorkbookHost<'a> {
         let number = |formula: &str| -> Option<f64> {
             match formula.strip_prefix('=') {
                 Some(expression) => match oxicells_core::formula::evaluate_expression(
-                    self.workbook,
+                    &self.workbook,
                     at.sheet,
                     expression,
                     self.now,
@@ -10614,7 +10733,7 @@ impl<'a> WorkbookHost<'a> {
             _ => match validation.formula1.strip_prefix('=') {
                 Some(expression) => matches!(
                     oxicells_core::formula::evaluate_expression(
-                        self.workbook,
+                        &self.workbook,
                         at.sheet,
                         expression,
                         self.now,
@@ -10622,7 +10741,7 @@ impl<'a> WorkbookHost<'a> {
                     Some(oxicells_calc::Value::Logical(true))
                 ) || matches!(
                     oxicells_core::formula::evaluate_expression(
-                        self.workbook,
+                        &self.workbook,
                         at.sheet,
                         expression,
                         self.now,
@@ -14261,7 +14380,10 @@ impl<'a> WorkbookHost<'a> {
         let order: Vec<String> = self.workbook.sheets.iter().map(|held| held.name.clone()).collect();
         let gone = self.workbook.sheets.remove(sheet).name;
         self.workbook.defined_names.retain(|(name, _)| !oxicells_core::ir::defined_name_scope(name).is_some_and(|(scope, _)| same_sheet_name(&scope, &gone)));
-        self.workbook.defined_name_attributes.retain(|name, _| self.workbook.defined_names.iter().any(|(held, _)| held == name));
+        {
+            let workbook=&mut *self.workbook;
+            workbook.defined_name_attributes.retain(|name,_|workbook.defined_names.iter().any(|(held,_)|held==name));
+        }
         self.rewrite_every_formula(&|formula| oxicells_calc::drop_sheet_in_formula(formula, &gone, &order));
         self.selections.remove(&sheet);
         // Excel moves to the sheet after the deleted one, or to the last
@@ -14315,19 +14437,22 @@ impl<'a> WorkbookHost<'a> {
                 if same_sheet_name(&scope, &old) { *held = oxicells_core::ir::scoped_defined_name(&new, leaf); }
             }
         }
-        for (held, _) in &mut self.workbook.defined_names {
+        {
+            let workbook=&mut *self.workbook;
+        for (held, _) in &mut workbook.defined_names {
             if let Some((scope, leaf)) = oxicells_core::ir::defined_name_scope(held) {
                 if same_sheet_name(&scope, &old) {
                     let renamed = oxicells_core::ir::scoped_defined_name(&new, leaf);
-                    if let Some(attributes) = self.workbook.defined_name_attributes.remove(held) {
-                        self.workbook.defined_name_attributes.insert(renamed.clone(), attributes);
+                    if let Some(attributes) = workbook.defined_name_attributes.remove(held) {
+                        workbook.defined_name_attributes.insert(renamed.clone(), attributes);
                     }
                     *held = renamed;
                 }
             }
         }
+        }
         self.rewrite_every_formula(&|formula| oxicells_calc::rename_sheet_in_formula(formula, &old, &new));
-        oxicells_core::recalculation::rename_sheet(self.workbook, &old, &new);
+        oxicells_core::recalculation::rename_sheet(&mut self.workbook, &old, &new);
         Ok(())
     }
 
@@ -15455,7 +15580,7 @@ impl<'a> WorkbookHost<'a> {
         // value of one, and a scalar have different VBA representations.
         oxicells_calc::set_digit_width(f64::from(self.digit_width()));
         let answer = oxicells_calc::engine::with_vba_evaluation(||
-            oxicells_core::formula::evaluate_expression_argument(self.workbook, sheet, reference, self.now));
+            oxicells_core::formula::evaluate_expression_argument(&self.workbook, sheet, reference, self.now));
         let scalar = match answer {
             Some(oxicells_calc::functions::Arg::Range(block)) => {
                 if let Some((target, range)) = block.cell_reference() {
@@ -18919,7 +19044,7 @@ impl<'a> WorkbookHost<'a> {
                 row.cells.sort_by_key(|cell| cell.col);
             }
         }
-        if replaced_formula { oxicells_core::recalculation::prepare(self.workbook); }
+        if replaced_formula { oxicells_core::recalculation::prepare(&mut self.workbook); }
         Ok(())
     }
 
@@ -20549,7 +20674,7 @@ impl<'a> WorkbookHost<'a> {
         }
 
         // Resolve edits against the old layout before moving their dirty cells.
-        oxicells_core::recalculation::prepare(self.workbook);
+        oxicells_core::recalculation::prepare(&mut self.workbook);
         let sheet = range.sheet;
         let moved_sheet = self.workbook.sheets.get(sheet)
             .ok_or_else(|| "worksheet is out of range".to_string())?.name.clone();
@@ -23422,7 +23547,8 @@ impl<'a> WorkbookHost<'a> {
             self.set_row_visible(filter.range.sheet, row, showing);
         }
         let range = filter.range;
-        self.workbook.recalculation.change(self.workbook.sheets[range.sheet].name.clone(),
+        let sheet_name=self.workbook.sheets[range.sheet].name.clone();
+        self.workbook.recalculation.change(sheet_name,
             (range.start_column, range.start_row - 1, range.end_column, range.end_row - 1));
         if !self.automatic_calculation() { self.workbook.calculation.completed = Some(false); }
         Ok(())
@@ -24752,19 +24878,19 @@ impl Host for WorkbookHost<'_> {
             }
             formula_changed_before_calculate = formula_changed;
             (value_changed && !formula_changed)
-                || (!self.workbook.recalculation.pending() && !oxicells_core::recalculation::volatile_dependents(self.workbook).is_empty())
+                || (!self.workbook.recalculation.pending() && !oxicells_core::recalculation::volatile_dependents(&self.workbook).is_empty())
         } else {
             full_calculation
         };
         let calculate_probe_target = if receiver.is_some_and(|receiver| self.is_application(receiver)) && name.eq_ignore_ascii_case("calculate") {
-            calculate_needs_lagging_scalar_indirect_probe(self.workbook, &self.user_functions.borrow())
+            calculate_needs_lagging_scalar_indirect_probe(&self.workbook, &self.user_functions.borrow())
         } else { None };
         let calculate_has_user_defined_selector = calculate_probe_target.as_ref().is_some_and(|(_, user_defined)| *user_defined);
         let wait_for_dynamic_lookups = full_calculation
             || (formula_changed_before_calculate && calculate_has_user_defined_selector);
         let mut provisional_dynamic_text_value = (name.eq_ignore_ascii_case("calculatefull")
-                && !has_dynamic_indirect_text_selector(self.workbook, &self.user_functions.borrow()))
-            || (full_rebuild && full_rebuild_needs_zero_text_probe(self.workbook, &self.user_functions.borrow()));
+                && !has_dynamic_indirect_text_selector(&self.workbook, &self.user_functions.borrow()))
+            || (full_rebuild && full_rebuild_needs_zero_text_probe(&self.workbook, &self.user_functions.borrow()));
         let wait_for_dependencies = oxicells_calc::engine::user_function_wait_for_dependencies();
         let previous_wait_for_dynamic_lookups = oxicells_calc::engine::user_function_wait_for_dynamic_lookups();
         let previous_provisional_dynamic_text_value = oxicells_calc::engine::user_function_provisional_dynamic_text_value();
@@ -24787,10 +24913,10 @@ impl Host for WorkbookHost<'_> {
         let mut calculate_target_priority = None;
         let mut provisional_zero_text_probe = false;
         let full_calculation_zero_target_priority = full_calculation && !full_rebuild
-            && computed_selector_zero_target_priority(self.workbook, &held, false);
+            && computed_selector_zero_target_priority(&self.workbook, &held, false);
         let calculate_zero_target_priority = receiver.is_some_and(|receiver| self.is_application(receiver))
             && name.eq_ignore_ascii_case("calculate")
-            && computed_selector_zero_target_priority(self.workbook, &held, true);
+            && computed_selector_zero_target_priority(&self.workbook, &held, true);
         let mut prioritize_dynamic_indirect_consumers = rebuild_zero_target
             || full_calculation_zero_target_priority
             || calculate_zero_target_priority;
@@ -24816,12 +24942,12 @@ impl Host for WorkbookHost<'_> {
             }
         }
         let (provisional_text_probe_target, allow_provisional_text_probe) = if name.eq_ignore_ascii_case("calculatefull") || full_rebuild {
-            if let Some(selector_target) = user_defined_indirect_selector_cell(self.workbook, &held, rebuild_zero_target) {
+            if let Some(selector_target) = user_defined_indirect_selector_cell(&self.workbook, &held, rebuild_zero_target) {
                 (Some(selector_target), false)
             } else {
                 let prior_target = (name.eq_ignore_ascii_case("calculatefull")
                     && !full_calculation_zero_target_priority
-                    && has_dynamic_indirect_text_selector(self.workbook, &held))
+                    && has_dynamic_indirect_text_selector(&self.workbook, &held))
                     .then(|| held.provisional_probe_target.as_ref().and_then(|(target_sheet, target, caller_sheet, caller)| {
                         (same_sheet_name(target_sheet, caller_sheet) && target < caller)
                             .then(|| (target_sheet.clone(), *target))
@@ -24833,7 +24959,7 @@ impl Host for WorkbookHost<'_> {
         provisional_dynamic_text_value |= allow_provisional_text_probe;
         let previous_provisional_text_probe_target = oxicells_calc::engine::user_function_provisional_text_probe_target();
         let spill_probe_layout = (full_calculation || name.eq_ignore_ascii_case("calculate"))
-            .then(|| oxicells_core::recalculation::spill_layout(self.workbook));
+            .then(|| oxicells_core::recalculation::spill_layout(&self.workbook));
         let previous_spill_probe_layout = oxicells_calc::engine::replace_user_function_spill_probe_layout(spill_probe_layout);
         let frame = UserOperation { formula_reads: held.formula_reads.clone(), answers: std::mem::take(&mut held.answers), calculation: held.calculation.take(), calculation_baseline: held.calculation_baseline.take(), evaluation_pass: held.evaluation_pass, calculation_done: held.calculation_done, wait_for_dependencies, wait_for_dynamic_lookups: previous_wait_for_dynamic_lookups, provisional_dynamic_text_value: previous_provisional_dynamic_text_value, provisional_zero_text_probe: previous_provisional_zero_text_probe, prioritize_dynamic_indirect_consumers: previous_prioritize_dynamic_indirect_consumers, provisional_text_probe_target: previous_provisional_text_probe_target, distinct_provisional_calls: previous_distinct_provisional_calls, full_rebuild: previous_full_rebuild, full_calculation: previous_full_calculation, copy_saved: held.copy_saved.take(), text_columns_result: held.text_columns_result.take(), spill_probe_layout: previous_spill_probe_layout };
         held.operations.push(frame); held.evaluation_pass = 0; held.calculation_done = false;
@@ -25858,7 +25984,7 @@ impl Host for WorkbookHost<'_> {
                                 break 'ranges;
                             }
                         }
-                        let volatile = oxicells_core::recalculation::volatile_dependents(self.workbook);
+                        let volatile = oxicells_core::recalculation::volatile_dependents(&self.workbook);
                         let mut computed_text_selector_volatile = std::collections::BTreeSet::new();
                         let scalar_indirect_volatile = volatile.iter().any(|(target, (column, row))| {
                             let Some(formula) = self.workbook.sheets.iter().find(|sheet| same_sheet_name(&sheet.name, target))
@@ -25936,13 +26062,13 @@ impl Host for WorkbookHost<'_> {
                         cells.extend(volatile);
                         // Entering a formula does not dirty already calculated
                         // precedents. Keep those clean formulas out of this pass.
-                        let whole_formula_set = formula_changed && oxicells_core::recalculation::formulas(self.workbook)
+                        let whole_formula_set = formula_changed && oxicells_core::recalculation::formulas(&self.workbook)
                             .iter().all(|cell| cells.contains(cell));
                         if whole_formula_set || too_many_changed_cells || cells.is_empty() { self.recalculate_all(); }
                         else { self.recalculate_subset(cells.into_iter().collect(), true, true, CalculationReason::Calculate); }
                     }
                 } else if start {
-                    let volatile = oxicells_core::recalculation::volatile_dependents(self.workbook);
+                    let volatile = oxicells_core::recalculation::volatile_dependents(&self.workbook);
                     if !volatile.is_empty() {
                         self.recalculate_subset(volatile.into_iter().collect(), false, true, CalculationReason::Calculate);
                     }
@@ -30057,7 +30183,7 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("themecolor") || name.eq_ignore_ascii_case("tintandshade") {
                 let condition = &self.conditions[self.condition_index(id)?];
                 let xml = condition.source_visual_xml.as_deref().or_else(|| oxicells_core::editor::default_conditional_visual("dataBar", None)).ok_or_else(|| host_error(1004, "missing data bar"))?;
-                let previous = data_bar_color(condition, self.workbook, role)?;
+                let previous = data_bar_color(condition, &self.workbook, role)?;
                 let (attribute, parameter) = if name.eq_ignore_ascii_case("themecolor") {
                     let number = conditional_enum_number(&value, "BarColor.ThemeColor")?;
                     if !(1..=11).contains(&number) { return Err(host_error(1004, "invalid data bar theme color")); }
@@ -38716,7 +38842,7 @@ struct WorkbookHostState {
     cursor: i64,
     interactive: bool,
     last_find: Option<FindState>,
-    objects: Vec<HostObject>,
+    objects: HostObjects,
     wrote: bool,
     now: Option<f64>,
     blocks: Vec<Vec<CellRange>>,
@@ -38815,12 +38941,12 @@ struct WorkbookHostState {
 }
 
 impl<'a> WorkbookHost<'a> {
-    fn into_state(self) -> WorkbookHostState {
-        let Self { workbook: _, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, calculation_assigned, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = self;
-        WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, calculation_assigned, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects }
+    fn into_parts(self) -> (WorkbookStorage<'a>,WorkbookHostState) {
+        let Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, calculation_assigned, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = self;
+        (workbook,WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, calculation_assigned, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects })
     }
 
-    fn resume(workbook: &'a mut Workbook, state: WorkbookHostState) -> Self {
+    fn resume_storage(workbook:WorkbookStorage<'a>, state: WorkbookHostState) -> Self {
         let WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, calculation_assigned, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = state;
         Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, calculation_assigned, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects }
     }
@@ -39576,7 +39702,7 @@ fn execute_workbook_action_in_session(
 }
 
 fn execute_workbook_invocation(
-    mut workbook: Workbook, source: &str, invocation: VbaInvocation<'_, Vec<Value>>,
+    workbook: Workbook, source: &str, invocation: VbaInvocation<'_, Vec<Value>>,
     active_sheet: usize, context: VbaRunContext, session: &mut Option<ProjectSessionState>,
 ) -> Result<RunOutcome, String> {
     let VbaInvocation { procedure, args, action } = invocation;
@@ -39682,6 +39808,7 @@ fn execute_workbook_invocation(
             return Err("invalid VBA object reference: source edit resets its owning project".into());
         }
     }
+    let mut workbook_slot=Some(workbook);
     let (mut host, mut project_state, mut external_references) = match session.take() {
         Some(previous) => {
             let state = if source_resets_project || documents_changed { None } else { previous.runtime };
@@ -39689,7 +39816,8 @@ fn execute_workbook_invocation(
             let refreshed_positions=!documents_changed && context.document_modules.is_some() && documents.iter().any(|document| {
                 previous.documents.iter().find(|old|old.name.eq_ignore_ascii_case(&document.name)).is_some_and(|old|old.sheet_index!=document.sheet_index)
             });
-            let mut host = WorkbookHost::resume(&mut workbook, previous.host);
+            let mut host=WorkbookHost::resume_storage(
+                WorkbookStorage::Owned(Box::new(workbook_slot.take().ok_or("missing workbook input")?)),previous.host);
             // Fresh package indexes identify the current positions. A complete
             // document map also works when an editor omits origin IDs or has
             // just reparsed a saved package and numbered those IDs anew.
@@ -39719,7 +39847,9 @@ fn execute_workbook_invocation(
             *host.user_functions.borrow_mut() = UserFunctions::default();
             (host, state, previous.external_references)
         }
-        None => (WorkbookHost::new(&mut workbook, active_sheet)?, None, ExternalReferences::default()),
+        None if procedure.is_none() && action.is_none() =>
+            (WorkbookHost::new_owned(workbook_slot.take().ok_or("missing workbook input")?,active_sheet)?,None,ExternalReferences::default()),
+        None => (WorkbookHost::new(workbook_slot.as_mut().ok_or("missing workbook input")?,active_sheet)?,None,ExternalReferences::default()),
     };
     if reset_storage { external_references.reset_project(); }
     if documents_changed { host.configure_documents(&documents)?; }
@@ -39741,7 +39871,7 @@ fn execute_workbook_invocation(
     let previous_on_save = host.workbook.calculation.on_save;
     // Compare the normalized IR, rather than the pending-recalculation flag:
     // reading a formula can clear that flag after earlier workbook edits.
-    let before = observable_workbook_bytes(host.workbook)?;
+    let before = observable_workbook_bytes(&mut host.workbook)?;
     host.condition_modified = false;
     // The host answers `TODAY()` from the same moment the runtime does, so a
     // macro that recalculates and then reads a date sees one story.
@@ -39883,7 +40013,9 @@ fn execute_workbook_invocation(
     let file_system_state = host.file_io.snapshot();
     let status_bar = host.status_bar.clone();
     let active_sheet = host.active_sheet;
-    let host_state = host.into_state();
+    let (host_workbook,host_state)=host.into_parts();
+    let mut workbook=host_workbook.into_owned()
+        .or_else(|_|workbook_slot.take().ok_or("missing borrowed workbook input"))?;
     // CalculateBeforeSave is persisted but assigning it does not dirty Excel's
     // workbook. Assigning Calculation dirties it even when the mode is unchanged.
     let on_save = workbook.calculation.on_save;
@@ -39928,6 +40060,241 @@ fn execute_workbook_invocation(
 mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
+    #[test]
+    fn actual_owned_books_share_native_ids_and_keep_code_and_data_owners() {
+        use std::{cell::RefCell, rc::Rc};
+        struct Books {
+            hosts: BTreeMap<u64, WorkbookHost<'static>>,
+            arena: Rc<RefCell<NativeObjectArena>>,
+            active: u64,
+        }
+        impl Books {
+            fn receiver_owner(&self, object: &ObjectRef) -> Result<u64, String> {
+                self.arena
+                    .borrow()
+                    .entries
+                    .get(host_object_index(object.handle))
+                    .map(|entry| entry.0)
+                    .ok_or_else(|| "Unknown native object identity".into())
+            }
+        }
+        struct Proxy {
+            books: Rc<RefCell<Books>>,
+            code_owner: u64,
+        }
+        impl Host for Proxy {
+            fn call(
+                &mut self,
+                receiver: Option<&ObjectRef>,
+                name: &str,
+                args: &[Value],
+            ) -> Result<Option<Value>, String> {
+                let mut books = self.books.borrow_mut();
+                let owner = match receiver {
+                    Some(object) => books.receiver_owner(object)?,
+                    None if name.eq_ignore_ascii_case("ThisWorkbook") => self.code_owner,
+                    None => books.active,
+                };
+                let name = if receiver.is_none() && name.eq_ignore_ascii_case("ActiveWorkbook") {
+                    "ThisWorkbook"
+                } else {
+                    name
+                };
+                books
+                    .hosts
+                    .get_mut(&owner)
+                    .ok_or("Workbook is not open")?
+                    .call(receiver, name, args)
+            }
+            fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+                let mut books = self.books.borrow_mut();
+                let owner = books.receiver_owner(receiver)?;
+                books
+                    .hosts
+                    .get_mut(&owner)
+                    .ok_or("Workbook is not open")?
+                    .get(receiver, name)
+            }
+            fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+                let mut books = self.books.borrow_mut();
+                let owner = books.receiver_owner(receiver)?;
+                books
+                    .hosts
+                    .get_mut(&owner)
+                    .ok_or("Workbook is not open")?
+                    .set(receiver, name, value)
+            }
+        }
+        const CODE: &str = r#"Attribute VB_Name = "Driver"
+    Private Count As Long
+    Public Sub Initial(ByVal number As Long)
+     ThisWorkbook.Worksheets(1).Range("A1").Value = number
+     Count = number
+    End Sub
+    Public Function MakeNative() As Object
+     Set MakeNative = ThisWorkbook.Worksheets(1).Range("A1")
+    End Function
+    Public Function ReadNative(ByVal target As Object) As String
+     ReadNative = CStr(target.Value) & "|" & ThisWorkbook.Name
+    End Function
+    Public Sub WriteNative(ByVal target As Object, ByVal number As Long)
+     target.Value = number
+    End Sub
+    Public Function Names() As String
+     Names = ThisWorkbook.Name & "|" & ActiveWorkbook.Name & "|" & CStr(Count)
+    End Function
+    Public Function NewWorker() As Object
+     Set NewWorker = New Worker
+    End Function
+    Public Function CallOwner(ByVal target As Object) As String
+     CallOwner = target.NameInfo()
+    End Function
+    VERSION 1.0 CLASS
+    Attribute VB_Name = "Worker"
+    Public Function NameInfo() As String
+     NameInfo = Driver.Names()
+    End Function
+    "#;
+        fn call(runtime: &mut Runtime, id: u64, name: &str, args: Vec<Value>) -> Value {
+            runtime
+                .in_application_project(id, |r| r.call(&format!("Driver.{name}"), args))
+                .unwrap()
+        }
+        let arena = Rc::new(RefCell::new(NativeObjectArena::default()));
+        let mut a = WorkbookHost::new_owned_in(workbook(), 0, 1, arena.clone()).unwrap();
+        let mut b = WorkbookHost::new_owned_in(workbook(), 0, 2, arena.clone()).unwrap();
+        a.file_name = Some("A.xlsx".into());
+        b.file_name = Some("B.xlsx".into());
+        let books = Rc::new(RefCell::new(Books {
+            hosts: BTreeMap::from([(1, a), (2, b)]),
+            arena: arena.clone(),
+            active: 2,
+        }));
+        let mut pa = Proxy {
+            books: books.clone(),
+            code_owner: 1,
+        };
+        let mut pb = Proxy {
+            books: books.clone(),
+            code_owner: 2,
+        };
+        let (module, classes) = oxivba_core::parse_project(CODE).unwrap();
+        let mut a = Runtime::new(&module)
+            .with_classes(&classes)
+            .with_host(&mut pa);
+        let mut b = Runtime::new(&module)
+            .with_classes(&classes)
+            .with_host(&mut pb);
+        a.set_application_project_identity(1).unwrap();
+        b.set_application_project_identity(2).unwrap();
+        assert!(b.register_application_project(a).is_ok());
+        call(&mut b, 1, "Initial", vec![Value::Integer(5)]);
+        call(&mut b, 2, "Initial", vec![Value::Integer(17)]);
+        let range_a = call(&mut b, 1, "MakeNative", vec![]);
+        let range_b = call(&mut b, 2, "MakeNative", vec![]);
+        let handle = |v: &Value| match v {
+            Value::Object(o) => o.handle,
+            _ => panic!("native object"),
+        };
+        assert_ne!(handle(&range_a), handle(&range_b));
+        assert_eq!(
+            arena
+                .borrow()
+                .entries
+                .get(host_object_index(handle(&range_a)))
+                .map(|entry| entry.0),
+            Some(1)
+        );
+        assert_eq!(
+            arena
+                .borrow()
+                .entries
+                .get(host_object_index(handle(&range_b)))
+                .map(|entry| entry.0),
+            Some(2)
+        );
+        assert_eq!(
+            call(&mut b, 1, "Names", vec![]),
+            Value::String("A.xlsx|B.xlsx|5".into())
+        );
+        assert_eq!(
+            call(&mut b, 2, "Names", vec![]),
+            Value::String("B.xlsx|B.xlsx|17".into())
+        );
+        // B code reads/writes A's native range while retaining B's ThisWorkbook.
+        assert_eq!(
+            call(&mut b, 2, "ReadNative", vec![range_a.clone()]),
+            Value::String("5|B.xlsx".into())
+        );
+        call(
+            &mut b,
+            2,
+            "WriteNative",
+            vec![range_a.clone(), Value::Integer(9)],
+        );
+        assert_eq!(
+            call(&mut b, 1, "ReadNative", vec![range_a.clone()]),
+            Value::String("9|A.xlsx".into())
+        );
+        assert_eq!(
+            call(&mut b, 2, "ReadNative", vec![range_b.clone()]),
+            Value::String("17|B.xlsx".into())
+        );
+        // A source class called from B still executes A code against the same actual hosts.
+        let worker_a = call(&mut b, 1, "NewWorker", vec![]);
+        assert_eq!(
+            call(&mut b, 2, "CallOwner", vec![worker_a]),
+            Value::String("A.xlsx|B.xlsx|5".into())
+        );
+        drop(b);
+        let mut books = books.borrow_mut();
+        let a = books.hosts.remove(&1).unwrap();
+        let b = books.hosts.remove(&2).unwrap();
+        let (data_a, state_a) = a.into_parts();
+        let (data_b, state_b) = b.into_parts();
+        let mut a = WorkbookHost::resume_storage(
+            data_a,
+            state_a,
+        );
+        let b = WorkbookHost::resume_storage(
+            data_b,
+            state_b,
+        );
+        assert!(
+            matches!(&range_a,Value::Object(o) if a.objects.get(host_object_index(o.handle)).is_some())
+        );
+        assert!(
+            matches!(&range_b,Value::Object(o) if b.objects.get(host_object_index(o.handle)).is_some())
+        );
+        let snapshot = a.objects.clone();
+        let stale = a.object(HostObject::Range(CellRange::single(CellAddress {
+            sheet: 0,
+            row: 2,
+            column: 1,
+        })));
+        a.objects = snapshot;
+        let fresh = a.object(HostObject::Range(CellRange::single(CellAddress {
+            sheet: 0,
+            row: 3,
+            column: 1,
+        })));
+        assert_ne!(handle(&stale), handle(&fresh));
+        assert!(
+            a.objects.get(host_object_index(handle(&stale))).is_none(),
+            "restored table must not alias stale IDs to later allocations"
+        );
+        assert!(a.objects.get(host_object_index(handle(&fresh))).is_some());
+        let old_next = arena.borrow().entries.len();
+        let c = WorkbookHost::new_owned_in(workbook(), 0, 3, arena.clone()).unwrap();
+        assert_eq!(
+            arena.borrow().entries.len(),
+            old_next,
+            "construction does not allocate or reuse unrelated references"
+        );
+        drop((a, b, c));
+    }
+
+
 
     #[test]
     fn external_retained_results_match_native_lifetimes() {
@@ -70854,5 +71221,7 @@ fn book_qualified_sheets(text: &str, book: &str, sheets: &[String]) -> String {
         }
     }
     out
+
+
 
 }
