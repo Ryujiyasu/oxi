@@ -123,6 +123,8 @@ impl FileError {
 pub struct Files {
     contents: BTreeMap<String, (String, Vec<u8>)>,
     open: BTreeMap<i64, Handle>,
+    /// Stream IDs are not reused while old TextStream references can exist.
+    next_stream_number: i64,
     /// What `Dir` with no arguments goes on to answer.
     listing: Option<Vec<String>>,
     /// Folders made with MkDir or CreateFolder, by key.
@@ -137,7 +139,7 @@ pub struct Files {
 impl Default for Files {
     fn default() -> Self {
         Self {
-            contents: BTreeMap::new(), open: BTreeMap::new(), listing: None,
+            contents: BTreeMap::new(), open: BTreeMap::new(), next_stream_number: 1000, listing: None,
             folders: Default::default(), current_drive: 'C',
             drive_directories: BTreeMap::from([('C', "C:\\".to_string())]),
             attributes: BTreeMap::new(),
@@ -521,7 +523,8 @@ impl Files {
 
     /// A number for a TextStream, from 1000 on, never one FreeFile hands out.
     pub fn open_stream(&mut self, path: &str, mode: OpenMode) -> Result<i64, FileError> {
-        let number = (1000..).find(|number| !self.open.contains_key(number)).unwrap_or(1000);
+        let number = self.next_stream_number;
+        self.next_stream_number = number.checked_add(1).ok_or(FileError::BadNumber)?;
         let name = self.key(path);
         if mode!=OpenMode::Input && self.is_read_only_key(&name) {return Err(FileError::PermissionDenied);}
         // Native FSO streams permit concurrent readers. ForWriting and
@@ -540,7 +543,12 @@ impl Files {
                 self.contents.entry(name.clone()).or_insert_with(|| (path, Vec::new()));
             }
         }
-        self.open.insert(number, Handle { path: name, mode, position: 0, column: 0,can_read,can_write,share_read,share_write });
+        let column = if mode == OpenMode::Append {
+            let bytes = &self.contents[&name].1;
+            let start = bytes.iter().rposition(|byte| matches!(*byte, b'\r' | b'\n')).map_or(0, |at| at + 1);
+            String::from_utf8_lossy(&bytes[start..]).encode_utf16().count()
+        } else { 0 };
+        self.open.insert(number, Handle { path: name, mode, position: 0, column,can_read,can_write,share_read,share_write });
         Ok(number)
     }
 
@@ -696,7 +704,7 @@ impl Files {
         Ok(rest)
     }
 
-    /// `Close`: the numbers given, or every file when none is.
+    /// Close internal handles, including streams, or every handle for an empty list.
     pub fn close(&mut self, numbers: &[i64]) {
         if numbers.is_empty() {
             self.open.clear();
@@ -706,6 +714,16 @@ impl Files {
                 self.open.remove(number);
             }
             self.record_locks.retain(|held|!numbers.contains(&held.owner));
+        }
+    }
+
+    /// VBA Close and Reset affect numbered Open channels, not FSO streams.
+    pub(crate) fn close_vba(&mut self, numbers: &[i64]) {
+        if numbers.is_empty() {
+            self.open.retain(|number, _| !(1..=511).contains(number));
+            self.record_locks.retain(|held| !(1..=511).contains(&held.owner));
+        } else {
+            self.close(numbers);
         }
     }
 

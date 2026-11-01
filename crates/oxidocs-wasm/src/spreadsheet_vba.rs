@@ -38879,7 +38879,7 @@ impl ExternalReferences {
 
     fn reset_project(&mut self) {
         // Host objects retain their identities when project storage resets.
-        self.values.retain(|_, object| object.life.is_none());
+        self.values.retain(|_, object| object.life.is_none() || object.is_native_stream());
     }
 }
 
@@ -38906,7 +38906,7 @@ enum ExternalObjectAction {
 
 fn value_owns_project_reference(value: &Value) -> bool {
     match value {
-        Value::Object(object) => object.life.is_some(),
+        Value::Object(object) => object.life.is_some() && !object.is_native_stream(),
         Value::Array(array) => array.values.iter().any(value_owns_project_reference),
         Value::Record(record) => record.fields.iter().any(|(_, value)| value_owns_project_reference(value)),
         _ => false,
@@ -39678,7 +39678,7 @@ fn execute_workbook_invocation(
         if !seen.insert(reference) { return Err("invalid VBA reference: duplicate release".into()); }
         let object = session.as_ref().and_then(|state| state.external_references.values.get(reference))
             .ok_or_else(|| "invalid VBA object reference: released, stale, or foreign reference".to_string())?;
-        if reset_storage && object.life.is_some() {
+        if reset_storage && object.life.is_some() && !object.is_native_stream() {
             return Err("invalid VBA object reference: source edit resets its owning project".into());
         }
     }

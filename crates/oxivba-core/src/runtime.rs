@@ -164,7 +164,7 @@ pub struct ObjectRef {
     pub kind: String,
     /// The interface carried by this dispatch reference, independent of object identity.
     pub dispatch_view: Option<String>,
-    /// For a class instance, a Collection or a Dictionary, a share in its
+    /// For a class instance, a Collection, a Dictionary or a TextStream, a share in its
     /// life: when the last share is dropped the object reports itself due
     /// (see [`LifeToken`]). None for everything else.
     pub life: Option<Rc<LifeToken>>,
@@ -178,6 +178,7 @@ pub struct ObjectRef {
 #[derive(Debug)]
 pub struct LifeToken {
     handle: u64,
+    native_stream: bool,
     due: Rc<RefCell<Vec<u64>>>,
 }
 
@@ -188,6 +189,12 @@ impl Drop for LifeToken {
 }
 
 impl ObjectRef {
+    /// Native streams are not code-owned class instances, even if a source
+    /// class happens to use the name TextStream.
+    pub fn is_native_stream(&self) -> bool {
+        self.life.as_ref().is_some_and(|life| life.native_stream)
+    }
+
     pub fn new(handle: u64, kind: impl Into<String>) -> Self {
         ObjectRef {
             handle,
@@ -730,7 +737,7 @@ enum InternalObject {
     /// `Scripting.FileSystemObject`, over the run's kept files.
     FileSystem,
     /// A TextStream: the file it has open, and the line it stands on.
-    TextStream { number: i64, line: i64 },
+    TextStream { number: i64, line: i64, mode: crate::files::OpenMode },
     /// FileSystemObject's File, Folder and a folder's Files, by path.
     FileItem(String),
     FolderItem(String),
@@ -3333,6 +3340,16 @@ impl<'a> Runtime<'a> {
             if batch.is_empty() {
                 return Ok(());
             }
+            // Native streams release their file handle with their last
+            // reference. An explicitly closed stream keeps its old identity.
+            let streams: Vec<_> = batch.iter().copied().filter(|handle|
+                matches!(self.internal_objects.get(handle), Some(InternalObject::TextStream { .. }))).collect();
+            for handle in &streams {
+                if let Some(InternalObject::TextStream { number, .. }) = self.internal_objects.remove(handle) {
+                    self.files.close(&[number]);
+                }
+            }
+            batch.retain(|handle| !streams.contains(handle));
             // A Collection or Dictionary nothing holds any more is gone, and
             // what it held with it: measured, `Set col = Nothing` runs the
             // Class_Terminate of the instance only the collection held. The
@@ -4313,11 +4330,11 @@ impl<'a> Runtime<'a> {
                 for file in files {
                     numbers.push(self.file_number(file, frame, span.line)?);
                 }
-                self.files.close(&numbers);
+                self.files.close_vba(&numbers);
                 Ok(Flow::Continue)
             }
             Statement::FileReset { .. } => {
-                self.files.close(&[]);
+                self.files.close_vba(&[]);
                 Ok(Flow::Continue)
             }
             Statement::FileOutput(output) => {
@@ -6320,7 +6337,7 @@ impl<'a> Runtime<'a> {
                 handle,
                 InternalObject::Instance(ClassInstance { class: name.clone(), state: None, terminated: false }),
             );
-            let life = Rc::new(LifeToken { handle, due: Rc::clone(&self.due) });
+            let life = Rc::new(LifeToken { handle, native_stream: false, due: Rc::clone(&self.due) });
             let made = ObjectRef { handle, kind: name, life: Some(life),dispatch_view:None };
             // Its variables are set up, then Class_Initialize runs, as the
             // instance comes into being.
@@ -6350,7 +6367,7 @@ impl<'a> Runtime<'a> {
         let container = matches!(object, InternalObject::Collection(_) | InternalObject::Dictionary(_));
         self.internal_objects.insert(handle, object);
         if container {
-            let life = Rc::new(LifeToken { handle, due: Rc::clone(&self.due) });
+            let life = Rc::new(LifeToken { handle, native_stream: false, due: Rc::clone(&self.due) });
             return Ok(Value::Object(ObjectRef { handle, kind: kind.to_string(), life: Some(life),dispatch_view:None }));
         }
         Ok(Value::Object(ObjectRef::new(handle, kind)))
@@ -8819,6 +8836,16 @@ impl<'a> Runtime<'a> {
             }
             return self.host_call(Some(receiver), &member, rest, at)?.ok_or_else(missing);
         }
+        if matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::TextStream { .. })) {
+            let property = matches!(member.to_ascii_lowercase().as_str(), "atendofstream" | "atendofline" | "line" | "column");
+            if !(if property { matches!(kind, 2 | 3) } else { matches!(kind, 1 | 3) }) {
+                return Err(missing());
+            }
+            if !property && matches!(member.to_ascii_lowercase().as_str(), "readline" | "readall") && !rest.is_empty() {
+                return Err(language_error(450, "TextStream methods take no dispatch arguments", at));
+            }
+            return self.internal_call(receiver, &member, rest, at);
+        }
         if self.instance_handles_member(receiver, &member) {
             return self.instance_automation_member(receiver, &member, kind as u8, rest, frame, at,
                 source.map(|(args, values, forced)| (&args[3..], &values[3..], forced)));
@@ -9829,8 +9856,14 @@ impl<'a> Runtime<'a> {
         let stream = |this: &mut Self, number: i64| {
             let handle = this.next_internal_handle;
             this.next_internal_handle += 1;
-            this.internal_objects.insert(handle, InternalObject::TextStream { number, line: 1 });
-            Value::Object(ObjectRef { handle, kind: "TextStream".to_string(), life: None,dispatch_view:None })
+            let mode = this.files.handle(number).map_or(OpenMode::Input, |held| held.mode);
+            let at = if mode == OpenMode::Append {
+                this.files.handle(number).and_then(|held| this.files.bytes(&held.path))
+                    .map_or(1, |bytes| 1 + bytes.iter().filter(|byte| **byte == b'\n').count() as i64)
+            } else { 1 };
+            this.internal_objects.insert(handle, InternalObject::TextStream { number, line: at, mode });
+            let life = Rc::new(LifeToken { handle, native_stream: true, due: Rc::clone(&this.due) });
+            Value::Object(ObjectRef { handle, kind: "TextStream".to_string(), life: Some(life),dispatch_view:None })
         };
         let failure = |failure: crate::files::FileError| file_failure(failure, line);
         Ok(match lower.as_str() {
@@ -10024,64 +10057,122 @@ impl<'a> Runtime<'a> {
 
     /// A TextStream's members: WriteLine ends a line with CR LF, ReadLine
     /// and ReadAll read on from where the stream stands, Line counts from 1.
-    fn text_stream_call(&mut self, receiver: &ObjectRef, number: i64, at: i64, name: &str, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
-        let failure = |failure: crate::files::FileError| file_failure(failure, line);
-        let text_at = |index: usize| -> Result<String, RuntimeError> {
-            match args.get(index).filter(|value| !matches!(value, Value::Missing)) {
-                Some(value) => text(value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line))),
-                None => Ok(String::new()),
-            }
+    fn text_stream_call(&mut self, receiver: &ObjectRef, stream: (i64, i64, crate::files::OpenMode),
+        name: &str, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
+        let (number, at, mode) = stream;
+        use crate::files::OpenMode;
+        let member = name.to_ascii_lowercase();
+        let property = matches!(member.as_str(), "atendofstream" | "atendofline" | "line" | "column");
+        let valid = match member.as_str() {
+            "read" | "skip" | "write" | "writeblanklines" => args.len() == 1,
+            "writeline" => args.len() <= 1,
+            "close" | "skipline" => args.is_empty(),
+            // Getter-style result indexing happens after the read/property.
+            "readline" | "readall" => true,
+            _ if property => true,
+            _ => return Err(no_such_member(format!("TextStream has no member {name}"), Some(line))),
         };
-        let set_line = |this: &mut Self, next: i64| {
-            if let Some(InternalObject::TextStream { line: held, .. }) = this.internal_objects.get_mut(&receiver.handle) {
-                *held = next;
+        if !valid { return Err(language_error(450, "invalid TextStream argument count", line)); }
+        let count = if matches!(member.as_str(), "read" | "skip" | "writeblanklines") {
+            if matches!(args[0], Value::Null | Value::Error(_)) {
+                return Err(language_error(13, "TextStream count requires a number", line));
             }
+            Some(convert_integer(&args[0], i64::from(i32::MIN), i64::from(i32::MAX), Some(line))?)
+        } else { None };
+        let written = if matches!(member.as_str(), "write" | "writeline") {
+            match args.first() {
+                Some(Value::Null | Value::Error(_)) => return Err(language_error(13, "TextStream text requires a string", line)),
+                Some(value) => Some(text(value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))?),
+                None => Some(String::new()),
+            }
+        } else { None };
+        let closed = self.files.handle(number).is_err();
+        let needs_read = matches!(member.as_str(), "read" | "readline" | "readall" | "skip" | "skipline" | "atendofline");
+        if needs_read && mode != OpenMode::Input {
+            return Err(language_error(54, "TextStream was not opened for reading", line));
+        }
+        // WriteLine checks its creation mode before checking closure.
+        if member == "writeline" && mode == OpenMode::Input {
+            return Err(language_error(54, "TextStream was not opened for writing", line));
+        }
+        if matches!(member.as_str(), "read" | "skip") {
+            let count = count.expect("count-bearing member");
+            if count < 0 { return Err(language_error(5, "negative TextStream character count", line)); }
+            if count == 0 {
+                return Ok(if member == "read" { Value::String(String::new()) } else { Value::Empty });
+            }
+        }
+        if member == "close" {
+            self.files.close(&[number]);
+            return Ok(Value::Empty);
+        }
+        if closed { return Err(language_error(91, "TextStream is closed", line)); }
+        if member == "atendofstream" && mode != OpenMode::Input {
+            return Err(language_error(54, "TextStream was not opened for reading", line));
+        }
+        if matches!(member.as_str(), "write" | "writeblanklines") && mode == OpenMode::Input {
+            return Err(language_error(54, "TextStream was not opened for writing", line));
+        }
+        let failure = |failure| file_failure(failure, line);
+        let set_line = |this: &mut Self, next| {
+            if let Some(InternalObject::TextStream { line: held, .. }) = this.internal_objects.get_mut(&receiver.handle) { *held = next; }
         };
-        Ok(match name.to_ascii_lowercase().as_str() {
-            "writeline" => {
-                self.files.write(number, &format!("{}\r\n", text_at(0)?)).map_err(failure)?;
+        let value = match member.as_str() {
+            "readline" | "skipline" => {
+                let value = self.files.read_line(number).map_err(failure)?;
                 set_line(self, at + 1);
-                Value::Empty
+                if member == "readline" { Value::String(value) } else { Value::Empty }
             }
-            "write" => {
-                let written = text_at(0)?;
-                self.files.write(number, &written).map_err(failure)?;
-                set_line(self, at + written.matches('\n').count() as i64);
+            "readall" => {
+                let value = self.files.read_rest(number).map_err(failure)?;
+                set_line(self, at + value.matches('\n').count() as i64);
+                Value::String(value)
+            }
+            "read" | "skip" => {
+                let held = self.files.handle(number).map_err(failure)?;
+                let remaining = self.files.bytes(&held.path).map_err(failure)?.len().saturating_sub(held.position);
+                let count = (count.expect("count-bearing member") as usize).min(remaining);
+                let value = self.files.read_characters(number, count).map_err(failure)?;
+                set_line(self, at + value.matches('\n').count() as i64);
+                if member == "read" { Value::String(value) } else { Value::Empty }
+            }
+            "write" | "writeline" => {
+                let mut value = written.expect("text-bearing member");
+                if member == "writeline" { value.push_str("\r\n"); }
+                self.files.write(number, &value).map_err(failure)?;
+                set_line(self, at + value.matches('\n').count() as i64);
                 Value::Empty
             }
             "writeblanklines" => {
-                let count = args.first().and_then(|value| crate::runtime::number(value).ok()).unwrap_or(0.0).max(0.0) as usize;
-                self.files.write(number, &"\r\n".repeat(count)).map_err(failure)?;
-                set_line(self, at + count as i64);
+                let count = count.expect("count-bearing member");
+                if count < 0 { return Err(language_error(5, "negative TextStream line count", line)); }
+                self.files.write(number, &"\r\n".repeat(count as usize)).map_err(failure)?;
+                set_line(self, at + count);
                 Value::Empty
-            }
-            "readline" => {
-                let read = self.files.read_line(number).map_err(failure)?;
-                set_line(self, at + 1);
-                Value::String(read)
-            }
-            "skipline" => {
-                self.files.read_line(number).map_err(failure)?;
-                set_line(self, at + 1);
-                Value::Empty
-            }
-            "readall" => {
-                let read = self.files.read_rest(number).map_err(failure)?;
-                set_line(self, at + read.matches('\n').count() as i64);
-                Value::String(read)
-            }
-            "read" => {
-                let count = args.first().and_then(|value| crate::runtime::number(value).ok()).unwrap_or(0.0).max(0.0) as usize;
-                Value::String(self.files.read_characters(number, count).map_err(failure)?)
             }
             "atendofstream" => Value::Boolean(self.files.at_end(number).map_err(failure)?),
-            "line" => Value::Integer(at),
-            "close" => {
-                self.files.close(&[number]);
-                Value::Empty
+            "atendofline" => {
+                let held = self.files.handle(number).map_err(failure)?;
+                let bytes = self.files.bytes(&held.path).map_err(failure)?;
+                Value::Boolean(bytes.get(held.position).is_none_or(|byte| matches!(*byte, b'\r' | b'\n')))
             }
-            _ => return Err(no_such_member(format!("TextStream has no member {name}"), Some(line))),
-        })
+            "line" => Value::Integer(at),
+            "column" => {
+                let held = self.files.handle(number).map_err(failure)?;
+                let column = if mode == OpenMode::Input {
+                    let bytes = self.files.bytes(&held.path).map_err(failure)?;
+                    let prefix = &bytes[..held.position.min(bytes.len())];
+                    let start = prefix.iter().rposition(|byte| matches!(*byte, b'\r' | b'\n')).map_or(0, |at| at + 1);
+                    String::from_utf8_lossy(&prefix[start..]).encode_utf16().count()
+                } else { held.column };
+                Value::Integer(column as i64 + 1)
+            }
+            _ => unreachable!("validated TextStream member"),
+        };
+        if !args.is_empty() && (property || matches!(member.as_str(), "readline" | "readall")) {
+            return Err(language_error(if member == "readall" { 440 } else { 451 }, "TextStream getter result cannot be indexed", line));
+        }
+        Ok(value)
     }
 
     fn internal_call(
@@ -10108,9 +10199,9 @@ impl<'a> Runtime<'a> {
         }
         match object {
             InternalObject::FileSystem => return self.file_system_call(name, args, line),
-            InternalObject::TextStream { number, line: at } => {
-                let (number, at) = (*number, *at);
-                return self.text_stream_call(receiver, number, at, name, args, line);
+            InternalObject::TextStream { number, line: at, mode } => {
+                let (number, at, mode) = (*number, *at, *mode);
+                return self.text_stream_call(receiver, (number, at, mode), name, args, line);
             }
             InternalObject::FileItem(path) => {
                 let path = path.clone();
@@ -22398,6 +22489,248 @@ End Function
         .unwrap();
 
         assert_eq!(value, Value::String("11|0|[]".to_string()));
+    }
+
+    #[test]
+    fn text_stream_close_reset_and_dispatch_match_native_modes() {
+        let source = r####"Attribute VB_Name = "IOOwner"
+Option Explicit
+Public Function StreamCloseProbe(ByVal path As String, ByVal mode As Long) As String
+ Dim fs As Object, stream As Object
+ On Error GoTo failed
+ Set fs = CreateObject("Scripting.FileSystemObject")
+ Set stream = fs.OpenTextFile(path, 1)
+ If mode = 0 Then
+  Open path For Input As #1
+  Close
+ ElseIf mode = 1 Then
+  Close
+ ElseIf mode = 3 Then
+  Open path For Input As #1
+  Reset
+ Else
+  stream.Close
+ End If
+ StreamCloseProbe = CStr(FreeFile(0)) & "|" & stream.ReadLine & "|" & CStr(stream.AtEndOfStream)
+ stream.Close
+ Exit Function
+failed:
+ StreamCloseProbe = "error|" & CStr(Err.Number) & "|" & Err.Description & "|" & Err.Source & "|" & CStr(Err.HelpContext)
+ On Error Resume Next
+ stream.Close
+ Close #1
+End Function
+Public Function ClosedStreamProbe(ByVal path As String, ByVal mode As Long, ByVal ioMode As Long, ByVal closed As Boolean) As String
+ Dim fs As Object, stream As Object, answer As Variant
+ On Error GoTo failed
+ Set fs = CreateObject("Scripting.FileSystemObject")
+ Set stream = fs.OpenTextFile(path, ioMode, True)
+ If closed Then stream.Close
+ Select Case mode
+ Case 0: answer = stream.ReadLine
+ Case 1: answer = stream.Read(1)
+ Case 2: answer = stream.ReadAll
+ Case 3: stream.SkipLine
+ Case 4: stream.Skip 1
+ Case 5: answer = stream.AtEndOfStream
+ Case 6: answer = stream.AtEndOfLine
+ Case 7: answer = stream.Line
+ Case 8: answer = stream.Column
+ Case 9: stream.Close
+ Case 10: stream.Write "x"
+ Case 11: stream.WriteLine "x"
+ Case 12: stream.WriteBlankLines 1
+ Case 13: answer = stream.NoSuchMember()
+ Case 14: answer = stream.Read()
+ Case 15: answer = stream.Read(-1)
+ Case 16: answer = stream.Read("bad")
+ Case 17: answer = stream.Read(Null)
+ Case 18: answer = CallByName(stream, "Read", vbGet, 1)
+ Case 19: answer = CallByName(stream, "ReadLine", vbMethod)
+ Case 20: answer = CallByName(stream, "ReadLine", vbGet)
+ Case 21: answer = TypeName(stream)
+ Case 22: answer = (stream Is Nothing)
+ Case 23: answer = stream.Read(0)
+ Case 24: stream.Close 1
+ Case 25: answer = stream.AtEndOfStream(1)
+ Case 26: answer = CallByName(stream, "AtEndOfStream", vbMethod)
+ Case 27: answer = CallByName(stream, "Column", vbGet)
+ Case 28: answer = CallByName(stream, "Line", 3)
+ Case 29: answer = CallByName(stream, "ReadLine", 3)
+ Case 30: answer = CallByName(stream, "AtEndOfStream", vbGet, 1)
+ Case 31: answer = CallByName(stream, "Line", vbGet, 1)
+ Case 32: answer = CallByName(stream, "Column", vbGet, 1)
+ Case 33: answer = CallByName(stream, "AtEndOfLine", vbGet, 1)
+ Case 34: answer = stream.Column(1)
+ Case 35: answer = stream.Read(100)
+ Case 36
+  answer = stream.ReadAll
+  answer = stream.ReadAll
+ Case 37: answer = stream.Read(0.5)
+ Case 38: answer = stream.Read(2.5)
+ Case 39: stream.Skip 100
+ Case 40: stream.WriteBlankLines 0
+ Case 41: stream.WriteBlankLines -1
+ Case 42: stream.WriteLine
+ Case 43: stream.Write
+ Case 44: stream.Write Null
+ Case 45: stream.WriteLine Null
+ Case 46: stream.WriteBlankLines Null
+ Case 47: answer = stream.Read(2147483648#)
+ Case 48: stream.Skip
+ Case 49: stream.Skip -1
+ Case 50: answer = stream.Read(Empty)
+ Case 51: answer = stream.Read(CVErr(7))
+ Case 52: stream.Write "x", "y"
+ Case 53: stream.SkipLine 1
+ Case 54: answer = stream.ReadLine(1)
+ Case 55: answer = stream.ReadAll(1)
+ Case 56: answer = CallByName(stream, "Close", vbGet)
+ Case 57: stream.Skip 0
+ Case 58: stream.WriteBlankLines "bad"
+ Case 59: answer = CallByName(stream, "AtEndOfStream", vbGet)
+ End Select
+ ClosedStreamProbe = "value|" & TypeName(answer) & "|" & CStr(answer)
+ Exit Function
+failed:
+ ClosedStreamProbe = "error|" & CStr(Err.Number) & "|" & Err.Description & "|" & Err.Source & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####;
+        let (module, classes) = crate::parse_project(source).unwrap();
+        let environment = crate::ErrorEnvironment { language: crate::ErrorLanguage::Japanese, help_file: "vba-help.chm".into() };
+        let mut runtime = Runtime::new(&module).with_classes(&classes).with_error_environment(environment.clone());
+        runtime.file_system_mut().replace_bytes("C:\\input.txt", b"first\r\nsecond\r\nthird\r\n".to_vec()).unwrap();
+        for mode in 0..4 {
+            let actual = runtime.call("IOOwner.StreamCloseProbe", vec![Value::String("C:\\input.txt".into()), Value::Integer(mode)]).unwrap();
+            let expected = if mode == 2 {
+                format!("error|91|{}|VBAProject|1000091", environment.description(91))
+            } else { "1|first|False".to_string() };
+            assert_eq!(actual, Value::String(expected), "Close/Reset mode {mode}");
+        }
+        // Same persistent runtime and file namespace throughout: append state
+        // and final-release cleanup must agree with the Native call sequence.
+        let numbers: [[i64; 60]; 6] = [
+            [91, 91, 91, 91, 91, 91, 91, 91, 91, 0, 91, 54, 91, 438, 450, 5, 13, 13, 438, 91, 438, 0, 0, 0, 450, 91, 438, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 0, 91, 91, 91, 91, 54, 450, 13, 13, 13, 6, 450, 5, 0, 13, 450, 450, 91, 91, 438, 0, 13, 91],
+            [54, 54, 54, 54, 54, 91, 54, 91, 91, 0, 91, 91, 91, 438, 450, 54, 13, 13, 438, 54, 438, 0, 0, 54, 450, 91, 438, 91, 91, 54, 91, 91, 91, 54, 91, 54, 54, 54, 54, 54, 91, 91, 91, 450, 13, 13, 13, 6, 450, 54, 54, 13, 450, 450, 54, 54, 438, 54, 13, 91],
+            [54, 54, 54, 54, 54, 91, 54, 91, 91, 0, 91, 91, 91, 438, 450, 54, 13, 13, 438, 54, 438, 0, 0, 54, 450, 91, 438, 91, 91, 54, 91, 91, 91, 54, 91, 54, 54, 54, 54, 54, 91, 91, 91, 450, 13, 13, 13, 6, 450, 54, 54, 13, 450, 450, 54, 54, 438, 54, 13, 91],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 54, 54, 54, 438, 450, 5, 13, 13, 438, 0, 438, 0, 0, 0, 450, 451, 438, 0, 0, 0, 451, 451, 451, 451, 451, 0, 62, 0, 0, 0, 54, 54, 54, 450, 13, 13, 13, 6, 450, 5, 0, 13, 450, 450, 451, 440, 438, 0, 13, 0],
+            [54, 54, 54, 54, 54, 54, 54, 0, 0, 0, 0, 0, 0, 438, 450, 54, 13, 13, 438, 54, 438, 0, 0, 54, 450, 54, 438, 0, 0, 54, 54, 451, 451, 54, 451, 54, 54, 54, 54, 54, 0, 5, 0, 450, 13, 13, 13, 6, 450, 54, 54, 13, 450, 450, 54, 54, 438, 54, 13, 54],
+            [54, 54, 54, 54, 54, 54, 54, 0, 0, 0, 0, 0, 0, 438, 450, 54, 13, 13, 438, 54, 438, 0, 0, 54, 450, 54, 438, 0, 0, 54, 54, 451, 451, 54, 451, 54, 54, 54, 54, 54, 0, 5, 0, 450, 13, 13, 13, 6, 450, 54, 54, 13, 450, 450, 54, 54, 438, 54, 13, 54]
+        ];
+        let successes: &[((bool, i64, i64), &str)] = &[
+            ((true, 1, 9), "value|Empty|"),
+            ((true, 1, 21), "value|String|TextStream"),
+            ((true, 1, 22), "value|Boolean|False"),
+            ((true, 1, 23), "value|String|"),
+            ((true, 1, 37), "value|String|"),
+            ((true, 1, 50), "value|String|"),
+            ((true, 1, 57), "value|Empty|"),
+            ((true, 2, 9), "value|Empty|"),
+            ((true, 2, 21), "value|String|TextStream"),
+            ((true, 2, 22), "value|Boolean|False"),
+            ((true, 8, 9), "value|Empty|"),
+            ((true, 8, 21), "value|String|TextStream"),
+            ((true, 8, 22), "value|Boolean|False"),
+            ((false, 1, 0), "value|String|first"),
+            ((false, 1, 1), "value|String|f"),
+            ((false, 1, 2), "value|String|first\r\nsecond\r\nthird\r\n"),
+            ((false, 1, 3), "value|Empty|"),
+            ((false, 1, 4), "value|Empty|"),
+            ((false, 1, 5), "value|Boolean|False"),
+            ((false, 1, 6), "value|Boolean|False"),
+            ((false, 1, 7), "value|Long|1"),
+            ((false, 1, 8), "value|Long|1"),
+            ((false, 1, 9), "value|Empty|"),
+            ((false, 1, 19), "value|String|first"),
+            ((false, 1, 21), "value|String|TextStream"),
+            ((false, 1, 22), "value|Boolean|False"),
+            ((false, 1, 23), "value|String|"),
+            ((false, 1, 27), "value|Long|1"),
+            ((false, 1, 28), "value|Long|1"),
+            ((false, 1, 29), "value|String|first"),
+            ((false, 1, 35), "value|String|first\r\nsecond\r\nthird\r\n"),
+            ((false, 1, 37), "value|String|"),
+            ((false, 1, 38), "value|String|fi"),
+            ((false, 1, 39), "value|Empty|"),
+            ((false, 1, 50), "value|String|"),
+            ((false, 1, 57), "value|Empty|"),
+            ((false, 1, 59), "value|Boolean|False"),
+            ((false, 2, 7), "value|Long|1"),
+            ((false, 2, 8), "value|Long|1"),
+            ((false, 2, 9), "value|Empty|"),
+            ((false, 2, 10), "value|Empty|"),
+            ((false, 2, 11), "value|Empty|"),
+            ((false, 2, 12), "value|Empty|"),
+            ((false, 2, 21), "value|String|TextStream"),
+            ((false, 2, 22), "value|Boolean|False"),
+            ((false, 2, 27), "value|Long|1"),
+            ((false, 2, 28), "value|Long|1"),
+            ((false, 2, 40), "value|Empty|"),
+            ((false, 2, 42), "value|Empty|"),
+            ((false, 8, 7), "value|Long|1"),
+            ((false, 8, 8), "value|Long|1"),
+            ((false, 8, 9), "value|Empty|"),
+            ((false, 8, 10), "value|Empty|"),
+            ((false, 8, 11), "value|Empty|"),
+            ((false, 8, 12), "value|Empty|"),
+            ((false, 8, 21), "value|String|TextStream"),
+            ((false, 8, 22), "value|Boolean|False"),
+            ((false, 8, 27), "value|Long|1"),
+            ((false, 8, 28), "value|Long|3"),
+            ((false, 8, 40), "value|Empty|"),
+            ((false, 8, 42), "value|Empty|"),
+        ];
+        for (group, (closed, mode)) in [true, false].into_iter().flat_map(|closed| [1, 2, 8].into_iter().map(move |mode| (closed, mode))).enumerate() {
+            for operation in 0..60_i64 {
+                let path = match mode { 1 => "C:\\input.txt", 2 => "C:\\output.txt", _ => "C:\\append.txt" };
+                let actual = runtime.call("IOOwner.ClosedStreamProbe", vec![Value::String(path.into()), Value::Integer(operation), Value::Integer(mode), Value::Boolean(closed)]).unwrap();
+                let number = numbers[group][operation as usize];
+                let expected = if number != 0 {
+                    format!("error|{number}|{}|VBAProject|vba-help.chm|{}", environment.description(number), 1_000_000 + number)
+                } else {
+                    successes.iter().find(|(key, _)| *key == (closed, mode, operation)).unwrap().1.to_string()
+                };
+                assert_eq!(actual, Value::String(expected), "closed={closed} mode={mode} operation={operation}");
+            }
+        }
+    }
+
+    #[test]
+    fn text_stream_references_close_on_last_release_and_do_not_reuse_closed_handles() {
+        let source = r#"Attribute VB_Name = "Streams"
+Public Function MakeStream(ByVal path As String) As Object
+ Dim fs As Object
+ Set fs = CreateObject("Scripting.FileSystemObject")
+ Set MakeStream = fs.OpenTextFile(path, 1)
+End Function
+Public Sub CloseNumbered()
+ Close
+End Sub
+Public Function MakeSourceClass() As Object
+ Set MakeSourceClass = New TextStream
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "TextStream"
+"#;
+        let (module, classes) = crate::parse_project(source).unwrap();
+        let mut runtime = Runtime::new(&module).with_classes(&classes);
+        let path = "C:\\stream.txt";
+        runtime.file_system_mut().replace_bytes(path, b"first\r\nsecond\r\n".to_vec()).unwrap();
+        let Value::Object(first) = runtime.call("Streams.MakeStream", vec![Value::String(path.into())]).unwrap() else { panic!("stream") };
+        assert!(first.is_native_stream());
+        runtime.call("Streams.CloseNumbered", vec![]).unwrap();
+        assert_eq!(runtime.invoke_member(&first, "ReadLine", 1, vec![]).unwrap(), Value::String("first".into()));
+        runtime.invoke_member(&first, "Close", 1, vec![]).unwrap();
+        let Value::Object(second) = runtime.call("Streams.MakeStream", vec![Value::String(path.into())]).unwrap() else { panic!("stream") };
+        assert_eq!(runtime.invoke_member(&first, "ReadLine", 1, vec![]).unwrap_err().vba_number, Some(91));
+        runtime.release_external_object(first).unwrap();
+        assert_eq!(runtime.invoke_member(&second, "ReadLine", 1, vec![]).unwrap(), Value::String("first".into()));
+        runtime.release_external_object(second).unwrap();
+        let handle = runtime.file_system_mut().open_stream(path, crate::files::OpenMode::Output).unwrap();
+        runtime.file_system_mut().close(&[handle]);
+        let Value::Object(source_class) = runtime.call("Streams.MakeSourceClass", vec![]).unwrap() else { panic!("source class") };
+        assert!(!source_class.is_native_stream());
+        runtime.release_external_object(source_class).unwrap();
     }
 
     #[test]
