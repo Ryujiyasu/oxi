@@ -35,6 +35,7 @@ pub use glyph_bounds::static_glyph_bounds;
 pub(crate) mod cjk_fallback;
 pub(crate) mod system_spacing_fallback;
 mod catalog;
+mod gdi_widths;
 pub(crate) use catalog::{CatalogGlyphMetrics, glyph_metrics as catalog_glyph_metrics, glyph_corner_kern as catalog_glyph_corner_kern, glyph_face_metrics as catalog_glyph_face_metrics, glyph_rule_thickness as catalog_glyph_rule_thickness, glyph_strikeout as catalog_glyph_strikeout};
 pub use catalog::{MissingCatalogMember, take_missing_members as take_missing_catalog_members, register_member as register_catalog_member};
 pub mod shape;
@@ -875,9 +876,6 @@ pub struct FontMetricsRegistry {
     default_family: String,
     /// COM-measured line heights: font → size_str → grid_key → height_pt
     com_line_heights: HashMap<String, HashMap<String, HashMap<String, f32>>>,
-    /// GDI-measured character widths: font → ppem → codepoint → width_px
-    /// These override the formula-based widths where GDI hinting produces different results.
-    gdi_widths: HashMap<String, HashMap<u32, HashMap<u32, u32>>>,
     /// GDI-measured tmHeight/tmAscent/tmDescent: font → ppem → (height, ascent, descent) in pixels
     /// ceil(winAscent/upm*ppem) + ceil(winDescent/upm*ppem) ≠ tmHeight due to hinting.
     gdi_heights: HashMap<String, HashMap<u32, (u32, u32, u32)>>,
@@ -1285,42 +1283,6 @@ impl FontMetricsRegistry {
             }
         };
 
-        // Load GDI-measured character width overrides
-        // These correct for GDI hinting that round(advance * ppem / upm) cannot reproduce
-        // Stored gzipped (30.5MB JSON -> 5.5MB): crates.io caps packages at 10MB
-        // and the raw table dominated the crate size. Same bytes after inflate.
-        let gdi_widths: HashMap<String, HashMap<u32, HashMap<u32, u32>>> = {
-            let gdi_gz: &[u8] = include_bytes!("data/gdi_width_overrides.json.gz");
-            let mut gdi_json = String::new();
-            {
-                use std::io::Read;
-                let mut dec = flate2::read::GzDecoder::new(gdi_gz);
-                dec.read_to_string(&mut gdi_json)
-                    .expect("gdi_width_overrides.json.gz: inflate failed");
-            }
-            // Parse: font_name -> ppem_str -> {codepoint_str: width_px}
-            let raw: HashMap<String, HashMap<String, HashMap<String, u32>>> =
-                serde_json::from_str(&gdi_json).unwrap_or_default();
-            // Convert string keys to numeric
-            let mut result = HashMap::new();
-            for (font, ppem_map) in raw {
-                let mut ppem_result = HashMap::new();
-                for (ppem_str, char_map) in ppem_map {
-                    if let Ok(ppem) = ppem_str.parse::<u32>() {
-                        let mut char_result = HashMap::new();
-                        for (cp_str, width) in char_map {
-                            if let Ok(cp) = cp_str.parse::<u32>() {
-                                char_result.insert(cp, width);
-                            }
-                        }
-                        ppem_result.insert(ppem, char_result);
-                    }
-                }
-                result.insert(font, ppem_result);
-            }
-            result
-        };
-
         // Load GDI-measured tmHeight table
         let (gdi_heights, gdi_height_supplements): (
             HashMap<String, HashMap<u32, (u32, u32, u32)>>,
@@ -1457,7 +1419,6 @@ impl FontMetricsRegistry {
             synthetic_bold_fonts,
             default_family: "Calibri".to_string(),
             com_line_heights,
-            gdi_widths,
             gdi_heights,
             gdi_height_supplements,
             com_twips_widths,
@@ -1618,9 +1579,9 @@ impl FontMetricsRegistry {
     }
 
     fn has_gdi_widths(&self, family: &str) -> bool {
-        self.gdi_widths.contains_key(family)
-            || self.gdi_widths.contains_key(&normalize_family_name(family))
-            || self.gdi_widths.contains_key(&base_family_name(family))
+        gdi_widths::has_family(family)
+            || gdi_widths::has_family(&normalize_family_name(family))
+            || gdi_widths::has_family(&base_family_name(family))
     }
 
     /// Does the shipped table carry the BOLD/ITALIC face itself, as opposed to
@@ -2126,11 +2087,9 @@ impl FontMetricsRegistry {
         }
         // GDI hinting override: fallback for fonts not in compact.json
         let ppem = (font_size * 96.0 / 72.0).round() as u32;
-        if let Some(font_ppems) = self.gdi_widths.get(&metrics.family) {
-            if let Some(char_widths) = font_ppems.get(&ppem) {
-                if let Some(&width_px) = char_widths.get(&(c as u32)) {
-                    return width_px as f32 * 72.0 / 96.0;
-                }
+        if let Some(char_widths) = gdi_widths::widths(&metrics.family, ppem) {
+            if let Some(&width_px) = char_widths.get(&(c as u32)) {
+                return width_px as f32 * 72.0 / 96.0;
             }
         }
 
@@ -2184,7 +2143,7 @@ impl FontMetricsRegistry {
     /// repeated HashMap lookups in per-character loops.
     pub fn get_gdi_char_widths(&self, family: &str, font_size: f32) -> Option<&HashMap<u32, u32>> {
         let ppem = (font_size * 96.0 / 72.0).round() as u32;
-        self.gdi_widths.get(family)?.get(&ppem)
+        gdi_widths::widths(family, ppem)
     }
 
     /// Character width using a pre-resolved GDI width map.
