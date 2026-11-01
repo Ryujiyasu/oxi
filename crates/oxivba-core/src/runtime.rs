@@ -3092,6 +3092,28 @@ impl<'a> Runtime<'a> {
         answer
     }
 
+    /// Invoke a retained dispatch reference with VBA CallByName flags.
+    /// The original reference preserves both lifetime and interface view.
+    pub fn invoke_member(&mut self, receiver: &ObjectRef, member: &str, kind: i64,
+        arguments: Vec<Value>) -> Result<Value, RuntimeError> {
+        self.start_execution()?;
+        let mut frame = empty_frame(self.error_environment.clone(), self.project_name.clone());
+        let mut values = vec![Value::Object(receiver.clone()), Value::String(member.into()), Value::Integer(kind)];
+        values.extend(arguments);
+        let result = self.call_by_name(&values, &mut frame, None, None);
+        drop(values);
+        let collected = self.collect_instances(0);
+        if result.is_ok() { collected?; }
+        result
+    }
+
+    /// Release one caller-owned reference and run any resulting termination
+    /// handlers while the runtime and its host are still available.
+    pub fn release_external_object(&mut self, object: ObjectRef) -> Result<(), RuntimeError> {
+        drop(object);
+        self.collect_instances(0)
+    }
+
     pub fn project_ended(&self) -> bool { self.project_ended }
 
     /// Invoke a host member while retaining the project's function callbacks.

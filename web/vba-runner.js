@@ -6,6 +6,7 @@ let projectWorkerType;
 let compilationWorker;
 let compilationWorkerType;
 let sourceHistory;
+let objectReferences = [];
 // Project resets discard VBA globals and open handles, while produced files
 // remain part of the containing application's filesystem.
 const producedFiles = new Map();
@@ -56,6 +57,8 @@ function retainedFileContext(context, mountFiles) {
 export function getVbaSourceForSave(fallback = '') {
     return sourceHistory?.source ?? fallback;
 }
+
+export function getVbaObjectReferences() { return objectReferences.slice(); }
 
 // Preserve editing operations that cannot be reconstructed from final text,
 // including replacing a declaration and then undoing it before running again.
@@ -110,7 +113,12 @@ function getProjectWorker(action = 'run') {
             if (event.data.execution.file_system_state) fileSystemState = copyFileSystemState(event.data.execution.file_system_state);
             rememberProducedFiles(event.data.execution);
             workersWithFiles.add(worker);
-            sourceHistory = execution.source?.trim() ? { source: execution.source, edits: [] } : undefined;
+            if (Array.isArray(event.data.execution.reference_state?.tokens)) {
+                objectReferences = event.data.execution.reference_state.tokens.slice();
+            }
+            if (execution.action !== 'release' && execution.action !== 'release-all') {
+                sourceHistory = execution.source?.trim() ? { source: execution.source, edits: [] } : undefined;
+            }
         }
         if (event.data?.ok) {
             execution.resolve(event.data.compilation ?? event.data.execution);
@@ -130,7 +138,7 @@ function getProjectWorker(action = 'run') {
     worker.addEventListener('error', event => {
         if (projectWorker === worker) projectWorker = null;
         if (compilationWorker === worker) compilationWorker = null;
-        if (!compiling) sourceHistory = undefined;
+        if (!compiling) { sourceHistory = undefined; objectReferences = []; }
         worker.terminate();
         const execution = activeExecution;
         if (!execution || execution.worker !== worker) return;
@@ -175,6 +183,13 @@ export function parseVbaArguments(text) {
                 case 'string': return typeof payload === 'string';
                 case 'utf16': return Array.isArray(payload)
                     && payload.every(unit => Number.isInteger(unit) && unit >= 0 && unit <= 65535);
+                case 'object':
+                    return payload && typeof payload === 'object' && !Array.isArray(payload)
+                        && typeof payload.reference === 'string'
+                        && Object.keys(payload).every(key => ['reference', 'kind', 'handle'].includes(key))
+                        && (!Object.hasOwn(payload, 'kind') || typeof payload.kind === 'string')
+                        && (!Object.hasOwn(payload, 'handle') || (Number.isSafeInteger(payload.handle) && payload.handle >= 0)
+                            || (typeof payload.handle === 'string' && /^\d+$/.test(payload.handle)));
                 case 'array': {
                     if (!payload || typeof payload !== 'object' || Array.isArray(payload)
                         || Object.keys(payload).some(key => !['dimensions', 'values', 'element_type', 'resizable'].includes(key))
@@ -204,7 +219,7 @@ export function parseVbaArguments(text) {
     args.forEach((value, index) => {
         const supported = supportedValue(value);
         if (!supported) {
-            throw new Error(`VBA argument ${index + 1} must be null, a boolean, a number, a string, or a typed VBA scalar or array.`);
+            throw new Error(`VBA argument ${index + 1} must be null, a boolean, a number, a string, or a typed VBA scalar, object reference, or array.`);
         }
     });
     return args;
@@ -212,6 +227,37 @@ export function parseVbaArguments(text) {
 
 export function runVbaInWorker(workbook, source, procedure, args, activeSheet, fileName, options = {}, packageBytes) {
     return startVbaWorker('run', workbook, source, procedure, args, activeSheet, fileName, options, packageBytes);
+}
+
+export function invokeVbaMemberInWorker(workbook, source, reference, member, callKind, args,
+    activeSheet, fileName, options = {}, packageBytes) {
+    return startVbaWorker('invoke', workbook, source, undefined, args, activeSheet, fileName,
+        options, packageBytes, { reference, member, callKind });
+}
+
+export function releaseAllVbaObjectsInWorker(workbook, activeSheet, fileName, options = {}, packageBytes) {
+    return startVbaWorker('release-all', workbook, undefined, undefined, [], activeSheet, fileName, options, packageBytes);
+}
+
+export function releaseVbaObjectsInWorker(workbook, source, references,
+    activeSheet, fileName, options = {}, packageBytes) {
+    return startVbaWorker('release', workbook, source, undefined, [], activeSheet, fileName,
+        options, packageBytes, { references });
+}
+
+// An execution result is a caller-owned value. Explicitly release its leases
+// after the consumer is done; nested array/record elements are released backwards.
+export function releaseVbaResultInWorker(workbook, source, result,
+    activeSheet, fileName, options = {}, packageBytes) {
+    const references = [];
+    const collect = value => {
+        if (value?.type === 'object' && typeof value.value?.reference === 'string') references.push(value.value.reference);
+        if (value?.type === 'array') for (const item of value.value.values) collect(item);
+        if (value?.type === 'record') for (const [, item] of value.value.fields) collect(item);
+    };
+    collect(result);
+    return releaseVbaObjectsInWorker(workbook, source, [...new Set(references)].reverse(),
+        activeSheet, fileName, options, packageBytes);
 }
 
 export function prepareVbaSaveInWorker(workbook, source, activeSheet, fileName, options = {}, packageBytes) {
@@ -225,7 +271,7 @@ export function compileVbaInWorker(source, options = {}, workbook, packageBytes)
     return startVbaWorker('compile', context, source, undefined, [], undefined, undefined, options, packageBytes);
 }
 
-function startVbaWorker(action, workbook, source, procedure, args, activeSheet, fileName, options, packageBytes) {
+function startVbaWorker(action, workbook, source, procedure, args, activeSheet, fileName, options, packageBytes, actionData = {}) {
     if (activeExecution) {
         return Promise.reject(new Error('A VBA macro is already running.'));
     }
@@ -244,10 +290,10 @@ function startVbaWorker(action, workbook, source, procedure, args, activeSheet, 
             worker.postMessage({
                 action, workbook, source, procedure, args, activeSheet, fileName,
                 options: action === 'compile' ? { errorLanguage, ...options } : { errorLanguage,
-                    ...(sourceHistory?.source === source && sourceHistory.edits.length ? { sourceEdits: sourceHistory.edits } : {}), ...options, ...(state ? {applicationState: state} : {}),
+                    ...(action !== 'release' && action !== 'release-all' && sourceHistory?.source === source && sourceHistory.edits.length ? { sourceEdits: sourceHistory.edits } : {}), ...options, ...(state ? {applicationState: state} : {}),
                     ...(namespace != null ? {fileSystemState: namespace} : {}),
                     ...(fileContext ? { fileContext } : {}) },
-                packageBytes,
+                packageBytes, ...actionData,
             });
         } catch (error) {
             activeExecution = null;
@@ -265,7 +311,7 @@ export function cancelActiveVbaExecution() {
     worker.terminate();
     if (projectWorker === worker) projectWorker = null;
     if (compilationWorker === worker) compilationWorker = null;
-    if (action !== 'compile') sourceHistory = undefined;
+    if (action !== 'compile') { sourceHistory = undefined; objectReferences = []; }
     const error = new Error(action === 'compile' ? 'VBA compilation cancelled.' : 'VBA execution cancelled.');
     error.name = 'AbortError';
     reject(error);
@@ -274,6 +320,7 @@ export function cancelActiveVbaExecution() {
 
 export function closeVbaProject() {
     sourceHistory = undefined;
+    objectReferences = [];
     let closed = cancelActiveVbaExecution();
     if (projectWorker) { projectWorker.terminate(); projectWorker = null; closed = true; }
     if (compilationWorker) { compilationWorker.terminate(); compilationWorker = null; closed = true; }

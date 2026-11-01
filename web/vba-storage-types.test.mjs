@@ -458,4 +458,237 @@ try{
 }finally{runner.closeVbaProject();globalThis.Worker=priorWorker;}
 assert.equal(automationDirectCalls,208);assert.equal(automationWorkerCalls,208);
 
-console.log(JSON.stringify({boundary_calls:726+automationDirectCalls+automationWorkerCalls,automation_calls:automationDirectCalls+automationWorkerCalls,typed_argument_rejections:138,excel_cases:cases.length,value_sequences:cases.filter(item=>item.outcome==='values').length,compile_cases:cases.filter(item=>item.outcome==='compile').length,value_steps:cases.filter(item=>item.outcome==='values').reduce((sum,item)=>sum+item.steps.length,0),direct_and_worker:true,passed:true}));
+
+// Real caller-owned references survive output conversion and Worker transport.
+// Native Excel observations cover scalar and two-element array lifetimes twice.
+const externalLeaseSource = "Attribute VB_Name = \"ReturnLeaseDriver\"\nOption Explicit\nPublic TraceLog As String\nPublic NextLeaseId As Long\nPublic Function ClearLeaseLog() As String\n TraceLog = \"\"\n NextLeaseId = 0\n ClearLeaseLog = TraceLog\nEnd Function\nPublic Function MakeLease() As Object\n Set MakeLease = New ReturnLeaseClass\nEnd Function\nPublic Function MakeLeaseArray() As Variant\n Dim values(0 To 1) As Variant\n Set values(0) = New ReturnLeaseClass\n Set values(1) = New ReturnLeaseClass\n MakeLeaseArray = values\nEnd Function\nPublic Function ReadLeaseLog() As String\n ReadLeaseLog = TraceLog\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"ReturnLeaseClass\"\nAttribute VB_Exposed = True\nPrivate LeaseId As Long\nPrivate Sub Class_Initialize()\n ReturnLeaseDriver.NextLeaseId = ReturnLeaseDriver.NextLeaseId + 1\n LeaseId = ReturnLeaseDriver.NextLeaseId\n ReturnLeaseDriver.TraceLog = ReturnLeaseDriver.TraceLog & \"I\" & CStr(LeaseId) & \";\"\nEnd Sub\nPrivate Sub Class_Terminate()\n ReturnLeaseDriver.TraceLog = ReturnLeaseDriver.TraceLog & \"T\" & CStr(LeaseId) & \";\"\nEnd Sub\n";
+async function verifyExternalLeases(api) {
+ let calls=0;
+ for (const array of [false,true]) for(let repetition=0;repetition<2;repetition++) {
+  let book=emptyBook();
+  const run=async (procedure,args=[])=>{
+   const result=await api.run(book,externalLeaseSource,procedure,args);calls++;
+   assert.equal(result.error,undefined,procedure);book=result.workbook;return result.result;
+  };
+  assert.deepEqual(await run('ClearLeaseLog'),{type:'string',value:''});
+  const retained=await run(array?'MakeLeaseArray':'MakeLease');
+  const objects=array?retained.value.values:[retained];
+  for(const object of objects){
+   assert.equal(object.type,'object');assert.equal(object.value.kind,'ReturnLeaseClass');
+   assert.equal(typeof object.value.reference,'string');
+   assert.deepEqual(runner.parseVbaArguments(JSON.stringify([object])),[object]);
+  }
+  const held=array?'I1;I2;':'I1;';
+  assert.deepEqual(await run('ReadLeaseLog'),{type:'string',value:held});
+  assert.deepEqual(await run('ReadLeaseLog'),{type:'string',value:held});
+  const references=objects.map(object=>object.value.reference).reverse();
+  const released=await api.release(book,externalLeaseSource,references);calls++;
+  assert.equal(released.error,undefined);book=released.workbook;
+  assert.deepEqual(await run('ReadLeaseLog'),{type:'string',value:array?'I1;I2;T2;T1;':'I1;T1;'});
+  await assert.rejects(async()=>api.release(book,externalLeaseSource,references),/released, stale, or foreign/);calls++;
+ }
+ return calls;
+}
+const externalCollectionSource = `Public Function MakeCollection() As Object
+ Set MakeCollection = New Collection
+End Function
+Public Function EchoObject(ByVal target As Object) As Object
+ Set EchoObject = target
+End Function
+Public Function Alive() As Long
+ Alive = 42
+End Function
+`;
+async function verifyExternalInvocation(api) {
+ let calls=0,book=emptyBook();
+ const run=async(procedure,args=[])=>{
+  const result=await api.run(book,externalCollectionSource,procedure,args);calls++;
+  assert.equal(result.error,undefined,procedure);book=result.workbook;return result.result;
+ };
+ const returned=await run('MakeCollection');
+ const token=returned.value.reference;
+ const invoke=async(member,kind,args=[])=>{
+  const result=await api.invoke(book,externalCollectionSource,token,member,kind,args);calls++;
+  book=result.workbook;return result;
+ };
+ assert.equal((await invoke('Add',1,['held'])).error,undefined);
+ assert.deepEqual((await invoke('Count',1)).result,{type:'integer',value:1});
+ const alias=await run('EchoObject',[returned]);
+ assert.notEqual(alias.value.reference,token);
+ assert.equal(alias.value.handle,returned.value.handle);
+ // Metadata is descriptive. It cannot replace an owned capability.
+ for(const value of [
+  {type:'object',value:{handle:returned.value.handle,kind:'Collection'}},
+  {type:'object',value:{...returned.value,reference:'foreign'}},
+  {type:'object',value:{...returned.value,kind:'Workbook'}},
+  {type:'object',value:{...returned.value,handle:17}},
+ ]){
+  await assert.rejects(async()=>api.run(book,externalCollectionSource,'EchoObject',[value]),/invalid VBA (argument|object reference)/);calls++;
+ }
+ await assert.rejects(async()=>api.invoke(book,externalCollectionSource,token,'Count',2.5,[]),/Invalid VBA member invocation|invalid VBA call kind/);calls++;
+ assert.deepEqual((await invoke('Count',1)).result,{type:'integer',value:1});
+ const rejected=await api.invoke(book,externalCollectionSource,token,'Missing',2,[]);calls++;
+ assert.equal(rejected.error.kind,'runtime');book=rejected.workbook;
+ assert.deepEqual((await invoke('Count',1)).result,{type:'integer',value:1});
+ const released=await api.release(book,externalCollectionSource,[token]);calls++;
+ assert.equal(released.error,undefined);book=released.workbook;
+ await assert.rejects(async()=>api.invoke(book,externalCollectionSource,token,'Count',1,[]),/released, stale, or foreign/);calls++;
+ const item=await api.invoke(book,externalCollectionSource,alias.value.reference,'Item',1,[1]);calls++;
+ assert.equal(item.error,undefined);assert.deepEqual(item.result,{type:'string',value:'held'});book=item.workbook;
+ const finished=await api.release(book,externalCollectionSource,[alias.value.reference]);calls++;
+ assert.equal(finished.error,undefined);book=finished.workbook;
+ assert.deepEqual(await run('Alive'),{type:'integer',value:42});
+ return calls;
+}
+const referenceSession=new wasm.SpreadsheetVbaSession();
+let externalReferenceCalls=0;
+try {
+ const api={
+  run:(book,source,procedure,args)=>referenceSession.run(book,source,procedure,args,0,'References.xlsm',{}),
+  invoke:(book,source,reference,member,kind,args)=>referenceSession.invoke_member(book,source,{reference,member,kind,args},0,'References.xlsm',{}),
+  release:(book,source,references)=>referenceSession.release_objects(book,references,0,'References.xlsm',{}),
+ };
+ externalReferenceCalls+=await verifyExternalLeases(api);
+ externalReferenceCalls+=await verifyExternalInvocation(api);
+}finally{referenceSession.free();}
+try{
+ globalThis.Worker=BrowserWorker;runner.closeVbaProject();
+ const api={
+  run:(book,source,procedure,args)=>runner.runVbaInWorker(book,source,procedure,args,0,'References.xlsm',{}),
+  invoke:async(book,source,reference,member,kind,args)=>{
+   try{return await runner.invokeVbaMemberInWorker(book,source,reference,member,kind,args,0,'References.xlsm',{});}
+   catch(error){if(error.execution)return error.execution;throw error;}
+  },
+  release:(book,source,references)=>runner.releaseVbaObjectsInWorker(book,source,references,0,'References.xlsm',{}),
+ };
+ externalReferenceCalls+=await verifyExternalLeases(api);
+ externalReferenceCalls+=await verifyExternalInvocation(api);
+}finally{runner.closeVbaProject();globalThis.Worker=priorWorker;}
+assert.ok(externalReferenceCalls>=90);
+
+// Release-all follows lease creation, including hexadecimal sequence boundaries.
+const countedReferenceCall=fn=>(...args)=>{externalReferenceCalls++;return fn(...args);};
+async function verifyReleaseAllOrder(api) {
+ let book=emptyBook();
+ async function run(procedure) {
+  const execution=await api.run(book,externalLeaseSource,procedure,[]);
+  assert.equal(execution.error,undefined);book=execution.workbook;return execution;
+ }
+ await run('ClearLeaseLog');
+ for(let id=1;id<=20;id++){
+  const created=await run('MakeLease');
+  assert.equal(created.reference_state.tokens.length,id);
+ }
+ const held=Array.from({length:20},(_,index)=>'I'+(index+1)+';').join('');
+ assert.deepEqual((await run('ReadLeaseLog')).result,{type:'string',value:held});
+ const released=await api.all(book);
+ assert.equal(released.error,undefined);assert.deepEqual(released.reference_state.tokens,[]);book=released.workbook;
+ assert.deepEqual((await run('ReadLeaseLog')).result,
+  {type:'string',value:held+Array.from({length:20},(_,index)=>'T'+(20-index)+';').join('')});
+}
+const orderedReferenceSession=new wasm.SpreadsheetVbaSession();
+try{
+ await verifyReleaseAllOrder({
+  run:countedReferenceCall((book,source,procedure,args)=>orderedReferenceSession.run(book,source,procedure,args,0,'LeaseOrder.xlsm',{})),
+  all:countedReferenceCall(book=>orderedReferenceSession.release_all_objects(book,0,'LeaseOrder.xlsm',{})),
+ });
+}finally{orderedReferenceSession.free();}
+try{
+ globalThis.Worker=BrowserWorker;runner.closeVbaProject();
+ await verifyReleaseAllOrder({
+  run:countedReferenceCall((book,source,procedure,args)=>runner.runVbaInWorker(book,source,procedure,args,0,'LeaseOrder.xlsm',{})),
+  all:countedReferenceCall(book=>runner.releaseAllVbaObjectsInWorker(book,0,'LeaseOrder.xlsm',{})),
+ });
+ assert.deepEqual(runner.getVbaObjectReferences(),[]);
+}finally{runner.closeVbaProject();globalThis.Worker=priorWorker;}
+
+// Real foreign tokens must fail even when owners allocated identical handles.
+const foreignSessions=[new wasm.SpreadsheetVbaSession(),new wasm.SpreadsheetVbaSession()];
+try{
+ const api=foreignSessions.map(session=>({
+  run:countedReferenceCall(()=>session.run(emptyBook(),externalCollectionSource,'MakeCollection',[],0,'Foreign.xlsm',{})),
+  invoke:countedReferenceCall((book,reference)=>session.invoke_member(book,externalCollectionSource,{reference,member:'Count',kind:1,args:[]},0,'Foreign.xlsm',{})),
+  all:countedReferenceCall(book=>session.release_all_objects(book,0,'Foreign.xlsm',{})),
+ }));
+ const created=api.map(owner=>owner.run());
+ assert.equal(created[0].result.value.handle,created[1].result.value.handle);
+ assert.notEqual(created[0].result.value.reference,created[1].result.value.reference);
+ for(let owner=0;owner<2;owner++){
+  assert.throws(()=>api[owner].invoke(created[owner].workbook,created[1-owner].result.value.reference),/released, stale, or foreign/);
+  const own=api[owner].invoke(created[owner].workbook,created[owner].result.value.reference);
+  assert.equal(own.error,undefined);assert.deepEqual(own.result,{type:'integer',value:0});
+  assert.equal(own.reference_state.tokens.length,1);
+  assert.deepEqual(api[owner].all(own.workbook).reference_state.tokens,[]);
+ }
+}finally{for(const session of foreignSessions)session.free();}
+const foreignWorkerSession=new wasm.SpreadsheetVbaSession();
+try{
+ globalThis.Worker=BrowserWorker;runner.closeVbaProject();
+ const ownRun=countedReferenceCall(()=>foreignWorkerSession.run(emptyBook(),externalCollectionSource,'MakeCollection',[],0,'ForeignWorker.xlsm',{}));
+ const ownInvoke=countedReferenceCall((book,reference)=>foreignWorkerSession.invoke_member(book,externalCollectionSource,{reference,member:'Count',kind:1,args:[]},0,'ForeignWorker.xlsm',{}));
+ const workerRun=countedReferenceCall(()=>runner.runVbaInWorker(emptyBook(),externalCollectionSource,'MakeCollection',[],0,'ForeignWorker.xlsm',{}));
+ const workerInvoke=countedReferenceCall((book,reference)=>runner.invokeVbaMemberInWorker(book,externalCollectionSource,reference,'Count',1,[],0,'ForeignWorker.xlsm',{}));
+ const own=ownRun(),held=await workerRun();
+ assert.equal(own.result.value.handle,held.result.value.handle);
+ assert.notEqual(own.result.value.reference,held.result.value.reference);
+ assert.throws(()=>ownInvoke(own.workbook,held.result.value.reference),/released, stale, or foreign/);
+ await assert.rejects(workerInvoke(held.workbook,own.result.value.reference),/released, stale, or foreign/);
+ const copy=runner.getVbaObjectReferences();copy.length=0;
+ assert.equal(runner.getVbaObjectReferences().length,1,'consumers receive a copy of the registry snapshot');
+ assert.deepEqual(ownInvoke(own.workbook,own.result.value.reference).result,{type:'integer',value:0});
+ assert.deepEqual((await workerInvoke(held.workbook,held.result.value.reference)).result,{type:'integer',value:0});
+ runner.closeVbaProject();assert.deepEqual(runner.getVbaObjectReferences(),[]);
+ const restarted=await workerRun();
+ assert.equal(restarted.result.value.handle,held.result.value.handle);
+ await assert.rejects(workerInvoke(restarted.workbook,held.result.value.reference),/released, stale, or foreign/);
+ const alive=await workerInvoke(restarted.workbook,restarted.result.value.reference);
+ assert.deepEqual(alive.result,{type:'integer',value:0});
+ const released=await countedReferenceCall(book=>runner.releaseAllVbaObjectsInWorker(book,0,'ForeignWorker.xlsm',{}))(alive.workbook);
+ assert.deepEqual(released.reference_state.tokens,[]);assert.deepEqual(runner.getVbaObjectReferences(),[]);
+ assert.deepEqual(countedReferenceCall(book=>foreignWorkerSession.release_all_objects(book,0,'ForeignWorker.xlsm',{}))(own.workbook).reference_state.tokens,[]);
+}finally{foreignWorkerSession.free();runner.closeVbaProject();globalThis.Worker=priorWorker;}
+
+
+
+// The single-call API retains the real returned owner by default. Adoption
+// transfers that graph, rather than reconstructing a dispatch object from data.
+for(const entry of ['run_spreadsheet_vba','run_spreadsheet_vba_with_outcome']){
+ for(const array of [false,true])for(let repetition=0;repetition<2;repetition++){
+  const made=countedReferenceCall((...args)=>wasm[entry](...args))(emptyBook(),externalLeaseSource,array?'MakeLeaseArray':'MakeLease',[],0,'ReturnedOwner.xlsm',{});
+  assert.equal(made.error,undefined);
+  const result=JSON.parse(JSON.stringify(made.result));
+  const token=(array?result.value.values[0]:result).value.reference;
+  assert.equal(typeof token,'string');
+  assert.throws(()=>countedReferenceCall(wasm.SpreadsheetVbaSession.from_reference)(token+'x'),/released, stale, or foreign/);
+  const session=countedReferenceCall(wasm.SpreadsheetVbaSession.from_reference)(token);
+  try{
+   assert.throws(()=>countedReferenceCall(wasm.SpreadsheetVbaSession.from_reference)(token),/already adopted/);
+   let book=made.workbook;
+   const held=array?'I1;I2;':'I1;';
+   for(let read=0;read<2;read++){
+    const observed=countedReferenceCall((...args)=>session.run(...args))(book,externalLeaseSource,'ReadLeaseLog',[],0,'ReturnedOwner.xlsm',{});
+    assert.equal(observed.error,undefined);assert.deepEqual(observed.result,{type:'string',value:held});
+    assert.equal(observed.reference_state.tokens.length,array?2:1);book=observed.workbook;
+   }
+   const released=countedReferenceCall((...args)=>session.release_all_objects(...args))(book,0,'ReturnedOwner.xlsm',{});
+   assert.equal(released.error,undefined);assert.deepEqual(released.reference_state.tokens,[]);
+   const observed=countedReferenceCall((...args)=>session.run(...args))(released.workbook,externalLeaseSource,'ReadLeaseLog',[],0,'ReturnedOwner.xlsm',{});
+   assert.deepEqual(observed.result,{type:'string',value:held+(array?'T2;T1;':'T1;')});
+   assert.throws(()=>countedReferenceCall(wasm.SpreadsheetVbaSession.from_reference)(token),/released, stale, or foreign/);
+  }finally{session.free();}
+ }
+}
+const returnedRangeSource='Public Function MakeRange() As Object\n Set MakeRange = Range("A1")\nEnd Function\n';
+const returnedRange=countedReferenceCall((...args)=>wasm.run_spreadsheet_vba_with_outcome(...args))(emptyBook(),returnedRangeSource,'MakeRange',[],0,'ReturnedRange.xlsm',{});
+const returnedRangeOwner=countedReferenceCall(wasm.SpreadsheetVbaSession.from_reference)(returnedRange.result.value.reference);
+try{
+ const set=countedReferenceCall((...args)=>returnedRangeOwner.invoke_member(...args))(returnedRange.workbook,returnedRangeSource,
+  {reference:returnedRange.result.value.reference,member:'Value',kind:4,args:[42]},0,'ReturnedRange.xlsm',{});
+ assert.equal(set.error,undefined);assert.equal(set.workbook_changed,true);
+ assert.equal(set.workbook.sheets[0].rows.find(row=>row.index===1).cells.find(cell=>cell.col===0).value.Number,42);
+ const released=countedReferenceCall((...args)=>returnedRangeOwner.release_all_objects(...args))(set.workbook,0,'ReturnedRange.xlsm',{});
+ assert.deepEqual(released.reference_state.tokens,[]);
+}finally{returnedRangeOwner.free();}
+
+
+console.log(JSON.stringify({boundary_calls:726+automationDirectCalls+automationWorkerCalls+externalReferenceCalls,external_reference_calls:externalReferenceCalls,automation_calls:automationDirectCalls+automationWorkerCalls,typed_argument_rejections:138,excel_cases:cases.length,value_sequences:cases.filter(item=>item.outcome==='values').length,compile_cases:cases.filter(item=>item.outcome==='compile').length,value_steps:cases.filter(item=>item.outcome==='values').reduce((sum,item)=>sum+item.steps.length,0),direct_and_worker:true,passed:true}));

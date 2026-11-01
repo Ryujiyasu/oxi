@@ -1136,6 +1136,7 @@ input[type="file"] { display: none; }
 End Sub</textarea>
         <div class="vba-actions">
             <button id="vbaClose">Cancel</button>
+            <button id="vbaRelease" disabled>Release results</button>
             <button id="vbaCompile">Compile</button>
             <button id="vbaRun" class="primary">Run</button>
         </div>
@@ -1540,7 +1541,7 @@ document.addEventListener('keydown', (e) => {
 <script type="module">
 import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_xlsx_from_workbook, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, spreadsheet_vba_source, save_spreadsheet_vba_source, format_cell_number } from './oxidocs_wasm.js';
 import { collectAdvances, familyPresent } from './face-metrics.js';
-import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker } from './vba-runner.js';
+import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker } from './vba-runner.js';
 import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-settings.js';
 import * as vbaProjectApi from './oxidocs_wasm.js';
 
@@ -2578,7 +2579,16 @@ function formatVbaExecution(execution) {
     return sections.join('\n\n');
 }
 
+function updateVbaReferenceButton() {
+    const count = getVbaObjectReferences().length;
+    const button = document.getElementById('vbaRelease');
+    button.textContent = count ? 'Release results (' + count + ')' : 'Release results';
+    button.disabled = !count || document.getElementById('vbaRun').disabled
+        || document.getElementById('vbaCompile').disabled;
+}
+
 function applyVbaExecution(execution, before) {
+    updateVbaReferenceButton();
     const changed = execution.workbook_changed !== false;
     const previousSheet = currentXlsxSheetIndex;
     if (changed) {
@@ -2617,6 +2627,7 @@ const vbaEditorSettings = bindVbaEditorSettings({
     onProfileChange: () => {
         if (currentXlsxVbaSource) currentXlsxVbaSource = document.getElementById('vbaSource').value;
         closeVbaProject();
+        updateVbaReferenceButton();
     },
     report: (message, bad) => {
         const result = document.getElementById('vbaResult');
@@ -2664,12 +2675,14 @@ function openVbaRunner() {
     resultElement.textContent = 'Ready. Press Ctrl+Enter to run.';
     resultElement.classList.remove('error');
     backdrop.classList.add('open');
+    updateVbaReferenceButton();
     refreshVbaProcedures(true);
     setTimeout(() => document.getElementById('vbaSource').focus(), 0);
 }
 
 function closeVbaRunner() {
     cancelActiveVbaExecution();
+    updateVbaReferenceButton();
     document.getElementById('vbaDialogBackdrop').classList.remove('open');
 }
 
@@ -2687,6 +2700,7 @@ async function executeVbaFromDialog() {
 
     runButton.disabled = true;
     document.getElementById('vbaCompile').disabled = true;
+    updateVbaReferenceButton();
     const endVbaOperation = vbaEditorSettings.beginOperation();
     resultElement.classList.remove('error');
     resultElement.textContent = 'Running...';
@@ -2728,18 +2742,53 @@ async function executeVbaFromDialog() {
     } finally {
         runButton.disabled = false;
         document.getElementById('vbaCompile').disabled = false;
+        updateVbaReferenceButton();
         endVbaOperation();
     }
 }
 
 document.getElementById('vbaClose').addEventListener('click', closeVbaRunner);
 document.getElementById('vbaRun').addEventListener('click', executeVbaFromDialog);
+
+async function releaseVbaResultsFromDialog() {
+    const runButton = document.getElementById('vbaRun');
+    const compileButton = document.getElementById('vbaCompile');
+    if (runButton.disabled || compileButton.disabled || !getVbaObjectReferences().length) return;
+    runButton.disabled = compileButton.disabled = true;
+    updateVbaReferenceButton();
+    const endVbaOperation = vbaEditorSettings.beginOperation();
+    const resultElement = document.getElementById('vbaResult');
+    resultElement.classList.remove('error');
+    resultElement.textContent = 'Releasing returned objects...';
+    let before;
+    try {
+        syncPendingXlsxEditsToIr();
+        before = currentDocIR;
+        const execution = await releaseAllVbaObjectsInWorker(currentDocIR, currentXlsxSheetIndex,
+            currentFileName, vbaEditorSettings.options(), currentFileBytes ? new Uint8Array(currentFileBytes) : undefined);
+        applyVbaExecution(execution, before);
+        resultElement.textContent = formatVbaExecution(execution);
+        showStatus('Returned objects released.', 'info');
+    } catch (error) {
+        if (error?.execution) applyVbaExecution(error.execution, before);
+        const message = error?.message || String(error);
+        resultElement.textContent = error?.execution ? formatVbaExecution(error.execution) : message;
+        resultElement.classList.toggle('error', error?.name !== 'AbortError');
+        showStatus(message, error?.name === 'AbortError' ? 'info' : 'error');
+    } finally {
+        runButton.disabled = compileButton.disabled = false;
+        updateVbaReferenceButton();
+        endVbaOperation();
+    }
+}
+document.getElementById('vbaRelease').addEventListener('click', releaseVbaResultsFromDialog);
 async function compileVbaFromDialog() {
     const compileButton = document.getElementById('vbaCompile');
     const runButton = document.getElementById('vbaRun');
     const result = document.getElementById('vbaResult');
     if (compileButton.disabled || runButton.disabled) return;
     compileButton.disabled = runButton.disabled = true;
+    updateVbaReferenceButton();
     const endVbaOperation = vbaEditorSettings.beginOperation();
     result.classList.remove('error');
     result.textContent = 'Compiling...';
@@ -2750,7 +2799,8 @@ async function compileVbaFromDialog() {
     } catch (error) {
         result.textContent = error?.message || String(error);
         result.classList.add('error');
-    } finally { compileButton.disabled = runButton.disabled = false; endVbaOperation(); }
+    } finally { compileButton.disabled = runButton.disabled = false;
+        updateVbaReferenceButton(); endVbaOperation(); }
 }
 document.getElementById('vbaCompile').addEventListener('click', compileVbaFromDialog);
 document.getElementById('vbaDialogBackdrop').addEventListener('click', event => {
@@ -4639,6 +4689,7 @@ async function handleFile(file) {
 
     showStatus(t('parsing'), 'info');
     closeVbaProject();
+    updateVbaReferenceButton();
     currentFileType = ext;
     currentFileName = file.name;
     btnDownload.textContent = `${t('download')} .${fileExtension}`;

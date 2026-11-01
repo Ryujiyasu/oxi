@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { bindVbaEditorSettings } from './vba-editor-settings.js';
-import { closeVbaProject, getVbaSourceForSave, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker } from './vba-runner.js';
+import { closeVbaProject, getVbaSourceForSave, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker } from './vba-runner.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = path.resolve(process.argv[2] || path.join(root, 'crates/oxidocs-wasm/pkg'));
 const wasm = await import('data:text/javascript;base64,' + Buffer.from(await readFile(path.join(pkg, 'oxidocs_wasm.js'))).toString('base64'));
@@ -29,7 +29,7 @@ function lift(name) {
 }
 const functions = ['xlsxEditKey', 'collectXlsxEdits', 'defaultCellStyle', 'cellStringValue', 'cellUtf16Text', 'setWorkbookCellString',
   'syncPendingXlsxEditsToIr', 'workbookCellMap', 'typedXlsxEdit', 'recordVbaWorkbookChanges',
-  'formatVbaResult', 'formatVbaExecution', 'applyVbaExecution', 'executeVbaFromDialog', 'compileVbaFromDialog', 'downloadEdited'];
+  'formatVbaResult', 'formatVbaExecution', 'updateVbaReferenceButton', 'applyVbaExecution', 'executeVbaFromDialog', 'releaseVbaResultsFromDialog', 'compileVbaFromDialog', 'downloadEdited'];
 const macroSource = await readFile(path.join(root, 'tests/fixtures/vba/failure_state.bas'), 'utf8');
 const applicationSource = await readFile(path.join(root, 'tests/fixtures/vba/application_state.bas'), 'utf8');
 const applicationFixture = JSON.parse(await readFile(path.join(root, 'tests/fixtures/vba/application_state.json'), 'utf8'));
@@ -48,7 +48,13 @@ globalThis.Worker = class {
           this.handlers.get('message')({ data: { ok: compilation.compiled, compilation, error: compilation.error?.message } });
           return;
         }
-        const execution = data.action === 'save'
+        const execution = data.action === 'release-all'
+          ? this.session.release_all_objects(data.workbook, data.activeSheet, data.fileName, data.options)
+          : data.action === 'release'
+          ? this.session.release_objects(data.workbook, data.references, data.activeSheet, data.fileName, data.options)
+          : data.action === 'invoke'
+          ? this.session.invoke_member(data.workbook, data.source, {reference:data.reference,member:data.member,kind:data.callKind,args:data.args}, data.activeSheet, data.fileName, data.options)
+          : data.action === 'save'
           ? this.session.prepare_save(data.workbook, data.source || (data.packageBytes ? wasm.spreadsheet_vba_source(data.packageBytes) || '' : ''), data.activeSheet, data.fileName, data.options)
           : this.session.run(data.workbook, data.source, data.procedure, data.args, data.activeSheet, data.fileName, data.options);
         this.handlers.get('message')({ data: { ok: !execution.error, execution, error: execution.error?.message } });
@@ -85,7 +91,7 @@ const context = vm.createContext({
   Blob: class { constructor(parts, options) { this.parts = parts; this.type = options.type; } },
   URL: { createObjectURL: blob => { written.push(blob); return 'blob:test'; }, revokeObjectURL() {} },
   t: text => text, I18N: { en: { downloaded: count => `saved ${count}` } },
-  runVbaInWorker,
+  runVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker,
   prepareVbaSaveInWorker,
   compileVbaInWorker,
   closeVbaProject, bindVbaEditorSettings,
@@ -322,4 +328,74 @@ Check = CStr(Range("Z2").Interior.Color) & "|" & CStr(Range("B40").Interior.Colo
 End Function`, 'Check', [], 0, 'bands.xlsm', {});
 assert.equal(checkBands.error, undefined);
 assert.deepEqual(checkBands.result, {type: 'string', value: '255|65280'}, 'typed cells keep their inherited colours after save');
-console.log(JSON.stringify({ main_editor_failure_save_cases: 8, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, passed: true }));
+
+// The main dialog owns returned references until the user releases them.
+// Releasing uses the loaded source even when the editor has pending invalid text.
+const leaseUiSource = `Attribute VB_Name = "LeaseUiDriver"
+Option Explicit
+Public Held As Object
+Public Function MakeUiLease() As Object
+ Range("Z1").Value = 0
+ Set MakeUiLease = New LeaseUiClass
+End Function
+Public Function EchoUiLease(ByVal target As Object) As Object
+ Set EchoUiLease = target
+End Function
+Public Function MakeHeldUiLease() As Object
+ Range("Z1").Value = 0
+ Set Held = New LeaseUiClass
+ Set MakeHeldUiLease = Held
+End Function
+Public Sub DropHeld()
+ Set Held = Nothing
+End Sub
+VERSION 1.0 CLASS
+Attribute VB_Name = "LeaseUiClass"
+Attribute VB_Exposed = True
+Private Sub Class_Terminate()
+ Range("Z1").Value = Range("Z1").Value + 1
+ Debug.Print "terminated"
+End Sub
+`;
+await prepare();
+node('vbaSource').value=leaseUiSource;node('vbaProcedure').value='MakeUiLease';node('vbaArguments').value='';
+await vm.runInContext('executeVbaFromDialog()',context);
+assert.equal(getVbaObjectReferences().length,1);
+assert.equal(node('vbaRelease').disabled,false);
+const firstUiLease=getVbaObjectReferences()[0];
+node('vbaProcedure').value='EchoUiLease';
+node('vbaArguments').value=JSON.stringify([{type:'object',value:{reference:firstUiLease}}]);
+await vm.runInContext('executeVbaFromDialog()',context);
+assert.equal(getVbaObjectReferences().length,2,'alias results own independent leases');
+assert.match(node('vbaRelease').textContent,/\(2\)/);
+const invalidLeaseUiSource=leaseUiSource.replace('End Function','');
+assert.equal(recordVbaSourceChange(leaseUiSource,invalidLeaseUiSource),true);
+node('vbaSource').value=invalidLeaseUiSource;
+const releasedUiSource=vm.runInContext('currentXlsxVbaSource',context);
+vm.runInContext('xlsxWorkbookChanged = false',context);
+await vm.runInContext('releaseVbaResultsFromDialog()',context);
+assert.equal(node('vbaResult').classList.values.has('error'),false);
+assert.equal(getVbaObjectReferences().length,0);
+assert.equal(node('vbaRelease').disabled,true);
+assert.equal(node('vbaSource').value,invalidLeaseUiSource,'release never edits the editor');
+assert.equal(getVbaSourceForSave(),invalidLeaseUiSource,'release preserves pending editing operations');
+assert.equal(vm.runInContext('currentXlsxVbaSource',context),releasedUiSource,'release never commits pending source');
+assert.equal(savedCell(vm.runInContext('currentDocIR',context),25).value.Number,1,'last alias release runs termination once');
+assert.match(node('vbaResult').textContent,/terminated/);
+assert.equal(vm.runInContext('xlsxWorkbookChanged',context),true);
+assert.equal(node('vbaRun').disabled,false);assert.equal(node('vbaCompile').disabled,false);
+await prepare();
+node('vbaSource').value=leaseUiSource;node('vbaProcedure').value='MakeHeldUiLease';node('vbaArguments').value='';
+await vm.runInContext('executeVbaFromDialog()',context);
+assert.equal(getVbaObjectReferences().length,1);
+await vm.runInContext('releaseVbaResultsFromDialog()',context);
+assert.equal(getVbaObjectReferences().length,0);
+assert.equal(savedCell(vm.runInContext('currentDocIR',context),25).value.Number,0,'VBA global still holds the object');
+node('vbaProcedure').value='DropHeld';
+await vm.runInContext('executeVbaFromDialog()',context);
+assert.equal(savedCell(vm.runInContext('currentDocIR',context),25).value.Number,1,'VBA releases its own last reference');
+closeVbaProject();
+assert.equal(getVbaObjectReferences().length,0);
+assert.ok(page.includes("document.getElementById('vbaRelease').addEventListener('click', releaseVbaResultsFromDialog)"));
+
+console.log(JSON.stringify({ main_editor_failure_save_cases: 8, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, passed: true }));

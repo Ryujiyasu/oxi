@@ -38046,7 +38046,8 @@ fn vba_input_fields(value: &JsValue, required: &[&str], optional: &[&str]) -> Re
     Ok(())
 }
 
-fn decode_vba_input_array(value: &JsValue, ancestors: &mut Vec<JsValue>) -> Result<Value, JsError> {
+fn decode_vba_input_array(value: &JsValue, ancestors: &mut Vec<JsValue>,
+    references: Option<&ExternalReferences>) -> Result<Value, JsError> {
     vba_input_fields(value, &["type", "value"], &[])?;
     let payload = vba_input_property(value, "value")?;
     vba_input_fields(&payload, &["dimensions", "element_type", "values"], &["resizable"])?;
@@ -38090,17 +38091,14 @@ fn decode_vba_input_array(value: &JsValue, ancestors: &mut Vec<JsValue>) -> Resu
                 .map_err(|_| JsError::new("invalid VBA argument: cannot construct typed array element"))?;
             descriptor.into()
         } else { item };
-        values.push(decode_vba_input_argument_inner(item, ancestors)?);
+        values.push(decode_vba_input_argument_inner(item, ancestors, references)?);
     }
     finish_vba_input_array(schema, values)
         .map_err(|message| JsError::new(&format!("invalid VBA argument: {message}")))
 }
 
-fn decode_vba_input_argument(value: JsValue) -> Result<Value, JsError> {
-    decode_vba_input_argument_inner(value, &mut Vec::new())
-}
-
-fn decode_vba_input_argument_inner(value: JsValue, ancestors: &mut Vec<JsValue>) -> Result<Value, JsError> {
+fn decode_vba_input_argument_inner(value: JsValue, ancestors: &mut Vec<JsValue>,
+    references: Option<&ExternalReferences>) -> Result<Value, JsError> {
     if value.is_bigint() {
         let integer = js_sys::BigInt::new(&value)
             .map_err(|_| JsError::new("invalid VBA argument: expected a BigInt"))?;
@@ -38125,12 +38123,33 @@ fn decode_vba_input_argument_inner(value: JsValue, ancestors: &mut Vec<JsValue>)
         vba_input_fields(&value, &["type"], &["value"])?;
         let tag = js_sys::Reflect::get(&value, &JsValue::from_str("type"))
             .map_err(|_| JsError::new("invalid VBA argument: cannot read type"))?.as_string();
+        if tag.as_deref() == Some("object") {
+            vba_input_fields(&value, &["type", "value"], &[])?;
+            let payload = vba_input_property(&value, "value")?;
+            vba_input_fields(&payload, &["reference"], &["handle", "kind"])?;
+            let reference = vba_input_property(&payload, "reference")?.as_string()
+                .ok_or_else(|| JsError::new("invalid VBA object reference: expected a string"))?;
+            let object = references.and_then(|references| references.values.get(&reference))
+                .ok_or_else(|| JsError::new("invalid VBA object reference: released, stale, or foreign reference"))?;
+            let kind = vba_input_property(&payload, "kind")?;
+            if !kind.is_undefined() && kind.as_string().as_deref() != Some(object.kind.as_str()) {
+                return Err(JsError::new("invalid VBA object reference: kind does not match"));
+            }
+            let handle = vba_input_property(&payload, "handle")?;
+            if !handle.is_undefined() {
+                let valid = handle.as_string().is_some_and(|value| value == object.handle.to_string())
+                    || handle.as_f64().is_some_and(|value| (0.0..=9_007_199_254_740_991.0).contains(&value)
+                        && value.fract() == 0.0 && value as u64 == object.handle);
+                if !valid { return Err(JsError::new("invalid VBA object reference: handle does not match")); }
+            }
+            return Ok(Value::Object(object.clone()));
+        }
         if tag.as_deref() == Some("array") {
             if ancestors.iter().any(|parent| js_sys::Object::is(parent, &value)) {
                 return Err(JsError::new("invalid VBA argument: recursive array descriptor"));
             }
             ancestors.push(value.clone());
-            let result = decode_vba_input_array(&value, ancestors);
+            let result = decode_vba_input_array(&value, ancestors, references);
             ancestors.pop();
             return result;
         }
@@ -38209,6 +38228,10 @@ enum OutputValue {
         #[serde(serialize_with = "serialize_vba_object_handle")]
         handle: u64,
         kind: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reference: Option<String>,
+        #[serde(skip)]
+        object: ObjectRef,
     },
 }
 
@@ -38288,7 +38311,9 @@ impl From<Value> for OutputValue {
             },
             Value::Object(value) => Self::Object {
                 handle: value.handle,
-                kind: value.kind,
+                kind: value.kind.clone(),
+                reference: None,
+                object: value,
             },
         }
     }
@@ -38589,6 +38614,7 @@ struct RunFailure {
 #[derive(Serialize)]
 struct RunOutcome {
     workbook: Workbook,
+    reference_state: VbaReferenceState,
     result: OutputValue,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
@@ -38800,12 +38826,128 @@ impl<'a> WorkbookHost<'a> {
     }
 }
 
+/// Opaque leases own the original dispatch reference, including its interface.
+/// Serialized handle/kind fields describe an object; they never reconstruct it.
+struct ExternalReferences {
+    namespace: String,
+    next: u64,
+    values: BTreeMap<String, ObjectRef>,
+}
+
+impl Default for ExternalReferences {
+    fn default() -> Self {
+        static NEXT_SESSION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+        let serial = NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(target_arch = "wasm32")]
+        let namespace = format!("{:x}-{:x}-{:x}-{serial:x}", js_sys::Date::now().to_bits(),
+            js_sys::Math::random().to_bits(), js_sys::Math::random().to_bits());
+        #[cfg(not(target_arch = "wasm32"))]
+        let namespace = format!("native-{serial:x}");
+        Self { namespace, next: 0, values: BTreeMap::new() }
+    }
+}
+
+impl ExternalReferences {
+    fn retain(&mut self, value: &mut OutputValue) {
+        match value {
+            OutputValue::Object { object, reference, .. } => {
+                self.next = self.next.checked_add(1).expect("VBA reference sequence exhausted");
+                let token = format!("{}-{:x}", self.namespace, self.next);
+                self.values.insert(token.clone(), object.clone());
+                *reference = Some(token);
+            }
+            OutputValue::Array { values, .. } => {
+                for value in values { self.retain(value); }
+            }
+            OutputValue::Record { fields, .. } => {
+                for (_, value) in fields { self.retain(value); }
+            }
+            _ => {}
+        }
+    }
+
+    fn tokens_in_release_order(&self) -> Vec<String> {
+        let mut tokens: Vec<_> = self.values.keys().cloned().collect();
+        tokens.sort_by_cached_key(|token| std::cmp::Reverse(
+            u64::from_str_radix(token.rsplit('-').next().expect("owned token"), 16).expect("owned token sequence")));
+        tokens
+    }
+
+    fn snapshot(&self) -> VbaReferenceState {
+        VbaReferenceState { owner: self.namespace.clone(), tokens: self.values.keys().cloned().collect() }
+    }
+
+    fn reset_project(&mut self) {
+        // Host objects retain their identities when project storage resets.
+        self.values.retain(|_, object| object.life.is_none());
+    }
+}
+
+#[derive(Serialize)]
+struct VbaReferenceState {
+    owner: String,
+    tokens: Vec<String>,
+}
+
+struct VbaInvocation<'a, A> {
+    procedure: Option<&'a str>,
+    args: A,
+    action: Option<ExternalObjectAction>,
+}
+
+impl<'a, A> VbaInvocation<'a, A> {
+    fn new(procedure: Option<&'a str>, args: A) -> Self { Self { procedure, args, action: None } }
+}
+
+enum ExternalObjectAction {
+    Invoke { reference: String, member: String, kind: i64 },
+    Release { references: Vec<String> },
+}
+
+fn value_owns_project_reference(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.life.is_some(),
+        Value::Array(array) => array.values.iter().any(value_owns_project_reference),
+        Value::Record(record) => record.fields.iter().any(|(_, value)| value_owns_project_reference(value)),
+        _ => false,
+    }
+}
+
 struct ProjectSessionState {
     source: String,
     runtime: Option<oxivba_core::ProjectState>,
     host: WorkbookHostState,
     workbook: Vec<u8>,
     documents: Vec<VbaDocumentModule>,
+    external_references: ExternalReferences,
+}
+
+// A single-call entry may return live objects. Keep its actual project/host
+// graph until the consumer adopts it; serialized handles cannot recreate it.
+std::thread_local! {
+    static RETURNED_VBA_PROJECTS: std::cell::RefCell<BTreeMap<String, ProjectSessionState>>
+        = const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+fn retain_returned_project(state: Option<ProjectSessionState>) {
+    if let Some(state) = state {
+        if !state.external_references.values.is_empty() {
+            RETURNED_VBA_PROJECTS.with(|projects| {
+                projects.borrow_mut().insert(state.external_references.namespace.clone(), state);
+            });
+        }
+    }
+}
+
+fn take_returned_project(reference: &str) -> Result<ProjectSessionState, String> {
+    let missing = || "invalid VBA object reference: released, stale, or foreign reference (result already adopted)".to_string();
+    let (owner, _) = reference.rsplit_once('-').ok_or_else(missing)?;
+    RETURNED_VBA_PROJECTS.with(|projects| {
+        let mut projects = projects.borrow_mut();
+        let valid = projects.get(owner).is_some_and(|state| state.external_references.values.contains_key(reference));
+        if !valid { return Err(missing()); }
+        Ok(projects.remove(owner).expect("validated returned project"))
+    })
 }
 
 #[derive(Default,Deserialize)]
@@ -38920,6 +39062,14 @@ impl SpreadsheetVbaSession {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self { Self::default() }
 
+    /// Adopt the actual owner of objects returned by a single-call run API.
+    /// Any reference from that result transfers the whole owner once, including
+    /// all sibling references in arrays/records and its module/host storage.
+    pub fn from_reference(reference: &str) -> Result<SpreadsheetVbaSession, JsError> {
+        take_returned_project(reference).map(|state| Self { state: Some(state) })
+            .map_err(|error| JsError::new(&error))
+    }
+
     pub fn compile(&self,source:&str,options:JsValue) -> Result<JsValue,JsError> {
         compile_spreadsheet_vba(source,options)
     }
@@ -38930,13 +39080,69 @@ impl SpreadsheetVbaSession {
 
     pub fn run(&mut self, workbook: JsValue, source: &str, procedure: &str, args: JsValue,
         active_sheet: usize, file_name: Option<String>, options: JsValue) -> Result<JsValue, JsError> {
-        let outcome = prepare_spreadsheet_vba(workbook, source, Some(procedure), args, active_sheet, file_name, options, &mut self.state)?;
+        let outcome = prepare_spreadsheet_vba(workbook, source, VbaInvocation::new(Some(procedure), args), active_sheet, file_name, options, &mut self.state)?;
         serialize_vba_outcome(&outcome)
+    }
+
+    /// Invoke a retained reference using { reference, member, kind, args }.
+    /// Flags follow VBA CallByName, including combined method/get flag 3.
+    pub fn invoke_member(&mut self, workbook: JsValue, source: &str, invocation: JsValue,
+        active_sheet: usize, file_name: Option<String>, options: JsValue) -> Result<JsValue, JsError> {
+        vba_input_fields(&invocation, &["reference", "member", "kind", "args"], &[])?;
+        let reference = vba_input_property(&invocation, "reference")?.as_string()
+            .ok_or_else(|| JsError::new("invalid VBA object reference: expected a string"))?;
+        let member = vba_input_property(&invocation, "member")?.as_string()
+            .ok_or_else(|| JsError::new("invalid VBA member name: expected a string"))?;
+        let kind = vba_input_property(&invocation, "kind")?;
+        if !js_sys::Number::is_safe_integer(&kind) {
+            return Err(JsError::new("invalid VBA call kind: expected a safe integer"));
+        }
+        let request = VbaInvocation {
+            procedure: None, args: vba_input_property(&invocation, "args")?,
+            action: Some(ExternalObjectAction::Invoke { reference, member, kind: kind.as_f64().unwrap() as i64 }),
+        };
+        let outcome = prepare_spreadsheet_vba(workbook, source, request,
+            active_sheet, file_name, options, &mut self.state)?;
+        serialize_vba_outcome(&outcome)
+    }
+
+    /// Release leases against their loaded source, preserving pending editor
+    /// changes. Host/workbook/file effects are returned as a normal execution.
+    pub fn release_objects(&mut self, workbook: JsValue, references: JsValue,
+        active_sheet: usize, file_name: Option<String>, options: JsValue) -> Result<JsValue, JsError> {
+        if !js_sys::Array::is_array(&references) {
+            return Err(JsError::new("invalid VBA references: expected an array"));
+        }
+        let references = js_sys::Array::from(&references).iter().map(|value| value.as_string()
+            .ok_or_else(|| JsError::new("invalid VBA reference: expected a string")))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.release_owned_objects(workbook, references, active_sheet, file_name, options)
+    }
+
+    /// Release every caller-owned lease, newest first. Project globals and
+    /// references retained by VBA continue to own their objects.
+    pub fn release_all_objects(&mut self, workbook: JsValue, active_sheet: usize,
+        file_name: Option<String>, options: JsValue) -> Result<JsValue, JsError> {
+        let references = self.state.as_ref().ok_or_else(|| JsError::new("no loaded VBA project"))?
+            .external_references.tokens_in_release_order();
+        self.release_owned_objects(workbook, references, active_sheet, file_name, options)
     }
 
     pub fn prepare_save(&mut self, workbook: JsValue, source: &str, active_sheet: usize,
         file_name: Option<String>, options: JsValue) -> Result<JsValue, JsError> {
-        let outcome = prepare_spreadsheet_vba(workbook, source, None, js_sys::Array::new().into(), active_sheet, file_name, options, &mut self.state)?;
+        let outcome = prepare_spreadsheet_vba(workbook, source, VbaInvocation::new(None, js_sys::Array::new().into()), active_sheet, file_name, options, &mut self.state)?;
+        serialize_vba_outcome(&outcome)
+    }
+}
+
+impl SpreadsheetVbaSession {
+    fn release_owned_objects(&mut self, workbook: JsValue, references: Vec<String>, active_sheet: usize,
+        file_name: Option<String>, options: JsValue) -> Result<JsValue, JsError> {
+        let source = self.state.as_ref().ok_or_else(|| JsError::new("no loaded VBA project"))?.source.clone();
+        let request = VbaInvocation { procedure: None, args: js_sys::Array::new().into(),
+            action: Some(ExternalObjectAction::Release { references }) };
+        let outcome = prepare_spreadsheet_vba(workbook, &source, request,
+            active_sheet, file_name, options, &mut self.state)?;
         serialize_vba_outcome(&outcome)
     }
 }
@@ -39173,7 +39379,7 @@ pub fn run_spreadsheet_vba_with_options(
     file_name: Option<String>,
     options: JsValue,
 ) -> Result<JsValue, JsError> {
-    let outcome = prepare_spreadsheet_vba(workbook, source, Some(procedure), args, active_sheet, file_name, options, &mut None)?;
+    let outcome = prepare_returned_spreadsheet_vba(workbook, source, VbaInvocation::new(Some(procedure), args), active_sheet, file_name, options)?;
     if let Some(error) = &outcome.error {
         return Err(JsError::new(&error.message));
     }
@@ -39197,7 +39403,7 @@ pub fn run_spreadsheet_vba_with_outcome(
     file_name: Option<String>,
     options: JsValue,
 ) -> Result<JsValue, JsError> {
-    let outcome = prepare_spreadsheet_vba(workbook, source, Some(procedure), args, active_sheet, file_name, options, &mut None)?;
+    let outcome = prepare_returned_spreadsheet_vba(workbook, source, VbaInvocation::new(Some(procedure), args), active_sheet, file_name, options)?;
     serialize_vba_outcome(&outcome)
 }
 
@@ -39211,20 +39417,27 @@ pub fn prepare_spreadsheet_vba_save(
     file_name: Option<String>,
     options: JsValue,
 ) -> Result<JsValue, JsError> {
-    let outcome = prepare_spreadsheet_vba(workbook, source, None, js_sys::Array::new().into(), active_sheet, file_name, options, &mut None)?;
+    let outcome = prepare_returned_spreadsheet_vba(workbook, source, VbaInvocation::new(None, js_sys::Array::new().into()), active_sheet, file_name, options)?;
     serialize_vba_outcome(&outcome)
 }
 
+fn prepare_returned_spreadsheet_vba(
+    workbook: JsValue, source: &str, invocation: VbaInvocation<'_, JsValue>,
+    active_sheet: usize, file_name: Option<String>, options: JsValue,
+) -> Result<RunOutcome, JsError> {
+    let mut state = None;
+    let outcome = prepare_spreadsheet_vba(workbook, source, invocation,
+        active_sheet, file_name, options, &mut state)?;
+    retain_returned_project(state);
+    Ok(outcome)
+}
+
 fn prepare_spreadsheet_vba(
-    workbook: JsValue,
-    source: &str,
-    procedure: Option<&str>,
-    args: JsValue,
-    active_sheet: usize,
-    file_name: Option<String>,
-    options: JsValue,
+    workbook: JsValue, source: &str, invocation: VbaInvocation<'_, JsValue>,
+    active_sheet: usize, file_name: Option<String>, options: JsValue,
     session: &mut Option<ProjectSessionState>,
 ) -> Result<RunOutcome, JsError> {
+    let VbaInvocation { procedure, args, action } = invocation;
     let options: VbaExecutionOptions = if options.is_null() || options.is_undefined() {
         VbaExecutionOptions::default()
     } else {
@@ -39286,6 +39499,9 @@ fn prepare_spreadsheet_vba(
         serde_wasm_bindgen::from_value(options)
             .map_err(|error| JsError::new(&format!("invalid VBA options: {error}")))?
     };
+    if matches!(&action, Some(ExternalObjectAction::Release { .. })) && options.source_edits.is_some() {
+        return Err(JsError::new("invalid VBA source edits: releasing references cannot edit source"));
+    }
     let project_name = options.project_name.clone().unwrap_or_else(|| "VBAProject".to_string());
     let source_edits = options.source_edits.clone().map(|edits| edits.into_iter().map(|edit| oxivba_core::SourceEdit {
         line: edit.line, delete_lines: edit.delete_lines, text: edit.text,
@@ -39306,13 +39522,14 @@ fn prepare_spreadsheet_vba(
     }
     if !js_sys::Array::is_array(&args){return Err(JsError::new("invalid VBA arguments: expected an array"));}
     let args: Vec<Value> = js_sys::Array::from(&args).iter()
-        .map(decode_vba_input_argument).collect::<Result<_, _>>()?;
+        .map(|value| decode_vba_input_argument_inner(value, &mut Vec::new(),
+            session.as_ref().map(|state| &state.external_references))).collect::<Result<_, _>>()?;
     let random_seed =
         js_sys::Date::now().to_bits() ^ js_sys::Math::random().to_bits().rotate_left(17);
     let browser_now = js_sys::Date::new_0();
     let local_millis = browser_now.get_time() - browser_now.get_timezone_offset() * 60_000.0;
     let current_time = local_millis / 86_400_000.0 + 25_569.0;
-    execute_workbook_action_in_session(workbook, source, procedure, args.into_iter().map(Value::from).collect(), active_sheet,
+    execute_workbook_invocation(workbook, source, VbaInvocation { procedure, args, action }, active_sheet,
         VbaRunContext { environment, host_ansi_code_page, project_name, file_name, random_seed, current_time, application_state, source_edits, document_modules, file_context, file_system_state }, session)
         .map_err(|error| JsError::new(&error))
 }
@@ -39349,22 +39566,27 @@ fn observable_workbook_bytes(workbook: &mut Workbook) -> Result<Vec<u8>, String>
     bytes
 }
 
+#[cfg(test)]
 fn execute_workbook_action_in_session(
-    mut workbook: Workbook,
-    source: &str,
-    procedure: Option<&str>,
-    args: Vec<Value>,
-    active_sheet: usize,
-    context: VbaRunContext,
-    session: &mut Option<ProjectSessionState>,
+    workbook: Workbook, source: &str, procedure: Option<&str>, args: Vec<Value>,
+    active_sheet: usize, context: VbaRunContext, session: &mut Option<ProjectSessionState>,
 ) -> Result<RunOutcome, String> {
+    execute_workbook_invocation(workbook, source, VbaInvocation::new(procedure, args), active_sheet,
+        context, session)
+}
+
+fn execute_workbook_invocation(
+    mut workbook: Workbook, source: &str, invocation: VbaInvocation<'_, Vec<Value>>,
+    active_sheet: usize, context: VbaRunContext, session: &mut Option<ProjectSessionState>,
+) -> Result<RunOutcome, String> {
+    let VbaInvocation { procedure, args, action } = invocation;
     // Validate before taking the previous state: invalid API inputs must not
     // destroy a loaded project or leave its host handles disconnected.
     if active_sheet >= workbook.sheets.len() { return Err(format!("active sheet index {active_sheet} is out of bounds")); }
     let mode = context.application_state.as_ref().map_or(calculation_constant(workbook.calculation.mode), |state| state.calculation);
     let on_save = context.application_state.as_ref().map_or(workbook.calculation.on_save, |state| state.calculate_before_save);
     let should_calculate = mode != -4135 || on_save;
-    let needs_runtime = procedure.is_some() || should_calculate;
+    let needs_runtime = procedure.is_some() || action.is_some() || should_calculate;
     let parsed = if needs_runtime || context.source_edits.is_some() {
         Some(oxivba_core::parse_project(source).map_err(|error| error.to_string())?)
     } else { None };
@@ -39440,7 +39662,27 @@ fn execute_workbook_action_in_session(
     if let Some(state)=context.file_system_state.as_ref() {next_files.restore(state)?;}
     let mut file_name = context.file_name.clone().filter(|name| !name.is_empty());
     next_files.configure(context.file_context.clone(), &stored_source, &mut file_name)?;
-    let (mut host, mut project_state) = match session.take() {
+    // Resolve capabilities against the loaded owner before taking its state.
+    // A source reset must never reinterpret an old handle as a new instance.
+    let reset_storage = source_resets_project || documents_changed;
+    if reset_storage && args.iter().any(value_owns_project_reference) {
+        return Err("invalid VBA object reference: source edit resets its owning project".into());
+    }
+    let action_references: &[String] = match &action {
+        Some(ExternalObjectAction::Invoke { reference, .. }) => std::slice::from_ref(reference),
+        Some(ExternalObjectAction::Release { references }) => references,
+        None => &[],
+    };
+    let mut seen = BTreeSet::new();
+    for reference in action_references {
+        if !seen.insert(reference) { return Err("invalid VBA reference: duplicate release".into()); }
+        let object = session.as_ref().and_then(|state| state.external_references.values.get(reference))
+            .ok_or_else(|| "invalid VBA object reference: released, stale, or foreign reference".to_string())?;
+        if reset_storage && object.life.is_some() {
+            return Err("invalid VBA object reference: source edit resets its owning project".into());
+        }
+    }
+    let (mut host, mut project_state, mut external_references) = match session.take() {
         Some(previous) => {
             let state = if source_resets_project || documents_changed { None } else { previous.runtime };
             let old_workbook=previous_workbook.expect("loaded workbook");
@@ -39475,10 +39717,11 @@ fn execute_workbook_action_in_session(
             host.activate_sheet(active_sheet);
             host.calculation_assigned = false;
             *host.user_functions.borrow_mut() = UserFunctions::default();
-            (host, state)
+            (host, state, previous.external_references)
         }
-        None => (WorkbookHost::new(&mut workbook, active_sheet)?, None),
+        None => (WorkbookHost::new(&mut workbook, active_sheet)?, None, ExternalReferences::default()),
     };
+    if reset_storage { external_references.reset_project(); }
     if documents_changed { host.configure_documents(&documents)?; }
     host.error_language = context.environment.language;
     if let Some(page) = context.host_ansi_code_page { host.automation_code_page = Some(page); }
@@ -39491,7 +39734,7 @@ fn execute_workbook_action_in_session(
     host.app_settings.insert("calculatebeforesave".to_string(), Value::Boolean(on_save));
     if let Some(state) = context.application_state { state.restore(&mut host); }
     host.sync_calculation_settings();
-    host.user_functions.borrow_mut().force_full_calculation = procedure.is_none()
+    host.user_functions.borrow_mut().force_full_calculation = procedure.is_none() && action.is_none()
         && should_calculate
         && host.workbook.calculation.completed == Some(false)
         && !host.workbook.recalculation.pending();
@@ -39540,9 +39783,27 @@ fn execute_workbook_action_in_session(
         if let Some(state) = project_state.take() { runtime = runtime.with_project_state(state); }
         runtime=runtime.with_document_objects(bindings,references).map_err(|error|error.to_string())?;
         *runtime.file_system_mut() = file_system;
-        let mut result = match procedure {
-            Some(procedure) => runtime.call_macro(procedure, args),
-            None => runtime.invoke_host("Application", "Calculate", vec![]),
+        let external_action = action.is_some();
+        let mut result = match action {
+            Some(ExternalObjectAction::Invoke { reference, member, kind }) => {
+                let object = external_references.values.get(&reference).expect("validated reference");
+                runtime.invoke_member(object, &member, kind, args)
+            }
+            Some(ExternalObjectAction::Release { references }) => {
+                let mut result = Ok(Value::Empty);
+                for reference in references {
+                    let object = external_references.values.remove(&reference).expect("validated reference");
+                    if let Err(error) = runtime.release_external_object(object) {
+                        result = Err(error);
+                        break;
+                    }
+                }
+                result
+            }
+            None => match procedure {
+                Some(procedure) => runtime.call_macro(procedure, args),
+                None => runtime.invoke_host("Application", "Calculate", vec![]),
+            },
         };
         if let Err(error) = runtime.finish_host_execution() {
             if result.is_ok() && error.kind != oxivba_core::RuntimeErrorKind::EndStatement { result = Err(error); }
@@ -39551,11 +39812,14 @@ fn execute_workbook_action_in_session(
         // storage. Error 40040 retains it in the measured COM profile.
         // Compile failures retain storage pending correction/reset; debugger
         // continuation is not provided here. Application/host state survives.
-        let reset = runtime.project_ended() || result.as_ref().err().is_some_and(|error| !matches!(error.kind,
+        let reset = runtime.project_ended() || !external_action && result.as_ref().err().is_some_and(|error| !matches!(error.kind,
             oxivba_core::RuntimeErrorKind::ExecutionTerminated | oxivba_core::RuntimeErrorKind::Compile));
         file_system = std::mem::take(runtime.file_system_mut());
         if reset { file_system.close(&[]); }
-        project_state = if reset { None } else { Some(runtime.into_project_state()) };
+        project_state = if reset {
+            external_references.reset_project();
+            None
+        } else { Some(runtime.into_project_state()) };
         result
     } else { Ok(Value::Empty) };
     host.file_io.files = file_system;
@@ -39617,9 +39881,7 @@ fn execute_workbook_action_in_session(
     let after = observable_workbook_bytes(&mut workbook);
     workbook.calculation.on_save = on_save;
     let workbook_changed = calculation_assigned || conditions_changed || before != after.map_err(|error| error.to_string())?;
-    *session = Some(ProjectSessionState { source: stored_source, runtime: project_state, host: host_state, documents,
-        workbook: serde_json::to_vec(&workbook).map_err(|error| error.to_string())? });
-    let (result, error) = match result {
+    let (mut result, error) = match result {
         Ok(value) => (value.into(), None),
         Err(failure) => {
             let kind = match failure.kind {
@@ -39631,8 +39893,13 @@ fn execute_workbook_action_in_session(
             (OutputValue::Empty, Some(RunFailure { message: failure.to_string(), kind, line: failure.line }))
         }
     };
+    external_references.retain(&mut result);
+    let reference_state = external_references.snapshot();
+    *session = Some(ProjectSessionState { source: stored_source, runtime: project_state, host: host_state, documents,
+        external_references, workbook: serde_json::to_vec(&workbook).map_err(|error| error.to_string())? });
     Ok(RunOutcome {
         workbook,
+        reference_state,
         result,
         debug_output,
         messages,
@@ -39651,6 +39918,187 @@ fn execute_workbook_action_in_session(
 mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
+
+    #[test]
+    fn external_retained_results_match_native_lifetimes() {
+        const SOURCE: &str = r####"Attribute VB_Name = "ReturnLeaseDriver"
+Option Explicit
+Public TraceLog As String
+Public NextLeaseId As Long
+Public Function ClearLeaseLog() As String
+ TraceLog = ""
+ NextLeaseId = 0
+ ClearLeaseLog = TraceLog
+End Function
+Public Function MakeLease() As Object
+ Set MakeLease = New ReturnLeaseClass
+End Function
+Public Function MakeLeaseArray() As Variant
+ Dim values(0 To 1) As Variant
+ Set values(0) = New ReturnLeaseClass
+ Set values(1) = New ReturnLeaseClass
+ MakeLeaseArray = values
+End Function
+Public Function ReadLeaseLog() As String
+ ReadLeaseLog = TraceLog
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "ReturnLeaseClass"
+Attribute VB_Exposed = True
+Private LeaseId As Long
+Private Sub Class_Initialize()
+ ReturnLeaseDriver.NextLeaseId = ReturnLeaseDriver.NextLeaseId + 1
+ LeaseId = ReturnLeaseDriver.NextLeaseId
+ ReturnLeaseDriver.TraceLog = ReturnLeaseDriver.TraceLog & "I" & CStr(LeaseId) & ";"
+End Sub
+Private Sub Class_Terminate()
+ ReturnLeaseDriver.TraceLog = ReturnLeaseDriver.TraceLog & "T" & CStr(LeaseId) & ";"
+End Sub
+"####;
+        fn run(book: Workbook, procedure: &str, state: &mut Option<ProjectSessionState>) -> RunOutcome {
+            execute_workbook_action_in_session(book, SOURCE, Some(procedure), vec![], 0, failure_context(), state).unwrap()
+        }
+        for array in [false, true] {
+            for _ in 0..2 {
+                let mut state = None;
+                let first = run(workbook(), "ClearLeaseLog", &mut state);
+                assert!(first.error.is_none());
+                let returned = run(first.workbook, if array { "MakeLeaseArray" } else { "MakeLease" }, &mut state);
+                assert!(returned.error.is_none());
+                let result = serde_json::to_value(&returned.result).unwrap();
+                let mut references: Vec<String> = if array {
+                    result["value"]["values"].as_array().unwrap().iter()
+                        .map(|value| value["value"]["reference"].as_str().unwrap().to_string()).collect()
+                } else { vec![result["value"]["reference"].as_str().unwrap().to_string()] };
+                let mut book = returned.workbook;
+                // Dropping the serialized result must leave the leases alive.
+                drop(returned.result);
+                for _ in 0..2 {
+                    let observed = run(book, "ReadLeaseLog", &mut state);
+                    assert!(observed.error.is_none());
+                    assert_eq!(serde_json::to_value(&observed.result).unwrap(),
+                        serde_json::json!({"type":"string","value":if array {"I1;I2;"} else {"I1;"}}));
+                    book = observed.workbook;
+                }
+                references.reverse(); // external consumer's measured tuple disposal order
+                let released = execute_workbook_invocation(book, SOURCE, VbaInvocation { procedure: None, args: vec![],
+                    action: Some(ExternalObjectAction::Release { references }) }, 0, failure_context(), &mut state).unwrap();
+                assert!(released.error.is_none());
+                let observed = run(released.workbook, "ReadLeaseLog", &mut state);
+                assert_eq!(serde_json::to_value(&observed.result).unwrap(),
+                    serde_json::json!({"type":"string","value":if array {"I1;I2;T2;T1;"} else {"I1;T1;"}}));
+                assert!(state.as_ref().unwrap().external_references.values.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn external_retained_collection_aliases_and_capability_validation() {
+        const SOURCE: &str = "Public Function MakeCollection() As Object\n Set MakeCollection = New Collection\nEnd Function\nPublic Function EchoObject(ByVal target As Object) As Object\n Set EchoObject = target\nEnd Function\nPublic Function Alive() As Long\n Alive = 42\nEnd Function\n";
+        fn invoke(book: Workbook, reference: &str, member: &str, kind: i64, args: Vec<Value>,
+            state: &mut Option<ProjectSessionState>) -> RunOutcome {
+            execute_workbook_invocation(book, SOURCE, VbaInvocation { procedure: None, args,
+                action: Some(ExternalObjectAction::Invoke { reference: reference.into(), member: member.into(), kind }) },
+                0, failure_context(), state).unwrap()
+        }
+        let mut state = None;
+        let returned = execute_workbook_action_in_session(workbook(), SOURCE, Some("MakeCollection"),
+            vec![], 0, failure_context(), &mut state).unwrap();
+        let token = serde_json::to_value(&returned.result).unwrap()["value"]["reference"].as_str().unwrap().to_string();
+        let book = returned.workbook; drop(returned.result);
+        let added = invoke(book, &token, "Add", 1, vec![Value::String("held".into())], &mut state);
+        assert!(added.error.is_none());
+        let count = invoke(added.workbook, &token, "Count", 1, vec![], &mut state);
+        assert_eq!(serde_json::to_value(&count.result).unwrap(), serde_json::json!({"type":"integer","value":1}));
+        let object = state.as_ref().unwrap().external_references.values[&token].clone();
+        let echoed = execute_workbook_action_in_session(count.workbook, SOURCE, Some("EchoObject"),
+            vec![Value::Object(object)], 0, failure_context(), &mut state).unwrap();
+        let alias = serde_json::to_value(&echoed.result).unwrap()["value"]["reference"].as_str().unwrap().to_string();
+        assert_ne!(token, alias);
+        let book = echoed.workbook; drop(echoed.result);
+        let released = execute_workbook_invocation(book, SOURCE, VbaInvocation { procedure: None, args: vec![],
+            action: Some(ExternalObjectAction::Release { references: vec![token.clone()] }) }, 0, failure_context(), &mut state).unwrap();
+        assert!(released.error.is_none());
+        let item = invoke(released.workbook, &alias, "Item", 1, vec![Value::Integer(1)], &mut state);
+        assert_eq!(serde_json::to_value(&item.result).unwrap(), serde_json::json!({"type":"string","value":"held"}));
+        let invalid = execute_workbook_invocation(item.workbook.clone(), SOURCE, VbaInvocation { procedure: None, args: vec![],
+            action: Some(ExternalObjectAction::Invoke {reference:token, member:"Count".into(), kind:2}) },
+            0, failure_context(), &mut state);
+        assert!(invalid.err().unwrap().contains("released, stale, or foreign"));
+        assert_eq!(state.as_ref().unwrap().external_references.values.len(),1);
+        let still_alive = invoke(item.workbook, &alias, "Count", 1, vec![], &mut state);
+        assert_eq!(serde_json::to_value(&still_alive.result).unwrap(), serde_json::json!({"type":"integer","value":1}));
+    }
+
+
+
+    #[test]
+    fn external_retained_release_captures_host_effects_and_live_snapshot() {
+        const SOURCE: &str = r####"Attribute VB_Name = "ReleaseDriver"
+Public Function MakeLease() As Object
+ Set MakeLease = New ReleaseClass
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "ReleaseClass"
+Attribute VB_Exposed = True
+Private Sub Class_Terminate()
+ Range("B1").Value = 42
+ Debug.Print "terminated"
+End Sub
+"####;
+        let mut state = None;
+        let returned = execute_workbook_action_in_session(workbook(), SOURCE, Some("MakeLease"), vec![], 0,
+            failure_context(), &mut state).unwrap();
+        assert!(returned.error.is_none());
+        assert_eq!(returned.reference_state.tokens.len(),1);
+        let owner = returned.reference_state.owner.clone();
+        let references = state.as_ref().unwrap().external_references.tokens_in_release_order();
+        let book = returned.workbook; drop(returned.result);
+        let released = execute_workbook_invocation(book, SOURCE,
+            VbaInvocation { procedure: None, args: vec![], action: Some(ExternalObjectAction::Release { references }) },
+            0, failure_context(), &mut state).unwrap();
+        assert!(released.error.is_none());
+        assert!(released.workbook_changed);
+        assert_eq!(released.reference_state.owner,owner);
+        assert!(released.reference_state.tokens.is_empty());
+        let cell = released.workbook.sheets[0].rows.iter().find(|row|row.index==1).unwrap()
+            .cells.iter().find(|cell|cell.col==1).unwrap();
+        assert!(matches!(&cell.value, CellValue::Number(value) if *value == 42.0));
+        assert!(released.debug_output.iter().any(|line|line.contains("terminated")));
+    }
+
+
+    #[test]
+    fn external_retained_single_call_owner_can_be_adopted_once_without_handle_reconstruction() {
+        const SOURCE: &str = "Public Function MakeLease() As Object\n Set MakeLease = New Collection\nEnd Function\nPublic Function EchoLease(ByVal target As Object) As Object\n Set EchoLease = target\nEnd Function\n";
+        let mut state = None;
+        let returned = execute_workbook_action_in_session(workbook(), SOURCE, Some("MakeLease"), vec![], 0,
+            failure_context(), &mut state).unwrap();
+        let token = returned.reference_state.tokens[0].clone();
+        let object = state.as_ref().unwrap().external_references.values[&token].clone();
+        let alias_result = execute_workbook_action_in_session(returned.workbook, SOURCE, Some("EchoLease"),
+            vec![Value::Object(object)], 0, failure_context(), &mut state).unwrap();
+        let tokens = alias_result.reference_state.tokens.clone();
+        assert_eq!(tokens.len(),2);
+        let book = alias_result.workbook; drop(returned.result); drop(alias_result.result);
+        retain_returned_project(state.take());
+        let owner = token.rsplit_once('-').unwrap().0;
+        assert!(take_returned_project(&format!("{owner}-foreign")).is_err());
+        let adopted = take_returned_project(&token).unwrap();
+        assert_eq!(adopted.external_references.values.len(),2);
+        assert!(take_returned_project(&tokens[1]).is_err(),"the owner transfers once, not once per alias");
+        let mut state = Some(adopted);
+        let observed = execute_workbook_invocation(book, SOURCE, VbaInvocation { procedure:None, args:vec![],
+            action:Some(ExternalObjectAction::Invoke {reference:tokens[1].clone(),member:"Count".into(),kind:1}) },
+            0,failure_context(),&mut state).unwrap();
+        assert!(observed.error.is_none());
+        assert_eq!(serde_json::to_value(&observed.result).unwrap(),serde_json::json!({"type":"integer","value":0}));
+        let references=state.as_ref().unwrap().external_references.tokens_in_release_order();
+        let released=execute_workbook_invocation(observed.workbook,SOURCE,VbaInvocation {procedure:None,args:vec![],
+            action:Some(ExternalObjectAction::Release {references})},0,failure_context(),&mut state).unwrap();
+        assert!(released.error.is_none());
+        assert!(released.reference_state.tokens.is_empty());
+    }
 
     #[test]
     fn document_runtime_matches_excel_with_host_objects() {
@@ -70396,4 +70844,5 @@ fn book_qualified_sheets(text: &str, book: &str, sheets: &[String]) -> String {
         }
     }
     out
+
 }
