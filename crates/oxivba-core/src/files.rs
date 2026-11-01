@@ -63,7 +63,7 @@ pub struct Handle {
 
 #[derive(Debug, Clone)]
 struct RecordLock {
-    owner: i64,
+    owner: (u64, i64),
     path: String,
     start: u64,
     end: u64,
@@ -122,11 +122,12 @@ impl FileError {
 #[derive(Debug, Clone)]
 pub struct Files {
     contents: BTreeMap<String, (String, Vec<u8>)>,
-    open: BTreeMap<i64, Handle>,
+    open: BTreeMap<(u64, i64), Handle>,
+    project_scope: u64,
     /// Stream IDs are not reused while old TextStream references can exist.
     next_stream_number: i64,
     /// What `Dir` with no arguments goes on to answer.
-    listing: Option<Vec<String>>,
+    listings: BTreeMap<u64, Vec<String>>,
     /// Folders made with MkDir or CreateFolder, by key.
     folders: std::collections::BTreeSet<String>,
     current_drive: char,
@@ -139,7 +140,7 @@ pub struct Files {
 impl Default for Files {
     fn default() -> Self {
         Self {
-            contents: BTreeMap::new(), open: BTreeMap::new(), next_stream_number: 1000, listing: None,
+            contents: BTreeMap::new(), open: BTreeMap::new(), project_scope: 0, next_stream_number: 1000, listings: BTreeMap::new(),
             folders: Default::default(), current_drive: 'C',
             drive_directories: BTreeMap::from([('C', "C:\\".to_string())]),
             attributes: BTreeMap::new(),
@@ -159,7 +160,32 @@ fn matches_pattern(name: &str, pattern: &str) -> bool {
     wildcards::matches(name,pattern)
 }
 
+fn channel_key(project: u64, number: i64) -> (u64, i64) {
+    (if number >= 1000 { 0 } else { project }, number)
+}
+
 impl Files {
+    /// Select the code project's numbered channels and Dir cursor.
+    /// The owned namespace and native stream table stay in this same Files.
+    pub fn select_project(&mut self, project: u64) {
+        self.project_scope = project;
+    }
+
+    pub fn project_scope(&self) -> u64 { self.project_scope }
+
+    /// A project joins the Application before acquiring its own file state.
+    pub(crate) fn pristine_application_context(&self) -> bool {
+        self.contents.is_empty() && self.open.is_empty() && self.listings.is_empty()
+            && self.folders.is_empty() && self.attributes.is_empty()
+            && self.volume_labels.is_empty() && self.record_locks.is_empty()
+            && self.next_stream_number==1000 && self.current_drive=='C'
+            && self.drive_directories.len()==1
+            && self.drive_directories.get(&'C').is_some_and(|path|path=="C:\\")
+    }
+
+
+
+
     /// Validate and normalize an absolute path supplied by a host snapshot.
     /// Relative mounts use the ordinary file-context API instead.
     pub fn normalize_snapshot_path(&self, path: &str) -> Result<String, FileError> {
@@ -216,7 +242,7 @@ impl Files {
         self.attributes=attributes;
         self.open.clear();
         self.record_locks.clear();
-        self.listing=None;
+        self.listings.clear();
         Ok(())
     }
 
@@ -449,7 +475,7 @@ impl Files {
     /// `FreeFile(1)`.
     pub fn free_number(&self, upper_range: bool) -> i64 {
         let start = if upper_range { 256 } else { 1 };
-        (start..start + 255).find(|number| !self.open.contains_key(number)).unwrap_or(0)
+        (start..start + 255).find(|number| !self.open.contains_key(&channel_key(self.project_scope, *number))).unwrap_or(0)
     }
 
     pub fn open(&mut self, path: &str, mode: OpenMode, number: i64) -> Result<(), FileError> {
@@ -464,14 +490,14 @@ impl Files {
         if !(1..=511).contains(&number) {
             return Err(FileError::BadNumber);
         }
-        if self.open.contains_key(&number) {
+        if self.open.contains_key(&channel_key(self.project_scope, number)) {
             return Err(FileError::AlreadyOpen);
         }
         let name = self.key(path);
         if path.trim().is_empty() {
             return Err(FileError::BadNumber);
         }
-        if self.open.iter().any(|(held_number,held)|*held_number<=511 && held.path==name &&
+        if self.open.iter().any(|(held_number,held)|held_number.1<=511 && held.path==name &&
             (matches!(mode,OpenMode::Output|OpenMode::Append) || matches!(held.mode,OpenMode::Output|OpenMode::Append))) {
             return Err(FileError::AlreadyOpen);
         }
@@ -517,7 +543,7 @@ impl Files {
             }
             _ => 0,
         };
-        self.open.insert(number, Handle { path: name, mode, position: 0, column,can_read,can_write,share_read,share_write });
+        self.open.insert(channel_key(self.project_scope, number), Handle { path: name, mode, position: 0, column,can_read,can_write,share_read,share_write });
         Ok(())
     }
 
@@ -548,7 +574,7 @@ impl Files {
             let start = bytes.iter().rposition(|byte| matches!(*byte, b'\r' | b'\n')).map_or(0, |at| at + 1);
             String::from_utf8_lossy(&bytes[start..]).encode_utf16().count()
         } else { 0 };
-        self.open.insert(number, Handle { path: name, mode, position: 0, column,can_read,can_write,share_read,share_write });
+        self.open.insert(channel_key(self.project_scope, number), Handle { path: name, mode, position: 0, column,can_read,can_write,share_read,share_write });
         Ok(number)
     }
 
@@ -711,9 +737,9 @@ impl Files {
             self.record_locks.clear();
         } else {
             for number in numbers {
-                self.open.remove(number);
+                self.open.remove(&channel_key(self.project_scope, *number));
             }
-            self.record_locks.retain(|held|!numbers.contains(&held.owner));
+            self.record_locks.retain(|held|!numbers.iter().any(|number| held.owner == channel_key(self.project_scope, *number)));
         }
     }
 
@@ -721,25 +747,26 @@ impl Files {
     /// Native TextStream handles and directory facts survive independently.
     pub(crate) fn reset_project(&mut self) {
         self.close_vba(&[]);
-        self.listing = None;
+        self.listings.remove(&self.project_scope);
     }
 
     /// VBA Close and Reset affect numbered Open channels, not FSO streams.
     pub(crate) fn close_vba(&mut self, numbers: &[i64]) {
         if numbers.is_empty() {
-            self.open.retain(|number, _| !(1..=511).contains(number));
-            self.record_locks.retain(|held| !(1..=511).contains(&held.owner));
+            let project = self.project_scope;
+            self.open.retain(|(owner, number), _| *owner != project || !(1..=511).contains(number));
+            self.record_locks.retain(|held| held.owner.0 != project || !(1..=511).contains(&held.owner.1));
         } else {
             self.close(numbers);
         }
     }
 
     pub fn handle(&self, number: i64) -> Result<&Handle, FileError> {
-        self.open.get(&number).ok_or(FileError::BadNumber)
+        self.open.get(&channel_key(self.project_scope, number)).ok_or(FileError::BadNumber)
     }
 
     pub(crate) fn restore_byte_position(&mut self, number: i64, path: &str, position: usize) {
-        if let Some(handle)=self.open.get_mut(&number).filter(|handle|handle.path==path) {handle.position=position;}
+        if let Some(handle)=self.open.get_mut(&channel_key(self.project_scope, number)).filter(|handle|handle.path==path) {handle.position=position;}
     }
 
     pub fn lock_records(&mut self, number: i64, start: Option<i64>, end: Option<i64>, unlock: bool) -> Result<(),FileError> {
@@ -751,11 +778,11 @@ impl Files {
             ((start as u64-1).checked_mul(unit).ok_or(FileError::BadRecordNumber)?,(end as u64).checked_mul(unit).ok_or(FileError::BadRecordNumber)?)
         };
         if unlock {
-            let index=self.record_locks.iter().position(|held|held.owner==number && held.path==handle.path && held.start==start && held.end==end).ok_or(FileError::PermissionDenied)?;
+            let index=self.record_locks.iter().position(|held|held.owner==channel_key(self.project_scope, number) && held.path==handle.path && held.start==start && held.end==end).ok_or(FileError::PermissionDenied)?;
             self.record_locks.remove(index);
         } else {
             if self.record_locks.iter().any(|held|held.path==handle.path && held.start<end && start<held.end) {return Err(FileError::PermissionDenied);}
-            self.record_locks.push(RecordLock {owner:number,path:handle.path.clone(),start,end});
+            self.record_locks.push(RecordLock {owner:channel_key(self.project_scope, number),path:handle.path.clone(),start,end});
         }
         Ok(())
     }
@@ -763,14 +790,14 @@ impl Files {
     fn check_record_access(&self, number: i64, handle: &Handle, count: usize) -> Result<(),FileError> {
         let count=match handle.mode {OpenMode::Random(length)=>count.max(length),_=>count};
         let start=handle.position as u64;let end=start.saturating_add(count as u64);
-        if count!=0 && self.record_locks.iter().any(|held|held.path==handle.path && held.owner!=number && held.start<end && start<held.end) {
+        if count!=0 && self.record_locks.iter().any(|held|held.path==handle.path && held.owner!=channel_key(self.project_scope, number) && held.start<end && start<held.end) {
             Err(FileError::PermissionDenied)
         } else {Ok(())}
     }
 
     /// Write text to a file open for output, keeping track of its column.
     pub fn write(&mut self, number: i64, text: &str) -> Result<(), FileError> {
-        let handle = self.open.get_mut(&number).ok_or(FileError::BadNumber)?;
+        let handle = self.open.get_mut(&channel_key(self.project_scope, number)).ok_or(FileError::BadNumber)?;
         if handle.mode == OpenMode::Input {
             return Err(FileError::BadNumber);
         }
@@ -827,7 +854,7 @@ impl Files {
 
     /// `Seek #n, position`, and the position a `Get` or `Put` names.
     pub fn move_to(&mut self, number: i64, position: i64) -> Result<(), FileError> {
-        let handle = self.open.get_mut(&number).ok_or(FileError::BadNumber)?;
+        let handle = self.open.get_mut(&channel_key(self.project_scope, number)).ok_or(FileError::BadNumber)?;
         if position < 1 {
             return Err(FileError::BadNumber);
         }
@@ -855,7 +882,7 @@ impl Files {
         }
         if !handle.can_write {return Err(FileError::PathFileAccess);}
         self.check_record_access(number,handle,bytes.len())?;
-        let handle=self.open.get_mut(&number).expect("checked handle");
+        let handle=self.open.get_mut(&channel_key(self.project_scope, number)).expect("checked handle");
         let file = self.contents.get_mut(&handle.path).ok_or(FileError::BadNumber)?;
         let end = handle.position + bytes.len();
         if file.1.len() < end {
@@ -871,7 +898,7 @@ impl Files {
     /// After a whole `Get` or `Put` in a random file, the next record: one
     /// read or written short still takes its whole length.
     pub fn finish_record(&mut self, number: i64) {
-        if let Some(handle) = self.open.get_mut(&number) {
+        if let Some(handle) = self.open.get_mut(&channel_key(self.project_scope, number)) {
             if let OpenMode::Random(length) = handle.mode {
                 let length = length.max(1);
                 handle.position = handle.position.div_ceil(length) * length;
@@ -887,7 +914,7 @@ impl Files {
         }
         if !handle.can_read {return Err(FileError::PathFileAccess);}
         self.check_record_access(number,handle,count)?;
-        let handle=self.open.get_mut(&number).expect("checked handle");
+        let handle=self.open.get_mut(&channel_key(self.project_scope, number)).expect("checked handle");
         let file = self.contents.get(&handle.path).map(|file| file.1.as_slice()).unwrap_or(&[]);
         let mut read = vec![0u8; count];
         for (index, slot) in read.iter_mut().enumerate() {
@@ -900,7 +927,7 @@ impl Files {
     }
 
     fn reading(&mut self, number: i64) -> Result<(&[u8], &mut usize), FileError> {
-        let handle = self.open.get_mut(&number).ok_or(FileError::BadNumber)?;
+        let handle = self.open.get_mut(&channel_key(self.project_scope, number)).ok_or(FileError::BadNumber)?;
         if handle.mode != OpenMode::Input {
             return Err(FileError::BadNumber);
         }
@@ -1028,7 +1055,7 @@ impl Files {
             if attributes==8 {
                 let root=self.volume_root(pattern);
                 let label=self.volume_labels.get(&root).cloned().unwrap_or_default();
-                self.listing=Some(Vec::new());
+                self.listings.insert(self.project_scope, Vec::new());
                 return Ok(label);
             }
             let pattern=if pattern.is_empty() || pattern.ends_with(['\\','/']) {format!("{pattern}*")} else {pattern.to_string()};
@@ -1060,10 +1087,10 @@ impl Files {
             let mut listing:Vec<_>=entries.into_values().filter(|(_,held)| {
                 (held & 2==0 || attributes & 2!=0) && (held & 4==0 || attributes & 4!=0)
             }).map(|(name,_)|name).collect();
-            listing.reverse();self.listing=Some(listing);
+            listing.reverse();self.listings.insert(self.project_scope, listing);
         }
-        let Some(listing)=self.listing.as_mut() else {return Err(FileError::InvalidArgument);};
-        if let Some(name)=listing.pop() {Ok(name)} else {self.listing=None;Ok(String::new())}
+        let Some(listing)=self.listings.get_mut(&self.project_scope) else {return Err(FileError::InvalidArgument);};
+        if let Some(name)=listing.pop() {Ok(name)} else {self.listings.remove(&self.project_scope);Ok(String::new())}
     }
 
     /// `Kill`: every file answering the pattern.

@@ -653,7 +653,23 @@ pub struct Runtime<'a> {
     project_name: String,
     error_environment: Rc<ErrorEnvironment>,
     project_ended: bool,
+    project_identity:u64,
+    object_projects:BTreeMap<u64,u64>,
+    projects:BTreeMap<u64,Box<Runtime<'a>>>,
 }
+
+/// Owned object graph transferred between application invocation contexts.
+struct ApplicationHeap<'a> {
+    files: crate::files::Files,
+    objects: BTreeMap<u64, InternalObject>,
+    next: u64,
+    pointers: BTreeMap<(u64, String, Option<String>), i64>,
+    literals: BTreeMap<Vec<u16>, bstr::Allocation>,
+    due: Rc<RefCell<Vec<u64>>>,
+    object_projects: BTreeMap<u64,u64>,
+    projects: BTreeMap<u64,Box<Runtime<'a>>>,
+}
+
 
 /// Owned project storage between invocations. Move this together with the
 /// host's object storage and restore it against compatible project declarations
@@ -1199,6 +1215,9 @@ impl<'a> Runtime<'a> {
             project_name: "VBAProject".to_string(),
             error_environment: Rc::new(ErrorEnvironment::default()),
             project_ended: false,
+            project_identity:0,
+            object_projects:BTreeMap::new(),
+            projects:BTreeMap::new(),
         }
     }
 
@@ -1612,6 +1631,12 @@ impl<'a> Runtime<'a> {
     ) -> Result<Value, RuntimeError> {
         if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
+        if let Some(project)=self.foreign_project(receiver){
+            return self.in_application_project(project,|runtime|runtime.instance_member(receiver, name, args, line));
+        }
+
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
+
         if let Some(view) = receiver.dispatch_view.as_deref() {
             let class = match self.internal_objects.get(&receiver.handle) {
                 Some(InternalObject::Instance(instance)) => instance.class.clone(),
@@ -1739,6 +1764,12 @@ impl<'a> Runtime<'a> {
     ) -> Result<Value, RuntimeError> {
         if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
+        if let Some(project)=self.foreign_project(receiver){
+            return self.in_application_project(project,|runtime|runtime.instance_member_named(receiver, name, args, argument_names, line));
+        }
+
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
+
         let class = match self.internal_objects.get(&receiver.handle) {
             Some(InternalObject::Instance(instance)) => instance.class.to_ascii_lowercase(),
             _ => String::new(),
@@ -1795,6 +1826,27 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
+
+        if let Some(project)=self.foreign_project(receiver){
+
+            let owned_evaluated;
+            let evaluated=match evaluated {
+                Some(values)=>Some(values),
+                None=>{
+                    let parameters=match self.internal_objects.get(&receiver.handle){
+                        Some(InternalObject::Instance(instance))=>self.projects.get(&project)
+                            .and_then(|r|r.source_class_procedure_view(&instance.class,name,&[ProcKind::Function,ProcKind::Sub,ProcKind::PropertyGet],view))
+                            .map(|(_,p)|p.params),
+                        _=>None
+                    };
+                    owned_evaluated=self.evaluate_source_arguments(args,force_by_value,parameters.as_deref(),frame)?;
+                    Some(owned_evaluated.as_slice())
+                }
+            };
+            return self.in_application_project(project,|runtime|runtime.call_instance_source(receiver, name, args, force_by_value, evaluated, view, frame, line));
+        }
+
         if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
         let class = match self.internal_objects.get(&receiver.handle) {
@@ -1944,6 +1996,8 @@ impl<'a> Runtime<'a> {
     }
 
     fn object_matches_type(&self, object: &ObjectRef, declared: &str) -> bool {
+        if !declared.eq_ignore_ascii_case("Object") && self.source_class_key(declared).is_some() && self.foreign_project(object).is_some(){return false;}
+
         if declared.eq_ignore_ascii_case("Object") { return true; }
         let instance = match self.internal_objects.get(&object.handle) {
             Some(InternalObject::Instance(instance)) => Some(instance),
@@ -1982,6 +2036,8 @@ impl<'a> Runtime<'a> {
         line: u32,
         this_year: i64,
     ) -> Result<Value, RuntimeError> {
+        if self.source_class_key(declared).is_some() && matches!(&value,Value::Object(object) if self.foreign_project(object).is_some()) {return Err(language_error(13,"class identity belongs to a different project",line));}
+
         let generic_object = declared.eq_ignore_ascii_case("Object");
         let specific_object = !generic_object && self.is_specific_object_type(declared);
         if generic_object || specific_object {
@@ -2385,6 +2441,12 @@ impl<'a> Runtime<'a> {
     ) -> Result<bool, RuntimeError> {
         if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
+        if let Some(project)=self.foreign_project(receiver){
+            return self.in_application_project(project,|runtime|runtime.call_instance_set_source(receiver, name, args, evaluated, value, view, frame, line));
+        }
+
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
+
         let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&receiver.handle)
         else {
             return Ok(false);
@@ -2753,6 +2815,12 @@ impl<'a> Runtime<'a> {
         value: Value,
         line: u32,
     ) -> Result<bool, RuntimeError> {
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
+
+        if let Some(project)=self.foreign_project(receiver){
+            return self.in_application_project(project,|runtime|runtime.instance_assign(receiver, name, args, value, line));
+        }
+
         if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
         if let Some(view) = receiver.dispatch_view.as_deref() {
@@ -3160,7 +3228,7 @@ impl<'a> Runtime<'a> {
         failure.vba_help_context=Some(1000440);
         failure
     }
-    pub fn into_project_state_after_end(mut self) -> Result<ProjectState,RuntimeError> {
+    fn reset_source_after_end(&mut self) -> Result<(),RuntimeError> {
         self.project_ended=true;
         self.switch_owner(None);
         self.enum_members.clear();
@@ -3177,6 +3245,7 @@ impl<'a> Runtime<'a> {
         self.me=None;
         self.owner=None;
         for (handle,object) in &mut self.internal_objects {
+            if self.project_identity!=0 && self.object_projects.get(handle)!=Some(&self.project_identity) {continue;}
             if let InternalObject::Instance(instance)=object {
                 if self.document_instances.contains(handle) {
                     instance.state=None;
@@ -3188,9 +3257,101 @@ impl<'a> Runtime<'a> {
         }
         self.files.reset_project();
         self.collect_instances(0)?;
-        let mut state=self.into_project_state();
-        state.source_was_reset=true;
-        Ok(state)
+        Ok(())
+    }
+
+    pub fn into_project_state_after_end(mut self) -> Result<ProjectState,RuntimeError> {
+        self.reset_source_after_end()?;
+        let mut state=self.into_project_state();state.source_was_reset=true;Ok(state)
+    }
+    fn context_error(message:&str)->RuntimeError {
+        error(RuntimeErrorKind::Unsupported,message.to_string(),None)
+    }
+    /// Assign a stable, nonzero code-project identity before executing or mounting files.
+    pub fn set_application_project_identity(&mut self,id:u64)->Result<(),RuntimeError>{
+        if id==0 || self.project_identity!=0 || self.module_initialized || !self.internal_objects.is_empty()
+            || !self.projects.is_empty() || self.owner.is_some() || self.depth!=0 || !self.files.pristine_application_context() {
+            return Err(Self::context_error("Project identity requires a fresh context and a nonzero identity"));
+        }
+        self.project_identity=id;self.files.select_project(id);Ok(())
+    }
+    /// Register a fresh code/host context. Rejection returns the unchanged context.
+    /// Mount files and create objects in the shared Application after registration.
+    pub fn register_application_project(&mut self,context:Self)->Result<(),Box<(Self,RuntimeError)>>{
+        let id=context.project_identity;
+        if self.project_identity==0 || id==0 || id==self.project_identity || self.projects.contains_key(&id) ||
+           !context.internal_objects.is_empty() || !context.projects.is_empty() ||
+           context.owner.is_some() || context.depth!=0 ||
+           !context.files.pristine_application_context() || !context.due.borrow().is_empty() {
+            return Err(Box::new((context,Self::context_error("Register a distinct fresh project before creating application objects or mounting files"))));
+        }
+        self.projects.insert(id,Box::new(context));Ok(())
+    }
+    fn take_object_heap(&mut self)->ApplicationHeap<'a>{
+        ApplicationHeap{
+            files:std::mem::take(&mut self.files),
+            objects:std::mem::take(&mut self.internal_objects),
+            next:std::mem::replace(&mut self.next_internal_handle,1u64<<63),
+            pointers:std::mem::take(&mut self.object_pointers),
+            literals:std::mem::take(&mut self.bstr_literals),
+            due:std::mem::replace(&mut self.due,Rc::new(RefCell::new(Vec::new()))),
+            object_projects:std::mem::take(&mut self.object_projects),
+            projects:std::mem::take(&mut self.projects),
+        }
+    }
+    fn install_object_heap(&mut self,heap:ApplicationHeap<'a>){
+        self.files=heap.files;self.files.select_project(self.project_identity);
+        self.internal_objects=heap.objects;self.next_internal_handle=heap.next;
+        self.object_pointers=heap.pointers;self.bstr_literals=heap.literals;
+        self.due=heap.due;self.object_projects=heap.object_projects;self.projects=heap.projects;
+    }
+    fn foreign_project(&self,receiver:&ObjectRef)->Option<u64>{
+        self.object_projects.get(&receiver.handle).copied().filter(|id|*id!=self.project_identity)
+    }
+    /// Run with the target project's declarations, variables and host while moving
+    /// the one actual object/file graph. Nested calls share the execution budget.
+    pub fn in_application_project<T>(&mut self,id:u64,work:impl FnOnce(&mut Self)->Result<T,RuntimeError>)->Result<T,RuntimeError>{
+        if id==self.project_identity {return work(self)}
+        if self.projects.contains_key(&self.project_identity) {
+            return Err(Self::context_error("The active project cannot also be suspended"));
+        }
+        let Some(mut target)=self.projects.remove(&id) else {
+            return Err(Self::context_error("The requested code project is not registered"));
+        };
+        let caller=self.project_identity;
+        let target_depth=target.depth;
+        target.steps=self.steps;target.max_steps=self.max_steps;
+        target.depth=self.depth;target.max_depth=self.max_depth;
+        target.install_object_heap(self.take_object_heap());
+        std::mem::swap(self,&mut target);
+        self.projects.insert(caller,target);
+        let result=work(self);
+        let completed_steps=self.steps;
+        let ended=self.project_ended || result.as_ref().is_err_and(|e|e.kind==RuntimeErrorKind::EndStatement);
+        let Some(mut suspended)=self.projects.remove(&caller) else {
+            return Err(Self::context_error("The suspended caller is unavailable"));
+        };
+        if ended && suspended.depth>0 {suspended.project_ended=true;}
+        self.depth=target_depth;
+        suspended.install_object_heap(self.take_object_heap());
+        std::mem::swap(self,&mut suspended);
+        self.steps=completed_steps;
+        self.projects.insert(id,suspended);
+        result
+    }
+    /// After End unwinds all VBA frames, reset every active code owner it crossed.
+    /// Idle projects and surviving intrinsic objects retain their original state.
+    pub fn reset_ended_application_projects(&mut self)->Result<Vec<u64>,RuntimeError>{
+        if self.depth!=0 || self.owner.is_some() ||
+           self.projects.values().any(|r|r.depth!=0 || r.owner.is_some()) {
+            return Err(Self::context_error("Unwind active VBA frames before resetting ended projects"));
+        }
+        let mut ended:Vec<_>=self.projects.iter().filter_map(|(id,r)|r.project_ended.then_some(*id)).collect();
+        if self.project_ended {ended.push(self.project_identity);}
+        for id in &ended {
+            self.in_application_project(*id,|r|r.reset_source_after_end())?;
+        }
+        Ok(ended)
     }
     pub fn project_ended(&self) -> bool { self.project_ended }
 
@@ -3453,6 +3614,22 @@ impl<'a> Runtime<'a> {
             batch.sort_unstable();
             batch.dedup();
             for (index, &handle) in batch.iter().enumerate() {
+                if self.project_ended {
+                    self.internal_objects.remove(&handle);
+                    self.object_projects.remove(&handle);
+                    continue;
+                }
+                if let Some(project)=self.object_projects.get(&handle).copied().filter(|id|*id!=self.project_identity) {
+                    let result=self.in_application_project(project,|runtime|{
+                        runtime.due.borrow_mut().push(handle);
+                        runtime.collect_instances(line)
+                    });
+                    if let Err(failure)=result {
+                        self.due.borrow_mut().extend_from_slice(&batch[index+1..]);
+                        return Err(failure);
+                    }
+                    continue;
+                }
                 // A Class_Terminate run before this one may already have
                 // collected it -- its own return collects what is due -- and
                 // then it is not to be terminated twice, nor looked for in
@@ -3464,6 +3641,7 @@ impl<'a> Runtime<'a> {
                     }
                     Some(InternalObject::DisconnectedInstance) => {
                         self.internal_objects.remove(&handle);
+                        self.object_projects.remove(&handle);
                         continue;
                     }
                     _ => continue,
@@ -3490,6 +3668,7 @@ impl<'a> Runtime<'a> {
                 }
                 // Gone, and with it whatever it alone was holding.
                 self.internal_objects.remove(&handle);
+                self.object_projects.remove(&handle);
             }
         }
     }
@@ -6417,6 +6596,7 @@ impl<'a> Runtime<'a> {
                 .unwrap_or_else(|| type_name.split_once('.').filter(|(project, _)| project.eq_ignore_ascii_case(&self.project_name)).map_or(type_name, |(_, class)| class).to_string());
             let handle = self.next_internal_handle;
             self.next_internal_handle += 1;
+            if self.project_identity!=0 {self.object_projects.insert(handle,self.project_identity);}
             self.internal_objects.insert(
                 handle,
                 InternalObject::Instance(ClassInstance { class: name.clone(), state: None, terminated: false }),
@@ -9019,6 +9199,12 @@ impl<'a> Runtime<'a> {
         args: &[Value], frame: &mut Frame, line: u32,
         source: Option<(&[Argument], &[EvaluatedArgument], bool)>) -> Result<Value, RuntimeError>
     {
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
+
+        if let Some(project)=self.foreign_project(receiver){
+            return self.in_application_project(project,|runtime|runtime.instance_automation_member(receiver, name, kind, args, frame, line, source));
+        }
+
         if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
         let class = match self.internal_objects.get(&receiver.handle) {
@@ -28092,4 +28278,172 @@ End Function
             }
         }
     }
+
+    #[test]
+    fn application_context_end_resets_active_code_owners_and_keeps_idle_graph() {
+        let source=r#"Attribute VB_Name = "Driver"
+Option Explicit
+Private Counter As Long
+Private Trace As String
+Private Foreign As Object
+Private Mirror As Object
+Public Sub Reset(ByVal value As Long)
+ Counter = value
+ Trace = ""
+End Sub
+Public Function State() As String
+ State = CStr(Counter) & "|" & Trace & "|" & CStr(FreeFile)
+End Function
+Public Function Make() As Object
+ Set Make = New Widget
+End Function
+Public Sub Hold(ByVal value As Object, ByVal localValue As Object)
+ Set Foreign = value
+ Set Mirror = localValue
+End Sub
+Public Sub OpenInput(ByVal path As String)
+ Open path For Input As #1
+End Sub
+Public Function Stream(ByVal path As String) As Object
+ Dim fs As Object
+ Set fs = CreateObject("Scripting.FileSystemObject")
+ Set Stream = fs.OpenTextFile(path, 1)
+End Function
+Public Function Run(ByVal mode As Long) As String
+ Dim localValue As Object
+ On Error Resume Next
+ Set localValue = Make()
+ Trace = Trace & "entered;"
+ Foreign.Stop mode
+ Counter = 99
+ Trace = Trace & "continued;"
+ Run = "continued"
+End Function
+Public Function ByRefCall() As String
+ Dim number As Long
+ number = 3
+ Foreign.Touch number
+ ByRefCall = CStr(number)
+End Function
+Public Function Types() As String
+ Types = CStr(TypeOf Foreign Is Widget) & "|" & CStr(TypeOf Mirror Is Widget)
+End Function
+Public Sub Added()
+ Counter = Counter + 1
+ Trace = Trace & "I" & CStr(Counter) & ";"
+End Sub
+Public Sub Removed(ByVal serial As Long)
+ Trace = Trace & "T" & CStr(serial) & ";"
+End Sub
+Public Function Current() As Long
+ Current = Counter
+End Function
+Public Function Ping() As Long
+ Counter = Counter + 10
+ Ping = Counter
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "Widget"
+Private Serial As Long
+Private Sub Class_Initialize()
+ Driver.Added
+ Serial = Driver.Current()
+End Sub
+Private Sub Class_Terminate()
+ Driver.Removed Serial
+End Sub
+Public Sub Stop(ByVal mode As Long)
+ If mode = 1 Then End
+End Sub
+Public Sub Touch(ByRef number As Long)
+ number = number + 5
+End Sub
+Public Function Ping() As Long
+ Ping = Driver.Ping()
+End Function
+"#;
+        fn call(runtime:&mut Runtime,id:u64,name:&str,args:Vec<Value>)->Result<Value,RuntimeError>{
+            runtime.in_application_project(id,|r|r.call(&format!("Driver.{name}"),args))
+        }
+        fn object(value:Value)->ObjectRef {
+            match value {Value::Object(object)=>object,_=>panic!("object factory")}
+        }
+        for mode in [0,1] {
+            let (module,classes)=crate::parse_project(source).unwrap();
+            let mut a=Runtime::new(&module).with_classes(&classes);
+            let mut b=Runtime::new(&module).with_classes(&classes);
+            let mut c=Runtime::new(&module).with_classes(&classes);
+            a.set_application_project_identity(1).unwrap();
+            b.set_application_project_identity(2).unwrap();
+            c.set_application_project_identity(3).unwrap();
+            assert!(c.register_application_project(a).is_ok());
+            assert!(c.register_application_project(b).is_ok());
+            assert!(c.in_application_project(999,|_|Ok(())).is_err());
+            let path="C:\\shared.txt";
+            c.file_system_mut().replace_bytes(path,b"first\r\nsecond\r\nthird\r\n".to_vec()).unwrap();
+            for id in [1,2,3] {
+                call(&mut c,id,"Reset",vec![Value::Integer((id*10) as i64)]).unwrap();
+                call(&mut c,id,"OpenInput",vec![Value::String(path.into())]).unwrap();
+            }
+            let a=object(call(&mut c,1,"Make",vec![]).unwrap());
+            let b=object(call(&mut c,2,"Make",vec![]).unwrap());
+            let idle=object(call(&mut c,3,"Make",vec![]).unwrap());
+            call(&mut c,2,"Hold",vec![Value::Object(a.clone()),Value::Object(b.clone())]).unwrap();
+            assert_eq!(call(&mut c,2,"Types",vec![]).unwrap(),Value::String("False|True".into()));
+            assert_eq!(call(&mut c,2,"ByRefCall",vec![]).unwrap(),Value::String("8".into()));
+            let mut streams=Vec::new();
+            for id in [1,2] {
+                let stream=object(call(&mut c,id,"Stream",vec![Value::String(path.into())]).unwrap());
+                assert_eq!(c.invoke_member(&stream,"ReadLine",1,vec![]).unwrap(),Value::String("first".into()));
+                streams.push(stream);
+            }
+            assert_ne!(streams[0].handle,streams[1].handle);
+            let result=call(&mut c,2,"Run",vec![Value::Integer(mode)]);
+            let ended=c.reset_ended_application_projects().unwrap();
+            if mode==0 {
+                assert_eq!(result.unwrap(),Value::String("continued".into()));
+                assert!(ended.is_empty());
+                assert_eq!(call(&mut c,1,"State",vec![]).unwrap(),Value::String("11|I11;|2".into()));
+                assert_eq!(call(&mut c,2,"State",vec![]).unwrap(),Value::String("99|I21;I22;entered;continued;T22;|2".into()));
+            } else {
+                assert_eq!(result.unwrap_err().kind,RuntimeErrorKind::EndStatement);
+                assert_eq!(ended,vec![1,2]);
+                for id in [1,2] {
+                    assert_eq!(call(&mut c,id,"State",vec![]).unwrap(),Value::String("0||1".into()));
+                }
+                for stale in [&a,&b] {
+                    assert_eq!(c.invoke_member(stale,"Ping",1,vec![]).unwrap_err().vba_number,Some(440));
+                }
+                let fresh=object(call(&mut c,1,"Make",vec![]).unwrap());
+                assert_ne!(fresh.handle,a.handle);
+                assert_eq!(c.invoke_member(&fresh,"Ping",1,vec![]).unwrap(),Value::Integer(11));
+            }
+            for stream in streams {
+                assert_eq!(c.invoke_member(&stream,"ReadLine",1,vec![]).unwrap(),Value::String("second".into()));
+                c.invoke_member(&stream,"Close",1,vec![]).unwrap();
+            }
+            assert_eq!(call(&mut c,3,"State",vec![]).unwrap(),Value::String("31|I31;|2".into()));
+            assert_eq!(c.invoke_member(&idle,"Ping",1,vec![]).unwrap(),Value::Integer(41));
+            c.release_external_object(idle).unwrap();
+            assert_eq!(call(&mut c,3,"State",vec![]).unwrap(),Value::String("41|I31;T31;|2".into()));
+        }
+    }
+
+    #[test]
+    fn application_context_registration_rejects_existing_graph_without_losing_it() {
+        let (module,classes)=crate::parse_project("Sub Main()\nEnd Sub\n").unwrap();
+        let mut application=Runtime::new(&module).with_classes(&classes);
+        application.set_application_project_identity(1).unwrap();
+        let mut context=Runtime::new(&module).with_classes(&classes);
+        context.set_application_project_identity(2).unwrap();
+        context.file_system_mut().replace_bytes("C:\\kept.txt",b"keep".to_vec()).unwrap();
+        let (mut context,_)=match application.register_application_project(context){
+            Err(rejected)=>*rejected,Ok(())=>panic!("configured context accepted")
+        };
+        assert_eq!(context.file_system_mut().bytes("C:\\kept.txt").unwrap(),b"keep");
+        assert_eq!(application.file_system_mut().project_scope(),1);
+        assert!(context.set_application_project_identity(3).is_err());
+        application.call("Main",vec![]).unwrap();
+    }
+
 }
