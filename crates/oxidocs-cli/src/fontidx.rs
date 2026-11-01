@@ -108,11 +108,7 @@ impl FontIndex {
             if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") {
                 continue;
             }
-            let data = match std::fs::read(&path) {
-                Ok(data) => data,
-                Err(_) => continue,
-            };
-            for face in read_faces(&data, &path) {
+            for face in read_faces_from_file(&path) {
                 for alias in face.aliases.clone() {
                     let key = (alias.to_lowercase(), face.bold, face.italic);
                     let keep = match self.faces.get(&key) {
@@ -202,13 +198,61 @@ fn read_faces(data: &[u8], path: &Path) -> Vec<Face> {
     out
 }
 
-fn read_face_at(data: &[u8], table_dir: usize, path: &Path, index: u32) -> Option<Face> {
-    let num_tables = be16(data, table_dir + 4)? as usize;
+/// Every face in the file at `path`, read without loading the file: the
+/// header, each face's table directory, and the three tables a face is named
+/// by. Reading whole files made indexing a Linux machine's fonts -- Noto CJK
+/// alone is several 20 MB collections -- a quarter of a second of every
+/// conversion; the same answers come from a few kilobytes per file.
+fn read_faces_from_file(path: &Path) -> Vec<Face> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else { return Vec::new() };
+    // What the file holds of [offset, offset + len): a table running past the
+    // end is read as far as it goes, as slicing the whole file did.
+    let mut read_at = |offset: usize, len: usize| -> Option<Vec<u8>> {
+        let mut buf = Vec::with_capacity(len);
+        file.seek(SeekFrom::Start(offset as u64)).ok()?;
+        (&mut file).take(len as u64).read_to_end(&mut buf).ok()?;
+        Some(buf)
+    };
+    let mut out = Vec::new();
+    let Some(header) = read_at(0, 12) else { return out };
+    let dirs: Vec<(usize, u32)> = if &header[0..4] == b"ttcf" {
+        let count = be32(&header, 8).unwrap_or(0).min(64) as usize;
+        let Some(offsets) = read_at(12, 4 * count) else { return out };
+        (0..count).filter_map(|i| Some((be32(&offsets, 4 * i)? as usize, i as u32))).collect()
+    } else {
+        vec![(0, 0)]
+    };
+    for (table_dir, index) in dirs {
+        let face = (|| {
+            let num_tables = (be16(&read_at(table_dir, 12)?, 4)? as usize).min(512);
+            let records = read_at(table_dir + 12, num_tables * 16)?;
+            let tables = locate_tables(&records, 0, num_tables)?;
+            let (name_off, name_len) = tables.name;
+            let name = read_at(name_off, name_len)?;
+            let mac_style = tables.head.and_then(|o| read_at(o + 44, 2)).and_then(|b| be16(&b, 0));
+            let weight = tables.os2.and_then(|o| read_at(o + 4, 2)).and_then(|b| be16(&b, 0));
+            face_from_tables(&name, mac_style, weight, path, index)
+        })();
+        out.extend(face);
+    }
+    out
+}
+
+/// Where a face's `name`, `head` and `OS/2` tables are, from the table records
+/// that start at `records` in `data`.
+struct Tables {
+    name: (usize, usize),
+    head: Option<usize>,
+    os2: Option<usize>,
+}
+
+fn locate_tables(data: &[u8], records: usize, num_tables: usize) -> Option<Tables> {
     let mut name = None;
     let mut head = None;
     let mut os2 = None;
     for i in 0..num_tables.min(512) {
-        let rec = table_dir + 12 + i * 16;
+        let rec = records + i * 16;
         let tag = data.get(rec..rec + 4)?;
         let offset = be32(data, rec + 8)? as usize;
         let length = be32(data, rec + 12)? as usize;
@@ -219,19 +263,39 @@ fn read_face_at(data: &[u8], table_dir: usize, path: &Path, index: u32) -> Optio
             _ => {}
         }
     }
-    let (name_off, name_len) = name?;
+    Some(Tables { name: name?, head, os2 })
+}
+
+fn read_face_at(data: &[u8], table_dir: usize, path: &Path, index: u32) -> Option<Face> {
+    let num_tables = be16(data, table_dir + 4)? as usize;
+    let tables = locate_tables(data, table_dir + 12, num_tables)?;
+    let (name_off, name_len) = tables.name;
     let end = name_off.checked_add(name_len)?;
-    let (families, subfamily) = read_name_table(data.get(name_off..end.min(data.len()))?)?;
+    let name = data.get(name_off..end.min(data.len()))?;
+    let mac_style = tables.head.and_then(|o| be16(data, o + 44));
+    let weight = tables.os2.and_then(|o| be16(data, o + 4));
+    face_from_tables(name, mac_style, weight, path, index)
+}
+
+/// A face from its `name` table, `head.macStyle` and `OS/2.usWeightClass`.
+fn face_from_tables(
+    name: &[u8],
+    mac_style: Option<u16>,
+    weight: Option<u16>,
+    path: &Path,
+    index: u32,
+) -> Option<Face> {
+    let (families, subfamily) = read_name_table(name)?;
     let family = families.first()?.clone();
 
     // head.macStyle bit 0 is bold, bit 1 is italic. The subfamily string is
     // the cross-check: some faces leave macStyle clear.
-    let mac_style = head.and_then(|o| be16(data, o + 44)).unwrap_or(0);
+    let mac_style = mac_style.unwrap_or(0);
     // OS/2.usWeightClass sits four bytes into the table, after version and
     // xAvgCharWidth. Apple's Japanese families leave macStyle clear on every
     // weight and spell the weight only in the subfamily -- W0 through W9 --
     // so the number is the only thing that separates Light from Heavy.
-    let weight = os2.and_then(|o| be16(data, o + 4)).unwrap_or(400);
+    let weight = weight.unwrap_or(400);
     let sub = subfamily.to_lowercase();
     let bold = mac_style & 0x1 != 0 || sub.contains("bold") || weight >= 600;
     let italic = mac_style & 0x2 != 0 || sub.contains("italic") || sub.contains("oblique");
@@ -514,6 +578,49 @@ mod tests {
             assert_eq!(regular.weight, 400, "regular slot, scanned as {order:?}");
             assert_eq!(bold.weight, 700, "bold slot, scanned as {order:?}");
         }
+    }
+
+    /// Reading a file's few tables in place answers exactly as reading the
+    /// whole file did, for a single face and for each member of a collection.
+    #[test]
+    fn reading_in_place_matches_reading_the_whole_file() {
+        let single = hiragino(300);
+        // A two-member collection: header, then each member's sfnt with its
+        // table offsets moved to where the member sits.
+        let members = [hiragino(400), hiragino(700)];
+        let mut ttc = Vec::new();
+        ttc.extend_from_slice(b"ttcf");
+        ttc.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+        ttc.extend_from_slice(&(members.len() as u32).to_be_bytes());
+        let mut at = 12 + 4 * members.len();
+        let mut body = Vec::new();
+        for m in &members {
+            ttc.extend_from_slice(&(at as u32).to_be_bytes());
+            let mut m = m.clone();
+            let n = usize::from(be16(&m, 4).unwrap());
+            for i in 0..n {
+                let rec = 12 + i * 16 + 8;
+                let off = be32(&m, rec).unwrap() as usize + at;
+                m[rec..rec + 4].copy_from_slice(&(off as u32).to_be_bytes());
+            }
+            at += m.len();
+            body.extend_from_slice(&m);
+        }
+        ttc.extend_from_slice(&body);
+
+        let dir = std::env::temp_dir().join(format!("oxi-fontidx-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, data) in [("single.ttf", &single), ("pair.ttc", &ttc)] {
+            let path = dir.join(name);
+            std::fs::write(&path, data).unwrap();
+            let whole = read_faces(data, &path);
+            let in_place = read_faces_from_file(&path);
+            assert!(!whole.is_empty(), "{name}");
+            let key = |f: &Face| (f.index, f.family.clone(), f.aliases.clone(), f.weight, f.bold, f.italic);
+            assert_eq!(whole.iter().map(key).collect::<Vec<_>>(), in_place.iter().map(key).collect::<Vec<_>>(), "{name}");
+        }
+        assert_eq!(read_faces_from_file(&dir.join("pair.ttc")).len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
