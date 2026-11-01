@@ -2552,7 +2552,7 @@ function recordVbaWorkbookChanges(before, after) {
 
 function formatVbaResult(result) {
     if (!result || result.type === 'empty' || result.type === 'null') return 'Completed.';
-    if (result.type === 'array' || result.type === 'object') {
+    if (['array', 'object', 'record', 'utf16'].includes(result.type)) {
         return `${result.type}: ${JSON.stringify(result.value)}`;
     }
     return `${result.type}: ${String(result.value)}`;

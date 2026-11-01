@@ -5205,7 +5205,7 @@ function reportMacro(execution) {
     parts.push(execution.error.message);
   } else if (!result || result.type === 'empty' || result.type === 'null') {
     parts.push('Completed.');
-  } else if (result.type === 'array' || result.type === 'object') {
+  } else if (['array', 'object', 'record', 'utf16'].includes(result.type)) {
     parts.push(`${result.type}: ${JSON.stringify(result.value)}`);
   } else {
     parts.push(`${result.type}: ${String(result.value)}`);
