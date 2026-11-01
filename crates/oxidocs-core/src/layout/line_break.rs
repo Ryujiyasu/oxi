@@ -3444,12 +3444,23 @@ impl<'a> LineBreaker<'a> {
                 // Day 37 (2026-05-14): EXCLUDE fitText runs — resolve_fit_text_runs
                 // already produces the FINAL effective cs (post-balance-doubling) so
                 // adding here would over-pump by another factor.
+                // OXI_BALANCE_PROP_ONCE (2026-11-01, default ON, opt-out _DISABLE): the
+                // double goes to FULL-WIDTH glyphs only -- a proportional face's kana
+                // (advance under the em) takes the spacing once. `_pb_balance_propkana_gen.py`
+                // (HGP創英角ﾎﾟｯﾌﾟ体 / ＭＳ Ｐゴシック / ＭＳ ゴシック 10.5, w:spacing 22 / 44,
+                // grid and none): kanji and ＭＳ ゴシック kana +2s, P-face kana +1s
+                // (に 9.60 -> 10.67 / 11.75). ja/correspondence__17884aa3's
+                // HGP創英角ﾎﾟｯﾌﾟ体 lines held one character fewer than Word.
+                let balance_prop_once = !crate::env_flag!("OXI_BALANCE_PROP_ONCE_DISABLE")
+                    && !vertical
+                    && width_before_tracking < 0.98 * font_size;
                 if self.balance_single_byte_double_byte_width
                     && if vertical && crate::font::vertical_font_advance_on() {
                         LayoutEngine::vertical_balance_spacing_char(ch)
                     } else {
                         crate::font::is_fullwidth(ch) && !yakumono_compressed[char_index]
                     }
+                    && !balance_prop_once
                     && style.fit_text.is_none() && !style.ruby_spread
                 {
                     char_width += cs;
@@ -3892,7 +3903,17 @@ impl<'a> LineBreaker<'a> {
                                 // (see grid_half_increment_class): half for kana / U+30FC /
                                 // U+3001-3002, the whole charSpace for everything else, each
                                 // on top of the glyph's own advance.
-                                char_width - grid_tracking + if grid_half_increment_class(ch) {
+                                // OXI_GRID_HALF_NEEDS_BALANCE (2026-11-01, default ON, opt-out
+                                // _DISABLE): the half increment is a balanceSingleByteDoubleByteWidth
+                                // effect -- without it a proportional glyph takes the whole
+                                // charSpace. `_pb_balance_propkana_gen.py` (charSpace 9011 = 2.2):
+                                // HGP創英角ﾎﾟｯﾌﾟ体 に 9.60 -> 10.68 with balance, 11.76 without;
+                                // ＭＳ Ｐゴシック に 9.96 -> 11.04 / 12.12. S1510's reports__393aa9 and
+                                // its kana probe carry balance.
+                                char_width - grid_tracking + if grid_half_increment_class(ch)
+                                    && (self.balance_single_byte_double_byte_width
+                                        || crate::env_flag!("OXI_GRID_HALF_NEEDS_BALANCE_DISABLE"))
+                                {
                                     0.5 * char_space_pt
                                 } else {
                                     char_space_pt
@@ -3925,7 +3946,13 @@ impl<'a> LineBreaker<'a> {
                                 // -0.27 -- exactly HALF. A proportional glyph takes
                                 // half the charSpace, the way a single-byte glyph
                                 // takes half the cell increment under balance.
-                                char_width - grid_tracking + 0.5 * char_space_pt
+                                char_width - grid_tracking + if self.balance_single_byte_double_byte_width
+                                    || crate::env_flag!("OXI_GRID_HALF_NEEDS_BALANCE_DISABLE")
+                                {
+                                    0.5 * char_space_pt
+                                } else {
+                                    char_space_pt
+                                }
                             } else {
                                 // S1210: additive for BOTH signs (see above).
                                 font_size + char_space_pt
@@ -3968,7 +3995,10 @@ impl<'a> LineBreaker<'a> {
                                 && style.fit_text.is_none()
                                 && !style.ruby_spread
                             {
-                                cs * if self.balance_single_byte_double_byte_width { 2.0 } else { 1.0 }
+                                // OXI_BALANCE_PROP_ONCE: a proportional glyph's tracking
+                                // is not doubled on the grid either (HGP創英角ﾎﾟｯﾌﾟ体 grid
+                                // + balance + spacing 22: に 11.75 = 9.60 + 1.1 + 1.07)
+                                cs * if self.balance_single_byte_double_byte_width && !balance_prop_once { 2.0 } else { 1.0 }
                             } else {
                                 0.0
                             };

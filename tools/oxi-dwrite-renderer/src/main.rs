@@ -1791,10 +1791,26 @@ unsafe fn render_text(
         let mut yy = (y_pt - 1.0) * PT_TO_DIP;
         for ch in text.chars() {
             if !ch.is_whitespace() {
-                let cw: Vec<u16> = ch.to_string().encode_utf16().collect();
+                // OXI_VERT_FORMS: vertical presentation forms; the long-vowel
+                // mark and dashes turn a quarter about the cell's top right.
+                let rotated = oxidocs_core::font::vertical_rotated_char(ch);
+                let v = if rotated { ch } else { oxidocs_core::font::vertical_presentation_form(ch).unwrap_or(ch) };
+                let cw: Vec<u16> = v.to_string().encode_utf16().collect();
                 if let Ok(clayout) = dwrite_factory.CreateTextLayout(
                     &cw, &format, layout_w_dip, layout_h_dip,
                 ) {
+                    if rotated {
+                        let mut saved = windows::Foundation::Numerics::Matrix3x2::default();
+                        rt.GetTransform(&mut saved);
+                        let pivot = D2D_POINT_2F { x: cx_dip + font_size_pt * PT_TO_DIP, y: yy };
+                        let mut rot = windows::Foundation::Numerics::Matrix3x2::default();
+                        windows::Win32::Graphics::Direct2D::D2D1MakeRotateMatrix(90.0, pivot, &mut rot);
+                        rt.SetTransform(&(rot * saved));
+                        rt.DrawTextLayout(pivot, &clayout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        rt.SetTransform(&saved);
+                        yy += adv_dip;
+                        continue;
+                    }
                     let corigin = D2D_POINT_2F { x: cx_dip, y: yy };
                     rt.DrawTextLayout(
                         corigin, &clayout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);

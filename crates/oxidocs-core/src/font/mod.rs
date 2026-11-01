@@ -2542,6 +2542,51 @@ pub(crate) fn is_metric_incompatible_substitution(family: &str) -> bool {
 /// Word substitutes these with Calibri / Times New Roman (PDF span fonts,
 /// S796/S831 derivations). JP maps are NOT routed here (their render
 /// calibration predates this and the JP names resolve natively).
+/// OXI_VERT_FORMS (2026-11-01, default ON, opt-out _DISABLE): the glyph Word
+/// draws for `ch` in upright vertical writing, where Unicode has a vertical
+/// presentation form (the face's `vert` substitution): corner brackets turn,
+/// parentheses open downward, 、。 move to the upper right. ja/creative__9132c5a8
+/// (tbRl): Word draws «「» as ﹁ and «、» in the cell's upper right; Oxi drew
+/// the horizontal forms.
+pub fn vertical_presentation_form(ch: char) -> Option<char> {
+    if std::env::var_os("OXI_VERT_FORMS_DISABLE").is_some() {
+        return None;
+    }
+    Some(match ch {
+        '\u{3001}' => '\u{FE11}', // 、
+        '\u{3002}' => '\u{FE12}', // 。
+        '\u{FF0C}' => '\u{FE10}', // ，
+        '\u{FF1A}' => '\u{FE13}', // ：
+        '\u{FF1B}' => '\u{FE14}', // ；
+        '\u{FF01}' => '\u{FE15}', // ！
+        '\u{FF1F}' => '\u{FE16}', // ？
+        '\u{3016}' => '\u{FE17}', '\u{3017}' => '\u{FE18}',
+        '\u{2026}' => '\u{FE19}', // …
+        '\u{2025}' => '\u{FE30}', // ‥
+        '\u{2014}' => '\u{FE31}', // —
+        '\u{2013}' => '\u{FE32}', // –
+        '\u{FF3F}' => '\u{FE33}', // ＿
+        '\u{FF08}' => '\u{FE35}', '\u{FF09}' => '\u{FE36}', // （）
+        '\u{FF5B}' => '\u{FE37}', '\u{FF5D}' => '\u{FE38}', // ｛｝
+        '\u{3014}' => '\u{FE39}', '\u{3015}' => '\u{FE3A}', // 〔〕
+        '\u{3010}' => '\u{FE3B}', '\u{3011}' => '\u{FE3C}', // 【】
+        '\u{300A}' => '\u{FE3D}', '\u{300B}' => '\u{FE3E}', // 《》
+        '\u{3008}' => '\u{FE3F}', '\u{3009}' => '\u{FE40}', // 〈〉
+        '\u{300C}' => '\u{FE41}', '\u{300D}' => '\u{FE42}', // 「」
+        '\u{300E}' => '\u{FE43}', '\u{300F}' => '\u{FE44}', // 『』
+        '\u{FF3B}' => '\u{FE47}', '\u{FF3D}' => '\u{FE48}', // ［］
+        _ => return None,
+    })
+}
+
+/// OXI_VERT_FORMS: characters with no vertical presentation form that Word
+/// turns a quarter clockwise in upright vertical writing (the long-vowel mark
+/// and the wave dashes / tildes / hyphen-minus).
+pub fn vertical_rotated_char(ch: char) -> bool {
+    std::env::var_os("OXI_VERT_FORMS_DISABLE").is_none()
+        && matches!(ch, '\u{30FC}' | '\u{301C}' | '\u{FF5E}' | '\u{FF0D}' | '\u{2212}' | '\u{2015}' | '\u{FF1D}')
+}
+
 pub fn render_family_name(name: &str) -> &str {
     if crate::env_flag!("OXI_S844_DISABLE") {
         return name;
