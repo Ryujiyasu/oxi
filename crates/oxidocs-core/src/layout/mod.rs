@@ -8652,8 +8652,29 @@ cells={} pitch={:.2} text={:?}",
         let para = para.unwrap();
         let mut out = Vec::new();
         let mut cy = y;
+        let vert_ruby = !crate::env_flag!("OXI_VERT_RUBY_DISABLE");
+        // OXI_VERT_RUBY: a column carrying ruby sets its base LEFT of centre
+        // (toward tbRl's "below"), by half the raise plus 0.3 x the ruby size,
+        // less 0.34 x the base size. `_pb_vert_ruby_gen.py` grid arms (ＭＳ 明朝
+        // 10.5 / 12, ruby 6 / 8pt, hpsRaise 7 / 11 / 15pt, linesAndChars 326):
+        // Word's base sits 1.37..6.56pt left of the two-cell column's centre,
+        // fitted to 0.1pt by 0.5 raise + 0.3 rfs - 0.34 fs + 0.15;
+        // ja/reference__6358c5e9 (12 / 6 / 11) measures 3.33 (formula 3.29).
+        let x = if vert_ruby && self.vertical_grid_for_block(page, recipe.block_idx).is_some() {
+            let shift = col.segs.iter().filter_map(|(ri, _)| {
+                let run = &para.runs[*ri];
+                let ruby = run.ruby.as_ref().filter(|r| !r.text.is_empty())?;
+                let fs = self.resolve_font_size(&run.style, &para.style);
+                let rfs = ruby.font_size.or(ruby.hps_halfpt.map(|h| h as f32 / 2.0)).unwrap_or(fs * 0.5);
+                let raise = ruby.hps_raise_halfpt.map(|h| h as f32 / 2.0).unwrap_or(fs * 0.5 + rfs * 0.5);
+                Some((0.5 * raise + 0.3 * rfs - 0.34 * fs + 0.15).max(0.0))
+            }).fold(0.0_f32, f32::max);
+            x - shift
+        } else { x };
         for (ri, text) in &col.segs {
             let run = &para.runs[*ri];
+            let seg_start = cy;
+            let ruby_out = out.len();
             let fs = self.resolve_font_size(&run.style, &para.style);
             let fam = self
                 .resolve_font_family_for_text(text, &run.style, &para.style)
@@ -8697,12 +8718,18 @@ cells={} pitch={:.2} text={:?}",
                         // A mixed segment can select a different face per glyph.
                         // Paint with the face whose vertical metric was used.
                         let glyph_family = Some(metrics.family.clone());
+                        let lead = if vert_ruby && run.style.ruby_spread { run.style.ruby_lead } else { 0.0 };
                         out.push(self.vertical_line_element(
-                            ch.to_string(), x, cy, col.pitch, advance, fs, 0.0,
+                            ch.to_string(), x, cy + lead, col.pitch, advance, fs, 0.0,
                             &glyph_family, &run.style, &para_style, recipe.block_idx,
                         ));
                         cy += advance;
                     }
+                    if vert_ruby {
+                        out.extend(self.vertical_ruby_elements(run, para, &para_style, x, col.pitch, fs,
+                            seg_start, cy, recipe.block_idx));
+                    }
+                    let _ = ruby_out;
                     continue;
                 }
             }
@@ -8721,8 +8748,79 @@ cells={} pitch={:.2} text={:?}",
                 recipe.block_idx,
             ));
             cy += n * fs;
+            if vert_ruby {
+                out.extend(self.vertical_ruby_elements(run, para, &para_style, x, col.pitch, fs,
+                    seg_start, cy, recipe.block_idx));
+            }
         }
         out
+    }
+
+    /// OXI_VERT_RUBY (2026-11-02, default ON, opt-out _DISABLE): a vertical
+    /// section draws a run's ruby beside its base, on the right (tbRl's "above").
+    /// Word PDF, ja/reference__6358c5e9 (ＭＳ 明朝 12, ruby hps 12 / hpsRaise 22,
+    /// distributeSpace): «南州» field 108.03..138.03 (= the five 6pt kana), base
+    /// glyphs at 109.47 / 124.47 (the S1650 lead and spread), «なんしゅう» stacked
+    /// from 108.03 at 6pt in a column centred 10.92 right of the base's centre
+    /// (hpsRaise 11); Oxi reserved the column pitch for the ruby but drew none.
+    #[allow(clippy::too_many_arguments)]
+    fn vertical_ruby_elements(
+        &self,
+        run: &Run,
+        para: &Paragraph,
+        para_style: &ParagraphStyle,
+        x: f32,
+        pitch: f32,
+        fs: f32,
+        field_start: f32,
+        field_end: f32,
+        block_idx: usize,
+    ) -> Vec<LayoutElement> {
+        let Some(ruby) = run.ruby.as_ref() else { return Vec::new(); };
+        let n = ruby.text.chars().count();
+        if n == 0 {
+            return Vec::new();
+        }
+        let rfs = ruby.font_size
+            .or(ruby.hps_halfpt.map(|h| h as f32 / 2.0))
+            .unwrap_or(fs * 0.5);
+        let raise = ruby.hps_raise_halfpt.map(|h| h as f32 / 2.0).unwrap_or(fs * 0.5 + rfs * 0.5);
+        let field = (field_end - field_start).max(0.0);
+        let natural = n as f32 * rfs;
+        let (start, spacing) = if natural >= field - 0.01 {
+            (field_start - (natural - field) * 0.5, 0.0)
+        } else {
+            match ruby.align {
+                Some(crate::ir::RubyAlign::DistributeSpace) => {
+                    let gap = (field - natural) / n as f32;
+                    (field_start + gap * 0.5, gap)
+                }
+                Some(crate::ir::RubyAlign::DistributeLetter) if n > 1 => {
+                    (field_start, (field - natural) / (n - 1) as f32)
+                }
+                Some(crate::ir::RubyAlign::Left) => (field_start, 0.0),
+                Some(crate::ir::RubyAlign::Right) => (field_end - natural, 0.0),
+                _ => (field_start + (field - natural) * 0.5, 0.0),
+            }
+        };
+        let mut style = run.style.clone();
+        style.character_spacing = None;
+        let family = ruby.annotation_fonts.first().cloned()
+            .or_else(|| self.resolve_font_family_for_text(&ruby.text, &run.style, &para.style).map(|s| s.to_string()));
+        let cx = x + pitch * 0.5 + raise;
+        vec![self.vertical_line_element(
+            ruby.text.clone(),
+            cx - rfs * 0.5,
+            start,
+            rfs,
+            natural + spacing * n as f32,
+            rfs,
+            spacing,
+            &family,
+            &style,
+            para_style,
+            block_idx,
+        )]
     }
 
     /// Build one vertical-line Text element (is_vertical=true). The renderer
@@ -10563,10 +10661,36 @@ cells={} pitch={:.2} text={:?}",
     /// the header distance for the header's leading paragraph (the only shape
     /// measured: reports__003862302b660a86 and the probe both anchor in the
     /// header's first paragraph). 0.0 when the header has no such float.
+    /// OXI_HDR_MARGIN_REANCHOR (2026-11-02, default ON, opt-out _DISABLE): how far a
+    /// header that outgrows the top margin moves the "margin" a header drawing's
+    /// relativeFrom="margin" offset counts from. Word lays the header out once
+    /// against the declared margin (a topAndBottom drawing there pushes the header
+    /// lines it overlaps), starts the body at that header's bottom, then places the
+    /// margin-relative drawing from the BODY TOP -- once, not to a fixed point.
+    /// `_pb_hdr_anchor_negmargin_gen.py` (top 72, header 36, 95.25pt picture,
+    /// Word PDF): offset -54 topAndBottom -> 84.2 (the empty header paragraph,
+    /// pushed under the picture at 18..113.2, ends at 138.2); five 25pt header
+    /// lines, wrapNone, offsets 0 / -54 / +30 -> 185.8 / 131.8 / 215.8 (body top
+    /// 185.8); topAndBottom 0 / -54 / +30 -> 292.1 / 209.1 / 302.1. page- and
+    /// paragraph-relative drawings stay put. en/administrative__00777f39: the logo
+    /// at 73.8 (header line under the picture ends at 127.8, minus 54), Oxi 18.
+    fn hdr_margin_reanchor_shift(&self, blocks: &[Block], page: &Page) -> f32 {
+        if crate::env_flag!("OXI_HDR_MARGIN_REANCHOR_DISABLE") || page.margin_top_negative {
+            return 0.0;
+        }
+        (self.s755_header_bottom_ex(blocks, page, false) - page.margin.top).max(0.0)
+    }
+
     fn s1381_header_band(&self, blocks: &[Block], page: &Page) -> f32 {
         if crate::env_flag!("OXI_S1381_DISABLE") {
             return 0.0;
         }
+        // OXI_HDR_MARGIN_REANCHOR: a margin-relative topAndBottom drawing, once
+        // re-placed from the body top, pushes the body when it covers that top
+        // (the probe's body lines start at the picture's bottom: 190.8 / 315.6
+        // baselines = 179.5 / 304.3 + ascent).
+        let reanchor_shift = self.hdr_margin_reanchor_shift(blocks, page);
+        let body_top = page.margin.top + reanchor_shift;
         let header_y = page.header_distance.unwrap_or(36.0);
         // S1389: a square/tight float that leaves no lane (width within 30pt of
         // the column) closes the column like topAndBottom. MEASURED
@@ -10586,6 +10710,13 @@ cells={} pitch={:.2} text={:?}",
                     img.position.as_ref().and_then(|p| match p.v_relative.as_deref() {
                         Some("page") => Some(p.y + img.height),
                         Some("paragraph") => Some(header_y + p.y + img.height),
+                        Some("margin")
+                            if reanchor_shift > 0.0
+                                && img.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
+                                && p.y <= 0.5 =>
+                        {
+                            Some(body_top + p.y + img.height)
+                        }
                         Some("text") if !crate::env_flag!("OXI_S1389_DISABLE") => Some(header_y + p.y + img.height),
                         _ => None,
                     })
@@ -10768,6 +10899,15 @@ cells={} pitch={:.2} text={:?}",
     }
 
     fn s755_header_bottom(&self, blocks: &[Block], page: &Page) -> f32 {
+        self.s755_header_bottom_ex(blocks, page, true)
+    }
+
+    /// `margin_floor = false`: the header's own extent, without the bottoms of
+    /// margin-relative floats (they push the header lines they cover, but the
+    /// body clears them by wrapping, not because the header reaches them --
+    /// `_pb_hdr_anchor_negmargin_gen.py` o0 topAndBottom: picture 72..167.2,
+    /// header line at 36 untouched, the picture stays at 72).
+    fn s755_header_bottom_ex(&self, blocks: &[Block], page: &Page, margin_floor: bool) -> f32 {
         let mut frame_floor = 0.0_f32;
         let mut flow_blocks = Vec::new();
         for block in blocks {
@@ -10979,7 +11119,7 @@ cells={} pitch={:.2} text={:?}",
             // banner (Picture 4, paragraph -20.25, 89pt) sits over the header line;
             // Word sets «As of November 2, 2021» under it at 107.7 and the body
             // follows the deeper header; Oxi set the line at 39, under the banner.
-            let floating_bands: Vec<(f32, f32, bool)> = if (std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || !crate::env_flag!("OXI_HEADER_FLOAT_BANDS_DISABLE")) {
+            let floating_bands: Vec<(f32, f32, bool, bool)> = if (std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || !crate::env_flag!("OXI_HEADER_FLOAT_BANDS_DISABLE")) {
                 blocks.iter().filter_map(|block| {
                     let Block::Image(image) = block else { return None; };
                     let position = image.position.as_ref()?;
@@ -11003,10 +11143,13 @@ cells={} pitch={:.2} text={:?}",
                     };
                     // A top-margin anchor excludes the body at its page
                     // position without moving its own header paragraph.
-                    Some((y, y + image.height + image.effect_extent_b.max(0.0), !top_margin_anchor))
+                    Some((y, y + image.height + image.effect_extent_b.max(0.0), !top_margin_anchor,
+                        position.v_relative.as_deref() == Some("margin")))
                 }).collect()
             } else { Vec::new() };
-            let floating_floor = floating_bands.iter().map(|(_, bottom, _)| *bottom)
+            let floating_floor = floating_bands.iter()
+                .filter(|(_, _, _, margin)| margin_floor || !*margin)
+                .map(|(_, bottom, _, _)| *bottom)
                 .fold(header_y, f32::max);
             // S813 (2026-07-13, default ON, opt-out OXI_S813_DISABLE): the header
             // stack includes the FIRST paragraph's style space_before and
@@ -11353,8 +11496,8 @@ cells={} pitch={:.2} text={:?}",
                     loop {
                         let line_top = band_bottom.max(header_y) + hdr_h;
                         let pushed = floating_bands.iter()
-                            .filter(|(top, bottom, moves_host)| *moves_host && line_top < *bottom && line_top + lh_used > *top)
-                            .map(|(_, bottom, _)| *bottom).fold(line_top, f32::max);
+                            .filter(|(top, bottom, moves_host, _)| *moves_host && line_top < *bottom && line_top + lh_used > *top)
+                            .map(|(_, bottom, _, _)| *bottom).fold(line_top, f32::max);
                         if pushed <= line_top { break; }
                         hdr_h += pushed - line_top;
                     }

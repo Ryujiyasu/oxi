@@ -11274,8 +11274,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             } else {
                                 page.margin.top
                             };
-                            let (ax, ay) =
+                            let (ax, mut ay) =
                                 self.resolve_floating_image_position(img, page, &[], hdr_anchor_y);
+                            // OXI_HDR_MARGIN_REANCHOR: margin-relative drawings count
+                            // from the body top once the header has outgrown the margin.
+                            if img.position.as_ref().and_then(|p| p.v_relative.as_deref()) == Some("margin") {
+                                ay += self.hdr_margin_reanchor_shift(hdr_blocks, page);
+                            }
                             let (mut paint_x, mut paint_y, mut paint_w, mut paint_h) =
                                 (ax, ay, img.width, img.height);
                             let mut paint_crop = img.crop;
