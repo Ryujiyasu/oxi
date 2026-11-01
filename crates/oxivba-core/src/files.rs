@@ -717,6 +717,13 @@ impl Files {
         }
     }
 
+    /// End abandons this project's Dir enumeration and numbered channels.
+    /// Native TextStream handles and directory facts survive independently.
+    pub(crate) fn reset_project(&mut self) {
+        self.close_vba(&[]);
+        self.listing = None;
+    }
+
     /// VBA Close and Reset affect numbered Open channels, not FSO streams.
     pub(crate) fn close_vba(&mut self, numbers: &[i64]) {
         if numbers.is_empty() {

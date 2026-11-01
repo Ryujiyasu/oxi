@@ -39805,6 +39805,7 @@ fn execute_workbook_invocation(
                 None => runtime.invoke_host("Application", "Calculate", vec![]),
             },
         };
+        let ended_before_finish = runtime.project_ended();
         if let Err(error) = runtime.finish_host_execution() {
             if result.is_ok() && error.kind != oxivba_core::RuntimeErrorKind::EndStatement { result = Err(error); }
         }
@@ -39812,14 +39813,23 @@ fn execute_workbook_invocation(
         // storage. Error 40040 retains it in the measured COM profile.
         // Compile failures retain storage pending correction/reset; debugger
         // continuation is not provided here. Application/host state survives.
-        let reset = runtime.project_ended() || !external_action && result.as_ref().err().is_some_and(|error| !matches!(error.kind,
+        let ended = ended_before_finish || runtime.project_ended();
+        let reset_unhandled = !external_action && result.as_ref().err().is_some_and(|error| !matches!(error.kind,
             oxivba_core::RuntimeErrorKind::ExecutionTerminated | oxivba_core::RuntimeErrorKind::Compile));
-        file_system = std::mem::take(runtime.file_system_mut());
-        if reset { file_system.close(&[]); }
-        project_state = if reset {
-            external_references.reset_project();
-            None
-        } else { Some(runtime.into_project_state()) };
+        project_state = if ended {
+            // Caller-held native objects keep their actual graph. Source class
+            // capabilities stay owned, but dispatch through disconnected code.
+            let mut state = runtime.into_project_state_after_end().map_err(|error| error.to_string())?;
+            file_system = state.take_file_system();
+            Some(state)
+        } else {
+            file_system = std::mem::take(runtime.file_system_mut());
+            if reset_unhandled {
+                file_system.close(&[]);
+                external_references.reset_project();
+                None
+            } else { Some(runtime.into_project_state()) }
+        };
         result
     } else { Ok(Value::Empty) };
     host.file_io.files = file_system;

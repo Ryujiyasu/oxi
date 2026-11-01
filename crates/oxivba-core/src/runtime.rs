@@ -673,11 +673,17 @@ pub struct ProjectState {
     due: Rc<RefCell<Vec<u64>>>,
     random_state: u32,
     random_entropy: u64,
+    source_was_reset: bool,
 }
 
 impl ProjectState {
     /// Files retained with the loaded project's storage between invocations.
     pub fn file_system(&self) -> &crate::files::Files { &self.files }
+    /// Move the actual file graph back to an embedding host between calls.
+    pub fn take_file_system(&mut self) -> crate::files::Files {
+        std::mem::take(&mut self.files)
+    }
+
 }
 
 struct Frame<'b> {
@@ -745,6 +751,8 @@ enum InternalObject {
     /// An instance of one of the project's class modules, with its own
     /// module-level variables (None while they are the live ones).
     Instance(ClassInstance),
+    /// Source instances retain identity after End, but their code is disconnected.
+    DisconnectedInstance,
 }
 
 struct ClassInstance {
@@ -1265,8 +1273,10 @@ impl<'a> Runtime<'a> {
         self.object_pointers = state.object_pointers;
         self.bstr_literals = state.bstr_literals;
         self.due = state.due;
-        self.random_state = state.random_state;
-        self.random_entropy = state.random_entropy;
+        if !state.source_was_reset {
+            self.random_state = state.random_state;
+            self.random_entropy = state.random_entropy;
+        }
         self
     }
 
@@ -1289,6 +1299,7 @@ impl<'a> Runtime<'a> {
             due: self.due,
             random_state: self.random_state,
             random_entropy: self.random_entropy,
+            source_was_reset: false,
         }
     }
 
@@ -1599,6 +1610,8 @@ impl<'a> Runtime<'a> {
         args: &[Value],
         line: u32,
     ) -> Result<Value, RuntimeError> {
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
+
         if let Some(view) = receiver.dispatch_view.as_deref() {
             let class = match self.internal_objects.get(&receiver.handle) {
                 Some(InternalObject::Instance(instance)) => instance.class.clone(),
@@ -1724,6 +1737,8 @@ impl<'a> Runtime<'a> {
         argument_names: &[Option<String>],
         line: u32,
     ) -> Result<Value, RuntimeError> {
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
+
         let class = match self.internal_objects.get(&receiver.handle) {
             Some(InternalObject::Instance(instance)) => instance.class.to_ascii_lowercase(),
             _ => String::new(),
@@ -1780,6 +1795,8 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
+
         let class = match self.internal_objects.get(&receiver.handle) {
             Some(InternalObject::Instance(instance)) => Some(instance.class.clone()),
             _ => None,
@@ -2366,6 +2383,8 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<bool, RuntimeError> {
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
+
         let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&receiver.handle)
         else {
             return Ok(false);
@@ -2734,6 +2753,8 @@ impl<'a> Runtime<'a> {
         value: Value,
         line: u32,
     ) -> Result<bool, RuntimeError> {
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
+
         if let Some(view) = receiver.dispatch_view.as_deref() {
             let class = match self.internal_objects.get(&receiver.handle) {
                 Some(InternalObject::Instance(instance)) => instance.class.clone(),
@@ -3121,6 +3142,56 @@ impl<'a> Runtime<'a> {
         self.collect_instances(0)
     }
 
+
+    fn disconnected_source_object(&self, receiver: &ObjectRef) -> bool {
+        matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::DisconnectedInstance))
+    }
+    fn disconnected_source_error(&self, line: u32, automation: bool) -> RuntimeError {
+        let number=if automation {440} else {-2147418105};
+        let description=if automation {self.error_environment.description(440).to_string()} else {
+            let body=match self.error_environment.language {
+                crate::ErrorLanguage::Japanese => r####"呼び出し先 (サーバー アプリケーションではなく、サーバー) は消失し、利用できません。すべての接続は無効です。呼び出しが実行されている可能性があります。"####,
+                crate::ErrorLanguage::English => r####"The callee (server [not server application]) is not available and disappeared; all connections are invalid. The call may have executed."####,
+            };
+            format!("{}\n{} ",self.error_environment.description(440),body)
+        };
+        let mut failure=raised_error(number,self.project_name.clone(),description,line);
+        failure.vba_help_file=Some(self.error_environment.help_file.clone());
+        failure.vba_help_context=Some(1000440);
+        failure
+    }
+    pub fn into_project_state_after_end(mut self) -> Result<ProjectState,RuntimeError> {
+        self.project_ended=true;
+        self.switch_owner(None);
+        self.enum_members.clear();
+        self.module_values.clear();
+        self.module_constants.clear();
+        self.module_auto_new.clear();
+        self.module_fixed_strings.clear();
+        self.module_declared.clear();
+        self.module_variants.clear();
+        self.static_values.clear();
+        self.module_initialized=false;
+        self.main_state=None;
+        self.standard_states.clear();
+        self.me=None;
+        self.owner=None;
+        for (handle,object) in &mut self.internal_objects {
+            if let InternalObject::Instance(instance)=object {
+                if self.document_instances.contains(handle) {
+                    instance.state=None;
+                    instance.terminated=false;
+                } else {
+                    *object=InternalObject::DisconnectedInstance;
+                }
+            }
+        }
+        self.files.reset_project();
+        self.collect_instances(0)?;
+        let mut state=self.into_project_state();
+        state.source_was_reset=true;
+        Ok(state)
+    }
     pub fn project_ended(&self) -> bool { self.project_ended }
 
     /// Invoke a host member while retaining the project's function callbacks.
@@ -3391,13 +3462,17 @@ impl<'a> Runtime<'a> {
                         instance.terminated = true;
                         instance.class.clone()
                     }
+                    Some(InternalObject::DisconnectedInstance) => {
+                        self.internal_objects.remove(&handle);
+                        continue;
+                    }
                     _ => continue,
                 };
                 let has_terminate = self
                     .classes
                     .get(&class.to_ascii_lowercase())
                     .is_some_and(|module| self.has_procedure_of(module, "Class_Terminate", &[ProcKind::Sub]));
-                if has_terminate {
+                if has_terminate && !self.project_ended {
                     let this = ObjectRef::new(handle, class);
                     // Its own Err is its own: measured, the 5 a procedure
                     // raised still stands in the caller after one of its
@@ -8598,6 +8673,10 @@ impl<'a> Runtime<'a> {
             );
             for value in &args {
                 if let Value::Object(object) = value {
+                    if asks_about && self.disconnected_source_object(object) {
+                        read.push(value.clone());
+                        continue;
+                    }
                     if !asks_about {
                         if let Some(number) = self.host.as_deref().and_then(|host| host.default_member_error(object)) {
                             return Err(language_error(number, "the default member requires arguments", line.unwrap_or(0)));
@@ -8662,6 +8741,11 @@ impl<'a> Runtime<'a> {
                 [Value::Missing] => return Ok(Value::String("エラー 448".to_string())),
                 _ => {},
             }
+        }
+        if name.eq_ignore_ascii_case("typename")
+            && matches!(args.as_slice(), [Value::Object(object)] if self.disconnected_source_object(object))
+        {
+            return Ok(Value::String("Object".into()));
         }
         if let Some(result) = call_builtin(
             name,
@@ -8790,6 +8874,7 @@ impl<'a> Runtime<'a> {
         // IDispatch names terminate at NUL, even when the supplied VBA BSTR
         // contains more characters. Source identifiers remain unchanged.
         let member = member.split('\0').next().unwrap_or_default();
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(at,true)); }
         let member = self.automation_member_name(receiver, member);
         let missing = || no_such_member(format!("{} has no member {member}", receiver.kind), line);
         if matches!(kind, 4 | 8) && rest.is_empty() {
@@ -8934,6 +9019,8 @@ impl<'a> Runtime<'a> {
         args: &[Value], frame: &mut Frame, line: u32,
         source: Option<(&[Argument], &[EvaluatedArgument], bool)>) -> Result<Value, RuntimeError>
     {
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
+
         let class = match self.internal_objects.get(&receiver.handle) {
             Some(InternalObject::Instance(instance)) => instance.class.as_str(),
             _ => return Err(no_such_member(name.to_string(), Some(line))),
@@ -9270,12 +9357,18 @@ impl<'a> Runtime<'a> {
         if is_err_object(object) {
             return err_property(frame, "Number", line);
         }
+        if self.disconnected_source_object(object) {
+            return Err(self.disconnected_source_error(line, false));
+        }
         Ok(self
             .host_get(object, "Value", line)?
             .unwrap_or_else(|| value.clone()))
     }
 
     fn let_value(&mut self, value: Value, frame: &Frame, line: u32) -> Result<Value, RuntimeError> {
+        if matches!(&value, Value::Object(object) if self.disconnected_source_object(object)) {
+            return Err(self.disconnected_source_error(line, false));
+        }
         if matches!(&value, Value::Object(object) if is_err_object(object)) {
             return err_property(frame, "Number", line);
         }
@@ -9815,6 +9908,7 @@ impl<'a> Runtime<'a> {
                         _ => Err(no_such_member("the class's enumerator is not an object".to_string(), Some(line))),
                     };
                 }
+                InternalObject::DisconnectedInstance => return Err(self.disconnected_source_error(line,false)),
                 InternalObject::FileList(folder) => {
                     let folder = folder.clone();
                     let paths = self.files.files_in(&folder);
@@ -10453,6 +10547,7 @@ impl<'a> Runtime<'a> {
                 Some(line),
             )),
             // Instances are answered before this is reached.
+            InternalObject::DisconnectedInstance => Err(self.disconnected_source_error(line,false)),
             InternalObject::Instance(_) => Err(no_such_member(format!("the class has no member {name}"), Some(line))),
             InternalObject::FileSystem
             | InternalObject::TextStream { .. }
@@ -11389,13 +11484,15 @@ fn preserve_array_values(existing: &ArrayValue, replacement: &mut ArrayValue) {
 ///
 /// The exceptions keep the object. `TypeName`, `IsObject` and `IsMissing` ask
 /// about the argument itself. `IIf`, `Array` and `Choose` hand Variants
-/// straight back, leaving resolution to whatever consumes the result. The
+/// straight back, leaving resolution to whatever consumes the result. CVar
+/// likewise wraps an object without invoking its default member. The
 /// array builtins want an array rather than a scalar, and probing what Excel
 /// does when handed a range instead wedges it, so they are left alone.
 fn builtin_reads_values(name: &str) -> bool {
     !matches!(
         name.to_ascii_lowercase().as_str(),
         "typename"
+            | "cvar"
             | "isobject"
             | "ismissing"
             | "iif"
@@ -20376,6 +20473,187 @@ End Function
             assert_eq!(invoke(&mut state, &mut host, "NextRandom"), continuous.call("NextRandom", vec![]).unwrap());
         }
         assert_eq!(invoke(&mut state, &mut host, "Release"), Value::String("IT".into()));
+    }
+
+
+    #[test]
+    fn end_suppresses_local_class_termination_without_changing_normal_or_error_unwind() {
+        struct StatusHost(std::rc::Rc<std::cell::RefCell<Value>>);
+        impl Host for StatusHost {
+            fn call(&mut self, receiver: Option<&ObjectRef>, name: &str, _args: &[Value]) -> Result<Option<Value>,String> {
+                Ok((receiver.is_none() && name.eq_ignore_ascii_case("Application"))
+                    .then(||Value::Object(ObjectRef::new(1,"Application"))))
+            }
+            fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>,String> {
+                Ok((receiver.handle==1 && name.eq_ignore_ascii_case("StatusBar")).then(||self.0.borrow().clone()))
+            }
+            fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool,String> {
+                if receiver.handle==1 && name.eq_ignore_ascii_case("StatusBar") {
+                    *self.0.borrow_mut()=value;
+                    return Ok(true);
+                }
+                Ok(false)
+            }
+        }
+        let source=r####"Attribute VB_Name = "OwnerDriver"
+Option Explicit
+Public Counter As Long
+Public TraceLog As String
+Public Function MakeOwner() As Object
+ Set MakeOwner = New SharedName
+End Function
+Public Function ReadTrace() As String
+ ReadTrace = TraceLog
+End Function
+Public Sub EndOwner()
+ End
+End Sub
+Public Function EndLocalProbe(ByVal mode As Long) As String
+ On Error Resume Next
+ TraceLog = ""
+ EndLocalInner mode
+ EndLocalProbe = CStr(Err.Number) & "|" & CStr(Application.StatusBar)
+End Function
+Private Sub EndLocalInner(ByVal mode As Long)
+ Dim held As Object
+ Set held = MakeOwner()
+ Application.StatusBar = "before-local-exit"
+ Select Case mode
+ Case 1: End
+ Case 2: Err.Raise 5
+ End Select
+End Sub
+VERSION 1.0 CLASS
+Attribute VB_Name = "SharedName"
+Attribute VB_Exposed = True
+Private Peer As Object
+Private Serial As Long
+Private TextValue As String
+Private Sub Class_Initialize()
+ OwnerDriver.Counter = OwnerDriver.Counter + 1
+ Serial = OwnerDriver.Counter
+ TextValue = "A-init"
+ OwnerDriver.TraceLog = OwnerDriver.TraceLog & "I" & CStr(Serial) & ";"
+End Sub
+Public Function InspectOwner() As String
+ InspectOwner = "A|" & CStr(OwnerDriver.Counter) & "|" & CStr(Serial) & "|" & TextValue & "|" & ThisWorkbook.Name & "|" & ActiveWorkbook.Name
+End Function
+Public Property Get Label() As String
+ Label = TextValue
+End Property
+Public Property Let Label(ByVal value As String)
+ TextValue = value
+ OwnerDriver.TraceLog = OwnerDriver.TraceLog & "S" & CStr(Serial) & ";"
+End Property
+Private Sub Class_Terminate()
+ Application.StatusBar = "term-A-entered"
+ OwnerDriver.TraceLog = OwnerDriver.TraceLog & "T" & CStr(Serial) & ";"
+ Application.StatusBar = "term-A-done"
+End Sub
+Public Function Touch(ByRef value As Long) As String
+ value = value + 5
+ Touch = "A|" & TypeName(value) & "|" & CStr(value)
+End Function
+Public Function Ping() As String
+ OwnerDriver.Counter = OwnerDriver.Counter + 10
+ Ping = "A:" & CStr(OwnerDriver.Counter)
+End Function
+Public Function Reentrant(ByVal other As Object) As String
+ Reentrant = "A(" & other.Ping() & ")|" & CStr(OwnerDriver.Counter)
+End Function
+Public Function HoldPeer(ByVal other As Object) As String
+ Set Peer = other
+ HoldPeer = TypeName(Peer)
+End Function
+Public Function ErrRoundTrip(ByVal mode As Long) As String
+ Select Case mode
+ Case 0
+  On Error Resume Next
+  Err.Raise 5
+  ErrRoundTrip = "raised|" & CStr(Err.Number)
+ Case 1
+  On Error GoTo handled
+  Err.Raise 5
+ Case 2
+  Err.Raise -2147220803, "A.Owner", "A.Fail", "A.Help", 71
+ Case 3
+  ErrRoundTrip = "incoming|" & CStr(Err.Number) & "|" & Err.Description & "|" & Err.Source
+ Case 4
+  ErrRoundTrip = "clearfrom|" & CStr(Err.Number)
+  Err.Clear
+ End Select
+ Exit Function
+handled:
+ ErrRoundTrip = "handled|" & CStr(Err.Number)
+ Exit Function
+End Function
+"####;
+        let (module,classes)=crate::parse_project(source).unwrap();
+        for mode in [0,1,2] {
+            let status=std::rc::Rc::new(std::cell::RefCell::new(Value::Boolean(false)));
+            let mut host=StatusHost(status.clone());
+            let mut runtime=Runtime::new(&module).with_classes(&classes).with_host(&mut host);
+            let result=runtime.call("OwnerDriver.EndLocalProbe",vec![Value::Integer(mode)]);
+            if mode==1 {
+                assert_eq!(result.unwrap_err().kind,RuntimeErrorKind::EndStatement);
+                assert_eq!(*status.borrow(),Value::String("before-local-exit".into()));
+                let state=runtime.into_project_state_after_end().unwrap();
+                runtime=Runtime::new(&module).with_classes(&classes).with_host(&mut host).with_project_state(state);
+                assert_eq!(runtime.call("OwnerDriver.ReadTrace",vec![]).unwrap(),Value::String(String::new()));
+            } else {
+                assert_eq!(result.unwrap(),Value::String(if mode==0 {"0|term-A-done"} else {"5|term-A-done"}.into()));
+                assert_eq!(*status.borrow(),Value::String("term-A-done".into()));
+                assert_eq!(runtime.call("OwnerDriver.ReadTrace",vec![]).unwrap(),Value::String("I1;T1;".into()));
+            }
+        }
+    }
+
+
+    #[test]
+    fn cvar_keeps_object_identity_and_end_disconnects_scalar_coercion() {
+        let source=r#"Attribute VB_Name = "Driver"
+Public Function Make() As Object
+ Set Make = New Wrapper
+End Function
+Public Function Meta(ByVal target As Object) As String
+ Meta = TypeName(CVar(target)) & "|" & CStr(VarType(CVar(target))) & "|" & CStr(IsObject(target)) & "|" & CStr(IsNumeric(target))
+End Function
+Public Function Scalar(ByVal target As Object, ByVal mode As Long) As String
+ Dim answer As Variant
+ On Error GoTo failed
+ Select Case mode
+ Case 0: answer = target
+ Case 1: answer = CStr(target)
+ Case 2: answer = Len(target)
+ End Select
+ Scalar = "unexpected"
+ Exit Function
+failed:
+ Scalar = CStr(Err.Number)
+End Function
+Public Sub StopNow()
+ End
+End Sub
+VERSION 1.0 CLASS
+Attribute VB_Name = "Wrapper"
+Private stored As Long
+"#;
+        let (module,classes)=crate::parse_project(source).unwrap();
+        let mut runtime=Runtime::new(&module).with_classes(&classes);
+        let Value::Object(object)=runtime.call("Driver.Make",vec![]).unwrap() else {panic!("object factory")};
+        for ended in [false,true] {
+            if ended {
+                assert_eq!(runtime.call("Driver.StopNow",vec![]).unwrap_err().kind,RuntimeErrorKind::EndStatement);
+                let state=runtime.into_project_state_after_end().unwrap();
+                runtime=Runtime::new(&module).with_classes(&classes).with_project_state(state);
+            }
+            let expected=if ended {"Object|9|True|False"} else {"Wrapper|9|True|False"};
+            assert_eq!(runtime.call("Driver.Meta",vec![Value::Object(object.clone())]).unwrap(),Value::String(expected.into()));
+            for mode in [0,1,2] {
+                let expected=if ended {"-2147418105"} else {"438"};
+                assert_eq!(runtime.call("Driver.Scalar",vec![Value::Object(object.clone()),Value::Integer(mode)]).unwrap(),Value::String(expected.into()));
+            }
+        }
     }
 
     #[test]
