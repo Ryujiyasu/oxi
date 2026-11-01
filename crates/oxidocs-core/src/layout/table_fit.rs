@@ -3203,7 +3203,7 @@ impl<'a> TableFitLayouter<'a> {
                 // by block_pos; absolute para top = cell_block_tops[idx] + dy (the
                 // dy applied to cell_elements below). Declared at cell-loop scope so
                 // it survives past the `if !is_vmerge_continue` block to the text-box
-                // emit site. Only consumed under OXI_S487_ENABLE.
+                // emit site. Consumed unless OXI_S487_DISABLE.
                 let mut cell_block_tops: Vec<f32> = Vec::new();
                 let cell_float_flow = LayoutEngine::cell_float_enabled(cell) && !self.is_vert_writing_active(cell);
                 let mut float_tops = vec![0.0; cell.blocks.len()];
@@ -10974,8 +10974,16 @@ impl<'a> TableFitLayouter<'a> {
                 // is the cell-content absolute base computed above). S487's bug was
                 // using cell_x (border-left, not content-left) for X and
                 // cursor.visual_y (cell top, not the anchor paragraph) for Y.
-                // Opt-IN OXI_S487_ENABLE (default OFF until gate-validated).
-                if !cell.cell_text_boxes.is_empty() && std::env::var("OXI_S487_ENABLE").is_ok() {
+                // Default ON since 2026-11-01 (opt-out OXI_S487_DISABLE; OXI_S487_ENABLE
+                // still forces it): ssim_ab over the 369 golden documents moved 8,
+                // net +0.0254 for drawing the boxes (2ea81a +0.0140, roudoujoken
+                // +0.0101, tsuuchisho +0.0045, 664c +0.0011; tokumei_08_04 -0.0041).
+                // ja/educational__244a3664's «自分は将来どういうふうに働きたいのか» box
+                // (layoutInCell, column-relative -234.8pt) was missing: 0.8645 -> 0.8729.
+                if !cell.cell_text_boxes.is_empty()
+                    && (std::env::var_os("OXI_S487_ENABLE").is_some()
+                        || std::env::var_os("OXI_S487_DISABLE").is_none())
+                {
                     let cell_content_left = cell_x + pad_l;
                     for tb in &cell.cell_text_boxes {
                         let (px, py) = tb

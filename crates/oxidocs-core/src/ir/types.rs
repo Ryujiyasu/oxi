@@ -129,6 +129,13 @@ pub struct Document {
     /// Add neighboring paragraph spacing contributions instead of collapsing them.
     #[serde(default)]
     pub additive_paragraph_spacing: bool,
+    /// w:mirrorMargins: even pages swap the left and right margins (the gutter
+    /// stays on the inside).
+    #[serde(default)]
+    pub mirror_margins: bool,
+    /// w:gutterAtTop: the gutter goes on the top edge and mirroring is off.
+    #[serde(default)]
+    pub gutter_at_top: bool,
 }
 
 /// S1553: one merged continuous section's header/footer set (see

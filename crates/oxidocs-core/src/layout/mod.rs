@@ -5053,6 +5053,34 @@ impl LayoutEngine {
             nums
         };
 
+        // OXI_MIRROR_MARGINS (2026-11-01, default ON, opt-out _DISABLE): under
+        // w:mirrorMargins an even-numbered page takes the right margin on its left
+        // and the left (plus gutter) on its right; the text width is unchanged, so
+        // the page's content moves sideways as a whole. w:gutterAtTop turns the
+        // mirroring off. `_pb_mirror_margins_gen.py` (left 1080, right 720): p2
+        // text 36.00..557.70 against 54.02..575.72 on p1/p3; gutter 360 -> p1/p3
+        // 72.02..575.58, p2 36.00..539.56; with gutterAtTop every page 54.02.
+        // en/technical__019d92d9 p2: Word's text starts at 36, Oxi drew 54.
+        if doc_resolved.mirror_margins && !doc_resolved.gutter_at_top
+            && std::env::var_os("OXI_MIRROR_MARGINS_DISABLE").is_none()
+        {
+            for (page_idx, page) in pages.iter_mut().enumerate() {
+                if page_numbers.get(page_idx).map_or(true, |n| n % 2 != 0) {
+                    continue;
+                }
+                let Some(ir) = layout_to_ir_page.get(page_idx).and_then(|&i| doc_resolved.pages.get(i)) else {
+                    continue;
+                };
+                let dx = ir.margin.right - ir.margin.left;
+                if dx.abs() < 0.01 {
+                    continue;
+                }
+                for e in &mut page.elements {
+                    e.x += dx;
+                }
+            }
+        }
+
         for (page_idx, page) in pages.iter_mut().enumerate() {
             // S534 (2026-06-10): apply the section's pgNumType format to the
             // PAGE field. 3a4f's footer section sets `<w:pgNumType

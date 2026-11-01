@@ -1425,6 +1425,8 @@ impl OoxmlParser {
             keep_floating_tables_together: self.parse_compat_bool_flag("doNotBreakWrappedTables"),
             preserve_same_style_cell_spacing: self.parse_compat_bool_flag("allowSpaceOfSameStyleInTable"),
             additive_paragraph_spacing: self.parse_compat_bool_flag("doNotUseHTMLParagraphAutoSpacing"),
+            mirror_margins: self.parse_compat_bool_flag("mirrorMargins"),
+            gutter_at_top: self.parse_compat_bool_flag("gutterAtTop"),
         };
         // S1008 (2026-07-26): resolve fontTable w:altName substitutions
         // (source unsupported → alternate supported). No-op for the vast
