@@ -5798,7 +5798,8 @@ impl<'a> TableFitLayouter<'a> {
                                                                 grid_base * pitch / default_fs
                                                             } else {
                                                                 // S1210: additive for both signs.
-                                                                grid_base + cell_cjk_grid_increment(ch, cm, &self.registry, font_size, char_space_pt)
+                                                                grid_base + cell_cjk_grid_increment(ch, cm, &self.registry, font_size, char_space_pt,
+                                                                    self.balance_single_byte_double_byte_width)
                                                             };
                                                             if (crate::env_flag!("OXI_CELL_GRID_SINGLE_BYTE")
                                             || !crate::env_flag!("OXI_S1449_DISABLE")) {
@@ -5854,9 +5855,14 @@ impl<'a> TableFitLayouter<'a> {
                                             // 奨励金" wraps at "○○" because cw=10.5+21+21=52.5pt × 3 chars
                                             // = 157.5pt > first_line_wrap_w=170pt approximately. The
                                             // correct cs=21pt gives cw=31.5pt × 3 = 94.5pt which fits).
+                                            // OXI_BALANCE_PROP_ONCE: a proportional glyph (its face
+                                            // advance under the em) takes the spacing once, as in the
+                                            // body (`_pb_balance_propkana_gen.py`).
                                             let balance_extra_cs = if self
                                                 .balance_single_byte_double_byte_width
                                                 && crate::font::is_fullwidth(ch)
+                                                && (crate::env_flag!("OXI_BALANCE_PROP_ONCE_DISABLE")
+                                                    || cm.char_width_em(ch) >= 0.98)
                                                 && run.style.fit_text.is_none() && !run.style.ruby_spread
                                             {
                                                 cs
@@ -9900,6 +9906,14 @@ impl<'a> TableFitLayouter<'a> {
                                                             _source_style,&para.style,*fs,*cs)
                                                             * aki_plan.get(frag_idx).map_or(1.0, |p| p.gap_scale))
                                                             .collect::<Vec<_>>(),
+                                                        if self.balance_single_byte_double_byte_width
+                                                            && _source_style.fit_text.is_none() && !_source_style.ruby_spread
+                                                            && !crate::env_flag!("OXI_CELL_GRID_BALANCE_CS_DISABLE")
+                                                        {
+                                                            *cs
+                                                        } else {
+                                                            0.0
+                                                        },
                                                     )
                                                 } else {
                                                     None

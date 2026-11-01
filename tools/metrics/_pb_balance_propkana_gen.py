@@ -9,6 +9,9 @@ the kana に/も 11.75; Oxi gives the kana 12.9 -- 1.15 more, one spacing.
 Arms: face HGP創英角ﾎﾟｯﾌﾟ体 / ＭＳ Ｐゴシック / ＭＳ ゴシック x spacing 0 / 22 / 44 x
 balance on / off x grid linesAndChars (charSpace 9011) / none. Text 出席にも欠席に.
 Readout: Word PDF per-character advances.
+
+`--cell`: the same run in a one-cell fixed table (tblW 6000) into
+tests/fixtures/balance_propkana_cell, faces HGP創英角ﾎﾟｯﾌﾟ体 / ＭＳ Ｐゴシック, spacing 22.
 """
 import os, sys, zipfile
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -32,10 +35,20 @@ def settings(bal):
             '<w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>')
 
 
+CELL = '--cell' in sys.argv
+if CELL:
+    OUT = 'tests/fixtures/balance_propkana_cell'; os.makedirs(OUT, exist_ok=True)
+
+
 def document(face, sp, grid):
     rpr = f'<w:rPr><w:rFonts w:ascii="{face}" w:eastAsia="{face}" w:hAnsi="{face}" w:hint="eastAsia"/><w:spacing w:val="{sp}"/><w:sz w:val="21"/></w:rPr>'
     g = '<w:docGrid w:type="linesAndChars" w:linePitch="320" w:charSpace="9011"/>' if grid else '<w:docGrid w:linePitch="360"/>'
-    return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W}><w:body><w:p><w:r>{rpr}<w:t>{TEXT}</w:t></w:r></w:p>'
+    para = f'<w:p><w:r>{rpr}<w:t>{TEXT}</w:t></w:r></w:p>'
+    if CELL:
+        para = ('<w:tbl><w:tblPr><w:tblW w:w="6000" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>'
+                '<w:tblGrid><w:gridCol w:w="6000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr>'
+                + para + '</w:tc></w:tr></w:tbl><w:p/>')
+    return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W}><w:body>{para}'
             f'<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" '
             f'w:header="720" w:footer="720" w:gutter="0"/>{g}</w:sectPr></w:body></w:document>')
 
@@ -45,10 +58,12 @@ if __name__ == '__main__':
     app = win32com.client.DispatchEx('Word.Application'); app.Visible = False; app.DisplayAlerts = 0
     try:
         for fk, face in FACES.items():
+            if CELL and fk == 'go':
+                continue
             for grid in (True, False):
                 for bal in (True, False):
-                    for sp in (0, 22, 44):
-                        name = f'{fk}_{"grid" if grid else "nogrid"}_{"bal" if bal else "nobal"}_sp{sp}'
+                    for sp in ((22,) if CELL else (0, 22, 44)):
+                        name = ('cell_' if CELL else '') + f'{fk}_{"grid" if grid else "nogrid"}_{"bal" if bal else "nobal"}_sp{sp}'
                         at = os.path.abspath(os.path.join(OUT, name + '.docx'))
                         with zipfile.ZipFile(at, 'w', zipfile.ZIP_DEFLATED) as z:
                             z.writestr('[Content_Types].xml', CT); z.writestr('_rels/.rels', RR)

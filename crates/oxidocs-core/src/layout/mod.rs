@@ -556,8 +556,13 @@ fn cell_aki_joint(a: char, b: char, de: bool, dn: bool) -> bool {
 // square compatibility symbols in a face with proportional kana advances.
 // A full-em glyph in such a face still uses the half addition. Latin pitch
 // and the current glyph alone cannot distinguish the CJK design.
-fn cell_cjk_grid_increment(ch: char, metrics: &FontMetrics, registry: &FontMetricsRegistry, fs: f32, delta: f32) -> f32 {
-    if delta > 0.0 && grid_half_increment_class(ch) && face_has_proportional_kana(metrics, registry, fs) {
+fn cell_cjk_grid_increment(ch: char, metrics: &FontMetrics, registry: &FontMetricsRegistry, fs: f32, delta: f32, balance: bool) -> f32 {
+    // OXI_GRID_HALF_NEEDS_BALANCE: the half increment is a balance effect in a
+    // cell as in the body (`_pb_balance_propkana_gen.py` one-cell arms: ＭＳ Ｐゴシック
+    // に 12.11 with balance, 13.19 without, spacing 22).
+    if delta > 0.0 && grid_half_increment_class(ch) && face_has_proportional_kana(metrics, registry, fs)
+        && (balance || crate::env_flag!("OXI_GRID_HALF_NEEDS_BALANCE_DISABLE"))
+    {
         return delta * 0.5;
     }
     delta
@@ -649,6 +654,7 @@ fn autospace_cell_segments(
     grid_kern: bool,
     char_width_adjustments: &[f32],
     natural_gaps_after: &[f32],
+    balance_cs: f32,
 ) -> Option<Vec<(String, f32, f32)>> {
     if let Some((pitch, ratio, balance, scale)) = grid {
         let chars: Vec<char> = text.chars().collect();
@@ -672,7 +678,7 @@ fn autospace_cell_segments(
             }
             let balanced = balance_spaces && balanced_cjk_space(ch, prev, next);
             let mut base = if balanced { fs * 0.5 + metrics.synthetic_bold_advance * fs } else { natural };
-            let mut extra = if crate::font::is_fullwidth(ch) { cell_cjk_grid_increment(ch, metrics, registry, fs, delta) }
+            let mut extra = if crate::font::is_fullwidth(ch) { cell_cjk_grid_increment(ch, metrics, registry, fs, delta, balance) }
                 else { cell_single_byte_grid_increment(ch, Some(pitch), Some(ratio), balance) };
             if let Some((space_base, space_extra)) = cell_proportional_space_grid(ch, metrics, fs,
                 Some(pitch), Some(ratio), balance) {
@@ -688,7 +694,19 @@ fn autospace_cell_segments(
                     x += gap_override.or_else(|| natural_gaps_after.get(i-1).copied()).unwrap_or_else(|| s546_autospace_extra(fs));
                 }
             }
-            let width = base * scale + extra + cs_render
+            // OXI_CELL_GRID_BALANCE_CS (2026-11-01, default ON, opt-out _DISABLE):
+            // the grid glyphs take balance's second spacing like the cell wrap
+            // (`balance_extra_cs`) and the body do. `_pb_balance_propkana_gen.py`
+            // one-cell arms (spacing 22, charSpace 9011, balance): Word advances
+            // kanji 14.87, Oxi drew 13.80 -- one spacing short.
+            let balance_extra = if crate::font::is_fullwidth(ch)
+                && (crate::env_flag!("OXI_BALANCE_PROP_ONCE_DISABLE") || metrics.char_width_em(ch) >= 0.98)
+            {
+                balance_cs
+            } else {
+                0.0
+            };
+            let width = base * scale + extra + cs_render + balance_extra
                 + char_width_adjustments.get(i).copied().unwrap_or(0.0);
             segments.push((ch.to_string(), x, width));
             x += width;
@@ -20360,7 +20378,8 @@ cells={} pitch={:.2} text={:?}",
                                     grid_base * pitch / default_fs
                                 } else {
                                     // S1210: additive for both signs.
-                                    grid_base + cell_cjk_grid_increment(ch, cm, &self.registry, font_size, char_space_pt)
+                                    grid_base + cell_cjk_grid_increment(ch, cm, &self.registry, font_size, char_space_pt,
+                                        self.balance_single_byte_double_byte_width)
                                 };
                                 if (crate::env_flag!("OXI_CELL_GRID_SINGLE_BYTE")
                                             || !crate::env_flag!("OXI_S1449_DISABLE")) {
@@ -20405,6 +20424,7 @@ cells={} pitch={:.2} text={:?}",
                 // balance doubling via resolve_fit_text_runs). Mirrors cell renderer fix.
                 let balance_extra_cs = if self.balance_single_byte_double_byte_width
                     && crate::font::is_fullwidth(ch)
+                    && (crate::env_flag!("OXI_BALANCE_PROP_ONCE_DISABLE") || cm.char_width_em(ch) >= 0.98)
                     && run.style.fit_text.is_none() && !run.style.ruby_spread
                 {
                     cs
