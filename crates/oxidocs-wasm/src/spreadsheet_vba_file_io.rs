@@ -60,11 +60,17 @@ pub(super) struct WorkbookFiles {
     pub format: Option<f64>,
     pub read_only_recommended: bool,
     pub create_backup: bool,
+    pub shared: bool,
     pub source: String,
     pub files: Files,
     pub exports: BTreeSet<String>,
     mounted_folders: BTreeSet<String>,
     mounted_files: BTreeSet<String>,
+}
+
+struct SharedXmlChild<'a> {
+    name: &'a str,
+    attributes: Vec<(&'a str, String)>,
 }
 
 enum CopyInput {
@@ -335,6 +341,282 @@ impl WorkbookFiles {
         output.finish().map(|cursor| cursor.into_inner()).map_err(|error| error.to_string())
     }
 
+
+    fn xml_elements(xml: &str, tag: &[u8], wanted_depth: usize) -> Result<Vec<BTreeMap<String, String>>, String> {
+        use quick_xml::events::Event;
+        let mut reader = quick_xml::Reader::from_str(xml);
+        let mut depth = 0;
+        let mut elements = Vec::new();
+        loop {
+            let event = reader.read_event().map_err(|error| error.to_string())?;
+            if let Event::Start(element) | Event::Empty(element) = &event {
+                if depth==wanted_depth && element.local_name().as_ref()==tag {
+                    let mut attributes = BTreeMap::new();
+                    for attribute in element.attributes() {
+                        let attribute = attribute.map_err(|error| error.to_string())?;
+                        let key = String::from_utf8(attribute.key.as_ref().to_vec()).map_err(|error| error.to_string())?;
+                        let value = attribute.decode_and_unescape_value(reader.decoder()).map_err(|error| error.to_string())?;
+                        attributes.insert(key, value.into_owned());
+                    }
+                    elements.push(attributes);
+                }
+            }
+            match event {
+                Event::Start(_) => depth += 1,
+                Event::End(_) => depth=depth.saturating_sub(1),
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        Ok(elements)
+    }
+
+    fn package_is_shared(package: &[u8]) -> Result<bool, String> {
+        let mut archive = oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error| error.to_string())?;
+        let Ok(xml) = archive.read_part("xl/_rels/workbook.xml.rels") else { return Ok(false); };
+        let relationships = Self::xml_elements(&xml, b"Relationship", 1)?;
+        let Some(header) = relationships.iter().find(|rel|
+            rel.get("Type").is_some_and(|value| value=="http://schemas.openxmlformats.org/officeDocument/2006/relationships/revisionHeaders")
+            && rel.get("TargetMode").is_none_or(|value| value!="External")) else { return Ok(false); };
+        let Some(target) = header.get("Target") else { return Ok(false); };
+        let absolute = target.starts_with('/');
+        let mut parts = if absolute {Vec::new()} else {vec!["xl"]};
+        for part in target.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => { if parts.pop().is_none() { return Ok(false); } }
+                part => parts.push(part),
+            }
+        }
+        let Ok(headers) = archive.read_part(&parts.join("/")) else { return Ok(false); };
+        Ok(Self::xml_elements(&headers, b"headers", 0)?.iter().any(|header| header.contains_key("guid")))
+    }
+
+    fn append_xml_children(xml: &str, children: &[SharedXmlChild<'_>]) -> Result<Vec<u8>, String> {
+        use quick_xml::events::{BytesEnd, BytesStart, Event};
+        fn append(writer: &mut quick_xml::Writer<Vec<u8>>, prefix: &str, children: &[SharedXmlChild<'_>]) -> Result<(), String> {
+            for child in children {
+                let mut element = BytesStart::new(format!("{prefix}{}", child.name));
+                for (key, value) in &child.attributes { element.push_attribute((*key, value.as_str())); }
+                writer.write_event(Event::Empty(element)).map_err(|error| error.to_string())?;
+            }
+            Ok(())
+        }
+        let mut reader = quick_xml::Reader::from_str(xml);
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        let (mut depth, mut prefix, mut written) = (0usize, String::new(), false);
+        loop {
+            let event = reader.read_event().map_err(|error| error.to_string())?;
+            if let Event::Start(root) | Event::Empty(root) = &event {
+                if depth==0 {
+                    let name = String::from_utf8(root.name().as_ref().to_vec()).map_err(|error| error.to_string())?;
+                    prefix = name.rsplit_once(':').map_or(String::new(), |(prefix,_)| format!("{prefix}:"));
+                    if matches!(&event, Event::Empty(_)) {
+                        writer.write_event(Event::Start(root.clone().into_owned())).map_err(|error| error.to_string())?;
+                        append(&mut writer, &prefix, children)?;
+                        writer.write_event(Event::End(BytesEnd::new(name))).map_err(|error| error.to_string())?;
+                        written = true;
+                        continue;
+                    }
+                }
+            }
+            if matches!(&event, Event::End(_) if depth==1) {
+                append(&mut writer, &prefix, children)?;written = true;
+            }
+            match &event {
+                Event::Start(_) => depth += 1,
+                Event::End(_) => depth=depth.saturating_sub(1),
+                Event::Eof => break,
+                _ => {}
+            }
+            writer.write_event(event).map_err(|error| error.to_string())?;
+        }
+        if !written { return Err("XML part has no root".into()); }
+        Ok(writer.into_inner())
+    }
+
+    fn replace_package_parts(package: &[u8], mut replacements: BTreeMap<String, Vec<u8>>, removed: &BTreeSet<String>) -> Result<Vec<u8>, String> {
+        use std::io::{Cursor, Write};
+        let mut input = zip::ZipArchive::new(Cursor::new(package)).map_err(|error| error.to_string())?;
+        let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        output.set_raw_comment(input.comment().into());
+        for index in 0..input.len() {
+            let part = input.by_index(index).map_err(|error| error.to_string())?;
+            let name = part.name().to_string();
+            if removed.contains(&name) { continue; }
+            if let Some(bytes) = replacements.remove(&name) {
+                let mut options = zip::write::SimpleFileOptions::default().compression_method(part.compression())
+                    .last_modified_time(part.last_modified().unwrap_or_default());
+                if let Some(mode) = part.unix_mode() { options=options.unix_permissions(mode); }
+                output.start_file(name, options).map_err(|error| error.to_string())?;
+                output.write_all(&bytes).map_err(|error| error.to_string())?;
+            } else { output.raw_copy_file(part).map_err(|error| error.to_string())?; }
+        }
+        for (name, bytes) in replacements {
+            output.start_file(name, zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated))
+                .map_err(|error| error.to_string())?;
+            output.write_all(&bytes).map_err(|error| error.to_string())?;
+        }
+        output.finish().map(|output| output.into_inner()).map_err(|error| error.to_string())
+    }
+
+    fn remove_xml_children(xml: &str, name: &[u8], attribute: &[u8], values: &BTreeSet<String>) -> Result<Vec<u8>, String> {
+        use quick_xml::events::Event;
+        let mut reader = quick_xml::Reader::from_str(xml);
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        let (mut depth, mut skipping) = (0usize, None);
+        loop {
+            let event = reader.read_event().map_err(|error| error.to_string())?;
+            let remove = match &event {
+                Event::Start(element) | Event::Empty(element) if depth==1 && element.local_name().as_ref()==name =>
+                    element.try_get_attribute(attribute).map_err(|error|error.to_string())?
+                        .map(|value| value.decode_and_unescape_value(reader.decoder()).map(|value|values.contains(value.as_ref())))
+                        .transpose().map_err(|error|error.to_string())?.unwrap_or(false),
+                _ => false,
+            };
+            if remove && matches!(&event, Event::Start(_)) { skipping=Some(depth); }
+            match &event {
+                Event::Start(_) => depth += 1,
+                Event::End(_) => depth=depth.saturating_sub(1),
+                Event::Eof => break,
+                _ => {}
+            }
+            if let Some(parent) = skipping {
+                if depth==parent && matches!(&event,Event::End(_)) { skipping=None; }
+                continue;
+            }
+            if !remove { writer.write_event(event).map_err(|error|error.to_string())?; }
+        }
+        Ok(writer.into_inner())
+    }
+
+    fn package_without_sharing(package: &[u8]) -> Result<Vec<u8>, String> {
+        if !Self::package_is_shared(package)? { return Ok(package.to_vec()); }
+        let mut archive=oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error|error.to_string())?;
+        let types=archive.read_part("[Content_Types].xml").map_err(|error|error.to_string())?;
+        let mut removed=BTreeSet::new();
+        let mut part_names=BTreeSet::new();
+        for item in Self::xml_elements(&types,b"Override",1)? {
+            let revision_type=item.get("ContentType").is_some_and(|value| [
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.revisionHeaders+xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.revisionLog+xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.userNames+xml",
+            ].contains(&value.as_str()));
+            if revision_type {
+                let name=item.get("PartName").ok_or("Missing revision part name")?;
+                part_names.insert(name.clone());
+                let part=name.trim_start_matches('/').to_string();
+                let sidecar=part.rsplit_once('/').map_or_else(||format!("_rels/{part}.rels"),
+                    |(parent,leaf)|format!("{parent}/_rels/{leaf}.rels"));
+                removed.insert(part);removed.insert(sidecar);
+            }
+        }
+        let relationship_types=BTreeSet::from([
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/revisionHeaders".into(),
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/usernames".into(),
+        ]);
+        let relationships=archive.read_part("xl/_rels/workbook.xml.rels").map_err(|error|error.to_string())?;
+        let replacements=BTreeMap::from([
+            ("[Content_Types].xml".into(),Self::remove_xml_children(&types,b"Override",b"PartName",&part_names)?),
+            ("xl/_rels/workbook.xml.rels".into(),Self::remove_xml_children(&relationships,b"Relationship",b"Type",&relationship_types)?),
+        ]);
+        Self::replace_package_parts(package,replacements,&removed)
+    }
+
+    fn shared_guid() -> Result<String, String> {
+        let mut bytes = [0u8;16];
+        #[cfg(target_arch="wasm32")]
+        {
+            use wasm_bindgen::JsCast;
+            let crypto = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto"))
+                .map_err(|_| "Cannot read the host random source".to_string())?;
+            let random = js_sys::Reflect::get(&crypto, &JsValue::from_str("getRandomValues"))
+                .map_err(|_| "Cannot read the host random source".to_string())?
+                .dyn_into::<js_sys::Function>().map_err(|_| "Host random source is unavailable".to_string())?;
+            let data = js_sys::Uint8Array::new_with_length(16);
+            random.call1(&crypto, data.as_ref()).map_err(|_| "Host random source failed".to_string())?;
+            data.copy_to(&mut bytes);
+        }
+        #[cfg(not(target_arch="wasm32"))]
+        {
+            use std::hash::{BuildHasher, Hasher};
+            let state = std::collections::hash_map::RandomState::new();
+            for (index, chunk) in bytes.chunks_mut(8).enumerate() {
+                let mut hash=state.build_hasher();hash.write_usize(index);
+                chunk.copy_from_slice(&hash.finish().to_le_bytes());
+            }
+        }
+        bytes[6]=(bytes[6]&0x0f)|0x40;bytes[8]=(bytes[8]&0x3f)|0x80;
+        Ok(format!("{{{}}}", uuid::Uuid::from_bytes(bytes).hyphenated().to_string().to_ascii_uppercase()))
+    }
+
+    fn shared_timestamp(serial: f64) -> String {
+        let seconds=((serial-25_569.0)*86_400.0+0.000001).floor() as i64;
+        let days=seconds.div_euclid(86_400);let day_seconds=seconds.rem_euclid(86_400);
+        let z=days+719_468;let era=z.div_euclid(146_097);let doe=z-era*146_097;
+        let yoe=(doe-doe/1_460+doe/36_524-doe/146_096)/365;let mut year=yoe+era*400;
+        let doy=doe-(365*yoe+yoe/4-yoe/100);let mp=(5*doy+2)/153;
+        let day=doy-(153*mp+2)/5+1;let month=mp+if mp<10 {3} else {-9};
+        if month<=2 { year+=1; }
+        format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}",day_seconds/3600,day_seconds%3600/60,day_seconds%60)
+    }
+
+    fn package_with_sharing(package: &[u8], author: &[u16], now: Option<f64>) -> Result<Vec<u8>, String> {
+        if Self::package_is_shared(package)? { return Ok(package.to_vec()); }
+        let mut archive=oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error| error.to_string())?;
+        let workbook=archive.read_part("xl/workbook.xml").map_err(|error| error.to_string())?;
+        let ids=Self::xml_elements(&workbook,b"sheet",2)?.into_iter().map(|sheet|
+            sheet.get("sheetId").ok_or_else(||"Missing sheet identity".to_string())?.parse::<u32>().map_err(|error|error.to_string()))
+            .collect::<Result<Vec<_>,_>>()?;
+        let max_id=ids.iter().max().copied().ok_or("Cannot share a workbook without sheets")?
+            .checked_add(1).ok_or("Workbook sheet identity overflow")?;
+        let guid=Self::shared_guid()?;
+        let timestamp=now.map(Self::shared_timestamp).unwrap_or_else(||current_threaded_comment_timestamp().trim_end_matches('Z').to_string());
+        let author=oxicells_core::encode_ooxml_string(author).replace('\t',"_x0009_").replace('\n',"_x000A_");
+        let author=quick_xml::escape::escape(&author);
+        let ns="http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let relationships_ns="http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let package_ns="http://schemas.openxmlformats.org/package/2006/relationships";
+        let sheet_ids=ids.iter().map(|id|format!("<sheetId val=\"{id}\"/>")).collect::<String>();
+        let headers=format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><headers xmlns=\"{ns}\" xmlns:r=\"{relationships_ns}\" guid=\"{guid}\"><header guid=\"{guid}\" dateTime=\"{timestamp}\" maxSheetId=\"{max_id}\" userName=\"{author}\" r:id=\"rId1\"><sheetIdMap count=\"{}\">{sheet_ids}</sheetIdMap></header></headers>",ids.len());
+        let users=format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><users xmlns=\"{ns}\" count=\"1\"><userInfo guid=\"{guid}\" name=\"{author}\" id=\"1\" dateTime=\"{timestamp}\"/></users>");
+        let log=format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><revisions xmlns=\"{ns}\"/>");
+        let header_rels=format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"{package_ns}\"><Relationship Id=\"rId1\" Type=\"{relationships_ns}/revisionLog\" Target=\"revisionLog1.xml\"/></Relationships>");
+        let rel_xml=archive.read_part("xl/_rels/workbook.xml.rels").map_err(|error|error.to_string())?;
+        let existing=Self::xml_elements(&rel_xml,b"Relationship",1)?;
+        let mut ids: BTreeSet<_>=existing.iter().filter_map(|rel|rel.get("Id").cloned()).collect();
+        let mut relationships=Vec::new();
+        for (kind,target) in [("revisionHeaders","revisions/revisionHeaders.xml"),("usernames","revisions/userNames.xml")] {
+            let ty=format!("{relationships_ns}/{kind}");
+            if existing.iter().any(|rel|rel.get("Type")==Some(&ty)) {
+                return Err("Existing shared relationship has no readable revision headers".into());
+            }
+            let mut index=1;
+            while ids.contains(&format!("rId{index}")) { index+=1; }
+            let id=format!("rId{index}");ids.insert(id.clone());
+            relationships.push(SharedXmlChild {name:"Relationship",attributes:vec![("Id",id),("Type",ty),("Target",target.into())]});
+        }
+        let type_xml=archive.read_part("[Content_Types].xml").map_err(|error|error.to_string())?;
+        let existing_types=Self::xml_elements(&type_xml,b"Override",1)?;
+        let mut types=Vec::new();
+        for (name,kind) in [("revisionHeaders.xml","revisionHeaders"),("revisionLog1.xml","revisionLog"),("userNames.xml","userNames")] {
+            let part=format!("/xl/revisions/{name}");
+            if !existing_types.iter().any(|item|item.get("PartName")==Some(&part)) {
+                types.push(SharedXmlChild {name:"Override",attributes:vec![("PartName",part),
+                    ("ContentType",format!("application/vnd.openxmlformats-officedocument.spreadsheetml.{kind}+xml"))]});
+            }
+        }
+        let mut replacements=BTreeMap::from([
+            ("xl/revisions/revisionHeaders.xml".into(),headers.into_bytes()),
+            ("xl/revisions/revisionLog1.xml".into(),log.into_bytes()),
+            ("xl/revisions/userNames.xml".into(),users.into_bytes()),
+            ("xl/revisions/_rels/revisionHeaders.xml.rels".into(),header_rels.into_bytes()),
+        ]);
+        replacements.insert("xl/_rels/workbook.xml.rels".into(),Self::append_xml_children(&rel_xml,&relationships)?);
+        replacements.insert("[Content_Types].xml".into(),Self::append_xml_children(&type_xml,&types)?);
+        Self::replace_package_parts(package,replacements,&BTreeSet::new())
+    }
+
     pub(super) fn package_format(package: &[u8]) -> Result<i64, String> {
         let mut archive = oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error| error.to_string())?;
         let types = archive.read_part("[Content_Types].xml").map_err(|error| error.to_string())?.to_ascii_lowercase();
@@ -349,6 +631,7 @@ impl WorkbookFiles {
         oxicells_core::XlsxEditor::new(&package).map_err(|error| error.to_string())?;
         self.format = Some(Self::package_format(&package)? as f64);
         (self.read_only_recommended, self.create_backup) = Self::package_preferences(&package)?;
+        self.shared = Self::package_is_shared(&package)?;
         if let Some(project) = crate::vba_project::retain_workbook_project(&package)? { self.retained_project = Some(project); }
         self.package = Some(package);
         Ok(())
@@ -363,8 +646,12 @@ impl WorkbookFiles {
             }
         }
         let Some(context) = context else { return Ok(()); };
-        if let Some(package) = context.package_bytes {
-            self.set_package(package)?;
+        // A retained workbook owns its current saved package. Repeated editor
+        // bootstrap bytes are a mount, not a reload of pre-SaveAs metadata.
+        if self.package.is_none() {
+            if let Some(package) = context.package_bytes {
+                self.set_package(package)?;
+            }
         }
         if let Some(full_name) = context.full_name {
             if full_name.is_empty() { return Err("invalid VBA file context: empty fullName".into()); }
@@ -550,7 +837,7 @@ impl WorkbookHost<'_> {
     }
 
     pub(super) fn save_in_format_with_preferences(&mut self, filename: Option<&Value>, format: Option<i64>,
-        preferences: Option<(bool, bool)>, files: &mut Files) -> Result<bool, String> {
+        preferences: Option<(bool, bool, bool)>, files: &mut Files) -> Result<bool, String> {
         let path = match filename {
             None | Some(Value::Missing | Value::Null) => self.file_io.full_name.clone()
                 .ok_or_else(|| host_error(1004, "Workbook.Close requires a filename for an unsaved workbook"))?,
@@ -662,7 +949,7 @@ impl WorkbookHost<'_> {
     }
 
     fn save_copy_path(&mut self, path: &str, format: Option<i64>,
-        preferences: Option<(bool, bool)>, copy_only: bool, files: &mut Files) -> Result<(), CopyFailure> {
+        preferences: Option<(bool, bool, bool)>, copy_only: bool, files: &mut Files) -> Result<(), CopyFailure> {
         if path.encode_utf16().count() > 255 { return Err(CopyFailure::Method(self.copy_method_failure())); }
         let invalid = path.chars().enumerate().any(|(index, ch)| {
             matches!(ch, '?' | '*' | '"' | '<' | '>' | '|') || ch == '\0' || ch == ':' && index != 1
@@ -710,8 +997,16 @@ impl WorkbookHost<'_> {
             bytes = crate::vba_project::convert_workbook_format(&bytes, format, retained_project.as_ref())
                 .map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
         }
-        let (recommended, backup) = preferences.unwrap_or((self.file_io.read_only_recommended, self.file_io.create_backup));
+        let (recommended, backup, shared) = preferences.unwrap_or((
+            self.file_io.read_only_recommended, self.file_io.create_backup, self.file_io.shared));
         bytes = WorkbookFiles::package_with_preferences(&bytes, recommended, backup).map_err(|_| failure())?;
+        if shared {
+            let author = self.application_setting("username").unwrap_or_else(||Value::String("User".into()));
+            let units = author.string_units().map(|units|units.into_owned()).unwrap_or_else(||"User".encode_utf16().collect());
+            bytes = WorkbookFiles::package_with_sharing(&bytes, &units, self.now).map_err(|_|failure())?;
+        } else {
+            bytes = WorkbookFiles::package_without_sharing(&bytes).map_err(|_|failure())?;
+        }
         // Save/SaveAs back up the previous destination, not the new bytes.
         // SaveCopyAs preserves the preference but does not create a backup.
         let backup_file = if backup && !copy_only {
@@ -738,6 +1033,7 @@ impl WorkbookHost<'_> {
         if let Some((path, _)) = backup_file { self.file_io.exports.insert(path); }
         self.file_io.read_only_recommended = recommended;
         self.file_io.create_backup = backup;
+        self.file_io.shared = shared;
         self.file_io.retained_project = retained_project;
         self.file_io.exports.insert(normalized);
         Ok(())

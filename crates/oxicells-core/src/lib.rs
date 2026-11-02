@@ -29,6 +29,12 @@ pub use formula::{
 };
 pub use parser::{parse_xlsx, parse_xlsx_preserving_values};
 
+/// Encode OOXML escaped text without losing unpaired UTF-16 code units.
+/// The result still needs the appropriate XML text or attribute escaping.
+pub fn encode_ooxml_string(units: &[u16]) -> String {
+    string_value::encode(units)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -41,7 +41,9 @@ import {readFile} from 'node:fs/promises';await init({module_or_path:await readF
 export {SpreadsheetVbaSession,spreadsheet_vba_source,spreadsheet_vba_project_name};export default function ready(){return Promise.resolve();}`;
 const workerSource=(await readFile(path.join(root,'web/vba-worker.js'),'utf8')).replace("'./oxidocs_wasm.js'",JSON.stringify('data:text/javascript;base64,'+Buffer.from(shim).toString('base64')));
 const bridge=`import {parentPort,workerData} from 'node:worker_threads';const queued=[];let listener;
-globalThis.self={postMessage:value=>parentPort.postMessage(value),addEventListener:(type,handler)=>{listener=handler;for(const data of queued)listener({data});}};
+// Browser workers expose the actual global through self, including WebCrypto.
+globalThis.self=Object.assign(globalThis,{postMessage:value=>parentPort.postMessage(value),addEventListener:(type,handler)=>{listener=handler;for(const data of queued)listener({data});}});
+if(self!==globalThis || typeof self.crypto?.getRandomValues!=='function')throw Error('Worker global scope lacks native WebCrypto');
 parentPort.on('message',data=>listener?listener({data}):queued.push(data));await import('data:text/javascript;base64,'+Buffer.from(workerData).toString('base64'));`;
 globalThis.Worker = class BrowserWorker {
     constructor(){this.thread=new ThreadWorker(new URL('data:text/javascript;base64,'+Buffer.from(bridge).toString('base64')),{workerData:workerSource});}
@@ -727,4 +729,50 @@ for(const route of ['main','canvas'])for(const [format,extension,hasVba,mime] of
 assert.equal(saveAsFormatUiRows.length,8);
 assert.deepEqual(saveAsFormatUiRows.filter(row=>!row.passed),[],'converted packages keep download type, live VBA and global state in both editors');
 
-console.log(JSON.stringify({ main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));
+// Saved properties survive the next UI invocation with its retained package.
+const savedPreferenceUiRows=[];
+for(const route of ['main','canvas'])for(const flavor of ['recommended','shared']){
+ closeVbaProject();
+ const name='SaveFlags-'+route+'-'+flavor+'.xlsm',destination=name.replace('.xlsm','-Saved.xlsm');
+ const option=flavor==='recommended'?'ReadOnlyRecommended:=True':'AccessMode:=2';
+ const expected=flavor==='recommended'?'True|False|False|52':'False|False|True|52';
+ const code='Attribute VB_Name = "Driver"\nPublic Sub SeedSaveFlags()\nApplication.DisplayAlerts = False\nApplication.EnableEvents = False\nEnd Sub\nPublic Function SaveFlags() As String\nThisWorkbook.SaveAs Filename:="C:\\'+destination+'", FileFormat:=52, '+option+'\nSaveFlags = ThisWorkbook.Name\nEnd Function\nPublic Function ReadFlags() As String\nReadFlags = CStr(ThisWorkbook.ReadOnlyRecommended) & "|" & CStr(ThisWorkbook.CreateBackup) & "|" & CStr(ThisWorkbook.MultiUserEditing) & "|" & CStr(ThisWorkbook.FileFormat)\nEnd Function\n';
+ const packet=wasm.save_spreadsheet_vba_source(bytes,code);
+ const row={route,flavor,expected};
+ try{
+  const seeded=await runVbaInWorker(wasm.parse_spreadsheet(packet),code,'Driver.SeedSaveFlags',[],0,name,
+   {applicationState:{},documentModules:wasm.spreadsheet_vba_document_modules(packet),fileSystemState:{folders:['C:\\'],files:[],mountedFolders:[],mountedFiles:[]},fileContext:{fullName:'C:\\'+name,packageBytes:packet}},packet);
+  assert.equal(seeded.error,undefined);
+  if(route==='main'){
+   context.saveFlagsFixture={seeded,packet,code,name};
+   vm.runInContext('currentDocIR=saveFlagsFixture.seeded.workbook;currentFileBytes=saveFlagsFixture.packet;currentFileName=saveFlagsFixture.name;currentXlsxSheetIndex=0;currentXlsxVbaSource=saveFlagsFixture.code;xlsxVbaSourceBound=true;xlsxVbaSourceBaseline=saveFlagsFixture.code;xlsxVbaSourceDirty=false;xlsxVbaEdits.clear();vbaWorkbookPicker.reset(currentFileName);applyVbaExecution(saveFlagsFixture.seeded,currentDocIR);',context);
+   node('vbaSource').value=code;node('vbaProcedure').value='Driver.SaveFlags';node('vbaArguments').value='[]';
+   node('vbaRun').disabled=node('vbaCompile').disabled=false;
+   await vm.runInContext('executeVbaFromDialog()',context);
+   assert.equal(node('vbaResult').classList.values.has('error'),false,node('vbaResult').textContent);
+   assert.ok(node('vbaResult').textContent.includes(destination),node('vbaResult').textContent);
+   node('vbaProcedure').value='Driver.ReadFlags';
+   await vm.runInContext('executeVbaFromDialog()',context);
+   row.actual=node('vbaResult').textContent;
+   assert.equal(node('vbaResult').classList.values.has('error'),false,row.actual);
+  }else{
+   demo.saveFlagsFixture={seeded,packet,code,name};
+   vm.runInContext('book=saveFlagsFixture.seeded.workbook;source=saveFlagsFixture.packet;fileName=saveFlagsFixture.name;shown=0;geom={};macroProjectSource=saveFlagsFixture.code;macroSourceBound=true;macroSourceBaseline=saveFlagsFixture.code;macroSourceDirty=false;macroWorkbookPicker.reset(fileName);applyMacroExecution(saveFlagsFixture.seeded);',demo);
+   demoNode('source').value=code;demoNode('proc').value='Driver.SaveFlags';demoNode('args').value='[]';
+   demoNode('run').disabled=demoNode('compile').disabled=false;
+   await vm.runInContext('macroRun.onclick()',demo);
+   assert.equal(demoNode('result').classList.values.has('error'),false,demoNode('result').textContent);
+   assert.ok(demoNode('result').textContent.includes(destination),demoNode('result').textContent);
+   demoNode('proc').value='Driver.ReadFlags';
+   await vm.runInContext('macroRun.onclick()',demo);
+   row.actual=demoNode('result').textContent;
+   assert.equal(demoNode('result').classList.values.has('error'),false,row.actual);
+  }
+  assert.ok(row.actual.includes(expected),row.actual);
+  row.passed=true;
+ }finally{closeVbaProject();}
+ savedPreferenceUiRows.push(row);
+}
+assert.equal(savedPreferenceUiRows.length,4);
+
+console.log(JSON.stringify({ main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, saved_preference_main_ui_cases:2, saved_preference_canvas_ui_cases:2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));

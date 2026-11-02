@@ -49,7 +49,9 @@ import {readFile} from 'node:fs/promises';await init({module_or_path:await readF
 export {SpreadsheetVbaSession,spreadsheet_vba_source,spreadsheet_vba_project_name};export default function ready(){return Promise.resolve();}`;
 const workerSource=(await readFile(path.join(root,'web/vba-worker.js'),'utf8')).replace("'./oxidocs_wasm.js'",JSON.stringify('data:text/javascript;base64,'+Buffer.from(shim).toString('base64')));
 const bridge=`import {parentPort,workerData} from 'node:worker_threads';const queued=[];let listener;
-globalThis.self={postMessage:value=>parentPort.postMessage(value),addEventListener:(type,handler)=>{listener=handler;for(const data of queued)listener({data});}};
+// Browser workers expose the actual global through self, including WebCrypto.
+globalThis.self=Object.assign(globalThis,{postMessage:value=>parentPort.postMessage(value),addEventListener:(type,handler)=>{listener=handler;for(const data of queued)listener({data});}});
+if(self!==globalThis || typeof self.crypto?.getRandomValues!=='function')throw Error('Worker global scope lacks native WebCrypto');
 parentPort.on('message',data=>listener?listener({data}):queued.push(data));await import('data:text/javascript;base64,'+Buffer.from(workerData).toString('base64'));`;
 class BrowserWorker {
     constructor(){this.thread=new ThreadWorker(new URL('data:text/javascript;base64,'+Buffer.from(bridge).toString('base64')),{workerData:workerSource});}

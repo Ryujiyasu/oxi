@@ -221,6 +221,8 @@ pub struct HostEventCall {
     pub deliveries: Vec<HostEventDelivery>,
     pub args: Vec<Value>,
     pub by_ref: Vec<usize>,
+    /// Pending host failure whose Err state is visible to this notification.
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -237,6 +239,9 @@ pub struct HostEventDelivery {
 pub struct HostEventResult {
     pub args: Vec<Value>,
     pub handlers: usize,
+    /// The post-handler Err state, including explicit source and help metadata.
+    pub error: Option<String>,
+    pub error_changed: bool,
 }
 
 pub trait Host {
@@ -611,7 +616,7 @@ impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // A host refusal may carry Excel's words and then, after a mark, the
         // engine's reason; whoever reads an unhandled failure sees both.
-        let message = match (self.kind == RuntimeErrorKind::Host)
+        let message = match (self.kind == RuntimeErrorKind::Host && self.vba_help_file.is_none())
             .then(|| self.message.split_once(REASON_MARK))
             .flatten()
         {
@@ -829,7 +834,7 @@ enum ErrorMode {
     Goto(String),
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 struct ErrorState {
     number: i64,
     description: String,
@@ -2900,6 +2905,12 @@ impl<'a> Runtime<'a> {
     }
 
     fn dispatch_host_event(&mut self, event: &HostEventCall) -> Result<HostEventResult, RuntimeError> {
+        if let Some(message) = &event.error {
+            let failure = host_failure(message.clone(), 0);
+            self.err_in = Some(self.raised_error_state(&failure, &self.project_name, None));
+            self.err_out = None;
+        }
+        let incoming_error = self.err_out.as_ref().or(self.err_in.as_ref()).cloned().unwrap_or_default();
         let slots: Vec<_> = event.args.iter().cloned().map(VariableSlot::new).collect();
         let references: Vec<_> = slots.iter().enumerate().map(|(index, slot)| {
             event.by_ref.contains(&index).then(|| {
@@ -2931,7 +2942,10 @@ impl<'a> Runtime<'a> {
                 handlers += usize::from(handled);
             }
         }
-        Ok(HostEventResult { args: slots.iter().map(|slot| slot.borrow().clone()).collect(), handlers })
+        let outgoing_error = self.err_out.as_ref().or(self.err_in.as_ref()).cloned().unwrap_or_default();
+        let error_changed = outgoing_error != incoming_error;
+        let error = host_error_state(&outgoing_error);
+        Ok(HostEventResult { args: slots.iter().map(|slot| slot.borrow().clone()).collect(), handlers, error, error_changed })
     }
 
     fn work_out_host_events(&mut self) -> Result<bool, RuntimeError> {
@@ -4556,23 +4570,8 @@ impl<'a> Runtime<'a> {
         Ok(Some(Flow::Exit(ExitKind::Sub)))
     }
 
-    fn handle_runtime_error(
-        &mut self,
-        failure: RuntimeError,
-        frame: &mut Frame,
-    ) -> Result<Flow, RuntimeError> {
-        if matches!(
-            failure.kind,
-            RuntimeErrorKind::StepLimit | RuntimeErrorKind::CallDepth | RuntimeErrorKind::ExecutionTerminated | RuntimeErrorKind::EndStatement | RuntimeErrorKind::Compile
-        ) || frame.error_handler_active
-        {
-            return Err(failure);
-        }
-        // A failed binding/conversion can leave a completed getter's Err carry.
-        // The current failure supersedes that carry; it must not overwrite Err
-        // again when the caller advances to its next statement.
-        self.err_out.take();
-        let number = runtime_error_number(&failure);
+    fn raised_error_state(&self, failure: &RuntimeError, source_name: &str, line: Option<u32>) -> ErrorState {
+        let number = runtime_error_number(failure);
         // A macro that shows `Err.Description` shows VBA's own words for the
         // errors the language raises; the engine's message says more, but it
         // is for whoever reads an unhandled failure, not for the macro.
@@ -4583,7 +4582,7 @@ impl<'a> Runtime<'a> {
         // VBAProject, and a duplicate Collection key 457 from VBAProject.
         let description = if failure.vba_default_description {
             self.error_environment.description(number).to_string()
-        } else if failure.kind == RuntimeErrorKind::Host {
+        } else if failure.kind == RuntimeErrorKind::Host && failure.vba_help_file.is_none() {
             failure.message.split(REASON_MARK).next().unwrap_or_default().to_string()
         } else {
             failure.message.clone()
@@ -4607,7 +4606,7 @@ impl<'a> Runtime<'a> {
                     1_000_000 + if number < 0 { 440 } else { number }
                 } else { vba_error_help_context(number) }
             });
-        frame.error_state = ErrorState {
+        ErrorState {
             help_file,
             help_context,
             number,
@@ -4619,9 +4618,29 @@ impl<'a> Runtime<'a> {
             source: failure
                 .vba_source
                 .clone()
-                .unwrap_or_else(|| frame.source_name.clone()),
-            line: excel_erl(frame.body, frame.last_line_number),
-        };
+                .unwrap_or_else(|| source_name.to_string()),
+            line,
+        }
+    }
+
+    fn handle_runtime_error(
+        &mut self,
+        failure: RuntimeError,
+        frame: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        if matches!(
+            failure.kind,
+            RuntimeErrorKind::StepLimit | RuntimeErrorKind::CallDepth | RuntimeErrorKind::ExecutionTerminated | RuntimeErrorKind::EndStatement | RuntimeErrorKind::Compile
+        ) || frame.error_handler_active
+        {
+            return Err(failure);
+        }
+        // A failed binding/conversion can leave a completed getter's Err carry.
+        // The current failure supersedes that carry; it must not overwrite Err
+        // again when the caller advances to its next statement.
+        self.err_out.take();
+        frame.error_state = self.raised_error_state(&failure, &frame.source_name,
+            excel_erl(frame.body, frame.last_line_number));
         match frame.error_mode.clone() {
             ErrorMode::Disabled => Err(failure),
             ErrorMode::ResumeNext => Ok(Flow::Continue),
@@ -11266,6 +11285,37 @@ pub fn host_error(number: i64, message: impl Into<String>) -> String {
     format!("{HOST_ERROR_MARK}{number}:{}", message.into())
 }
 
+
+// Length-prefixed UTF-8 fields let callback errors retain arbitrary BSTR text
+// without adding dependencies or reserving characters in Source/Description.
+const HOST_ERROR_STATE_MARK: &str = "vba-error-state:";
+
+fn host_error_state(state: &ErrorState) -> Option<String> {
+    (state.number != 0).then(|| format!(
+        "{HOST_ERROR_STATE_MARK}{}:{}:{}:{}:{}:{}{}{}",
+        state.number, state.help_context, state.description.len(), state.source.len(),
+        state.help_file.len(), state.description, state.source, state.help_file))
+}
+
+fn detailed_host_failure(message: &str, line: u32) -> Option<RuntimeError> {
+    let mut fields = message.strip_prefix(HOST_ERROR_STATE_MARK)?.splitn(6, ':');
+    let number = fields.next()?.parse().ok()?;
+    let help_context = fields.next()?.parse().ok()?;
+    let description_len: usize = fields.next()?.parse().ok()?;
+    let source_len: usize = fields.next()?.parse().ok()?;
+    let help_len: usize = fields.next()?.parse().ok()?;
+    let body = fields.next()?;
+    let source_end = description_len.checked_add(source_len)?;
+    if source_end.checked_add(help_len)? != body.len() { return None; }
+    Some(RuntimeError {
+        kind: RuntimeErrorKind::Host, message: body.get(..description_len)?.to_string(),
+        line: Some(line), vba_number: Some(number),
+        vba_source: Some(body.get(description_len..source_end)?.to_string()),
+        vba_help_file: Some(body.get(source_end..)?.to_string()),
+        vba_help_context: Some(help_context), vba_default_description: false,
+    })
+}
+
 const HOST_ERROR_MARK: &str = "vba-error:";
 
 /// Between Excel's words for an error and the engine's reason for it.
@@ -11297,6 +11347,7 @@ pub fn host_error_from(number: i64, source: &str, description: impl Into<String>
 /// is what `Err.Description` reads in Excel -- `Invalid procedure call or
 /// argument` for 5 -- rather than the host's account of why.
 fn host_failure(message: String, line: u32) -> RuntimeError {
+    if let Some(failure) = detailed_host_failure(&message, line) { return failure; }
     if let Some(rest) = message.strip_prefix(HOST_ERROR_MARK) {
         if let Some((number, description)) = rest.split_once('=') {
             let (number, source) = match number.split_once('@') {
@@ -29295,4 +29346,37 @@ End Function
         });
     }
 
+}
+
+#[cfg(test)]
+mod host_event_error_tests {
+    use super::*;
+
+    #[test]
+    fn callback_error_snapshot_retains_unicode_delimiters_and_help() {
+        let module = crate::parse_module("").unwrap();
+        let runtime = Runtime::new(&module);
+        for (number, source) in [(1004, "Source=@:日本語"), (-2147221080, "")] {
+            let state = ErrorState {
+                number, source: source.into(), description: "説明:\0@=\n𠮷\u{1}detail".into(),
+                help_file: "help:書.hlp".into(), help_context: 12345,
+                description_set: true, source_set: true, help_file_set: true,
+                ..Default::default()
+            };
+            let encoded = host_error_state(&state).unwrap();
+            let failure = host_failure(encoded, 42);
+            assert_eq!(failure.vba_number, Some(number));
+            assert_eq!(failure.vba_source.as_deref(), Some(source));
+            assert_eq!(failure.vba_help_file.as_deref(), Some("help:書.hlp"));
+            assert_eq!(failure.vba_help_context, Some(12345));
+            let carried = runtime.raised_error_state(&failure, "Fallback", None);
+            assert_eq!(carried.description, state.description);
+            assert_eq!(carried.source, state.source);
+            assert_eq!(carried.help_file, state.help_file);
+            assert_eq!(carried.help_context, state.help_context);
+        }
+        assert!(host_error_state(&ErrorState::default()).is_none());
+        assert!(detailed_host_failure("vba-error-state:1004:0:999:0:0:short", 1).is_none());
+        assert!(detailed_host_failure("vba-error-state:1004:0:1:2:0:日", 1).is_none());
+    }
 }
