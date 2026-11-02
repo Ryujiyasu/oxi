@@ -3487,7 +3487,8 @@ struct WorkbookHost<'a> {
     /// as in Excel. Keyed by kind (0 workbook, 1 application, 2 a sheet).
     singletons: BTreeMap<(u8, usize), u64>,
     automation_code_page: Option<AnsiCodePage>,
-    calculation_assigned: bool,
+    /// Native settings can dirty a book without changing its cells.
+    application_setting_dirtied: bool,
     comment_shape_counters: std::collections::HashMap<usize, u32>,
     document_code_names: BTreeMap<usize, String>,
     error_language: ErrorLanguage,
@@ -3766,7 +3767,7 @@ impl<'a> WorkbookHost<'a> {
             debug_output: Vec::new(),
             messages: Vec::new(),
             automation_code_page: None,
-            calculation_assigned: false,
+            application_setting_dirtied: false,
             comment_shape_counters: Default::default(),
             document_code_names: Default::default(),
             error_language: ErrorLanguage::English,
@@ -24661,10 +24662,618 @@ impl<'a> WorkbookHost<'a> {
     }
 }
 
+// These values have one application lifetime. They move between real hosts
+// when native dispatch changes books; they are never copied per workbook.
+struct ApplicationProperties {
+    find_settings: (i64, i64, i64),
+    screen_updating: bool,
+    enable_events: bool,
+    display_alerts: bool,
+    calculation: i64,
+    status_bar: Option<String>,
+    cursor: i64,
+    interactive: bool,
+    app_settings: std::collections::HashMap<String, Value>,
+    find_format_add_indent: Option<bool>,
+    find_format_bold: Option<bool>,
+    find_format_borders: std::collections::HashMap<BorderSelection, FormatBorder>,
+    find_format_font_color: Option<Option<String>>,
+    find_format_font_color_index: Option<i64>,
+    find_format_font_name: Option<Option<String>>,
+    find_format_font_size: Option<f32>,
+    find_format_font_style: Option<(bool, bool)>,
+    find_format_font_theme: Option<usize>,
+    find_format_font_theme_font: Option<i64>,
+    find_format_font_tint: Option<f64>,
+    find_format_formula_hidden: Option<bool>,
+    find_format_horizontal_alignment: Option<Option<String>>,
+    find_format_indent_level: Option<u32>,
+    find_format_interior_color: Option<Option<String>>,
+    find_format_interior_color_index: Option<i64>,
+    find_format_interior_pattern: Option<i64>,
+    find_format_interior_theme_color: Option<usize>,
+    find_format_interior_tint: Option<f64>,
+    find_format_italic: Option<bool>,
+    find_format_locked: Option<bool>,
+    find_format_merge_cells: Option<bool>,
+    find_format_number_format: Option<String>,
+    find_format_orientation: Option<i64>,
+    find_format_pattern_color: Option<Option<u32>>,
+    find_format_pattern_color_index: Option<i64>,
+    find_format_pattern_theme_color: Option<usize>,
+    find_format_pattern_tint: Option<f64>,
+    find_format_shrink_to_fit: Option<bool>,
+    find_format_strikethrough: Option<bool>,
+    find_format_subscript: Option<bool>,
+    find_format_superscript: Option<bool>,
+    find_format_underline: Option<i64>,
+    find_format_vertical_alignment: Option<Option<String>>,
+    find_format_wrap_text: Option<bool>,
+    replace_format_add_indent: Option<bool>,
+    replace_format_bold: Option<bool>,
+    replace_format_borders: std::collections::HashMap<BorderSelection, FormatBorder>,
+    replace_format_font_color: Option<Option<String>>,
+    replace_format_font_face_actions: Vec<FormatFontFaceAction>,
+    replace_format_font_name: Option<Option<String>>,
+    replace_format_font_paint_actions: Vec<FormatFontPaintAction>,
+    replace_format_font_size: Option<f32>,
+    replace_format_font_style: Option<(bool, bool)>,
+    replace_format_font_theme_font: Option<i64>,
+    replace_format_font_touched: bool,
+    replace_format_formula_hidden: Option<bool>,
+    replace_format_horizontal_alignment: Option<Option<String>>,
+    replace_format_indent_level: Option<u32>,
+    replace_format_interior_actions: Vec<FormatInteriorAction>,
+    replace_format_interior_color: Option<Option<String>>,
+    replace_format_interior_pattern: Option<i64>,
+    replace_format_italic: Option<bool>,
+    replace_format_locked: Option<bool>,
+    replace_format_merge_cells: Option<bool>,
+    replace_format_number_format: Option<String>,
+    replace_format_orientation: Option<i64>,
+    replace_format_pattern_color: Option<Option<u32>>,
+    replace_format_shrink_to_fit: Option<bool>,
+    replace_format_strikethrough: Option<bool>,
+    replace_format_subscript: Option<bool>,
+    replace_format_superscript: Option<bool>,
+    replace_format_underline: Option<i64>,
+    replace_format_vertical_alignment: Option<Option<String>>,
+    replace_format_wrap_text: Option<bool>,
+    replace_format_font_color_index: Option<i64>,
+    replace_format_font_theme: Option<usize>,
+    replace_format_font_tint: Option<f64>,
+    replace_format_interior_color_index: Option<i64>,
+    replace_format_interior_theme_color: Option<usize>,
+    replace_format_interior_tint: Option<f64>,
+    replace_format_pattern_color_index: Option<i64>,
+    replace_format_pattern_theme_color: Option<usize>,
+    replace_format_pattern_tint: Option<f64>,
+}
+impl ApplicationProperties {
+    fn take(host: &mut WorkbookHost<'_>) -> Self {
+        Self {
+            find_settings: std::mem::take(&mut host.find_settings),
+            screen_updating: std::mem::take(&mut host.screen_updating),
+            enable_events: std::mem::take(&mut host.enable_events),
+            display_alerts: std::mem::take(&mut host.display_alerts),
+            calculation: std::mem::take(&mut host.calculation),
+            status_bar: std::mem::take(&mut host.status_bar),
+            cursor: std::mem::take(&mut host.cursor),
+            interactive: std::mem::take(&mut host.interactive),
+            app_settings: std::mem::take(&mut host.app_settings),
+            find_format_add_indent: std::mem::take(&mut host.find_format_add_indent),
+            find_format_bold: std::mem::take(&mut host.find_format_bold),
+            find_format_borders: std::mem::take(&mut host.find_format_borders),
+            find_format_font_color: std::mem::take(&mut host.find_format_font_color),
+            find_format_font_color_index: std::mem::take(&mut host.find_format_font_color_index),
+            find_format_font_name: std::mem::take(&mut host.find_format_font_name),
+            find_format_font_size: std::mem::take(&mut host.find_format_font_size),
+            find_format_font_style: std::mem::take(&mut host.find_format_font_style),
+            find_format_font_theme: std::mem::take(&mut host.find_format_font_theme),
+            find_format_font_theme_font: std::mem::take(&mut host.find_format_font_theme_font),
+            find_format_font_tint: std::mem::take(&mut host.find_format_font_tint),
+            find_format_formula_hidden: std::mem::take(&mut host.find_format_formula_hidden),
+            find_format_horizontal_alignment: std::mem::take(
+                &mut host.find_format_horizontal_alignment,
+            ),
+            find_format_indent_level: std::mem::take(&mut host.find_format_indent_level),
+            find_format_interior_color: std::mem::take(&mut host.find_format_interior_color),
+            find_format_interior_color_index: std::mem::take(
+                &mut host.find_format_interior_color_index,
+            ),
+            find_format_interior_pattern: std::mem::take(&mut host.find_format_interior_pattern),
+            find_format_interior_theme_color: std::mem::take(
+                &mut host.find_format_interior_theme_color,
+            ),
+            find_format_interior_tint: std::mem::take(&mut host.find_format_interior_tint),
+            find_format_italic: std::mem::take(&mut host.find_format_italic),
+            find_format_locked: std::mem::take(&mut host.find_format_locked),
+            find_format_merge_cells: std::mem::take(&mut host.find_format_merge_cells),
+            find_format_number_format: std::mem::take(&mut host.find_format_number_format),
+            find_format_orientation: std::mem::take(&mut host.find_format_orientation),
+            find_format_pattern_color: std::mem::take(&mut host.find_format_pattern_color),
+            find_format_pattern_color_index: std::mem::take(
+                &mut host.find_format_pattern_color_index,
+            ),
+            find_format_pattern_theme_color: std::mem::take(
+                &mut host.find_format_pattern_theme_color,
+            ),
+            find_format_pattern_tint: std::mem::take(&mut host.find_format_pattern_tint),
+            find_format_shrink_to_fit: std::mem::take(&mut host.find_format_shrink_to_fit),
+            find_format_strikethrough: std::mem::take(&mut host.find_format_strikethrough),
+            find_format_subscript: std::mem::take(&mut host.find_format_subscript),
+            find_format_superscript: std::mem::take(&mut host.find_format_superscript),
+            find_format_underline: std::mem::take(&mut host.find_format_underline),
+            find_format_vertical_alignment: std::mem::take(
+                &mut host.find_format_vertical_alignment,
+            ),
+            find_format_wrap_text: std::mem::take(&mut host.find_format_wrap_text),
+            replace_format_add_indent: std::mem::take(&mut host.replace_format_add_indent),
+            replace_format_bold: std::mem::take(&mut host.replace_format_bold),
+            replace_format_borders: std::mem::take(&mut host.replace_format_borders),
+            replace_format_font_color: std::mem::take(&mut host.replace_format_font_color),
+            replace_format_font_face_actions: std::mem::take(
+                &mut host.replace_format_font_face_actions,
+            ),
+            replace_format_font_name: std::mem::take(&mut host.replace_format_font_name),
+            replace_format_font_paint_actions: std::mem::take(
+                &mut host.replace_format_font_paint_actions,
+            ),
+            replace_format_font_size: std::mem::take(&mut host.replace_format_font_size),
+            replace_format_font_style: std::mem::take(&mut host.replace_format_font_style),
+            replace_format_font_theme_font: std::mem::take(
+                &mut host.replace_format_font_theme_font,
+            ),
+            replace_format_font_touched: std::mem::take(&mut host.replace_format_font_touched),
+            replace_format_formula_hidden: std::mem::take(&mut host.replace_format_formula_hidden),
+            replace_format_horizontal_alignment: std::mem::take(
+                &mut host.replace_format_horizontal_alignment,
+            ),
+            replace_format_indent_level: std::mem::take(&mut host.replace_format_indent_level),
+            replace_format_interior_actions: std::mem::take(
+                &mut host.replace_format_interior_actions,
+            ),
+            replace_format_interior_color: std::mem::take(&mut host.replace_format_interior_color),
+            replace_format_interior_pattern: std::mem::take(
+                &mut host.replace_format_interior_pattern,
+            ),
+            replace_format_italic: std::mem::take(&mut host.replace_format_italic),
+            replace_format_locked: std::mem::take(&mut host.replace_format_locked),
+            replace_format_merge_cells: std::mem::take(&mut host.replace_format_merge_cells),
+            replace_format_number_format: std::mem::take(&mut host.replace_format_number_format),
+            replace_format_orientation: std::mem::take(&mut host.replace_format_orientation),
+            replace_format_pattern_color: std::mem::take(&mut host.replace_format_pattern_color),
+            replace_format_shrink_to_fit: std::mem::take(&mut host.replace_format_shrink_to_fit),
+            replace_format_strikethrough: std::mem::take(&mut host.replace_format_strikethrough),
+            replace_format_subscript: std::mem::take(&mut host.replace_format_subscript),
+            replace_format_superscript: std::mem::take(&mut host.replace_format_superscript),
+            replace_format_underline: std::mem::take(&mut host.replace_format_underline),
+            replace_format_vertical_alignment: std::mem::take(
+                &mut host.replace_format_vertical_alignment,
+            ),
+            replace_format_wrap_text: std::mem::take(&mut host.replace_format_wrap_text),
+            replace_format_font_color_index: std::mem::take(
+                &mut host.replace_format_font_color_index,
+            ),
+            replace_format_font_theme: std::mem::take(&mut host.replace_format_font_theme),
+            replace_format_font_tint: std::mem::take(&mut host.replace_format_font_tint),
+            replace_format_interior_color_index: std::mem::take(
+                &mut host.replace_format_interior_color_index,
+            ),
+            replace_format_interior_theme_color: std::mem::take(
+                &mut host.replace_format_interior_theme_color,
+            ),
+            replace_format_interior_tint: std::mem::take(&mut host.replace_format_interior_tint),
+            replace_format_pattern_color_index: std::mem::take(
+                &mut host.replace_format_pattern_color_index,
+            ),
+            replace_format_pattern_theme_color: std::mem::take(
+                &mut host.replace_format_pattern_theme_color,
+            ),
+            replace_format_pattern_tint: std::mem::take(&mut host.replace_format_pattern_tint),
+        }
+    }
+    fn install(self, host: &mut WorkbookHost<'_>) {
+        host.find_settings = self.find_settings;
+        host.screen_updating = self.screen_updating;
+        host.enable_events = self.enable_events;
+        host.display_alerts = self.display_alerts;
+        host.calculation = self.calculation;
+        host.status_bar = self.status_bar;
+        host.cursor = self.cursor;
+        host.interactive = self.interactive;
+        host.app_settings = self.app_settings;
+        host.find_format_add_indent = self.find_format_add_indent;
+        host.find_format_bold = self.find_format_bold;
+        host.find_format_borders = self.find_format_borders;
+        host.find_format_font_color = self.find_format_font_color;
+        host.find_format_font_color_index = self.find_format_font_color_index;
+        host.find_format_font_name = self.find_format_font_name;
+        host.find_format_font_size = self.find_format_font_size;
+        host.find_format_font_style = self.find_format_font_style;
+        host.find_format_font_theme = self.find_format_font_theme;
+        host.find_format_font_theme_font = self.find_format_font_theme_font;
+        host.find_format_font_tint = self.find_format_font_tint;
+        host.find_format_formula_hidden = self.find_format_formula_hidden;
+        host.find_format_horizontal_alignment = self.find_format_horizontal_alignment;
+        host.find_format_indent_level = self.find_format_indent_level;
+        host.find_format_interior_color = self.find_format_interior_color;
+        host.find_format_interior_color_index = self.find_format_interior_color_index;
+        host.find_format_interior_pattern = self.find_format_interior_pattern;
+        host.find_format_interior_theme_color = self.find_format_interior_theme_color;
+        host.find_format_interior_tint = self.find_format_interior_tint;
+        host.find_format_italic = self.find_format_italic;
+        host.find_format_locked = self.find_format_locked;
+        host.find_format_merge_cells = self.find_format_merge_cells;
+        host.find_format_number_format = self.find_format_number_format;
+        host.find_format_orientation = self.find_format_orientation;
+        host.find_format_pattern_color = self.find_format_pattern_color;
+        host.find_format_pattern_color_index = self.find_format_pattern_color_index;
+        host.find_format_pattern_theme_color = self.find_format_pattern_theme_color;
+        host.find_format_pattern_tint = self.find_format_pattern_tint;
+        host.find_format_shrink_to_fit = self.find_format_shrink_to_fit;
+        host.find_format_strikethrough = self.find_format_strikethrough;
+        host.find_format_subscript = self.find_format_subscript;
+        host.find_format_superscript = self.find_format_superscript;
+        host.find_format_underline = self.find_format_underline;
+        host.find_format_vertical_alignment = self.find_format_vertical_alignment;
+        host.find_format_wrap_text = self.find_format_wrap_text;
+        host.replace_format_add_indent = self.replace_format_add_indent;
+        host.replace_format_bold = self.replace_format_bold;
+        host.replace_format_borders = self.replace_format_borders;
+        host.replace_format_font_color = self.replace_format_font_color;
+        host.replace_format_font_face_actions = self.replace_format_font_face_actions;
+        host.replace_format_font_name = self.replace_format_font_name;
+        host.replace_format_font_paint_actions = self.replace_format_font_paint_actions;
+        host.replace_format_font_size = self.replace_format_font_size;
+        host.replace_format_font_style = self.replace_format_font_style;
+        host.replace_format_font_theme_font = self.replace_format_font_theme_font;
+        host.replace_format_font_touched = self.replace_format_font_touched;
+        host.replace_format_formula_hidden = self.replace_format_formula_hidden;
+        host.replace_format_horizontal_alignment = self.replace_format_horizontal_alignment;
+        host.replace_format_indent_level = self.replace_format_indent_level;
+        host.replace_format_interior_actions = self.replace_format_interior_actions;
+        host.replace_format_interior_color = self.replace_format_interior_color;
+        host.replace_format_interior_pattern = self.replace_format_interior_pattern;
+        host.replace_format_italic = self.replace_format_italic;
+        host.replace_format_locked = self.replace_format_locked;
+        host.replace_format_merge_cells = self.replace_format_merge_cells;
+        host.replace_format_number_format = self.replace_format_number_format;
+        host.replace_format_orientation = self.replace_format_orientation;
+        host.replace_format_pattern_color = self.replace_format_pattern_color;
+        host.replace_format_shrink_to_fit = self.replace_format_shrink_to_fit;
+        host.replace_format_strikethrough = self.replace_format_strikethrough;
+        host.replace_format_subscript = self.replace_format_subscript;
+        host.replace_format_superscript = self.replace_format_superscript;
+        host.replace_format_underline = self.replace_format_underline;
+        host.replace_format_vertical_alignment = self.replace_format_vertical_alignment;
+        host.replace_format_wrap_text = self.replace_format_wrap_text;
+        host.replace_format_font_color_index = self.replace_format_font_color_index;
+        host.replace_format_font_theme = self.replace_format_font_theme;
+        host.replace_format_font_tint = self.replace_format_font_tint;
+        host.replace_format_interior_color_index = self.replace_format_interior_color_index;
+        host.replace_format_interior_theme_color = self.replace_format_interior_theme_color;
+        host.replace_format_interior_tint = self.replace_format_interior_tint;
+        host.replace_format_pattern_color_index = self.replace_format_pattern_color_index;
+        host.replace_format_pattern_theme_color = self.replace_format_pattern_theme_color;
+        host.replace_format_pattern_tint = self.replace_format_pattern_tint;
+    }
+    fn swap(left: &mut WorkbookHost<'_>, right: &mut WorkbookHost<'_>) {
+        std::mem::swap(&mut left.find_settings, &mut right.find_settings);
+        std::mem::swap(&mut left.screen_updating, &mut right.screen_updating);
+        std::mem::swap(&mut left.enable_events, &mut right.enable_events);
+        std::mem::swap(&mut left.display_alerts, &mut right.display_alerts);
+        std::mem::swap(&mut left.calculation, &mut right.calculation);
+        std::mem::swap(&mut left.status_bar, &mut right.status_bar);
+        std::mem::swap(&mut left.cursor, &mut right.cursor);
+        std::mem::swap(&mut left.interactive, &mut right.interactive);
+        std::mem::swap(&mut left.app_settings, &mut right.app_settings);
+        std::mem::swap(
+            &mut left.find_format_add_indent,
+            &mut right.find_format_add_indent,
+        );
+        std::mem::swap(&mut left.find_format_bold, &mut right.find_format_bold);
+        std::mem::swap(
+            &mut left.find_format_borders,
+            &mut right.find_format_borders,
+        );
+        std::mem::swap(
+            &mut left.find_format_font_color,
+            &mut right.find_format_font_color,
+        );
+        std::mem::swap(
+            &mut left.find_format_font_color_index,
+            &mut right.find_format_font_color_index,
+        );
+        std::mem::swap(
+            &mut left.find_format_font_name,
+            &mut right.find_format_font_name,
+        );
+        std::mem::swap(
+            &mut left.find_format_font_size,
+            &mut right.find_format_font_size,
+        );
+        std::mem::swap(
+            &mut left.find_format_font_style,
+            &mut right.find_format_font_style,
+        );
+        std::mem::swap(
+            &mut left.find_format_font_theme,
+            &mut right.find_format_font_theme,
+        );
+        std::mem::swap(
+            &mut left.find_format_font_theme_font,
+            &mut right.find_format_font_theme_font,
+        );
+        std::mem::swap(
+            &mut left.find_format_font_tint,
+            &mut right.find_format_font_tint,
+        );
+        std::mem::swap(
+            &mut left.find_format_formula_hidden,
+            &mut right.find_format_formula_hidden,
+        );
+        std::mem::swap(
+            &mut left.find_format_horizontal_alignment,
+            &mut right.find_format_horizontal_alignment,
+        );
+        std::mem::swap(
+            &mut left.find_format_indent_level,
+            &mut right.find_format_indent_level,
+        );
+        std::mem::swap(
+            &mut left.find_format_interior_color,
+            &mut right.find_format_interior_color,
+        );
+        std::mem::swap(
+            &mut left.find_format_interior_color_index,
+            &mut right.find_format_interior_color_index,
+        );
+        std::mem::swap(
+            &mut left.find_format_interior_pattern,
+            &mut right.find_format_interior_pattern,
+        );
+        std::mem::swap(
+            &mut left.find_format_interior_theme_color,
+            &mut right.find_format_interior_theme_color,
+        );
+        std::mem::swap(
+            &mut left.find_format_interior_tint,
+            &mut right.find_format_interior_tint,
+        );
+        std::mem::swap(&mut left.find_format_italic, &mut right.find_format_italic);
+        std::mem::swap(&mut left.find_format_locked, &mut right.find_format_locked);
+        std::mem::swap(
+            &mut left.find_format_merge_cells,
+            &mut right.find_format_merge_cells,
+        );
+        std::mem::swap(
+            &mut left.find_format_number_format,
+            &mut right.find_format_number_format,
+        );
+        std::mem::swap(
+            &mut left.find_format_orientation,
+            &mut right.find_format_orientation,
+        );
+        std::mem::swap(
+            &mut left.find_format_pattern_color,
+            &mut right.find_format_pattern_color,
+        );
+        std::mem::swap(
+            &mut left.find_format_pattern_color_index,
+            &mut right.find_format_pattern_color_index,
+        );
+        std::mem::swap(
+            &mut left.find_format_pattern_theme_color,
+            &mut right.find_format_pattern_theme_color,
+        );
+        std::mem::swap(
+            &mut left.find_format_pattern_tint,
+            &mut right.find_format_pattern_tint,
+        );
+        std::mem::swap(
+            &mut left.find_format_shrink_to_fit,
+            &mut right.find_format_shrink_to_fit,
+        );
+        std::mem::swap(
+            &mut left.find_format_strikethrough,
+            &mut right.find_format_strikethrough,
+        );
+        std::mem::swap(
+            &mut left.find_format_subscript,
+            &mut right.find_format_subscript,
+        );
+        std::mem::swap(
+            &mut left.find_format_superscript,
+            &mut right.find_format_superscript,
+        );
+        std::mem::swap(
+            &mut left.find_format_underline,
+            &mut right.find_format_underline,
+        );
+        std::mem::swap(
+            &mut left.find_format_vertical_alignment,
+            &mut right.find_format_vertical_alignment,
+        );
+        std::mem::swap(
+            &mut left.find_format_wrap_text,
+            &mut right.find_format_wrap_text,
+        );
+        std::mem::swap(
+            &mut left.replace_format_add_indent,
+            &mut right.replace_format_add_indent,
+        );
+        std::mem::swap(
+            &mut left.replace_format_bold,
+            &mut right.replace_format_bold,
+        );
+        std::mem::swap(
+            &mut left.replace_format_borders,
+            &mut right.replace_format_borders,
+        );
+        std::mem::swap(
+            &mut left.replace_format_font_color,
+            &mut right.replace_format_font_color,
+        );
+        std::mem::swap(
+            &mut left.replace_format_font_face_actions,
+            &mut right.replace_format_font_face_actions,
+        );
+        std::mem::swap(
+            &mut left.replace_format_font_name,
+            &mut right.replace_format_font_name,
+        );
+        std::mem::swap(
+            &mut left.replace_format_font_paint_actions,
+            &mut right.replace_format_font_paint_actions,
+        );
+        std::mem::swap(
+            &mut left.replace_format_font_size,
+            &mut right.replace_format_font_size,
+        );
+        std::mem::swap(
+            &mut left.replace_format_font_style,
+            &mut right.replace_format_font_style,
+        );
+        std::mem::swap(
+            &mut left.replace_format_font_theme_font,
+            &mut right.replace_format_font_theme_font,
+        );
+        std::mem::swap(
+            &mut left.replace_format_font_touched,
+            &mut right.replace_format_font_touched,
+        );
+        std::mem::swap(
+            &mut left.replace_format_formula_hidden,
+            &mut right.replace_format_formula_hidden,
+        );
+        std::mem::swap(
+            &mut left.replace_format_horizontal_alignment,
+            &mut right.replace_format_horizontal_alignment,
+        );
+        std::mem::swap(
+            &mut left.replace_format_indent_level,
+            &mut right.replace_format_indent_level,
+        );
+        std::mem::swap(
+            &mut left.replace_format_interior_actions,
+            &mut right.replace_format_interior_actions,
+        );
+        std::mem::swap(
+            &mut left.replace_format_interior_color,
+            &mut right.replace_format_interior_color,
+        );
+        std::mem::swap(
+            &mut left.replace_format_interior_pattern,
+            &mut right.replace_format_interior_pattern,
+        );
+        std::mem::swap(
+            &mut left.replace_format_italic,
+            &mut right.replace_format_italic,
+        );
+        std::mem::swap(
+            &mut left.replace_format_locked,
+            &mut right.replace_format_locked,
+        );
+        std::mem::swap(
+            &mut left.replace_format_merge_cells,
+            &mut right.replace_format_merge_cells,
+        );
+        std::mem::swap(
+            &mut left.replace_format_number_format,
+            &mut right.replace_format_number_format,
+        );
+        std::mem::swap(
+            &mut left.replace_format_orientation,
+            &mut right.replace_format_orientation,
+        );
+        std::mem::swap(
+            &mut left.replace_format_pattern_color,
+            &mut right.replace_format_pattern_color,
+        );
+        std::mem::swap(
+            &mut left.replace_format_shrink_to_fit,
+            &mut right.replace_format_shrink_to_fit,
+        );
+        std::mem::swap(
+            &mut left.replace_format_strikethrough,
+            &mut right.replace_format_strikethrough,
+        );
+        std::mem::swap(
+            &mut left.replace_format_subscript,
+            &mut right.replace_format_subscript,
+        );
+        std::mem::swap(
+            &mut left.replace_format_superscript,
+            &mut right.replace_format_superscript,
+        );
+        std::mem::swap(
+            &mut left.replace_format_underline,
+            &mut right.replace_format_underline,
+        );
+        std::mem::swap(
+            &mut left.replace_format_vertical_alignment,
+            &mut right.replace_format_vertical_alignment,
+        );
+        std::mem::swap(
+            &mut left.replace_format_wrap_text,
+            &mut right.replace_format_wrap_text,
+        );
+        std::mem::swap(
+            &mut left.replace_format_font_color_index,
+            &mut right.replace_format_font_color_index,
+        );
+        std::mem::swap(
+            &mut left.replace_format_font_theme,
+            &mut right.replace_format_font_theme,
+        );
+        std::mem::swap(
+            &mut left.replace_format_font_tint,
+            &mut right.replace_format_font_tint,
+        );
+        std::mem::swap(
+            &mut left.replace_format_interior_color_index,
+            &mut right.replace_format_interior_color_index,
+        );
+        std::mem::swap(
+            &mut left.replace_format_interior_theme_color,
+            &mut right.replace_format_interior_theme_color,
+        );
+        std::mem::swap(
+            &mut left.replace_format_interior_tint,
+            &mut right.replace_format_interior_tint,
+        );
+        std::mem::swap(
+            &mut left.replace_format_pattern_color_index,
+            &mut right.replace_format_pattern_color_index,
+        );
+        std::mem::swap(
+            &mut left.replace_format_pattern_theme_color,
+            &mut right.replace_format_pattern_theme_color,
+        );
+        std::mem::swap(
+            &mut left.replace_format_pattern_tint,
+            &mut right.replace_format_pattern_tint,
+        );
+    }
+}
+
+fn same_application_setting(left: Option<&Value>, right: Option<&Value>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => match (left.string_units(), right.string_units()) {
+            (Some(left), Some(right)) => left == right,
+            _ => left == right,
+        },
+        _ => left == right,
+    }
+}
+
 // The registry owns real hosts. Project views only borrow it for one native
 // operation, so VBA callbacks can re-enter another view after that borrow ends.
 struct WorkbookApplication<'a> {
     hosts: BTreeMap<u64, WorkbookHost<'a>>,
+    application_owner: Option<u64>,
+    parked_application: Option<Box<ApplicationProperties>>,
     arena: std::rc::Rc<std::cell::RefCell<NativeObjectArena>>,
     active: u64,
     application: ObjectRef,
@@ -24679,6 +25288,7 @@ struct WorkbookApplication<'a> {
 
 impl<'a> WorkbookApplication<'a> {
     fn new(mut host: WorkbookHost<'a>) -> Self {
+        let properties = ApplicationProperties::take(&mut host);
         let owner = host.objects.owner;
         let arena = host.objects.arena.clone();
         let Value::Object(application) = host.object(HostObject::Application) else {
@@ -24686,6 +25296,8 @@ impl<'a> WorkbookApplication<'a> {
         };
         let mut registry = Self {
             hosts: BTreeMap::new(),
+            application_owner: None,
+            parked_application: Some(Box::new(properties)),
             arena,
             active: owner,
             application,
@@ -24701,6 +25313,7 @@ impl<'a> WorkbookApplication<'a> {
             registry.insert(host).is_ok(),
             "fresh registry accepts its first host"
         );
+        registry.ensure_application_owner(owner);
         registry
     }
 
@@ -24724,6 +25337,43 @@ impl<'a> WorkbookApplication<'a> {
         self.applications.insert(owner, application);
         self.hosts.insert(owner, host);
         Ok(())
+    }
+
+    fn ensure_application_owner(&mut self, owner: u64) {
+        if self.application_owner == Some(owner) {
+            return;
+        }
+        assert!(
+            self.hosts.contains_key(&owner),
+            "registered application state recipient"
+        );
+        if let Some(previous) = self.application_owner {
+            let mut previous_host = self
+                .hosts
+                .remove(&previous)
+                .expect("application state owner");
+            ApplicationProperties::swap(
+                &mut previous_host,
+                self.hosts
+                    .get_mut(&owner)
+                    .expect("application state recipient"),
+            );
+            self.hosts.insert(previous, previous_host);
+        } else {
+            self.parked_application
+                .take()
+                .expect("parked application state")
+                .install(
+                    self.hosts
+                        .get_mut(&owner)
+                        .expect("application state recipient"),
+                );
+        }
+        self.application_owner = Some(owner);
+        self.hosts
+            .get_mut(&owner)
+            .expect("application state recipient")
+            .sync_calculation_settings();
     }
 
     fn native_owner(&self, object: &ObjectRef) -> Option<u64> {
@@ -24808,12 +25458,13 @@ impl<'a> ApplicationHost<'a> {
         code_context: bool,
         work: impl FnOnce(&WorkbookHost<'a>, Option<&ObjectRef>) -> R,
     ) -> R {
-        let application = self.application.borrow();
+        let mut application = self.application.borrow_mut();
         let owner = if code_context {
             self.code_owner
         } else {
             application.owner(self.code_owner, receiver, name, true)
         };
+        application.ensure_application_owner(owner);
         let local = application.local_receiver(owner, receiver);
         work(
             application
@@ -24837,15 +25488,48 @@ impl<'a> ApplicationHost<'a> {
         } else {
             application.owner(self.code_owner, receiver, name, true)
         };
+        application.ensure_application_owner(owner);
         let local = application.local_receiver(owner, receiver);
         application.last_owner = owner;
-        work(
+
+        let separator = if receiver.is_some_and(|object| application.is_application(object)) {
+            if name.eq_ignore_ascii_case("DecimalSeparator") {
+                Some("decimalseparator")
+            } else if name.eq_ignore_ascii_case("ThousandsSeparator") {
+                Some("thousandsseparator")
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let old_setting = separator.and_then(|name| {
+            application
+                .hosts
+                .get(&owner)
+                .and_then(|host| host.application_setting(name))
+        });
+        let result = work(
             application
                 .hosts
                 .get_mut(&owner)
                 .expect("registered code owner"),
             local.as_ref().or(receiver),
-        )
+        );
+
+        if let Some(name) = separator {
+            let new_setting = application
+                .hosts
+                .get(&owner)
+                .and_then(|host| host.application_setting(name));
+            if !same_application_setting(old_setting.as_ref(), new_setting.as_ref()) {
+                for host in application.hosts.values_mut() {
+                    host.saved = false;
+                    host.application_setting_dirtied = true;
+                }
+            }
+        }
+        result
     }
 
     fn complete_call(
@@ -24888,6 +25572,7 @@ impl<'a> ApplicationHost<'a> {
     fn begin_member(&mut self, receiver: Option<&ObjectRef>, name: &str, kind: u8) {
         let mut application = self.application.borrow_mut();
         let owner = application.owner(self.code_owner, receiver, name, false);
+        application.ensure_application_owner(owner);
         let local = application.local_receiver(owner, receiver);
         application.member_owners.push(owner);
         application.last_owner = owner;
@@ -24909,6 +25594,7 @@ impl<'a> ApplicationHost<'a> {
             .member_owners
             .pop()
             .expect("balanced application member call");
+        application.ensure_application_owner(owner);
         let local = application.local_receiver(owner, receiver);
         let host = application
             .hosts
@@ -24951,6 +25637,7 @@ impl Host for ApplicationHost<'_> {
     ) -> Result<Option<Box<dyn std::any::Any>>, String> {
         let mut application = self.application.borrow_mut();
         let owner = application.owner(self.code_owner, Some(receiver), name, true);
+        application.ensure_application_owner(owner);
         let local = application.local_receiver(owner, Some(receiver));
         application.last_owner = owner;
         let state = application
@@ -24971,6 +25658,7 @@ impl Host for ApplicationHost<'_> {
             .downcast_mut::<ApplicationArrayAssignment>()
             .expect("application array assignment");
         let mut application = self.application.borrow_mut();
+        application.ensure_application_owner(state.owner);
         application.last_owner = state.owner;
         application
             .hosts
@@ -24981,6 +25669,7 @@ impl Host for ApplicationHost<'_> {
     fn take_user_function_calls(&mut self) -> Vec<(u64, String, Vec<Value>)> {
         let mut application = self.application.borrow_mut();
         let owner = application.operation_owner();
+        application.ensure_application_owner(owner);
         let calls = application
             .hosts
             .get_mut(&owner)
@@ -25016,6 +25705,7 @@ impl Host for ApplicationHost<'_> {
     fn enter_user_function(&mut self, key: u64) {
         let mut application = self.application.borrow_mut();
         let (owner, local) = application.callback(key);
+        application.ensure_application_owner(owner);
         application.running_callbacks.push((key, owner));
         application
             .hosts
@@ -25026,6 +25716,7 @@ impl Host for ApplicationHost<'_> {
     fn enter_user_function_body(&mut self, key: u64) {
         let mut application = self.application.borrow_mut();
         let (owner, local) = application.callback(key);
+        application.ensure_application_owner(owner);
         application
             .hosts
             .get_mut(&owner)
@@ -25033,8 +25724,9 @@ impl Host for ApplicationHost<'_> {
             .enter_user_function_body(local);
     }
     fn user_function_returns_reference(&self, key: u64, value: &Value) -> bool {
-        let application = self.application.borrow();
+        let mut application = self.application.borrow_mut();
         let (owner, local) = application.callback(key);
+        application.ensure_application_owner(owner);
         application
             .hosts
             .get(&owner)
@@ -25044,6 +25736,7 @@ impl Host for ApplicationHost<'_> {
     fn answer_user_function(&mut self, key: u64, value: Value) {
         let mut application = self.application.borrow_mut();
         let (owner, local) = application.callback(key);
+        application.ensure_application_owner(owner);
         application
             .hosts
             .get_mut(&owner)
@@ -25062,6 +25755,7 @@ impl Host for ApplicationHost<'_> {
     ) -> Vec<u64> {
         let mut application = self.application.borrow_mut();
         let (owner, local) = application.callback(completed);
+        application.ensure_application_owner(owner);
         let pending = pending
             .iter()
             .filter_map(|key| application.callbacks.get(key))
@@ -25083,6 +25777,7 @@ impl Host for ApplicationHost<'_> {
     fn resume_user_function_calculation(&mut self) -> Result<(), String> {
         let mut application = self.application.borrow_mut();
         let owner = application.operation_owner();
+        application.ensure_application_owner(owner);
         application
             .hosts
             .get_mut(&owner)
@@ -29221,12 +29916,6 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("interactive") {
                 return Ok(Some(Value::Boolean(self.interactive)));
             }
-            if matches!(
-                name.to_ascii_lowercase().as_str(),
-                "displayformulabar" | "displaystatusbar"
-            ) {
-                return Ok(Some(Value::Boolean(true)));
-            }
             if name.eq_ignore_ascii_case("windowstate") {
                 return Ok(Some(Value::Integer(-4137)));
             }
@@ -31215,7 +31904,19 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("calculationstate") {
                 return Err(host_error(450, "CalculationState is read-only"));
             }
+            if name.eq_ignore_ascii_case("DisplayFormulaBar") || name.eq_ignore_ascii_case("DisplayStatusBar") {
+                let flag = application_switch(&value, &format!("Application.{name}"))?;
+                self.app_settings.insert(name.to_ascii_lowercase(), Value::Boolean(flag));
+                return Ok(true);
+            }
             if APPLICATION_SETTINGS.iter().any(|(held, _, settable)| *settable && held.eq_ignore_ascii_case(name)) {
+                if name.eq_ignore_ascii_case("DecimalSeparator") || name.eq_ignore_ascii_case("ThousandsSeparator") {
+                    let previous = self.application_setting(&name.to_ascii_lowercase());
+                    if !same_application_setting(previous.as_ref(), Some(&value)) {
+                        self.saved = false;
+                        self.application_setting_dirtied = true;
+                    }
+                }
                 self.app_settings.insert(name.to_ascii_lowercase(), value);
                 return Ok(true);
             }
@@ -31227,7 +31928,7 @@ impl Host for WorkbookHost<'_> {
                 let mode = application_calculation(&value)?;
                 let changed = self.calculation != mode;
                 self.calculation = mode;
-                self.calculation_assigned = true;
+                self.application_setting_dirtied = true;
                 self.saved = false;
                 if changed && self.automatic_calculation() {
                     self.calculate_dirty(None);
@@ -31250,7 +31951,7 @@ impl Host for WorkbookHost<'_> {
             // which a browser has to honour but none of which may refuse.
             if matches!(
                 name.to_ascii_lowercase().as_str(),
-                "displayformulabar" | "displaystatusbar" | "displayscrollbars"
+                "displayscrollbars"
                     | "windowstate" | "calculatebeforesave" | "enableanimations"
                     | "printcommunication" | "displaycommentindicator"
                     | "askToUpdateLinks" | "asktoupdatelinks" | "enablecancelkey"
@@ -39120,6 +39821,8 @@ impl From<Value> for OutputValue {
 #[allow(clippy::type_complexity)]
 const APPLICATION_SETTINGS: &[(&str, fn() -> Value, bool)] = &[
     ("referencestyle", || Value::Integer(1), true),
+    ("displayformulabar", || Value::Boolean(true), true),
+    ("displaystatusbar", || Value::Boolean(true), true),
     ("decimalseparator", || Value::String(".".to_string()), true),
     ("thousandsseparator", || Value::String(",".to_string()), true),
     ("usesystemseparators", || Value::Boolean(true), true),
@@ -39510,7 +40213,7 @@ struct WorkbookHostState {
     messages: Vec<BrowserMessage>,
     singletons: BTreeMap<(u8, usize), u64>,
     automation_code_page: Option<AnsiCodePage>,
-    calculation_assigned: bool,
+    application_setting_dirtied: bool,
     comment_shape_counters: std::collections::HashMap<usize, u32>,
     document_code_names: BTreeMap<usize, String>,
     error_language: ErrorLanguage,
@@ -39597,13 +40300,13 @@ struct WorkbookHostState {
 
 impl<'a> WorkbookHost<'a> {
     fn into_parts(self) -> (WorkbookStorage<'a>,WorkbookHostState) {
-        let Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, calculation_assigned, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = self;
-        (workbook,WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, calculation_assigned, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects })
+        let Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = self;
+        (workbook,WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects })
     }
 
     fn resume_storage(workbook:WorkbookStorage<'a>, state: WorkbookHostState) -> Self {
-        let WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, calculation_assigned, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = state;
-        Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, calculation_assigned, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects }
+        let WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = state;
+        Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects }
     }
 }
 
@@ -40498,7 +41201,7 @@ fn execute_workbook_invocation(
             }
             if previous.workbook != incoming { host.saved = false; }
             host.activate_sheet(active_sheet);
-            host.calculation_assigned = false;
+            host.application_setting_dirtied = false;
             *host.user_functions.borrow_mut() = UserFunctions::default();
             (host, state, previous.external_references)
         }
@@ -40619,6 +41322,7 @@ fn execute_workbook_invocation(
             } else { Some(runtime.into_project_state()) }
         };
         drop(application_host);
+        application.borrow_mut().ensure_application_owner(code_owner);
         host = application.borrow_mut().hosts.remove(&code_owner).expect("invoking workbook remains registered");
         result
     } else { Ok(Value::Empty) };
@@ -40666,7 +41370,7 @@ fn execute_workbook_invocation(
         }
     }
     let conditions_changed = host.condition_modified;
-    let calculation_assigned = host.calculation_assigned;
+    let application_setting_dirtied = host.application_setting_dirtied;
     let debug_output = host.take_debug_output();
     let messages = host.take_messages();
     let application_state = VbaApplicationState::capture(&host);
@@ -40682,7 +41386,7 @@ fn execute_workbook_invocation(
     workbook.calculation.on_save = previous_on_save;
     let after = observable_workbook_bytes(&mut workbook);
     workbook.calculation.on_save = on_save;
-    let workbook_changed = calculation_assigned || conditions_changed || before != after.map_err(|error| error.to_string())?;
+    let workbook_changed = application_setting_dirtied || conditions_changed || before != after.map_err(|error| error.to_string())?;
     let (mut result, error) = match result {
         Ok(value) => (value.into(), None),
         Err(failure) => {
@@ -40720,6 +41424,414 @@ fn execute_workbook_invocation(
 mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
+
+    #[test]
+    fn shared_application_properties_follow_native_across_book_activation() {
+        use std::{cell::RefCell, rc::Rc};
+        const CODE: &str = r####"Attribute VB_Name = "Driver"
+Private Function TextOf(ByVal value As Variant) As String
+ If IsNull(value) Then
+  TextOf = "<Null>"
+ Else
+  TextOf = CStr(value)
+ End If
+End Function
+Public Sub PrimeShared()
+ Application.ScreenUpdating = True
+ Application.EnableEvents = True
+ Application.DisplayAlerts = True
+ Application.StatusBar = False
+ Application.Calculation = -4105
+ Application.CalculateBeforeSave = True
+ Application.Interactive = True
+ Application.Cursor = -4143
+ Application.DisplayStatusBar = True
+ Application.ReferenceStyle = 1
+ Application.DisplayFormulaBar = True
+ Application.UseSystemSeparators = False
+ Application.DecimalSeparator = "."
+ Application.ThousandsSeparator = ","
+ Application.UseSystemSeparators = True
+ Application.FindFormat.Clear
+ Application.ReplaceFormat.Clear
+End Sub
+Public Function ReadShared(ByVal kind As Long) As String
+ Select Case kind
+ Case 0: ReadShared = TextOf(Application.ScreenUpdating)
+ Case 1: ReadShared = TextOf(Application.EnableEvents)
+ Case 2: ReadShared = TextOf(Application.DisplayAlerts)
+ Case 3: ReadShared = TextOf(Application.StatusBar)
+ Case 4: ReadShared = TextOf(Application.Calculation)
+ Case 5: ReadShared = TextOf(Application.CalculateBeforeSave)
+ Case 6: ReadShared = TextOf(Application.Interactive)
+ Case 7: ReadShared = TextOf(Application.Cursor)
+ Case 8: ReadShared = TextOf(Application.DisplayStatusBar)
+ Case 9: ReadShared = TextOf(Application.ReferenceStyle)
+ Case 10: ReadShared = TextOf(Application.DisplayFormulaBar)
+ Case 11: ReadShared = TextOf(Application.UseSystemSeparators)
+ Case 12: ReadShared = TextOf(Application.DecimalSeparator)
+ Case 13: ReadShared = TextOf(Application.ThousandsSeparator)
+ Case 14: ReadShared = TextOf(Application.FindFormat.Font.Bold)
+ Case 15: ReadShared = TextOf(Application.FindFormat.NumberFormat)
+ Case 16: ReadShared = TextOf(Application.FindFormat.Interior.Color)
+ Case 17: ReadShared = TextOf(Application.ReplaceFormat.Font.Bold)
+ Case 18: ReadShared = TextOf(Application.FindFormat.Font.Name)
+ Case 19: ReadShared = TextOf(Application.FindFormat.Borders(7).Weight)
+ End Select
+End Function
+Public Sub SetShared(ByVal kind As Long, ByVal value As Variant)
+ Select Case kind
+ Case 0: Application.ScreenUpdating = value
+ Case 1: Application.EnableEvents = value
+ Case 2: Application.DisplayAlerts = value
+ Case 3: Application.StatusBar = value
+ Case 4: Application.Calculation = value
+ Case 5: Application.CalculateBeforeSave = value
+ Case 6: Application.Interactive = value
+ Case 7: Application.Cursor = value
+ Case 8: Application.DisplayStatusBar = value
+ Case 9: Application.ReferenceStyle = value
+ Case 10: Application.DisplayFormulaBar = value
+ Case 11: Application.UseSystemSeparators = value
+ Case 12: Application.DecimalSeparator = value
+ Case 13: Application.ThousandsSeparator = value
+ Case 14: Application.FindFormat.Font.Bold = value
+ Case 15: Application.FindFormat.NumberFormat = value
+ Case 16: Application.FindFormat.Interior.Color = value
+ Case 17: Application.ReplaceFormat.Font.Bold = value
+ Case 18: Application.FindFormat.Font.Name = value
+ Case 19: Application.FindFormat.Borders(7).Weight = value
+ End Select
+End Sub
+Public Function MakeReader() As Object
+ Set MakeReader = New Reader
+End Function
+Public Function ActivateSelf() As String
+ ThisWorkbook.Activate
+ ActivateSelf = ActiveWorkbook.Name
+End Function
+Public Function SetAndRead(ByVal reader As Object, ByVal kind As Long, ByVal value As Variant) As String
+ Dim localValue As String, remoteValue As String
+ SetShared kind, value
+ localValue = ReadShared(kind)
+ remoteValue = reader.ReadValue(kind)
+ SetAndRead = localValue & "|" & remoteValue & "|" & ReadShared(kind) & "|" & CStr(ThisWorkbook.Saved) & "|" & reader.SavedValue()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "Reader"
+Attribute VB_Exposed = True
+Public Function ReadValue(ByVal kind As Long) As String
+ ThisWorkbook.Activate
+ ReadValue = Driver.ReadShared(kind)
+End Function
+Public Function SavedValue() As String
+ SavedValue = CStr(ThisWorkbook.Saved)
+End Function
+"####;
+        fn call(runtime: &mut Runtime, owner: u64, name: &str, args: Vec<Value>) -> Value {
+            runtime
+                .in_application_project(owner, |r| r.call(&format!("Driver.{name}"), args))
+                .unwrap()
+        }
+        let arena = Rc::new(RefCell::new(NativeObjectArena::default()));
+        let mut a = WorkbookHost::new_owned_in(workbook(), 0, 1, arena.clone()).unwrap();
+        let mut b = WorkbookHost::new_owned_in(workbook(), 0, 2, arena).unwrap();
+        a.file_name = Some("A.xlsm".into());
+        b.file_name = Some("B.xlsm".into());
+        let books = Rc::new(RefCell::new(WorkbookApplication::new(a)));
+        assert!(books.borrow_mut().insert(b).is_ok());
+        books.borrow_mut().active = 2;
+        let mut ha = ApplicationHost {
+            application: books.clone(),
+            code_owner: 1,
+        };
+        let mut hb = ApplicationHost {
+            application: books.clone(),
+            code_owner: 2,
+        };
+        let (module, classes) = oxivba_core::parse_project(CODE).unwrap();
+        let mut a = Runtime::new(&module)
+            .with_classes(&classes)
+            .with_host(&mut ha);
+        let mut b = Runtime::new(&module)
+            .with_classes(&classes)
+            .with_host(&mut hb);
+        a.set_application_project_identity(1).unwrap();
+        b.set_application_project_identity(2).unwrap();
+        assert!(b.register_application_project(a).is_ok());
+        let reader_b = call(&mut b, 2, "MakeReader", vec![]);
+        let reader_a = call(&mut b, 1, "MakeReader", vec![]);
+        call(&mut b, 1, "PrimeShared", vec![]);
+        call(&mut b, 1, "ActivateSelf", vec![]);
+        call(
+            &mut b,
+            1,
+            "SetAndRead",
+            vec![
+                reader_b.clone(),
+                Value::Integer(3),
+                Value::String("warm".into()),
+            ],
+        );
+        for (kind, value, expected, after, saved_a, saved_b) in [
+            (
+                0,
+                Value::Boolean(false),
+                "False|False|False|True|True",
+                "False",
+                true,
+                true,
+            ),
+            (
+                1,
+                Value::Boolean(false),
+                "False|False|False|True|True",
+                "False",
+                true,
+                true,
+            ),
+            (
+                2,
+                Value::Boolean(false),
+                "False|False|False|True|True",
+                "False",
+                true,
+                true,
+            ),
+            (
+                3,
+                Value::String("shared-status".into()),
+                "shared-status|shared-status|shared-status|True|True",
+                "shared-status",
+                true,
+                true,
+            ),
+            (
+                4,
+                Value::Integer(-4135),
+                "-4135|-4135|-4135|False|True",
+                "-4135",
+                false,
+                true,
+            ),
+            (
+                4,
+                Value::Integer(-4135),
+                "-4135|-4135|-4135|False|True",
+                "-4135",
+                false,
+                true,
+            ),
+            (
+                4,
+                Value::Integer(-4105),
+                "-4105|-4105|-4105|False|True",
+                "-4105",
+                false,
+                true,
+            ),
+            (4, Value::Integer(2), "2|2|2|False|True", "2", false, true),
+            (
+                5,
+                Value::Boolean(false),
+                "False|False|False|True|True",
+                "False",
+                true,
+                true,
+            ),
+            (
+                5,
+                Value::Boolean(true),
+                "True|True|True|True|True",
+                "True",
+                true,
+                true,
+            ),
+            (
+                6,
+                Value::Boolean(false),
+                "False|False|False|True|True",
+                "False",
+                true,
+                true,
+            ),
+            (7, Value::Integer(2), "2|2|2|True|True", "2", true, true),
+            (
+                8,
+                Value::Boolean(false),
+                "False|False|False|True|True",
+                "False",
+                true,
+                true,
+            ),
+            (
+                9,
+                Value::Integer(-4150),
+                "-4150|-4150|-4150|True|True",
+                "-4150",
+                true,
+                true,
+            ),
+            (
+                10,
+                Value::Boolean(false),
+                "False|False|False|True|True",
+                "False",
+                true,
+                true,
+            ),
+            (
+                11,
+                Value::Boolean(false),
+                "False|False|False|True|True",
+                "False",
+                true,
+                true,
+            ),
+            (
+                12,
+                Value::String(",".into()),
+                ",|,|,|False|False",
+                ",",
+                false,
+                false,
+            ),
+            (
+                13,
+                Value::String(".".into()),
+                ".|.|.|False|False",
+                ".",
+                false,
+                false,
+            ),
+            (
+                14,
+                Value::Boolean(true),
+                "True|True|True|True|True",
+                "True",
+                true,
+                true,
+            ),
+            (
+                15,
+                Value::String("0.00".into()),
+                "0.00|0.00|0.00|True|True",
+                "0.00",
+                true,
+                true,
+            ),
+            (
+                16,
+                Value::Integer(255),
+                "255|255|255|True|True",
+                "255",
+                true,
+                true,
+            ),
+            (
+                17,
+                Value::Boolean(true),
+                "True|True|True|True|True",
+                "True",
+                true,
+                true,
+            ),
+            (
+                18,
+                Value::String("Arial".into()),
+                "Arial|Arial|Arial|True|True",
+                "Arial",
+                true,
+                true,
+            ),
+            (19, Value::Integer(4), "4|4|4|True|True", "4", true, true),
+        ] {
+            for host in books.borrow_mut().hosts.values_mut() {
+                host.saved = true;
+            }
+            call(&mut b, 1, "ActivateSelf", vec![]);
+            let result = call(
+                &mut b,
+                1,
+                "SetAndRead",
+                vec![reader_b.clone(), Value::Integer(kind), value],
+            );
+            assert_eq!(result, Value::String(expected.into()), "property {kind}");
+            assert_eq!(
+                call(&mut b, 1, "ReadShared", vec![Value::Integer(kind)]),
+                Value::String(after.into()),
+                "property {kind} from A"
+            );
+            assert_eq!(
+                call(&mut b, 2, "ReadShared", vec![Value::Integer(kind)]),
+                Value::String(after.into()),
+                "property {kind} from B"
+            );
+            assert_eq!(
+                books.borrow().hosts[&1].saved,
+                saved_a,
+                "property {kind}, A.Saved"
+            );
+            assert_eq!(
+                books.borrow().hosts[&2].saved,
+                saved_b,
+                "property {kind}, B.Saved"
+            );
+        }
+        for (owner, active, mode, expected, saved_a, saved_b) in [
+            (1, 2, -4135, "-4135|-4135|-4135|True|False", true, false),
+            (2, 1, -4105, "-4105|-4105|-4105|True|False", false, true),
+            (1, 2, -4105, "-4105|-4105|-4105|True|False", true, false),
+        ] {
+            for host in books.borrow_mut().hosts.values_mut() {
+                host.saved = true;
+            }
+            call(&mut b, active, "ActivateSelf", vec![]);
+            let reader = if owner == 1 {
+                reader_b.clone()
+            } else {
+                reader_a.clone()
+            };
+            assert_eq!(
+                call(
+                    &mut b,
+                    owner,
+                    "SetAndRead",
+                    vec![reader, Value::Integer(4), Value::Integer(mode)]
+                ),
+                Value::String(expected.into())
+            );
+            assert_eq!(books.borrow().hosts[&1].saved, saved_a);
+            assert_eq!(books.borrow().hosts[&2].saved, saved_b);
+        }
+    }
+
+    #[test]
+    fn separator_changes_dirty_outcome_but_equal_utf16_text_does_not() {
+        let code = "Public Sub Assign(ByVal value As Variant)\n Application.DecimalSeparator = value\nEnd Sub\n";
+        let mut session = None;
+        let mut data = workbook();
+        for (value, expected) in [
+            (Value::String(",".into()), true),
+            (Value::Utf16(vec![44]), false),
+            (Value::String(".".into()), true),
+        ] {
+            let outcome = execute_workbook_action_in_session(
+                data,
+                code,
+                Some("Assign"),
+                vec![value],
+                0,
+                failure_context(),
+                &mut session,
+            )
+            .unwrap();
+            assert!(outcome.error.is_none(), "{}", outcome.error.as_ref().map(|error| error.message.as_str()).unwrap_or(""));
+            assert_eq!(outcome.workbook_changed, expected);
+            data = outcome.workbook;
+        }
+    }
+
     #[test]
     fn actual_owned_books_share_native_ids_and_keep_code_and_data_owners() {
         use std::{cell::RefCell, rc::Rc};
