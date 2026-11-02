@@ -8059,6 +8059,7 @@ fn parse_drawing(
     let mut has_no_fill = false;
     let mut has_no_stroke = false;
     let mut corner_radius_adj: Option<f32> = None; // avLst adj value (0-100000 scale)
+    let mut shape_adj_map: Vec<(String, f32)> = Vec::new(); // OXI_TXBX_CALLOUT
     let mut gradient_stops: Vec<GradientStop> = Vec::new();
     let mut gradient_angle: Option<f32> = None;
     // Text body insets (from bodyPr lIns/rIns/tIns/bIns, in EMU)
@@ -9410,6 +9411,21 @@ fn parse_drawing(
                                 corner_radius_adj = Some(val);
                             }
                         }
+                        {
+                            let mut nm = None;
+                            let mut v = None;
+                            for attr in e.attributes().flatten() {
+                                match local_name(attr.key.as_ref()).as_str() {
+                                    "name" => nm = Some(String::from_utf8_lossy(&attr.value).to_string()),
+                                    "fmla" => v = String::from_utf8_lossy(&attr.value).strip_prefix("val ")
+                                        .and_then(|t| t.trim().parse::<f32>().ok()),
+                                    _ => {}
+                                }
+                            }
+                            if let (Some(nm), Some(v)) = (nm, v) {
+                                shape_adj_map.push((nm, v));
+                            }
+                        }
                         if let Some(wsp) = s839_wsp.as_mut() {
                             let mut nm = None;
                             let mut v = None;
@@ -9879,6 +9895,7 @@ fn parse_drawing(
                                     anchor_block_index: 0,
                                     corner_radius: None,
                                     ellipse: false,
+            callout: None,
                                     inset_left: text_inset_left,
                                     inset_right: text_inset_right,
                                     inset_top: text_inset_top,
@@ -9996,6 +10013,7 @@ fn parse_drawing(
                                     anchor_block_index: 0,
                                     corner_radius: None,
                                     ellipse: false,
+            callout: None,
                                     inset_left: Some(0.0),
                                     inset_right: Some(0.0),
                                     inset_top: Some(0.0),
@@ -10390,6 +10408,18 @@ fn parse_drawing(
             // OXI_TXBX_ELLIPSE (2026-10-30, default ON, opt-out _DISABLE)
             ellipse: shape_type.as_deref() == Some("ellipse")
                 && std::env::var_os("OXI_TXBX_ELLIPSE_DISABLE").is_none(),
+            // OXI_TXBX_CALLOUT (2026-11-03, default ON, opt-out _DISABLE)
+            callout: match shape_type.as_deref() {
+                Some(p @ ("wedgeRoundRectCallout" | "wedgeRectCallout"))
+                    if !crate::env_flag!("OXI_TXBX_CALLOUT_DISABLE") =>
+                {
+                    let g = |n: &str, d: f32| shape_adj_map.iter().rev()
+                        .find(|(k, _)| k == n).map_or(d, |(_, v)| *v);
+                    Some([g("adj1", -20833.0), g("adj2", 62500.0),
+                        if p == "wedgeRoundRectCallout" { g("adj3", 16667.0) } else { 0.0 }])
+                }
+                _ => None,
+            },
             inset_left: text_inset_left,
             inset_right: text_inset_right,
             inset_top: text_inset_top,
@@ -10619,6 +10649,7 @@ fn vml_shape_text_box(sh: &Shape) -> TextBox {
         anchor_block_index: 0,
         corner_radius: None,
         ellipse: false,
+            callout: None,
         inset_left: Some(7.2),
         inset_right: Some(7.2),
         inset_top: Some(3.6),
@@ -11512,6 +11543,7 @@ fn parse_vml_pict(
             anchor_block_index: 0,
             corner_radius: None,
             ellipse: false,
+            callout: None,
             inset_left: None,
             inset_right: None,
             inset_top: None,
@@ -11588,6 +11620,7 @@ fn parse_vml_pict(
             anchor_block_index: 0,
             corner_radius: if shape_type.as_deref() == Some("roundRect") { Some(3.0) } else { None },
             ellipse: false,
+            callout: None,
             inset_left: Some(inset[0]),
             inset_top: Some(inset[1]),
             inset_right: Some(inset[2]),
@@ -11661,6 +11694,7 @@ fn parse_vml_pict(
                 None
             },
             ellipse: false,
+            callout: None,
             inset_left: None,
             inset_right: None,
             inset_top: None,

@@ -200,6 +200,7 @@ pub(super) fn text_box(
         anchor_block_index: 0,
         corner_radius: None,
         ellipse: false,
+        callout: None,
         inset_left: Some(insets[0]),
         inset_right: Some(insets[2]),
         inset_top: Some(insets[1]),

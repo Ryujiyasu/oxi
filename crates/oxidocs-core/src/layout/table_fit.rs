@@ -4895,7 +4895,9 @@ impl<'a> TableFitLayouter<'a> {
                                             && self.compress_punctuation;
                                     // S1082: the S825 compat-15 justified space-shrink capacity,
                                     // ported to this cell breaker (see the effective_wrap site).
-                                    let s1082_cell_shrink = !self.doc_body_has_real_cjk
+                                    let s1082_cell_shrink = (!self.doc_body_has_real_cjk
+                                        || (!crate::env_flag!("OXI_LATIN_PARA_SHRINK_DISABLE")
+                                            && para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk))))
                                         && self.compat_mode >= 15
                                         && self.compat_mode_explicit
                                         && matches!(

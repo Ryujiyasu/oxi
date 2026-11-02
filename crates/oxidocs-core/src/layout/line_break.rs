@@ -342,9 +342,18 @@ impl<'a> LineBreaker<'a> {
         // 6.8tw/space, well under the 25% cap). This extends the KERNBREAK
         // space-compression credit (kern-active-only) to the no-kern justified
         // case. Scope: !doc_body_has_real_cjk → JP byte-identical by construction.
+        // OXI_LATIN_PARA_SHRINK (2026-11-02, default ON, opt-out _DISABLE): the S825
+        // quarter-space shrink is a property of the LINE's script, not of the
+        // document. `_pb_cjkdoc_latin_shrink_gen.py` («Connections Luxury in
+        // Madeira», Century 10.5, compat 15, compressPunctuation): justified keeps
+        // it 2.1pt under natural in a Japanese document and a Latin one alike, body
+        // and cell; left 0. A paragraph with no CJK character takes it whatever
+        // else the document holds (CJK lines stay with S1585).
+        let latin_para = !crate::env_flag!("OXI_LATIN_PARA_SHRINK_DISABLE")
+            && fragments.iter().all(|&(t, ..)| !t.chars().any(kinsoku::is_cjk));
         let s799_space_shrink = !crate::env_flag!("OXI_S799_DISABLE")
             && is_justified
-            && !self.doc_body_has_real_cjk;
+            && (!self.doc_body_has_real_cjk || latin_para);
         // S953 (2026-07-20, default ON, opt-out OXI_S953_DISABLE): a COMPAT-15 JUSTIFIED
         // line hangs its trailing '.'/',' past the right edge — the S809 rule's
         // modern-justified arm. DERIVED (hang_probe, Arial-12, 12-space line,

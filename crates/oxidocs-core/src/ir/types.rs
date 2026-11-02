@@ -1291,6 +1291,10 @@ pub struct TextBox {
     /// its text sits in the ellipse's inscribed text rectangle.
     #[serde(default)]
     pub ellipse: bool,
+    /// OXI_TXBX_CALLOUT: a wedgeRectCallout / wedgeRoundRectCallout box —
+    /// [adj1, adj2, adj3] in 1/100000 (adj3 0 for the square-cornered one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callout: Option<[f32; 3]>,
     /// Text inset left (in points, default 7.2pt = 91440 EMU)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset_left: Option<f32>,

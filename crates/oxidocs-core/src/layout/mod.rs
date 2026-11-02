@@ -9485,6 +9485,57 @@ cells={} pitch={:.2} text={:?}",
                     } else { None },
                     stroke_width: if has_border { text_box.stroke_width.unwrap_or(1.0) } else { 0.0 },
                 }));
+        } else if let (Some([a1, a2, a3]), true) = (text_box.callout, has_fill || has_border) {
+            // OXI_TXBX_CALLOUT: the ECMA wedge(Round)RectCallout outline — the tail
+            // tip at the centre + (adj1 w, adj2 h), its base on the edge the tip
+            // leans past (|dy| > |dx| h/w -> top / bottom) at 2/12..5/12 or
+            // 7/12..10/12 of that edge; corner radius adj3 of the shorter side.
+            // ja/administrative__05e3143c's «角丸四角形吹き出し 4» came out a square box.
+            use crate::ir::PathSeg;
+            let (w, h) = (text_box.width.max(0.01), text_box.height.max(0.01));
+            let (dx, dy) = (w * a1 / 100000.0, h * a2 / 100000.0);
+            let (xp, yp) = (w / 2.0 + dx, h / 2.0 + dy);
+            let dz = dy.abs() - (dx * h / w).abs();
+            let (x1, x2) = if dx > 0.0 { (w * 7.0 / 12.0, w * 10.0 / 12.0) } else { (w * 2.0 / 12.0, w * 5.0 / 12.0) };
+            let (y1, y2) = if dy > 0.0 { (h * 7.0 / 12.0, h * 10.0 / 12.0) } else { (h * 2.0 / 12.0, h * 5.0 / 12.0) };
+            let pick = |c: bool, a: f32, b: f32| if c { a } else { b };
+            // ECMA: xl/yl (left), xt/yt (top), xr/yr (right), xb/yb (bottom)
+            let (xl, yl) = (pick(dz > 0.0, 0.0, pick(dx > 0.0, 0.0, xp)), pick(dz > 0.0, y1, pick(dx > 0.0, y1, yp)));
+            let (xt, yt) = (pick(dz > 0.0, pick(dy > 0.0, x1, xp), x1), pick(dz > 0.0, pick(dy > 0.0, 0.0, yp), 0.0));
+            let (xr, yr) = (pick(dz > 0.0, w, pick(dx > 0.0, xp, w)), pick(dz > 0.0, y1, pick(dx > 0.0, yp, y1)));
+            let (xb, yb) = (pick(dz > 0.0, pick(dy > 0.0, xp, x1), x1), pick(dz > 0.0, pick(dy > 0.0, yp, h), h));
+            let r = (w.min(h) * a3 / 100000.0).max(0.0);
+            let k = 0.552_284_8 * r;
+            let n = |x: f32, y: f32| (x / w, y / h);
+            let mut segs: Vec<PathSeg> = Vec::new();
+            let mv = |v: &mut Vec<PathSeg>, x: f32, y: f32| { let (a, b) = n(x, y); v.push(PathSeg::M(a, b)); };
+            let ln = |v: &mut Vec<PathSeg>, x: f32, y: f32| { let (a, b) = n(x, y); v.push(PathSeg::L(a, b)); };
+            let cu = |v: &mut Vec<PathSeg>, p: [f32; 6]| {
+                let (a, b) = n(p[0], p[1]); let (c, d) = n(p[2], p[3]); let (e, f) = n(p[4], p[5]);
+                v.push(PathSeg::C(a, b, c, d, e, f));
+            };
+            mv(&mut segs, 0.0, r);
+            if r > 0.0 { cu(&mut segs, [0.0, r - k, r - k, 0.0, r, 0.0]); }
+            ln(&mut segs, x1, 0.0); ln(&mut segs, xt, yt); ln(&mut segs, x2, 0.0);
+            ln(&mut segs, w - r, 0.0);
+            if r > 0.0 { cu(&mut segs, [w - r + k, 0.0, w, r - k, w, r]); }
+            ln(&mut segs, w, y1); ln(&mut segs, xr, yr); ln(&mut segs, w, y2);
+            ln(&mut segs, w, h - r);
+            if r > 0.0 { cu(&mut segs, [w, h - r + k, w - r + k, h, w - r, h]); }
+            ln(&mut segs, x2, h); ln(&mut segs, xb, yb); ln(&mut segs, x1, h);
+            ln(&mut segs, r, h);
+            if r > 0.0 { cu(&mut segs, [r - k, h, 0.0, h - r + k, 0.0, h - r]); }
+            ln(&mut segs, 0.0, y2); ln(&mut segs, xl, yl); ln(&mut segs, 0.0, y1);
+            segs.push(PathSeg::Z);
+            elements.push(LayoutElement::new(abs_x, abs_y, w, h,
+                LayoutContent::VectorPath {
+                    segs,
+                    fill: text_box.fill.clone(),
+                    stroke_color: if has_border {
+                        text_box.stroke_color.clone().or_else(|| Some("000000".to_string()))
+                    } else { None },
+                    stroke_width: if has_border { text_box.stroke_width.unwrap_or(1.0) } else { 0.0 },
+                }));
         } else if has_fill || has_border {
             let fill_hex = text_box.fill.as_ref().map(|f| {
                 if f.starts_with('#') {
@@ -9577,6 +9628,9 @@ cells={} pitch={:.2} text={:?}",
         // roundRect corner pushes the inscribed text area inward by r·(1−cos 45°) ≈ 0.293r per side.
         let corner_inset = text_box
             .corner_radius
+            // OXI_TXBX_CALLOUT: the callout's text rectangle is inset like a
+            // roundRect's, by its own adj3 corner (ECMA il = dx1 x 29289 / 100000).
+            .or_else(|| text_box.callout.map(|[_, _, a3]| text_box.width.min(text_box.height) * a3 / 100000.0))
             .map(|r| r * (1.0 - std::f32::consts::FRAC_1_SQRT_2))
             .unwrap_or(0.0);
         // S761 (2026-07-08): the preset-geometry text rectangle applies on ALL
@@ -10081,6 +10135,12 @@ cells={} pitch={:.2} text={:?}",
                     LayoutContent::BoxRect { .. }
                     | LayoutContent::ClipStart
                     | LayoutContent::ClipEnd => {}
+                    // the box's own outline (ellipse / callout background) is not content
+                    LayoutContent::VectorPath { .. }
+                        if (el.x - abs_x).abs() < 0.01 && (el.y - abs_y).abs() < 0.01
+                            && (el.width - text_box.width).abs() < 0.01
+                            && (el.height - text_box.height).abs() < 0.01
+                            && !crate::env_flag!("OXI_TXBX_CALLOUT_DISABLE") => {}
                     _ => {
                         if el.y < min_y {
                             min_y = el.y;
@@ -10108,6 +10168,11 @@ cells={} pitch={:.2} text={:?}",
             for el in elements.iter_mut() {
                 match &el.content {
                     LayoutContent::BoxRect { .. } | LayoutContent::ClipStart => {}
+                    LayoutContent::VectorPath { .. }
+                        if (el.x - abs_x).abs() < 0.01 && (el.y - abs_y).abs() < 0.01
+                            && (el.width - text_box.width).abs() < 0.01
+                            && (el.height - text_box.height).abs() < 0.01
+                            && !crate::env_flag!("OXI_TXBX_CALLOUT_DISABLE") => {}
                     _ => {
                         el.y += v_shift;
                     }
@@ -20523,7 +20588,9 @@ cells={} pitch={:.2} text={:?}",
             && self.balance_single_byte_double_byte_width
             && self.compress_punctuation;
         // S1082 estimate mirror of the render-loop gate.
-        let s1082_cell_shrink = !self.doc_body_has_real_cjk
+        let s1082_cell_shrink = (!self.doc_body_has_real_cjk
+            || (!crate::env_flag!("OXI_LATIN_PARA_SHRINK_DISABLE")
+                && para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk))))
             && self.compat_mode >= 15
             && self.compat_mode_explicit
             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)

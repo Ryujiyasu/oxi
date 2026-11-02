@@ -1645,7 +1645,13 @@ impl<'a> ParagraphLayouter<'a> {
         }
         if (crate::env_flag!("OXI_WRAP_WORD_FIT")
                 || !crate::env_flag!("OXI_S1472_DISABLE"))
-            && (!self.doc_body_has_real_cjk || crate::env_flag!("OXI_WRAP_ROWPLAN_CJK"))
+            // OXI_WRAP_ROWPLAN_CJK (2026-11-03, default ON, opt-out _DISABLE): the
+            // mid-paragraph entry planner for CJK documents too. A Japanese body
+            // wraps the lines of the anchor paragraph that fall beside a square
+            // float exactly as a Latin one does (ja/creative__13152ea1's floating
+            // table +0.018, ja/administrative__05e3143c's girl picture +0.004); the
+            // 369-doc SSIM A/B changed 0 bytes with it on.
+            && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_WRAP_ROWPLAN_CJK_DISABLE"))
             && body_para_index.is_some()
             && fragments.iter().all(|f| !f.0.chars().any(|c| matches!(c, '\t' | '\u{FFFC}')))
         {
