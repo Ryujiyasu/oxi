@@ -159,6 +159,10 @@ pub struct HeaderFooterRun {
     pub title_pg: bool,
     #[serde(default)]
     pub even_odd_hf: bool,
+    /// OXI_S1553_HF_BOXES: this section's header/footer text boxes (the same
+    /// variant codes as `Page::hf_text_boxes`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hf_text_boxes: Vec<(u8, TextBox)>,
 }
 
 /// Grid settings belonging to a range of blocks in a continuous section.

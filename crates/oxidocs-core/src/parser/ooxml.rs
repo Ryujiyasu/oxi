@@ -1067,6 +1067,7 @@ impl OoxmlParser {
                     footer_even: footer_even.clone(),
                     title_pg: section.properties.title_pg,
                     even_odd_hf,
+                    hf_text_boxes: hf_text_boxes.clone(),
                 });
                 last.section_grid_runs.push(crate::ir::SectionGridRun {
                         block_start: last.blocks.len(),
@@ -1206,6 +1207,7 @@ impl OoxmlParser {
                     footer_even: footer_even.clone(),
                     title_pg: section.properties.title_pg,
                     even_odd_hf,
+                    hf_text_boxes: hf_text_boxes.clone(),
                 }];
                 // S735: seed the grid-run list with the first section's pitch.
                 let grid_runs = vec![(0usize, section.properties.grid_line_pitch)];
@@ -15807,7 +15809,29 @@ fn parse_header_footer_xml(
                                             in_footer || std::env::var_os("OXI_HEADER_INLINE_OBJECTS").is_some(),
                                             !in_footer,
                                         )?;
+                                        // OXI_HF_SDT_DRAWINGS (2026-11-03, default ON, opt-out _DISABLE):
+                                        // a paragraph inside a header/footer content control keeps
+                                        // its drawings, as the plain-paragraph arm keeps them (S759
+                                        // floating pictures, the header/footer text boxes). The
+                                        // "Page Numbers (Bottom of Page)" gallery wraps the whole
+                                        // footer in an sdt: en/policies__0066a548's footer -- five
+                                        // logos and a grey band anchored beside the PAGE field --
+                                        // drew only the number.
+                                        let sdt_drawings = !crate::env_flag!("OXI_HF_SDT_DRAWINGS_DISABLE");
+                                        let mut pr = pr;
+                                        if sdt_drawings {
+                                            let mut tbs = std::mem::take(&mut pr.text_boxes);
+                                            for tb in &mut tbs {
+                                                tb.anchor_block_index = blocks.len();
+                                            }
+                                            HF_TEXT_BOXES.with(|v| v.borrow_mut().extend(tbs));
+                                        }
                                         blocks.push(Block::Paragraph(pr.paragraph));
+                                        if sdt_drawings {
+                                            for img in pr.floating_images {
+                                                blocks.push(Block::Image(img));
+                                            }
+                                        }
                                     } else if content_depth > 0 && sl == "tbl" {
                                         let table = parse_table(&mut reader, ctx, styles)?;
                                         blocks.push(Block::Table(table));
