@@ -203,15 +203,19 @@ impl WorkbookFiles {
         Ok(())
     }
 
+    pub(super) fn package_format(package: &[u8]) -> Result<i64, String> {
+        let mut archive = oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error| error.to_string())?;
+        let types = archive.read_part("[Content_Types].xml").map_err(|error| error.to_string())?.to_ascii_lowercase();
+        Ok(if types.contains("application/vnd.ms-excel.template.macroenabled.main+xml") { 53 }
+            else if types.contains("application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml") { 54 }
+            else if types.contains("application/vnd.ms-excel.sheet.macroenabled.main+xml") { 52 }
+            else { 51 })
+    }
+
     pub(super) fn set_package(&mut self, package: Vec<u8>) -> Result<(), String> {
         // Reject invalid packages before replacing a loaded host's source.
         oxicells_core::XlsxEditor::new(&package).map_err(|error| error.to_string())?;
-        let mut archive = oxidocs_common::archive::OoxmlArchive::new(&package).map_err(|error| error.to_string())?;
-        let types = archive.read_part("[Content_Types].xml").map_err(|error| error.to_string())?.to_ascii_lowercase();
-        self.format = Some(if types.contains("application/vnd.ms-excel.template.macroenabled.main+xml") { 53.0 }
-            else if types.contains("application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml") { 54.0 }
-            else if types.contains("application/vnd.ms-excel.sheet.macroenabled.main+xml") { 52.0 }
-            else { 51.0 });
+        self.format = Some(Self::package_format(&package)? as f64);
         if let Some(project) = crate::vba_project::retain_workbook_project(&package)? { self.retained_project = Some(project); }
         self.package = Some(package);
         Ok(())
