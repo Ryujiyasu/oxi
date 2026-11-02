@@ -25389,6 +25389,9 @@ struct WorkbookApplication<'a> {
     workbook_names: BTreeMap<String, u64>,
     code: BTreeMap<u64, ApplicationCode>,
     pending_projects: Vec<u64>,
+    closed: std::collections::BTreeSet<u64>,
+    pending_closed: Vec<u64>,
+    activation_order: Vec<u64>,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
     member_owners: Vec<u64>,
@@ -25419,6 +25422,9 @@ impl<'a> WorkbookApplication<'a> {
             workbook_names: BTreeMap::new(),
             code: BTreeMap::new(),
             pending_projects: Vec::new(),
+            closed: Default::default(),
+            pending_closed: Vec::new(),
+            activation_order: vec![owner],
             debug_output: Vec::new(),
             messages: Vec::new(),
             member_owners: Vec::new(),
@@ -25502,11 +25508,87 @@ impl<'a> WorkbookApplication<'a> {
             .is_some_and(|host| host.is_workbooks(object))
     }
 
+    fn activate(&mut self, owner: u64) {
+        self.active=owner;
+        self.activation_order.retain(|held|*held!=owner);
+        self.activation_order.push(owner);
+    }
+
+    fn open_count(&self) -> usize {
+        self.hosts.keys().filter(|owner|!self.closed.contains(*owner)).count()
+    }
+
+    fn closed_object_error(&self, object: &ObjectRef) -> Option<String> {
+        let owner=self.native_owner(object)?;
+        if !self.closed.contains(&owner) { return None; }
+        let host=self.hosts.get(&owner)?;
+        if host.is_application(object) || host.is_workbooks(object) { return None; }
+        let number=if object.kind=="Range" {424} else {-2147221080};
+        Some(host_error(number,"The native workbook object is no longer available"))
+    }
+
+    fn close_workbook(
+        &mut self,
+        owner: u64,
+        args: &[Value],
+        files: Option<&mut oxivba_core::files::Files>,
+    ) -> Result<Value, String> {
+        if args.len() > 3 {
+            return Err(host_error(450, "Workbook.Close takes SaveChanges, Filename, RouteWorkbook"));
+        }
+        if self.closed.contains(&owner) {
+            return Err(host_error(-2147221080, "Workbook is already closed"));
+        }
+        // Automation rejects Error/Nothing arguments even when the workbook
+        // is already saved or the corresponding option would be ignored.
+        for value in args {
+            match value {
+                Value::Error(_) => return Err(host_error(13, "Workbook.Close argument is an Error value")),
+                Value::Nothing => return Err(host_error(5, "Workbook.Close argument is a null object reference")),
+                _ => {}
+            }
+        }
+        self.ensure_application_owner(owner);
+        let host = self.hosts.get_mut(&owner).expect("registered closing workbook");
+        let omitted = args.first().is_none_or(|value| matches!(value, Value::Missing));
+        if !host.saved && omitted && host.display_alerts {
+            return Err(host_error(1004, "Workbook.Close requires a response to the save prompt"));
+        }
+        // This optional Variant accepts Byte/Integer/Long and Boolean flags.
+        // Other subtypes (including floating point, LongLong and text) close
+        // without saving; they do not use the usual VBA Boolean conversion.
+        let save = match args.first() {
+            Some(Value::Boolean(value)) => *value,
+            Some(Value::Byte(value)) => *value != 0,
+            Some(Value::Int16(value)) => *value != 0,
+            Some(Value::Integer(value)) => *value != 0,
+            _ => false,
+        };
+        if !host.saved && save && !matches!(args.get(1), Some(Value::Array(_))) {
+            let files = files.ok_or_else(|| host_error(1004, "Workbook.Close requires the application filesystem"))?;
+            if !host.save_for_close(args.get(1), files)? {
+                // Calculation may request project UDFs. Keep the workbook and
+                // source alive until Runtime completes them and retries Close.
+                return Ok(Value::Empty);
+            }
+        }
+        self.closed.insert(owner);
+        self.pending_closed.push(owner);
+        *self.hosts.get_mut(&owner).expect("registered closed workbook").user_functions.borrow_mut()=UserFunctions::default();
+        if self.active==owner {
+            if let Some(next)=self.activation_order.iter().rev().find(|id|!self.closed.contains(id)).copied() {
+                self.active=next;
+            }
+        }
+        self.activation_order.retain(|id|*id!=owner);
+        Ok(Value::Empty)
+    }
+
     fn workbook_item(&mut self, index: &Value) -> Result<Value, String> {
         let owner = match index {
             Value::String(_) | Value::Utf16(_) => {
                 let units = index.string_units().expect("string index");
-                self.hosts.iter().find_map(|(owner, host)| {
+                self.hosts.iter().filter(|(owner,_)|!self.closed.contains(owner)).find_map(|(owner, host)| {
                     let own = host.file_name.as_deref().unwrap_or("Book1");
                     crate::vba_automation::workbook_name_matches(own, &units).then_some(*owner)
                 })
@@ -25522,7 +25604,7 @@ impl<'a> WorkbookApplication<'a> {
                     return Err(host_error(6, "workbook index overflows a Long"));
                 }
                 if number < 1.0 { None }
-                else { self.hosts.keys().nth(number as usize - 1).copied() }
+                else { self.hosts.keys().filter(|owner|!self.closed.contains(*owner)).nth(number as usize - 1).copied() }
             }
         }.ok_or_else(|| host_error(9, "there is no such workbook open"))?;
         Ok(self.hosts.get_mut(&owner).expect("selected workbook")
@@ -25538,7 +25620,7 @@ impl<'a> WorkbookApplication<'a> {
         loop {
             let name = format!("{prefix}{next}");
             let units: Vec<_> = name.encode_utf16().collect();
-            if !self.hosts.values().any(|host| crate::vba_automation::workbook_name_matches(
+            if !self.hosts.iter().any(|(owner,host)| !self.closed.contains(owner) && crate::vba_automation::workbook_name_matches(
                 host.file_name.as_deref().unwrap_or("Book1"), &units)) {
                 return Ok((name, next, key));
             }
@@ -25583,7 +25665,7 @@ impl<'a> WorkbookApplication<'a> {
             WorkbookTemplate::File(path) => {
                 let files = files.ok_or_else(|| host_error(1004, "Workbook template requires the application filesystem"))?;
                 let absolute = files.absolute_path(&path);
-                if self.hosts.values().any(|host| host.file_io.full_name.as_deref()
+                if self.hosts.iter().any(|(owner,host)| !self.closed.contains(owner) && host.file_io.full_name.as_deref()
                     .is_some_and(|name| name.eq_ignore_ascii_case(&absolute))) {
                     return Err(host_error(1004, "The template workbook is already open"));
                 }
@@ -25658,7 +25740,7 @@ impl<'a> WorkbookApplication<'a> {
         self.pending_projects.push(owner);
         self.next_workbook = next;
         self.workbook_names.insert(key, next_name);
-        self.active = owner;
+        self.activate(owner);
         Ok(book)
     }
 
@@ -25680,9 +25762,9 @@ impl<'a> WorkbookApplication<'a> {
             value => shown_text(value, None),
         };
         let path = files.absolute_path(&path);
-        if let Some(owner) = self.hosts.iter().find_map(|(owner, host)|
+        if let Some(owner) = self.hosts.iter().filter(|(owner,_)|!self.closed.contains(owner)).find_map(|(owner, host)|
             host.file_io.full_name.as_deref().filter(|name| name.eq_ignore_ascii_case(&path)).map(|_| *owner)) {
-            self.active = owner;
+            self.activate(owner);
             return Ok(self.hosts.get_mut(&owner).expect("open workbook")
                 .object(HostObject::Workbook));
         }
@@ -25720,7 +25802,7 @@ impl<'a> WorkbookApplication<'a> {
         self.code.insert(owner, ApplicationCode { source, project_name, documents });
         self.pending_projects.push(owner);
         self.next_workbook = next;
-        self.active = owner;
+        self.activate(owner);
         Ok(Value::Object(book))
     }
 
@@ -25806,9 +25888,24 @@ impl<'a> ApplicationHost<'a> {
         name: &str,
         args: &[Value],
         names: &[Option<String>],
-        files: Option<&oxivba_core::files::Files>,
+        files: Option<&mut oxivba_core::files::Files>,
     ) -> Option<Result<Option<Value>, String>> {
         let mut application = self.application.borrow_mut();
+        if let Some(error)=receiver.and_then(|object|application.closed_object_error(object)) {
+            return Some(Err(error));
+        }
+        if name.eq_ignore_ascii_case("Close") {
+            if let Some(owner)=receiver.and_then(|object|application.native_owner(object))
+                .filter(|owner|receiver.is_some_and(|object|application.hosts.get(owner).is_some_and(|host|host.is_workbook(object)))) {
+                let args=if names.is_empty() {Ok(args.to_vec())}
+                    else {normalize_named_arguments(args,names,&["SaveChanges","Filename","RouteWorkbook"],"Workbook.Close")};
+                return Some(args.and_then(|args|application.close_workbook(owner,&args,files).map(Some)));
+            }
+        }
+        if name.eq_ignore_ascii_case("ActiveWorkbook") && receiver.is_none_or(|object|application.is_application(object))
+            && application.closed.contains(&application.active) {
+            return Some(Ok(Some(Value::Nothing)));
+        }
         let collection = receiver.is_some_and(|object| application.is_workbooks(object));
         let global = receiver.is_none_or(|object| application.is_application(object))
             && name.eq_ignore_ascii_case("Workbooks");
@@ -25832,11 +25929,11 @@ impl<'a> ApplicationHost<'a> {
                 }));
         }
         if name.eq_ignore_ascii_case("Count") && args.is_empty() {
-            return Some(Ok(Some(Value::Integer(application.hosts.len() as i64))));
+            return Some(Ok(Some(Value::Integer(application.open_count() as i64))));
         }
         if name.eq_ignore_ascii_case("Add") {
             return Some(normalize(&["Template"], "Workbooks.Add")
-                .and_then(|args| application.add_workbooks(self.code_owner, &args, files).map(Some)));
+                .and_then(|args| application.add_workbooks(self.code_owner, &args, files.as_deref()).map(Some)));
         }
         if name.eq_ignore_ascii_case("Open") {
             return Some(normalize(
@@ -25844,7 +25941,7 @@ impl<'a> ApplicationHost<'a> {
                   "IgnoreReadOnlyRecommended", "Origin", "Delimiter", "Editable", "Notify",
                   "Converter", "AddToMru", "Local", "CorruptLoad"], "Workbooks.Open")
                 .and_then(|args| {
-                    let files = files.ok_or_else(|| host_error(1004, "Workbooks.Open requires the application filesystem"))?;
+                    let files = files.as_deref().ok_or_else(|| host_error(1004, "Workbooks.Open requires the application filesystem"))?;
                     application.open_workbook(self.code_owner, &args, files).map(Some)
                 }));
         }
@@ -25958,7 +26055,7 @@ impl<'a> ApplicationHost<'a> {
                     Some(HostObject::Worksheet(_))
                 )
             {
-                application.active = owner;
+                application.activate(owner);
             }
         }
     }
@@ -26293,13 +26390,19 @@ impl Host for ApplicationHost<'_> {
     fn take_application_projects(&mut self) -> Vec<u64> {
         std::mem::take(&mut self.application.borrow_mut().pending_projects)
     }
+    fn take_closed_application_projects(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.application.borrow_mut().pending_closed)
+    }
+    fn closed_native_object_error(&self, receiver: &ObjectRef) -> Option<String> {
+        self.application.borrow().closed_object_error(receiver)
+    }
     fn macro_project(&self, requested: &str) -> Result<Option<(u64, String)>, String> {
         let Some((book, procedure)) = requested.rsplit_once('!') else { return Ok(None); };
         let book = book.strip_prefix('\'').and_then(|book| book.strip_suffix('\''))
             .map(|book| book.replace("''", "'")).unwrap_or_else(|| book.to_string());
         let units: Vec<_> = book.encode_utf16().collect();
         let application = self.application.borrow();
-        application.hosts.iter().find_map(|(owner, host)| {
+        application.hosts.iter().filter(|(owner,_)|!application.closed.contains(owner)).find_map(|(owner, host)| {
             let name = host.file_name.as_deref().unwrap_or("Book1");
             (crate::vba_automation::workbook_name_matches(name, &units) && !procedure.is_empty())
                 .then(|| (*owner, procedure.to_string()))
@@ -26308,6 +26411,9 @@ impl Host for ApplicationHost<'_> {
         })
     }
     fn macro_reference(&self, requested: &str) -> Result<String, String> {
+        if self.application.borrow().closed.contains(&self.code_owner) {
+            return Err(self.macro_unavailable(requested));
+        }
         self.read(None, "", true, |host, _receiver| {
             host.macro_reference(requested)
         })
@@ -26351,7 +26457,7 @@ impl Host for ApplicationHost<'_> {
         args: &[Value],
         _files: &mut oxivba_core::files::Files,
     ) -> Result<Option<Value>, String> {
-        if let Some(result) = self.workbooks_call(receiver, name, args, &[], Some(_files)) { return result; }
+        if let Some(result) = self.workbooks_call(receiver, name, args, &[], Some(&mut *_files)) { return result; }
         let mut result = self.write(receiver, name, false, |host, receiver| {
             host.call_with_files(receiver, name, args, _files)
         });
@@ -26366,7 +26472,7 @@ impl Host for ApplicationHost<'_> {
         argument_names: &[Option<String>],
         _files: &mut oxivba_core::files::Files,
     ) -> Result<Option<Value>, String> {
-        if let Some(result) = self.workbooks_call(receiver, name, args, argument_names, Some(_files)) { return result; }
+        if let Some(result) = self.workbooks_call(receiver, name, args, argument_names, Some(&mut *_files)) { return result; }
         let mut result = self.write(receiver, name, false, |host, receiver| {
             host.call_named_with_files(receiver, name, args, argument_names, _files)
         });
@@ -26382,19 +26488,16 @@ impl Host for ApplicationHost<'_> {
         result
     }
     fn user_functions(&mut self, _names: &[String]) {
-        self.write(None, "", true, |host, _receiver| {
-            host.user_functions(_names)
-        })
+        self.application.borrow_mut().hosts.get_mut(&self.code_owner)
+            .expect("worksheet function code owner").user_functions(_names);
     }
     fn user_function_reference_arguments(&mut self, _functions: &[(String, Vec<usize>)]) {
-        self.write(None, "", true, |host, _receiver| {
-            host.user_function_reference_arguments(_functions)
-        })
+        self.application.borrow_mut().hosts.get_mut(&self.code_owner)
+            .expect("worksheet function code owner").user_function_reference_arguments(_functions);
     }
     fn user_function_variant_arguments(&mut self, _functions: &[(String, Vec<usize>)]) {
-        self.write(None, "", true, |host, _receiver| {
-            host.user_function_variant_arguments(_functions)
-        })
+        self.application.borrow_mut().hosts.get_mut(&self.code_owner)
+            .expect("worksheet function code owner").user_function_variant_arguments(_functions);
     }
     fn finish_execution(&mut self) -> Result<(), String> {
         self.write(None, "", true, |host, _receiver| host.finish_execution())
@@ -26426,6 +26529,12 @@ impl Host for ApplicationHost<'_> {
         })
     }
     fn enumeration_item_is_live(&self, _receiver: &ObjectRef, _value: &Value) -> bool {
+        let application=self.application.borrow();
+        if application.is_workbooks(_receiver) {
+            return matches!(_value,Value::Object(object) if application.native_owner(object)
+                .is_some_and(|owner|!application.closed.contains(&owner)));
+        }
+        drop(application);
         self.read(Some(_receiver), "", false, |host, receiver| {
             host.enumeration_item_is_live(receiver.expect("native receiver"), _value)
         })
@@ -26433,8 +26542,9 @@ impl Host for ApplicationHost<'_> {
     fn enumerate(&mut self, _receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
         let mut application = self.application.borrow_mut();
         if application.is_workbooks(_receiver) {
-            return Ok(Some(application.hosts.values_mut()
-                .map(|host| host.object(HostObject::Workbook)).collect()));
+            let closed=application.closed.clone();
+            return Ok(Some(application.hosts.iter_mut().filter(|(owner,_)|!closed.contains(owner))
+                .map(|(_,host)| host.object(HostObject::Workbook)).collect()));
         }
         drop(application);
         self.write(Some(_receiver), "", false, |host, receiver| {
@@ -40941,6 +41051,7 @@ fn loaded_application_runtime<'code>(
         .with_random_seed(context.random_seed)
         .with_reference_constants(context.constants.clone());
     runtime.set_application_project_identity(owner)?;
+    runtime.prepare_worksheet_functions();
     runtime.with_document_objects(bindings, references)
 }
 
@@ -40993,7 +41104,7 @@ fn selection_snapshot(state: &ProjectSessionState) -> Result<WorkbookSelection, 
         workbook: serde_json::from_slice(&state.workbook).map_err(|error| error.to_string())?,
     };
     let other_workbooks = state.application.as_ref().map(|application| {
-        application.application.hosts.iter().map(|(owner, host)| {
+        application.application.hosts.iter().filter(|(owner,_)|!application.application.closed.contains(owner)).map(|(owner, host)| {
             let code = &application.application.code[owner];
             OpenWorkbookOutput {
                 identity: owner.to_string(),
@@ -41031,6 +41142,12 @@ fn select_session_workbook_with_edits(
     let owner: u64 = identity.parse().map_err(|_| "invalid workbook identity".to_string())?;
     if owner.to_string() != identity { return Err("invalid workbook identity".into()); }
     let previous = session.as_ref().ok_or("no loaded VBA project")?;
+    if previous.application.as_ref().is_some_and(|state|state.application.closed.contains(&owner)) {
+        return Err("workbook is not open in this session".into());
+    }
+    if previous.application.as_ref().is_some_and(|state|state.application.closed.contains(&previous.host.objects.owner)) {
+        return select_session_workbook(session,identity);
+    }
     if owner != previous.host.objects.owner && !previous.application.as_ref()
         .is_some_and(|application| application.application.hosts.contains_key(&owner)
             && application.application.code.contains_key(&owner)) {
@@ -41056,11 +41173,14 @@ fn select_session_workbook(session: &mut Option<ProjectSessionState>, identity: 
     if identity != owner.to_string() { return Err("invalid workbook identity".into()); }
     let previous = session.as_ref().ok_or("no loaded VBA project")?;
     let old_owner = previous.host.objects.owner;
+    if previous.application.as_ref().is_some_and(|state|state.application.closed.contains(&owner)) {
+        return Err("workbook is not open in this session".into());
+    }
     if old_owner == owner {
         let state = session.as_mut().expect("loaded project");
         state.selected_project_name = Some(state.project_name.clone());
         if let Some(application) = state.application.as_mut() {
-            application.application.active = owner;
+            application.application.activate(owner);
         }
         return selection_snapshot(state);
     }
@@ -41082,7 +41202,7 @@ fn select_session_workbook(session: &mut Option<ProjectSessionState>, identity: 
     });
     assert!(application.application.insert(old_host).is_ok(), "detached root has a unique native owner");
     application.application.ensure_application_owner(owner);
-    application.application.active = owner;
+    application.application.activate(owner);
     let mut selected = application.application.hosts.remove(&owner).expect("validated selected workbook");
     selected.file_io.swap_application_files(&mut application.application.hosts
         .get_mut(&old_owner).expect("previous root").file_io);
@@ -42067,7 +42187,7 @@ fn execute_workbook_invocation(
         let ended = ended_before_finish || runtime.project_ended();
         let reset_unhandled = !external_action && result.as_ref().err().is_some_and(|error| !matches!(error.kind,
             oxivba_core::RuntimeErrorKind::ExecutionTerminated | oxivba_core::RuntimeErrorKind::Compile));
-        let multiple_books = application.borrow().hosts.len() > 1;
+        let multiple_books = { let state=application.borrow(); state.hosts.len()>1 || !state.closed.is_empty() };
         let mut next_application_storage = None;
         project_state = if multiple_books {
             if reset_unhandled && !ended {
@@ -42116,7 +42236,7 @@ fn execute_workbook_invocation(
         result
     } else { Ok(Value::Empty) };
     let other_workbooks = application_session.as_ref().map(|state| {
-        state.application.hosts.iter().map(|(owner, host)| {
+        state.application.hosts.iter().filter(|(owner,_)|!state.application.closed.contains(owner)).map(|(owner, host)| {
             let code = state.application.code.get(owner).expect("opened workbook source");
             OpenWorkbookOutput {
                 identity: owner.to_string(),
@@ -42132,7 +42252,8 @@ fn execute_workbook_invocation(
             }
         }).collect()
     }).unwrap_or_default();
-    let active_workbook = application_session.as_ref().map(|state| state.application.active.to_string());
+    let active_workbook = application_session.as_ref().and_then(|state|
+        (!state.application.closed.contains(&state.application.active)).then(||state.application.active.to_string()));
     host.file_io.files = file_system;
     let files = host.file_io.produced_files(&files_before);
     let deleted_files = host.file_io.files.deleted_files(&files_before);
@@ -42198,6 +42319,454 @@ mod tests {
 
 
 
+
+
+    fn close_fixture_session(a: &str, b: &str, a_name: &str, b_name: &str, setup: &str)
+        -> (RunOutcome, Option<ProjectSessionState>, String) {
+        let seed=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let open=format!("Public Sub OpenPeer()\nDim peer As Workbook\nSet peer = Workbooks.Open(\"C:\\{b_name}\")\n{setup}\nEnd Sub\n");
+        let a=if a.contains("VERSION 1.0 CLASS") { a.replacen("VERSION 1.0 CLASS",&format!("{open}VERSION 1.0 CLASS"),1) }
+            else {format!("{a}\n{open}")};
+        let package_a=crate::vba_project::write_project_source(seed,&a,None).unwrap();
+        let package_b=crate::vba_project::write_project_source(seed,b,None).unwrap();
+        let mut context=failure_context();context.file_name=Some(a_name.into());
+        context.file_context=Some(file_io::FileContext {
+            package_bytes:Some(package_a),full_name:Some(format!(r"C:\{a_name}")),
+            files:vec![file_io::ProducedFile {path:format!(r"C:\{b_name}"),bytes:package_b}],
+            ..Default::default()
+        });
+        let mut session=None;
+        let outcome=execute_workbook_action_in_session(workbook(),&a,Some("Driver.OpenPeer"),vec![],0,context,&mut session).unwrap();
+        assert!(outcome.error.is_none(),"{:?}",outcome.error.as_ref().map(|error|&error.message));
+        (outcome,session,a)
+    }
+
+    fn close_fixture_run(book: Workbook, source: &str, procedure: &str, args: Vec<Value>,
+        file_name: &str, session: &mut Option<ProjectSessionState>) -> RunOutcome {
+        let mut context=failure_context();context.file_name=Some(file_name.into());
+        context.environment.language=ErrorLanguage::Japanese;
+        execute_workbook_action_in_session(book,source,Some(procedure),args,0,context,session).unwrap()
+    }
+
+    #[test]
+    fn closing_an_idle_source_disconnects_only_its_class_and_native_objects() {
+        const A: &str=r#"Attribute VB_Name = "Driver"
+Private count As Long
+Public Function MakeCounter() As Object
+ count = 7
+ ThisWorkbook.Worksheets(1).Range("A1").Value = 11
+ Dim item As Counter
+ Set item = New Counter
+ item.Data = 70
+ Set MakeCounter = item
+End Function
+Public Function ReadCount() As Long
+ count = count + 1
+ ReadCount = count
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "Counter"
+Public Data As Long
+Public Function Report() As String
+ Report = CStr(Data) & "|" & CStr(Driver.ReadCount()) & "|" & CStr(Workbooks.Count) & "|" & ActiveWorkbook.Name
+End Function
+Public Function BookName() As String
+ BookName = ThisWorkbook.Name
+End Function
+Private Sub Class_Terminate()
+ On Error Resume Next
+ Dim target As Workbook
+ Set target = Workbooks("close-owner-B.xlsm")
+ target.Worksheets(1).Range("Z1").Value = target.Worksheets(1).Range("Z1").Value + 1
+End Sub
+"#;
+        const B: &str=r#"Attribute VB_Name = "Driver"
+Private held As Object
+Private heldBook As Workbook
+Private heldSheet As Worksheet
+Private heldRange As Range
+Public Sub Seed(ByVal name As String)
+ Set held = Application.Run("'" & name & "'!Driver.MakeCounter")
+ Set heldBook = Workbooks(name)
+ Set heldSheet = heldBook.Worksheets(1)
+ Set heldRange = heldSheet.Range("A1")
+End Sub
+Public Function Probe(ByVal route As Long) As String
+ On Error GoTo failed
+ Select Case route
+ Case 0: Probe = CStr(held.Data)
+ Case 1: Probe = held.Report()
+ Case 2: Probe = held.BookName()
+ Case 3: Probe = heldBook.Name
+ Case 4: Probe = heldSheet.Name
+ Case 5: Probe = CStr(heldRange.Value)
+ Case 6: Probe = TypeName(held)
+ Case 7: Probe = CStr(ThisWorkbook.Worksheets(1).Range("Z1").Value)
+ End Select
+ Exit Function
+failed:
+ Probe = "error|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description
+End Function
+Public Function CloseRoot(ByVal name As String) As String
+ On Error GoTo failed
+ Workbooks(name).Close SaveChanges:=False
+ CloseRoot = CStr(Workbooks.Count)
+ Exit Function
+failed:
+ CloseRoot = "error|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description
+End Function
+Public Sub ReleaseHeld()
+ Set held = Nothing
+ Set heldRange = Nothing
+ Set heldSheet = Nothing
+ Set heldBook = Nothing
+End Sub
+"#;
+        let (_,mut session,_)=close_fixture_session(A,B,"close-owner-A.xlsm","close-owner-B.xlsm",
+            "Application.Run \"'close-owner-B.xlsm'!Driver.Seed\", \"close-owner-A.xlsm\"");
+        let view=select_session_workbook(&mut session,"1").unwrap();
+        let source=view.selected.source;let mut book=view.selected.workbook;
+        let before=close_fixture_run(book,&source,"Driver.Probe",vec![Value::Integer(0)],"close-owner-B.xlsm",&mut session);
+        assert!(before.error.is_none());
+        assert_eq!(serde_json::to_value(before.result).unwrap()["value"],"70");book=before.workbook;
+        let closed=close_fixture_run(book,&source,"Driver.CloseRoot",vec![Value::String("close-owner-A.xlsm".into())],"close-owner-B.xlsm",&mut session);
+        assert!(closed.error.is_none(),"{:?}",closed.error.as_ref().map(|error|&error.message));
+        assert_eq!(serde_json::to_value(closed.result).unwrap()["value"],"1");
+        assert!(closed.other_workbooks.is_empty());book=closed.workbook;
+        for (route,expected) in [
+            (0,r#"error|-2147418105|VBAProject|オートメーション エラーです。
+呼び出し先 (サーバー アプリケーションではなく、サーバー) は消失し、利用できません。すべての接続は無効です。呼び出しが実行されている可能性があります。 "#),
+            (1,r#"error|-2147418105|VBAProject|オートメーション エラーです。
+呼び出し先 (サーバー アプリケーションではなく、サーバー) は消失し、利用できません。すべての接続は無効です。呼び出しが実行されている可能性があります。 "#),
+            (2,r#"error|-2147418105|VBAProject|オートメーション エラーです。
+呼び出し先 (サーバー アプリケーションではなく、サーバー) は消失し、利用できません。すべての接続は無効です。呼び出しが実行されている可能性があります。 "#),
+            (3,r#"error|-2147221080|VBAProject|オートメーション エラーです。"#),
+            (4,r#"error|-2147221080|VBAProject|オートメーション エラーです。"#),
+            (5,r#"error|424|VBAProject|オブジェクトが必要です。"#),
+            (6,r#"Object"#),
+            (7,r#""#),
+        ] {
+            let outcome=close_fixture_run(book,&source,"Driver.Probe",vec![Value::Integer(route)],"close-owner-B.xlsm",&mut session);
+            assert!(outcome.error.is_none());
+            let result=serde_json::to_value(outcome.result).unwrap();
+            assert_eq!(result["value"].as_str().unwrap(),expected,"{route}");book=outcome.workbook;
+        }
+        assert!(select_session_workbook(&mut session,"0").is_err());
+    }
+
+    #[test]
+    fn closing_an_active_source_stops_all_active_callers_and_retains_idle_projects() {
+        const A: &str=r#"Attribute VB_Name = "Driver"
+Public Function SelfClose(ByVal peerName As String) As Variant
+ Workbooks(peerName).Worksheets(1).Range("A1").Value = "before"
+ ThisWorkbook.Close SaveChanges:=False
+ Workbooks(peerName).Worksheets(1).Range("A2").Value = "after"
+ SelfClose = 91
+End Function
+Public Function CallCloser(ByVal peerName As String) As Variant
+ Workbooks(peerName).Worksheets(1).Range("A1").Value = "before"
+ Dim reply As Variant
+ reply = Application.Run("'" & peerName & "'!Driver.CloseCaller", ThisWorkbook.Name)
+ Workbooks(peerName).Worksheets(1).Range("A2").Value = "after|" & CStr(reply)
+ CallCloser = 92
+End Function
+"#;
+        const B: &str=r#"Attribute VB_Name = "Driver"
+Private count As Long
+Private kept As Object
+Public Function CloseCaller(ByVal name As String) As Long
+ count = 13
+ kept.Data = 130
+ ThisWorkbook.Worksheets(1).Range("B1").Value = "entered"
+ Workbooks(name).Close SaveChanges:=False
+ ThisWorkbook.Worksheets(1).Range("B2").Value = "continued"
+ CloseCaller = 42
+End Function
+Public Sub SeedState()
+ count = 7
+ Set kept = New Counter
+ kept.Data = 70
+End Sub
+Public Function State() As String
+ Dim prefix As String
+ prefix = CStr(count) & "|" & TypeName(kept)
+ On Error GoTo failed
+ If kept Is Nothing Then
+  State = prefix & "|nothing"
+ Else
+  State = prefix & "|" & CStr(kept.Data)
+ End If
+ Exit Function
+failed:
+ State = prefix & "|error|" & CStr(Err.Number)
+End Function
+Public Sub ReleaseState()
+ Set kept = Nothing
+End Sub
+VERSION 1.0 CLASS
+Attribute VB_Name = "Counter"
+Public Data As Long
+"#;
+        for (procedure,expected) in [("Driver.SelfClose","7|Counter|70"),("Driver.CallCloser","0|Nothing|nothing")] {
+            let (opened,mut session,source)=close_fixture_session(A,B,"close-flow-state-A.xlsm","close-flow-state-B.xlsm",
+                "Application.Run \"'close-flow-state-B.xlsm'!Driver.SeedState\"");
+            let stopped=close_fixture_run(opened.workbook,&source,procedure,vec![Value::String("close-flow-state-B.xlsm".into())],"close-flow-state-A.xlsm",&mut session);
+            assert_eq!(stopped.error.as_ref().map(|error|error.kind),Some("terminated"));
+            let view=select_session_workbook(&mut session,"1").unwrap();
+            let outcome=close_fixture_run(view.selected.workbook,&view.selected.source,"Driver.State",vec![],"close-flow-state-B.xlsm",&mut session);
+            assert!(outcome.error.is_none(),"{:?}",outcome.error.as_ref().map(|error|&error.message));
+            assert_eq!(serde_json::to_value(outcome.result).unwrap()["value"],expected, "{procedure}");
+        }
+    }
+
+    #[test]
+    fn closing_saves_after_project_udfs_finish_before_invalidating_the_source() {
+        const A: &str = r#"Attribute VB_Name = "Driver"
+Public Function Twice(ByVal value As Double) As Double
+ Twice = value * 2
+End Function
+Public Sub SaveSelf()
+ ThisWorkbook.Close True
+ Workbooks("close-udf-B.xlsm").Worksheets(1).Range("Z1").Value = "after"
+End Sub
+"#;
+        const B: &str = r#"Attribute VB_Name = "Driver"
+Public Function SavePeer() As Long
+ Workbooks("close-udf-A.xlsm").Close SaveChanges:=True
+ SavePeer = Workbooks.Count
+End Function
+"#;
+        for self_close in [false, true] {
+            let (opened, mut session, source) = close_fixture_session(A, B, "close-udf-A.xlsm", "close-udf-B.xlsm",
+                "Application.Calculation = xlCalculationManual\nApplication.CalculateBeforeSave = True\nThisWorkbook.Worksheets(1).Range(\"B1\").Value = 21\nThisWorkbook.Worksheets(1).Range(\"A1\").Formula = \"=Twice(B1)\"");
+            let outcome = if self_close {
+                close_fixture_run(opened.workbook, &source, "Driver.SaveSelf", vec![], "close-udf-A.xlsm", &mut session)
+            } else {
+                let view = select_session_workbook(&mut session, "1").unwrap();
+                close_fixture_run(view.selected.workbook, &view.selected.source, "Driver.SavePeer", vec![], "close-udf-B.xlsm", &mut session)
+            };
+            if self_close { assert_eq!(outcome.error.as_ref().map(|error| error.kind), Some("terminated")); }
+            else {
+                assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], 1);
+            }
+            assert_eq!(outcome.files.len(), 1, "self_close={self_close}");
+            assert_eq!(outcome.files[0].path, r"C:\close-udf-A.xlsm");
+            let saved = oxicells_core::parse_xlsx_preserving_values(&outcome.files[0].bytes).unwrap();
+            let cell = saved.sheets[0].rows.iter().find(|row| row.index == 1).unwrap().cells.iter().find(|cell| cell.col == 0).unwrap();
+            assert_eq!(cell.formula.as_deref(), Some("Twice(B1)"));
+            assert!(matches!(cell.value, CellValue::Number(value) if value == 42.0), "self_close={self_close}: {:?}", cell.value);
+            assert!(select_session_workbook(&mut session, "0").is_err());
+        }
+    }
+
+    #[test]
+    fn closing_with_save_arguments_matches_native_excel_and_publishes_saved_bytes() {
+        const A: &str = "Attribute VB_Name = \"Driver\"\nPublic Function Ping() As Long\n Ping = 7\nEnd Function\n";
+        const B: &str = r#"Attribute VB_Name = "Driver"
+Public Function Probe(ByVal name As String, ByVal kind As Long, ByVal destination As String) As String
+ On Error GoTo failed
+ Dim target As Workbook
+ Set target = Workbooks(name)
+ Select Case kind
+ Case 0: target.Close False
+ Case 1: target.Close True
+ Case 2: target.Close
+ Case 3: target.Close Null
+ Case 4: target.Close Empty
+ Case 5: target.Close 0
+ Case 6: target.Close -1
+ Case 7: target.Close "False"
+ Case 8: target.Close "abc"
+ Case 9: target.Close False, Null
+ Case 10: target.Close True, destination
+ Case 11: target.Close False, destination
+ Case 12
+  target.Saved = True
+  target.Close Null
+ Case 13: target.Close Array(0)
+ Case 14: target.Close False, Array(0)
+ Case 15: target.Close 1
+ Case 16: target.Close 2
+ Case 17: target.Close 0.5
+ Case 18: target.Close "True"
+ Case 19: target.Close "1"
+ Case 20: target.Close CVar(True)
+ Case 21: target.Close DateSerial(2026, 1, 1)
+ Case 22: target.Close CVErr(5)
+ Case 23: target.Close 0.6
+ Case 24: target.Close -0.6
+ Case 25: target.Close 1.5
+ Case 26: target.Close 0.49
+ Case 27: target.Close CCur(1)
+ Case 28: target.Close CSng(1)
+ Case 29: target.Close CDec(1)
+ Case 30: target.Close 2147483648#
+ Case 31: target.Close CDate(0)
+ Case 32: target.Close Nothing
+ Case 33: target.Close CByte(1)
+ Case 34: target.Close CLng(1)
+ Case 35: target.Close CLngLng(1)
+ Case 36: target.Close CDbl(1)
+ Case 37: target.Close CInt(-2)
+ Case 38: target.Close ThisWorkbook.Worksheets(1).Range("Z9")
+ Case 39: target.Close True, Null
+ Case 40: target.Close True, Empty
+ Case 41: target.Close True, Array(0)
+ Case 42: target.Close True, CVErr(5)
+ Case 43: target.Close True, Nothing
+ Case 44: target.Saved = True: target.Close True, destination
+ Case 45: target.Saved = True: target.Close CVErr(5)
+ Case 46: target.Close False, CVErr(5)
+ Case 47: target.Close False, Nothing
+ Case 48: target.Close Filename:=destination
+ Case 49: target.Close True, ""
+ End Select
+ Probe = "ok|" & CStr(Workbooks.Count)
+ Exit Function
+failed:
+ Probe = "error|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & CStr(Workbooks.Count)
+End Function
+"#;
+        // Result, original file changed, explicit destination created.
+        // These cases include Variant subtypes, ignored options and errors
+        // which must leave the workbook open without writing any bytes.
+        for (kind, expected, saved_original, saved_destination) in [
+            (0, "ok|1", false, false),
+            (1, "ok|1", true, false),
+            (2, "ok|1", false, false),
+            (3, "ok|1", false, false),
+            (4, "ok|1", false, false),
+            (5, "ok|1", false, false),
+            (6, "ok|1", true, false),
+            (7, "ok|1", false, false),
+            (8, "ok|1", false, false),
+            (9, "ok|1", false, false),
+            (10, "ok|1", false, true),
+            (11, "ok|1", false, false),
+            (12, "ok|1", false, false),
+            (13, "ok|1", false, false),
+            (14, "ok|1", false, false),
+            (15, "ok|1", true, false),
+            (16, "ok|1", true, false),
+            (17, "ok|1", false, false),
+            (18, "ok|1", false, false),
+            (19, "ok|1", false, false),
+            (20, "ok|1", true, false),
+            (21, "ok|1", false, false),
+            (22, "error|13|VBAProject|型が一致しません。|2", false, false),
+            (23, "ok|1", false, false),
+            (24, "ok|1", false, false),
+            (25, "ok|1", false, false),
+            (26, "ok|1", false, false),
+            (27, "ok|1", false, false),
+            (28, "ok|1", false, false),
+            (29, "ok|1", false, false),
+            (30, "ok|1", false, false),
+            (31, "ok|1", false, false),
+            (32, "error|5|VBAProject|プロシージャの呼び出し、または引数が不正です。|2", false, false),
+            (33, "ok|1", true, false),
+            (34, "ok|1", true, false),
+            (35, "ok|1", false, false),
+            (36, "ok|1", false, false),
+            (37, "ok|1", true, false),
+            (38, "ok|1", false, false),
+            (39, "ok|1", true, false),
+            (40, "error|1004|Microsoft Excel|ファイルにアクセスできませんでした。次のいずれかを確認してみてください:\n\n• 指定したフォルダーが存在することを確認します。\n• ファイルが保存されているフォルダーが読み取り専用でないことを確認します。\n• ファイル名とフォルダーのパスに次の文字が含まれていないことを確認します: <  >  ?  [  ]  :  | *\n• ファイル名とフォルダーのパスが 218 文字以下になっていることを確認します。|2", false, false),
+            (41, "ok|1", false, false),
+            (42, "error|13|VBAProject|型が一致しません。|2", false, false),
+            (43, "error|5|VBAProject|プロシージャの呼び出し、または引数が不正です。|2", false, false),
+            (44, "ok|1", false, false),
+            (45, "error|13|VBAProject|型が一致しません。|2", false, false),
+            (46, "error|13|VBAProject|型が一致しません。|2", false, false),
+            (47, "error|5|VBAProject|プロシージャの呼び出し、または引数が不正です。|2", false, false),
+            (48, "ok|1", false, false),
+            (49, "error|1004|Microsoft Excel|ファイルにアクセスできませんでした。次のいずれかを確認してみてください:\n\n• 指定したフォルダーが存在することを確認します。\n• ファイルが保存されているフォルダーが読み取り専用でないことを確認します。\n• ファイル名とフォルダーのパスに次の文字が含まれていないことを確認します: <  >  ?  [  ]  :  | *\n• ファイル名とフォルダーのパスが 218 文字以下になっていることを確認します。|2", false, false)
+        ] {
+            let (opened, mut session, _) = close_fixture_session(A, B, "close-save-A.xlsm", "close-save-B.xlsm",
+                "Application.DisplayAlerts = False\nThisWorkbook.Worksheets(1).Range(\"A1\").Value = 321");
+            let view = select_session_workbook(&mut session, "1").unwrap();
+            let outcome = close_fixture_run(view.selected.workbook, &view.selected.source,
+                "Driver.Probe", vec![Value::String("close-save-A.xlsm".into()), Value::Integer(kind),
+                    Value::String(r"C:\close-save-result.xlsm".into())], "close-save-B.xlsm", &mut session);
+            assert!(outcome.error.is_none(), "case {kind}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected, "case {kind}");
+            assert_eq!(outcome.files.len(), usize::from(saved_original) + usize::from(saved_destination), "case {kind}");
+            let snapshot = serde_json::to_value(&outcome.file_system_state).unwrap();
+            let files: Vec<file_io::ProducedFile> = serde_json::from_value(snapshot["files"].clone()).unwrap();
+            let original = files.iter().find(|file| file.path.eq_ignore_ascii_case(r"C:\close-save-A.xlsm")).unwrap();
+            let parsed = oxicells_core::parse_xlsx_preserving_values(&original.bytes).unwrap();
+            let cell = parsed.sheets[0].rows.iter().find(|row| row.index == 1).unwrap().cells.iter().find(|cell| cell.col == 0).unwrap();
+            if saved_original { assert!(matches!(cell.value, CellValue::Number(value) if value == 321.0), "case {kind}"); }
+            else { assert!(matches!(&cell.value, CellValue::String(text) if text == "a😀b"), "case {kind}"); }
+            let destination = files.iter().find(|file| file.path.eq_ignore_ascii_case(r"C:\close-save-result.xlsm"));
+            assert_eq!(destination.is_some(), saved_destination, "case {kind}");
+            if let Some(file) = destination {
+                let parsed = oxicells_core::parse_xlsx_preserving_values(&file.bytes).unwrap();
+                let cell = parsed.sheets[0].rows.iter().find(|row| row.index == 1).unwrap().cells.iter().find(|cell| cell.col == 0).unwrap();
+                assert!(matches!(cell.value, CellValue::Number(value) if value == 321.0), "case {kind}");
+                let source = crate::vba_project::read_project_source_with_code_page(&file.bytes, None).unwrap().unwrap();
+                assert!(source.contains("Public Function Ping()"), "case {kind}");
+            }
+            // Error results leave A open; successful calls remove A from the
+            // live list even when its unsaved changes were discarded.
+            assert_eq!(outcome.other_workbooks.len(), usize::from(expected.starts_with("error|")), "case {kind}");
+            drop(opened);
+        }
+    }
+
+    #[test]
+    fn closing_a_created_peer_updates_live_count_and_active_workbook() {
+        const CODE: &str=r#"Attribute VB_Name = "Driver"
+Private heldApp As Object
+Private heldBooks As Object
+Private count As Long
+Private Function Snapshot(ByVal status As Long) As String
+ count = count + 1
+ Snapshot = CStr(status) & "|" & CStr(heldApp Is Application) & "|" & CStr(heldBooks Is Workbooks) & "|" & CStr(heldBooks.Count) & "|" & ThisWorkbook.Name & "|" & ActiveWorkbook.Name & "|" & CStr(count)
+End Function
+Public Function PeerClose() As String
+ Set heldApp = Application
+ Set heldBooks = Workbooks
+ Dim peer As Workbook
+ Set peer = Workbooks.Add
+ On Error Resume Next
+ peer.Close SaveChanges:=False
+ Dim status As Long
+ status = Err.Number
+ PeerClose = Snapshot(status)
+End Function
+Public Function OriginalClose(ByVal rootName As String) As String
+ Set heldApp = Application
+ Set heldBooks = Workbooks
+ On Error Resume Next
+ Workbooks(rootName).Close SaveChanges:=False
+ Dim status As Long
+ status = Err.Number
+ OriginalClose = Snapshot(status)
+End Function
+Public Function ReadState() As String
+ ReadState = Snapshot(0)
+End Function
+Public Function Before() As String
+ Dim first As Object, second As Object
+ Set first = Workbooks
+ Set second = Workbooks
+ Before = CStr(first Is second) & "|" & CStr(first Is Workbooks) & "|" & CStr(first.Count) & "|" & CStr(Application Is Application)
+End Function
+Public Sub ReleaseHeld()
+ Set heldApp = Nothing
+ Set heldBooks = Nothing
+End Sub
+"#;
+        let mut session=None;
+        let outcome=close_fixture_run(workbook(),CODE,"Driver.PeerClose",vec![],"workbook-close-control-v2.xlsm",&mut session);
+        assert!(outcome.error.is_none(),"{:?}",outcome.error.as_ref().map(|error|&error.message));
+        assert_eq!(serde_json::to_value(outcome.result).unwrap()["value"],
+            "0|True|False|1|workbook-close-control-v2.xlsm|workbook-close-control-v2.xlsm|1");
+        assert!(outcome.other_workbooks.is_empty());
+        assert_eq!(outcome.active_workbook.as_deref(),Some("0"));
+    }
 
     #[test]
     fn workbooks_property_creates_fresh_references_and_keeps_assigned_aliases() {

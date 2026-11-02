@@ -303,6 +303,14 @@ pub trait Host {
     /// before VBA uses their document members or worksheet functions.
     fn take_application_projects(&mut self) -> Vec<u64> { Vec::new() }
 
+    /// Closed documents whose source instances must be disconnected. Closing
+    /// a project on the current call stack also cancels those active callers.
+    fn take_closed_application_projects(&mut self) -> Vec<u64> { Vec::new() }
+
+    /// A native document can become unavailable before its code-behind
+    /// dispatch is attempted; intrinsic application objects may remain live.
+    fn closed_native_object_error(&self, _receiver: &ObjectRef) -> Option<String> { None }
+
     /// Resolve a macro to an application code owner. None preserves ordinary
     /// single-project macro_reference handling.
     fn macro_project(&self, _requested: &str) -> Result<Option<(u64,String)>,String> {
@@ -3521,6 +3529,35 @@ impl<'a> Runtime<'a> {
     fn load_host_application_projects(&mut self)->Result<(),RuntimeError> {
         let requested=self.host.as_deref_mut().map(|host|host.take_application_projects()).unwrap_or_default();
         for id in requested {self.ensure_application_project(id)?;}
+        let closed=self.host.as_deref_mut().map(|host|host.take_closed_application_projects()).unwrap_or_default();
+        if closed.is_empty() { return Ok(()); }
+        for id in &closed { self.ensure_application_project(*id)?; }
+        let interrupts=closed.iter().any(|id| {
+            if *id==self.project_identity { self.depth>0 }
+            else { self.projects.get(id).is_some_and(|runtime|runtime.depth>0) }
+        });
+        let mut reset:BTreeSet<u64>=closed.into_iter().collect();
+        if interrupts {
+            if self.depth>0 { reset.insert(self.project_identity); }
+            reset.extend(self.projects.iter().filter_map(|(id,runtime)|(runtime.depth>0).then_some(*id)));
+        }
+        for id in &reset {
+            if *id==self.project_identity { self.project_ended=true; }
+            else if let Some(runtime)=self.projects.get_mut(id) { runtime.project_ended=true; }
+        }
+        let documents:BTreeSet<u64>=self.document_instances.iter().copied()
+            .chain(self.projects.values().flat_map(|runtime|runtime.document_instances.iter().copied())).collect();
+        for (handle,object) in &mut self.internal_objects {
+            let owner=self.object_projects.get(handle).copied().unwrap_or(self.project_identity);
+            if reset.contains(&owner) && !documents.contains(handle)
+                && matches!(object,InternalObject::Instance(_)) {
+                *object=InternalObject::DisconnectedInstance;
+            }
+        }
+        if interrupts {
+            return Err(error(RuntimeErrorKind::ExecutionTerminated,
+                "Execution stopped because an active workbook was closed",None));
+        }
         Ok(())
     }
 
@@ -3616,6 +3653,14 @@ impl<'a> Runtime<'a> {
         self.project_ended = false;
         self.steps = 0;
         self.depth = 0;
+        self.prepare_worksheet_functions();
+        // Initialize each module lazily when its code or storage is used.
+        Ok(())
+    }
+
+    /// Register worksheet callbacks without executing or resetting a project.
+    /// Hosts can calculate an idle workbook before calling any of its macros.
+    pub fn prepare_worksheet_functions(&mut self) {
         let mut functions: Vec<String> = self
             .main_module
             .items
@@ -3675,9 +3720,6 @@ impl<'a> Runtime<'a> {
             host.user_function_reference_arguments(&reference_arguments);
             host.user_function_variant_arguments(&variant_arguments);
         }
-        // Excel can run valid code while an unused module has invalid global
-        // declarations. Initialize each module when its code or storage is used.
-        Ok(())
     }
 
     fn initialize_module(&mut self) -> Result<(), RuntimeError> {
@@ -9944,6 +9986,9 @@ impl<'a> Runtime<'a> {
         }
 
         if let Some(receiver) = receiver {
+            if let Some(message)=self.host.as_deref().and_then(|host|host.closed_native_object_error(receiver)) {
+                return Err(host_failure(message,line));
+            }
             if self.instance_handles_member(receiver,name) {
                 return self.instance_member(receiver, name, args, line).map(Some);
             }
@@ -10055,6 +10100,9 @@ impl<'a> Runtime<'a> {
         }
 
         if let Some(receiver) = receiver {
+            if let Some(message)=self.host.as_deref().and_then(|host|host.closed_native_object_error(receiver)) {
+                return Err(host_failure(message,line));
+            }
             if self.instance_handles_member(receiver,name) {
                 if argument_names.iter().any(Option::is_some) {
                     return self.instance_member_named(receiver, name, args, argument_names, line).map(Some);
@@ -10124,6 +10172,9 @@ impl<'a> Runtime<'a> {
         name: &str,
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        if let Some(message)=self.host.as_deref().and_then(|host|host.closed_native_object_error(receiver)) {
+            return Err(host_failure(message,line));
+        }
         if self.instance_handles_member(receiver,name) {
             return self.instance_member(receiver, name, &[], line).map(Some);
         }
@@ -10171,6 +10222,9 @@ impl<'a> Runtime<'a> {
 
     fn host_array_set(&mut self, receiver: &ObjectRef, name: &str, args: &[Value], value: &Value, line: u32)
         -> Result<Option<bool>, RuntimeError> {
+        if let Some(message)=self.host.as_deref().and_then(|host|host.closed_native_object_error(receiver)) {
+            return Err(host_failure(message,line));
+        }
         if !matches!(value, Value::Array(_)) { return Ok(None); }
         let Some(host) = self.host.as_deref_mut() else { return Ok(None) };
         let Some(mut state) = host.begin_array_set(receiver, name, args, value)
@@ -10212,6 +10266,9 @@ impl<'a> Runtime<'a> {
         value: Value,
         line: u32,
     ) -> Result<bool, RuntimeError> {
+        if let Some(message)=self.host.as_deref().and_then(|host|host.closed_native_object_error(receiver)) {
+            return Err(host_failure(message,line));
+        }
         let option_compare_text = self.option_compare_text();
         if self.instance_handles_member(receiver,name) {
             return self.instance_assign(receiver, name, &[], value, line);
@@ -10283,6 +10340,9 @@ impl<'a> Runtime<'a> {
         value: Value,
         line: u32,
     ) -> Result<bool, RuntimeError> {
+        if let Some(message)=self.host.as_deref().and_then(|host|host.closed_native_object_error(receiver)) {
+            return Err(host_failure(message,line));
+        }
         if self.instance_handles_member(receiver,name) {
             return self.instance_assign(receiver, name, args, value, line);
         }

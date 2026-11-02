@@ -400,6 +400,42 @@ impl WorkbookHost<'_> {
         oxivba_core::host_error_from(1004, "Microsoft Excel", description)
     }
 
+    /// Save the closing workbook through the shared virtual filesystem.
+    /// False means calculation requested VBA callbacks and Close must retry.
+    pub(super) fn save_for_close(&mut self, filename: Option<&Value>, files: &mut Files) -> Result<bool, String> {
+        let path = match filename {
+            None | Some(Value::Missing | Value::Null) => self.file_io.full_name.clone()
+                .ok_or_else(|| host_error(1004, "Workbook.Close requires a filename for an unsaved workbook"))?,
+            Some(Value::String(path)) => path.clone(),
+            Some(Value::Utf16(units)) => String::from_utf16(units)
+                .map_err(|_| self.copy_name_failure(&String::from_utf16_lossy(units)))?,
+            Some(Value::Empty | Value::NullString) => String::new(),
+            Some(value) => shown_text(value, None),
+        };
+        if path.is_empty() {
+            let description = match self.error_language {
+                ErrorLanguage::Japanese => "ファイルにアクセスできませんでした。次のいずれかを確認してみてください:\n\n• 指定したフォルダーが存在することを確認します。\n• ファイルが保存されているフォルダーが読み取り専用でないことを確認します。\n• ファイル名とフォルダーのパスに次の文字が含まれていないことを確認します: <  >  ?  [  ]  :  | *\n• ファイル名とフォルダーのパスが 218 文字以下になっていることを確認します。".to_string(),
+                ErrorLanguage::English => "The file could not be accessed. Check that the folder exists, is writable, and the filename and path are valid.".to_string(),
+            };
+            return Err(oxivba_core::host_error_from(1004, "Microsoft Excel", description));
+        }
+        let normalized = files.absolute_path(&path);
+        if self.file_io.read_only && self.file_io.full_name.as_deref()
+            .is_some_and(|current| current.eq_ignore_ascii_case(&normalized)) {
+            return Err(host_error(1004, "Workbook.Close requires another filename for a read-only workbook"));
+        }
+        self.save_copy_path(&path, files).map_err(|error| match error {
+            CopyFailure::Method(error) | CopyFailure::Excel(error) => error,
+        })?;
+        if !self.user_functions.borrow().pending.is_empty() { return Ok(false); }
+        self.file_io.full_name = Some(normalized.clone());
+        self.file_name = Some(normalized.rsplit('\\').next().unwrap_or(&normalized).to_string());
+        self.file_io.package = Some(files.bytes(&normalized).map_err(|error| error.description().to_string())?.to_vec());
+        self.file_io.read_only = false;
+        self.saved = true;
+        Ok(true)
+    }
+
     pub(super) fn save_copy_as(&mut self, args: &[Value], files: &mut Files) -> Result<Option<Value>, String> {
         if args.len() > 1 { return Err(host_error(450, "SaveCopyAs accepts one Filename")); }
         let input = args.first().ok_or_else(|| self.copy_method_failure())?;
