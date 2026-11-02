@@ -25385,7 +25385,6 @@ struct WorkbookApplication<'a> {
     active: u64,
     application: ObjectRef,
     applications: BTreeMap<u64, ObjectRef>,
-    workbooks: ObjectRef,
     next_workbook: u64,
     workbook_names: BTreeMap<String, u64>,
     code: BTreeMap<u64, ApplicationCode>,
@@ -25408,9 +25407,6 @@ impl<'a> WorkbookApplication<'a> {
         let Value::Object(application) = host.object(HostObject::Application) else {
             unreachable!("Application has an Automation identity");
         };
-        let Value::Object(workbooks) = host.object(HostObject::Workbooks) else {
-            unreachable!("Workbooks has an Automation identity");
-        };
         let mut registry = Self {
             hosts: BTreeMap::new(),
             application_owner: None,
@@ -25419,7 +25415,6 @@ impl<'a> WorkbookApplication<'a> {
             active: owner,
             application,
             applications: BTreeMap::new(),
-            workbooks,
             next_workbook: owner.saturating_add(1).max(1),
             workbook_names: BTreeMap::new(),
             code: BTreeMap::new(),
@@ -25819,7 +25814,10 @@ impl<'a> ApplicationHost<'a> {
             && name.eq_ignore_ascii_case("Workbooks");
         if !collection && !global { return None; }
         if global && args.is_empty() {
-            return Some(Ok(Some(Value::Object(application.workbooks.clone()))));
+            // Excel returns a new collection reference for each property
+            // access; assigning that reference still preserves its identity.
+            let host = application.hosts.get_mut(&self.code_owner).expect("registered Workbooks caller");
+            return Some(Ok(Some(host.object(HostObject::Workbooks))));
         }
         let normalize = |parameters: &[&str], method: &str| {
             if names.is_empty() { Ok(args.to_vec()) }
@@ -42200,6 +42198,47 @@ mod tests {
 
 
 
+
+    #[test]
+    fn workbooks_property_creates_fresh_references_and_keeps_assigned_aliases() {
+        const CODE: &str = r#"Attribute VB_Name = "Driver"
+Private held As Object
+Public Function Capture() As String
+ Set held = Workbooks
+ Capture = Report()
+End Function
+Public Function Report() As String
+ Dim second As Object, copied As Object
+ Set second = Workbooks
+ Set copied = held
+ Report = CStr(held Is copied) & "|" & CStr(held Is second) & "|" & CStr(held Is Workbooks) & "|" & CStr(held Is Application.Workbooks) & "|" & TypeName(held) & "|" & CStr(held.Count) & "|" & CStr(held.Parent Is Application)
+End Function
+Public Function AddPeer() As String
+ Dim peer As Workbook
+ Set peer = Workbooks.Add
+ AddPeer = Report()
+End Function
+Public Sub ReleaseHeld()
+ Set held = Nothing
+End Sub
+"#;
+        let mut session = None;
+        let mut book = workbook();
+        for (procedure, expected) in [
+            ("Driver.Capture", "True|False|False|False|Workbooks|1|True"),
+            ("Driver.Report", "True|False|False|False|Workbooks|1|True"),
+            ("Driver.AddPeer", "True|False|False|False|Workbooks|2|True"),
+            ("Driver.Report", "True|False|False|False|Workbooks|2|True"),
+        ] {
+            let mut context = failure_context();
+            context.file_name = Some("Identity.xlsm".into());
+            let outcome = execute_workbook_action_in_session(book, CODE, Some(procedure),
+                vec![], 0, context, &mut session).unwrap();
+            assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(outcome.result).unwrap()["value"], expected);
+            book = outcome.workbook;
+        }
+    }
 
     #[test]
     fn project_name_overrides_are_per_call_until_a_workbook_is_selected() {

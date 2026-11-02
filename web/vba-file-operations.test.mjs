@@ -411,4 +411,35 @@ try{
 assert.equal(projectNameDirectCalls,11);
 assert.equal(projectNameWorkerCalls,11);
 
-console.log(JSON.stringify({native_cases:163,direct,worker,text_stream_cases:360,text_stream_close_reset_cases:4,text_stream_direct_calls:textStreamDirectCalls,text_stream_worker_calls:textStreamWorkerCalls,end_direct_calls:endDirectCalls,end_worker_calls:endWorkerCalls,workbook_selection_direct_calls:workbookSelectionDirectCalls,workbook_selection_worker_calls:workbookSelectionWorkerCalls,project_name_direct_calls:projectNameDirectCalls,project_name_worker_calls:projectNameWorkerCalls,complete_results:true,post_file_bytes_and_folders:true,post_attributes:true,deletion_outputs:true,passed:true}));
+
+// Independent property retrievals differ; assigned references retain identity.
+const collectionIdentitySource="Attribute VB_Name = \"Driver\"\nPrivate held As Object\nPublic Function Capture() As String\n Set held = Workbooks\n Capture = Report()\nEnd Function\nPublic Function Report() As String\n Dim second As Object, copied As Object\n Set second = Workbooks\n Set copied = held\n Report = CStr(held Is copied) & \"|\" & CStr(held Is second) & \"|\" & CStr(held Is Workbooks) & \"|\" & CStr(held Is Application.Workbooks) & \"|\" & TypeName(held) & \"|\" & CStr(held.Count) & \"|\" & CStr(held.Parent Is Application)\nEnd Function\nPublic Function AddPeer() As String\n Dim peer As Workbook\n Set peer = Workbooks.Add\n AddPeer = Report()\nEnd Function\nPublic Sub ReleaseHeld()\n Set held = Nothing\nEnd Sub\n";
+async function verifyWorkbooksIdentity(mode){
+ const session=mode==='direct'?new wasm.SpreadsheetVbaSession():null;
+ let book=wasm.parse_spreadsheet(selectionSeed),calls=0;
+ try{
+  for(const [procedure,expected] of [
+   ['Driver.Capture','True|False|False|False|Workbooks|1|True'],
+   ['Driver.Report','True|False|False|False|Workbooks|1|True'],
+   ['Driver.AddPeer','True|False|False|False|Workbooks|2|True'],
+   ['Driver.Report','True|False|False|False|Workbooks|2|True'],
+  ]){
+   const execution=session?session.run(book,collectionIdentitySource,procedure,[],0,'Identity.xlsm',{})
+    :await runner.runVbaInWorker(book,collectionIdentitySource,procedure,[],0,'Identity.xlsm',{});
+   calls++;book=execution.workbook;
+   assert.equal(execution.error,undefined,mode+' '+procedure);
+   assert.deepEqual(execution.result,{type:'string',value:expected},mode+' '+procedure);
+  }
+ }finally{session?.free();if(!session)runner.closeVbaProject();}
+ return calls;
+}
+let workbooksIdentityDirectCalls,workbooksIdentityWorkerCalls;
+try{
+ workbooksIdentityDirectCalls=await verifyWorkbooksIdentity('direct');
+ globalThis.Worker=BrowserWorker;
+ workbooksIdentityWorkerCalls=await verifyWorkbooksIdentity('worker');
+}finally{runner.closeVbaProject();globalThis.Worker=originalWorker;}
+assert.equal(workbooksIdentityDirectCalls,4);
+assert.equal(workbooksIdentityWorkerCalls,4);
+
+console.log(JSON.stringify({native_cases:163,direct,worker,text_stream_cases:360,text_stream_close_reset_cases:4,text_stream_direct_calls:textStreamDirectCalls,text_stream_worker_calls:textStreamWorkerCalls,end_direct_calls:endDirectCalls,end_worker_calls:endWorkerCalls,workbook_selection_direct_calls:workbookSelectionDirectCalls,workbook_selection_worker_calls:workbookSelectionWorkerCalls,project_name_direct_calls:projectNameDirectCalls,project_name_worker_calls:projectNameWorkerCalls,workbooks_identity_direct_calls:workbooksIdentityDirectCalls,workbooks_identity_worker_calls:workbooksIdentityWorkerCalls,complete_results:true,post_file_bytes_and_folders:true,post_attributes:true,deletion_outputs:true,passed:true}));
