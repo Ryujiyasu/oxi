@@ -40956,12 +40956,20 @@ struct ApplicationSessionState {
 struct ProjectSessionState {
     source: String,
     project_name: String,
+    // Only an explicit workbook selection binds the default for later calls.
+    // An invocation's projectName override must not become the next default.
+    selected_project_name: Option<String>,
     runtime: Option<oxivba_core::ProjectState>,
     application: Option<ApplicationSessionState>,
     host: WorkbookHostState,
     workbook: Vec<u8>,
     documents: Vec<VbaDocumentModule>,
     external_references: ExternalReferences,
+}
+
+fn invocation_project_name(session: Option<&ProjectSessionState>, requested: Option<&str>) -> String {
+    requested.or_else(|| session.and_then(|state| state.selected_project_name.as_deref()))
+        .unwrap_or("VBAProject").to_string()
 }
 
 #[derive(Serialize)]
@@ -41051,10 +41059,12 @@ fn select_session_workbook(session: &mut Option<ProjectSessionState>, identity: 
     let previous = session.as_ref().ok_or("no loaded VBA project")?;
     let old_owner = previous.host.objects.owner;
     if old_owner == owner {
-        if let Some(application) = session.as_mut().and_then(|state| state.application.as_mut()) {
+        let state = session.as_mut().expect("loaded project");
+        state.selected_project_name = Some(state.project_name.clone());
+        if let Some(application) = state.application.as_mut() {
             application.application.active = owner;
         }
-        return selection_snapshot(session.as_ref().expect("loaded project"));
+        return selection_snapshot(state);
     }
     let application = previous.application.as_ref().ok_or("workbook is not open in this session")?;
     let selected = application.application.hosts.get(&owner).ok_or("workbook is not open in this session")?;
@@ -41081,6 +41091,7 @@ fn select_session_workbook(session: &mut Option<ProjectSessionState>, identity: 
     selected.file_io.files.select_project(owner);
     let (_, host) = selected.into_parts();
     *session = Some(ProjectSessionState {
+        selected_project_name: Some(project_name.clone()),
         source, project_name, documents, workbook, host, runtime: None,
         application: Some(application), external_references: previous.external_references,
     });
@@ -41685,8 +41696,7 @@ fn prepare_spreadsheet_vba(
     if matches!(&action, Some(ExternalObjectAction::Release { .. })) && options.source_edits.is_some() {
         return Err(JsError::new("invalid VBA source edits: releasing references cannot edit source"));
     }
-    let project_name = options.project_name.clone().unwrap_or_else(||
-        session.as_ref().map_or_else(|| "VBAProject".to_string(), |state| state.project_name.clone()));
+    let project_name = invocation_project_name(session.as_ref(), options.project_name.as_deref());
     let source_edits = options.source_edits.clone().map(|edits| edits.into_iter().map(|edit| oxivba_core::SourceEdit {
         line: edit.line, delete_lines: edit.delete_lines, text: edit.text,
     }).collect());
@@ -41791,7 +41801,8 @@ fn execute_workbook_invocation(
     active_sheet: usize, context: VbaRunContext, session: &mut Option<ProjectSessionState>,
 ) -> Result<RunOutcome, String> {
     let VbaInvocation { procedure, args, action } = invocation;
-    let stored_project_name = context.project_name.clone();
+    let selected_project_name = session.as_ref().and_then(|state| state.selected_project_name.clone());
+    let stored_project_name = selected_project_name.clone().unwrap_or_else(|| context.project_name.clone());
     // Validate before taking the previous state: invalid API inputs must not
     // destroy a loaded project or leave its host handles disconnected.
     if active_sheet >= workbook.sheets.len() { return Err(format!("active sheet index {active_sheet} is out of bounds")); }
@@ -42160,7 +42171,7 @@ fn execute_workbook_invocation(
     };
     external_references.retain(&mut result);
     let reference_state = external_references.snapshot();
-    *session = Some(ProjectSessionState { source: stored_source, project_name: stored_project_name, runtime: project_state, application: application_session, host: host_state, documents,
+    *session = Some(ProjectSessionState { source: stored_source, project_name: stored_project_name, selected_project_name, runtime: project_state, application: application_session, host: host_state, documents,
         external_references, workbook: serde_json::to_vec(&workbook).map_err(|error| error.to_string())? });
     Ok(RunOutcome {
         workbook,
@@ -42189,6 +42200,61 @@ mod tests {
 
 
 
+
+    #[test]
+    fn project_name_overrides_are_per_call_until_a_workbook_is_selected() {
+        const CODE: &str = r#"Attribute VB_Name = "Driver"
+Private count As Long
+Public Sub OpenPeer()
+ Dim peer As Workbook
+ Set peer = Workbooks.Open("C:\B.xlsm")
+End Sub
+Public Function ReadSource() As String
+ count = count + 1
+ On Error Resume Next
+ Err.Raise 5
+ ReadSource = Err.Source & "|" & CStr(count)
+End Function
+"#;
+        fn read_source(book: Workbook, session: &mut Option<ProjectSessionState>,
+            requested: Option<&str>, expected: &str) -> Workbook {
+            let mut context = failure_context();
+            context.project_name = invocation_project_name(session.as_ref(), requested);
+            context.file_name = session.as_ref().and_then(|state| state.host.file_name.clone())
+                .or_else(|| Some("A.xlsm".into()));
+            let outcome = execute_workbook_action_in_session(book, CODE, Some("Driver.ReadSource"),
+                vec![], 0, context, session).unwrap();
+            assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(outcome.result).unwrap()["value"], expected);
+            outcome.workbook
+        }
+        let mut session = None;
+        let book = read_source(workbook(), &mut session, Some("ExplicitProject"), "ExplicitProject|1");
+        let book = read_source(book, &mut session, None, "VBAProject|2");
+        let seed = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let package = crate::vba_project::write_project_source(seed, CODE, None).unwrap();
+        let mut context = failure_context();
+        context.project_name = "RootProject".into();
+        context.file_name = Some("A.xlsm".into());
+        context.file_context = Some(file_io::FileContext {
+            files: vec![file_io::ProducedFile { path: r"C:\B.xlsm".into(), bytes: package }],
+            ..Default::default()
+        });
+        let outcome = execute_workbook_action_in_session(book, CODE, Some("Driver.OpenPeer"),
+            vec![], 0, context, &mut session).unwrap();
+        assert!(outcome.error.is_none());
+        assert!(session.as_ref().unwrap().selected_project_name.is_none());
+        assert_eq!(select_session_workbook(&mut session, "0").unwrap().selected.project_name, "RootProject");
+        let view = select_session_workbook(&mut session, "1").unwrap();
+        let child_name = view.selected.project_name;
+        let book = read_source(view.selected.workbook, &mut session, None, &format!("{child_name}|1"));
+        let book = read_source(book, &mut session, Some("OneCallOverride"), "OneCallOverride|2");
+        assert_eq!(selection_snapshot(session.as_ref().unwrap()).unwrap().selected.project_name, child_name);
+        let _book = read_source(book, &mut session, None, &format!("{child_name}|3"));
+        let root = select_session_workbook(&mut session, "0").unwrap();
+        assert_eq!(root.selected.project_name, "RootProject");
+        let _book = read_source(root.selected.workbook, &mut session, None, "RootProject|3");
+    }
 
     #[test]
     fn editor_selection_synchronizes_cells_without_resetting_code_and_exports_own_package() {

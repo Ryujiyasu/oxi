@@ -356,4 +356,59 @@ try{
 assert.equal(workbookSelectionDirectCalls,10);
 assert.equal(workbookSelectionWorkerCalls,13);
 
-console.log(JSON.stringify({native_cases:163,direct,worker,text_stream_cases:360,text_stream_close_reset_cases:4,text_stream_direct_calls:textStreamDirectCalls,text_stream_worker_calls:textStreamWorkerCalls,end_direct_calls:endDirectCalls,end_worker_calls:endWorkerCalls,workbook_selection_direct_calls:workbookSelectionDirectCalls,workbook_selection_worker_calls:workbookSelectionWorkerCalls,complete_results:true,post_file_bytes_and_folders:true,post_attributes:true,deletion_outputs:true,passed:true}));
+
+// A per-call Err.Source override never renames a selected workbook's project.
+const projectNameSource=`Attribute VB_Name = "Driver"
+Private count As Long
+Public Sub OpenPeer()
+ Dim peer As Workbook
+ Set peer = Workbooks.Open("C:\\B.xlsm")
+End Sub
+Public Function ReadSource() As String
+ count = count + 1
+ On Error Resume Next
+ Err.Raise 5
+ ReadSource = Err.Source & "|" & CStr(count)
+End Function
+`;
+const projectNamePackage=wasm.save_spreadsheet_vba_source(selectionSeed,projectNameSource);
+async function verifyProjectNameDefaults(mode){
+ const session=mode==='direct'?new wasm.SpreadsheetVbaSession():null;
+ let book=wasm.parse_spreadsheet(selectionSeed),fileName='A.xlsm',calls=0;
+ async function run(procedure,projectName){
+  const options={fileContext:{files:[{path:'C:\\B.xlsm',bytes:projectNamePackage}]}};
+  if(projectName!==undefined)options.projectName=projectName;
+  const execution=session?session.run(book,projectNameSource,procedure,[],0,fileName,options)
+   :await runner.runVbaInWorker(book,projectNameSource,procedure,[],0,fileName,options);
+  assert.equal(execution.error,undefined,mode+' '+procedure);
+  calls++;book=execution.workbook;return execution.result;
+ }
+ async function select(identity){
+  const view=session?session.select_workbook(identity):await runner.selectVbaWorkbookInWorker(identity);
+  calls++;book=view.selected.workbook;fileName=view.selected.name;return view;
+ }
+ try{
+  assert.deepEqual(await run('Driver.ReadSource','ExplicitProject'),{type:'string',value:'ExplicitProject|1'});
+  assert.deepEqual(await run('Driver.ReadSource'),{type:'string',value:'VBAProject|2'});
+  await run('Driver.OpenPeer','RootProject');
+  assert.equal((await select('0')).selected.project_name,'RootProject');
+  const childName=(await select('1')).selected.project_name;
+  assert.deepEqual(await run('Driver.ReadSource'),{type:'string',value:childName+'|1'});
+  assert.deepEqual(await run('Driver.ReadSource','OneCallOverride'),{type:'string',value:'OneCallOverride|2'});
+  assert.equal((await select('1')).selected.project_name,childName);
+  assert.deepEqual(await run('Driver.ReadSource'),{type:'string',value:childName+'|3'});
+  assert.equal((await select('0')).selected.project_name,'RootProject');
+  assert.deepEqual(await run('Driver.ReadSource'),{type:'string',value:'RootProject|3'});
+ }finally{session?.free();if(!session)runner.closeVbaProject();}
+ return calls;
+}
+let projectNameDirectCalls,projectNameWorkerCalls;
+try{
+ projectNameDirectCalls=await verifyProjectNameDefaults('direct');
+ globalThis.Worker=BrowserWorker;
+ projectNameWorkerCalls=await verifyProjectNameDefaults('worker');
+}finally{runner.closeVbaProject();globalThis.Worker=originalWorker;}
+assert.equal(projectNameDirectCalls,11);
+assert.equal(projectNameWorkerCalls,11);
+
+console.log(JSON.stringify({native_cases:163,direct,worker,text_stream_cases:360,text_stream_close_reset_cases:4,text_stream_direct_calls:textStreamDirectCalls,text_stream_worker_calls:textStreamWorkerCalls,end_direct_calls:endDirectCalls,end_worker_calls:endWorkerCalls,workbook_selection_direct_calls:workbookSelectionDirectCalls,workbook_selection_worker_calls:workbookSelectionWorkerCalls,project_name_direct_calls:projectNameDirectCalls,project_name_worker_calls:projectNameWorkerCalls,complete_results:true,post_file_bytes_and_folders:true,post_attributes:true,deletion_outputs:true,passed:true}));
