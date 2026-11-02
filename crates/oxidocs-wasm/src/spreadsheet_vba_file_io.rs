@@ -54,6 +54,7 @@ struct FileAttributes {
 #[derive(Clone, Default)]
 pub(super) struct WorkbookFiles {
     pub package: Option<Vec<u8>>,
+    pub retained_project: Option<crate::vba_project::RetainedVbaProject>,
     pub full_name: Option<String>,
     pub read_only: bool,
     pub format: Option<f64>,
@@ -211,6 +212,7 @@ impl WorkbookFiles {
             else if types.contains("application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml") { 54.0 }
             else if types.contains("application/vnd.ms-excel.sheet.macroenabled.main+xml") { 52.0 }
             else { 51.0 });
+        if let Some(project) = crate::vba_project::retain_workbook_project(&package)? { self.retained_project = Some(project); }
         self.package = Some(package);
         Ok(())
     }
@@ -403,6 +405,10 @@ impl WorkbookHost<'_> {
     /// Save the closing workbook through the shared virtual filesystem.
     /// False means calculation requested VBA callbacks and Close must retry.
     pub(super) fn save_for_close(&mut self, filename: Option<&Value>, files: &mut Files) -> Result<bool, String> {
+        self.save_in_format(filename, None, files)
+    }
+
+    pub(super) fn save_in_format(&mut self, filename: Option<&Value>, format: Option<i64>, files: &mut Files) -> Result<bool, String> {
         let path = match filename {
             None | Some(Value::Missing | Value::Null) => self.file_io.full_name.clone()
                 .ok_or_else(|| host_error(1004, "Workbook.Close requires a filename for an unsaved workbook"))?,
@@ -424,13 +430,14 @@ impl WorkbookHost<'_> {
             .is_some_and(|current| current.eq_ignore_ascii_case(&normalized)) {
             return Err(host_error(1004, "Workbook.Close requires another filename for a read-only workbook"));
         }
-        self.save_copy_path(&path, files).map_err(|error| match error {
+        self.save_copy_path(&path, format, files).map_err(|error| match error {
             CopyFailure::Method(error) | CopyFailure::Excel(error) => error,
         })?;
         if !self.user_functions.borrow().pending.is_empty() { return Ok(false); }
         self.file_io.full_name = Some(normalized.clone());
         self.file_name = Some(normalized.rsplit('\\').next().unwrap_or(&normalized).to_string());
         self.file_io.package = Some(files.bytes(&normalized).map_err(|error| error.description().to_string())?.to_vec());
+        if let Some(format) = format { self.file_io.format = Some(format as f64); }
         self.file_io.read_only = false;
         self.saved = true;
         Ok(true)
@@ -447,7 +454,7 @@ impl WorkbookHost<'_> {
         let mut excel_failure = None;
         for input in inputs {
             let result = match input {
-                CopyInput::Filename(path) => self.save_copy_path(&path, files),
+                CopyInput::Filename(path) => self.save_copy_path(&path, None, files),
                 CopyInput::Error => Err(CopyFailure::Method(self.copy_method_failure())),
             };
             match result {
@@ -512,7 +519,7 @@ impl WorkbookHost<'_> {
         Ok(inputs)
     }
 
-    fn save_copy_path(&mut self, path: &str, files: &mut Files) -> Result<(), CopyFailure> {
+    fn save_copy_path(&mut self, path: &str, format: Option<i64>, files: &mut Files) -> Result<(), CopyFailure> {
         if path.encode_utf16().count() > 255 { return Err(CopyFailure::Method(self.copy_method_failure())); }
         let invalid = path.chars().enumerate().any(|(index, ch)| {
             matches!(ch, '?' | '*' | '"' | '<' | '>' | '|') || ch == '\0' || ch == ':' && index != 1
@@ -543,14 +550,28 @@ impl WorkbookHost<'_> {
         let mut editor = oxicells_core::XlsxEditor::new(&package).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
         editor.apply_workbook(&self.workbook).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
         let mut bytes = editor.save().map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
-        if crate::vba_project::read_project_source_with_code_page(&bytes, None).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?.is_some() {
+        let failure = || CopyFailure::Method(self.copy_method_failure());
+        let project = crate::vba_project::retain_workbook_project(&bytes).map_err(|_| failure())?;
+        if project.is_none() && self.file_io.retained_project.is_some() {
+            bytes = crate::vba_project::convert_workbook_format(&bytes, 52, self.file_io.retained_project.as_ref())
+                .map_err(|_| failure())?;
+        }
+        if project.is_some() || self.file_io.retained_project.is_some() {
             bytes = crate::vba_project::write_project_source(&bytes, &self.file_io.source, None).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
             bytes = crate::vba_project::compact_project_storage(&bytes).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
+        }
+        let retained_project = crate::vba_project::retain_workbook_project(&bytes)
+            .map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
+        let format = format.or(self.file_io.format.map(|value| value as i64)).unwrap_or(51);
+        if matches!(format, 51 | 54) || self.file_io.format != Some(format as f64) {
+            bytes = crate::vba_project::convert_workbook_format(&bytes, format, retained_project.as_ref())
+                .map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
         }
         files.replace_bytes(&normalized, bytes).map_err(|error| match error {
             FileError::AlreadyOpen | FileError::PathNotFound => CopyFailure::Excel(self.copy_access_failure(path)),
             _ => CopyFailure::Method(self.copy_method_failure()),
         })?;
+        self.file_io.retained_project = retained_project;
         self.file_io.exports.insert(normalized);
         Ok(())
     }

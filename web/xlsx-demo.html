@@ -520,7 +520,7 @@ import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
                row_height_px, spreadsheet_vba_source } from './oxidocs_wasm.js';
 // A macro runs in a worker: the interpreter is free to take as long as the
 // macro asks for without the grid stopping being drawable meanwhile.
-import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension } from './vba-runner.js';
+import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
 import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-settings.js';
 import * as vbaProjectApi from './oxidocs_wasm.js';
 // The row model is the renderer's own, written out once in JS: what the grid
@@ -4190,11 +4190,11 @@ async function save() {
       : edit_xlsx(sourceData, [...changes.values()]);
     const extension = vbaWorkbookExtension(fileName, book, macroSourceBound);
     const blob = new Blob([written], {
-      type: extension === 'xlsm' ? 'application/vnd.ms-excel.sheet.macroEnabled.12' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      type: vbaWorkbookMimeType(extension),
     });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = fileName.replace(/\.xls[xm]$/i, '') + '-edited.' + extension;
+    link.download = fileName.replace(/\.(?:xls[xm]|xlt[xm])$/i, '') + '-edited.' + extension;
     link.click();
     URL.revokeObjectURL(link.href);
     // What was saved is now what the file holds: the next save starts from

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import {Worker as ThreadWorker} from 'node:worker_threads';
 import { bindVbaEditorSettings } from './vba-editor-settings.js';
-import { closeVbaProject, getVbaSourceForSave, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension } from './vba-runner.js';
+import { closeVbaProject, getVbaSourceForSave, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = path.resolve(process.argv[2] || path.join(root, 'crates/oxidocs-wasm/pkg'));
 const wasm = await import('data:text/javascript;base64,' + Buffer.from(await readFile(path.join(pkg, 'oxidocs_wasm.js'))).toString('base64'));
@@ -82,7 +82,7 @@ const context = vm.createContext({
   runVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker,
   prepareVbaSaveInWorker,
   compileVbaInWorker,
-  closeVbaProject, bindVbaEditorSettings, bindVbaWorkbookPicker, vbaWorkbookExtension,
+  closeVbaProject, bindVbaEditorSettings, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType,
   recordVbaSourceChange, getVbaSourceForSave, setTimeout() { return 0; }, clearTimeout() {},
 });
 vm.runInContext(`let currentDocIR, currentFileBytes, currentXlsxSheetIndex = 0, wasmReady = true;
@@ -498,15 +498,15 @@ const demoPage = await readFile(path.join(root,'web/xlsx-demo.html'),'utf8');
 const demoNode = id => node('demo-'+id);
 let demoPaints = 0;
 const demo = vm.createContext({
- ...wasm, Uint8Array, Map, Set, parseVbaArguments: JSON.parse, runVbaInWorker, bindVbaWorkbookPicker,
- document:{getElementById:demoNode}, measureDigit:()=>7,
+ ...wasm, Uint8Array, Map, Set, parseVbaArguments: JSON.parse, runVbaInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType, getVbaSourceForSave, prepareVbaSaveInWorker, Blob:context.Blob, URL:context.URL, window:{dispatchEvent(){}}, Event:class{},
+ document:{getElementById:demoNode,createElement:()=>({click(){downloads.push(this.download);}})}, measureDigit:()=>7,
  weighCalc(){}, markConditional(){}, markFrozen(){}, markSteps(){}, describe(){}, sayFaces(){},
  goTo(){}, listMacroProcedures(){}, showMacroFiles(){}, draw(){demoPaints++;},
  sayMacro(message,bad){demoNode('result').textContent=message;demoNode('result').classList.toggle('error',bad);},
  closeSeed, closePacketA,
 });
 const demoFunctions=['captureMacroWorkbookView','applyMacroWorkbookView','clearClosedMacroWorkbookView',
- 'applyMacroExecution','reportMacro','calculationPendingSave','markSaved'];
+ 'applyMacroExecution','reportMacro','calculationPendingSave','markSaved','save'];
 vm.runInContext('let book=closeSeed.workbook, source=closePacketA, fileName="CloseUI-A.xlsm", shown=0, geom={};\n'
  +'let macroProjectSource="",macroSourceBound=false,macroSourceBaseline="",macroSourceDirty=false,macroSourceRevision=0,beyondValues=false,digitWidth=7,editor=null;\n'
  +'let savedCalculation={mode:"auto",on_save:true};const at={row:1,col:0},changes=new Map(),pristine=new Map(),conditional=new Map(),undone=[],redone=[];\n'
@@ -660,4 +660,71 @@ for(const route of ['main','canvas'])for(const kind of [0,1,2]){
 assert.equal(saveAsUiRows.length,6);
 assert.deepEqual(saveAsUiRows.filter(row=>!row.passed),[], 'SaveAs updates both editors without replacing cancelled packages or losing the selected procedure');
 
-console.log(JSON.stringify({ main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));
+
+const saveAsFormatUiRows=[];
+for(const route of ['main','canvas'])for(const [format,extension,hasVba,mime] of [
+ [51,'xlsx',false,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+ [52,'xlsm',true,'application/vnd.ms-excel.sheet.macroEnabled.12'],
+ [53,'xltm',true,'application/vnd.ms-excel.template.macroEnabled.12'],
+ [54,'xltx',false,'application/vnd.openxmlformats-officedocument.spreadsheetml.template'],
+]){
+ closeVbaProject();
+ const name='SaveFormatUI-'+route+'-'+format+'.xlsm',destination=name.replace('.xlsm','-Saved.'+extension);
+ const code='Attribute VB_Name = "Driver"\nPrivate counter As Long\nPublic Sub SeedFormatUI()\nApplication.DisplayAlerts = False\nEnd Sub\nPublic Function SaveCurrent() As String\nThisWorkbook.Worksheets(1).Range("A1").Value = "converted from macro"\nThisWorkbook.SaveAs Filename:="C:\\'+destination+'", FileFormat:='+format+'\ncounter = counter + 1\nSaveCurrent = CStr(counter) & "|" & CStr(ThisWorkbook.HasVBProject) & "|" & CStr(ThisWorkbook.FileFormat)\nEnd Function\nPublic Function Report() As String\nReport = CStr(counter) & "|" & CStr(ThisWorkbook.HasVBProject) & "|" & CStr(ThisWorkbook.FileFormat)\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = "ThisWorkbook"\n';
+ const packet=wasm.save_spreadsheet_vba_source(bytes,code),row={route,format,extension};
+ try{
+  const seeded=await runVbaInWorker(wasm.parse_spreadsheet(packet),code,'Driver.SeedFormatUI',[],0,name,
+   {applicationState:{},documentModules:wasm.spreadsheet_vba_document_modules(packet),fileSystemState:{folders:['C:\\'],files:[],mountedFolders:[],mountedFiles:[]},fileContext:{fullName:'C:\\'+name,packageBytes:packet}},packet);
+  assert.equal(seeded.error,undefined);
+  if(route==='main'){
+   context.formatFixture={seeded,packet,code,name};
+   vm.runInContext('currentDocIR=formatFixture.seeded.workbook;currentFileBytes=formatFixture.packet;currentFileName=formatFixture.name;currentXlsxSheetIndex=0;currentXlsxVbaSource=formatFixture.code;xlsxVbaSourceBound=true;xlsxVbaSourceBaseline=formatFixture.code;xlsxVbaSourceDirty=false;xlsxVbaEdits.clear();vbaWorkbookPicker.reset(currentFileName);applyVbaExecution(formatFixture.seeded,currentDocIR);',context);
+   node('vbaSource').value=code;node('vbaProcedure').value='Driver.SaveCurrent';node('vbaArguments').value='[]';
+   node('vbaRun').disabled=node('vbaCompile').disabled=false;
+   await vm.runInContext('executeVbaFromDialog()',context);
+   assert.equal(node('vbaResult').classList.values.has('error'),false,node('vbaResult').textContent);
+   assert.equal(vm.runInContext('currentFileName',context),destination);
+   assert.equal(!!wasm.spreadsheet_vba_source(vm.runInContext('new Uint8Array(currentFileBytes)',context)),hasVba);
+   node('vbaProcedure').value='Driver.Report';
+   await vm.runInContext('executeVbaFromDialog()',context);
+   assert.ok(node('vbaResult').textContent.includes('1|True|'+format),node('vbaResult').textContent);
+   written.length=0;
+   await vm.runInContext('downloadEdited()',context);
+   assert.equal(written.length,1,JSON.stringify(statuses.slice(-2)));
+   assert.equal(downloads.at(-1),'edited.'+extension);
+   assert.equal(written[0].type,mime);
+   assert.equal(!!wasm.spreadsheet_vba_source(written[0].parts[0]),hasVba);
+   assert.equal(savedCell(wasm.parse_spreadsheet(written[0].parts[0]),0).value.String,'converted from macro');
+   await vm.runInContext('executeVbaFromDialog()',context);
+   assert.ok(node('vbaResult').textContent.includes('1|True|'+format),node('vbaResult').textContent);
+  }else{
+   demo.formatFixture={seeded,packet,code,name};
+   vm.runInContext('book=formatFixture.seeded.workbook;source=formatFixture.packet;fileName=formatFixture.name;shown=0;geom={};macroProjectSource=formatFixture.code;macroSourceBound=true;macroSourceBaseline=formatFixture.code;macroSourceDirty=false;macroWorkbookPicker.reset(fileName);applyMacroExecution(formatFixture.seeded);',demo);
+   demoNode('source').value=code;demoNode('proc').value='Driver.SaveCurrent';demoNode('args').value='[]';
+   demoNode('run').disabled=demoNode('compile').disabled=false;
+   await vm.runInContext('macroRun.onclick()',demo);
+   assert.equal(demoNode('result').classList.values.has('error'),false,demoNode('result').textContent);
+   assert.equal(vm.runInContext('fileName',demo),destination);
+   assert.equal(!!wasm.spreadsheet_vba_source(vm.runInContext('new Uint8Array(source)',demo)),hasVba);
+   demoNode('proc').value='Driver.Report';
+   await vm.runInContext('macroRun.onclick()',demo);
+   assert.ok(demoNode('result').textContent.includes('1|True|'+format),demoNode('result').textContent);
+   written.length=0;
+   await vm.runInContext('save()',demo);
+   assert.equal(written.length,1,demoNode('state').textContent);
+   assert.equal(downloads.at(-1),destination.replace(/\.(?:xls[xm]|xlt[xm])$/i,'')+'-edited.'+extension);
+   assert.equal(written[0].type,mime);
+   assert.equal(!!wasm.spreadsheet_vba_source(written[0].parts[0]),hasVba);
+   assert.equal(savedCell(wasm.parse_spreadsheet(written[0].parts[0]),0).value.String,'converted from macro');
+   await vm.runInContext('macroRun.onclick()',demo);
+   assert.ok(demoNode('result').textContent.includes('1|True|'+format),demoNode('result').textContent);
+  }
+  row.passed=true;
+ }catch(error){row.passed=false;row.failure=error.stack||String(error);}
+ finally{closeVbaProject();}
+ saveAsFormatUiRows.push(row);
+}
+assert.equal(saveAsFormatUiRows.length,8);
+assert.deepEqual(saveAsFormatUiRows.filter(row=>!row.passed),[],'converted packages keep download type, live VBA and global state in both editors');
+
+console.log(JSON.stringify({ main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));

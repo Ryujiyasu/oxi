@@ -1543,7 +1543,7 @@ document.addEventListener('keydown', (e) => {
 <script type="module">
 import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_xlsx_from_workbook, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, spreadsheet_vba_source, save_spreadsheet_vba_source, format_cell_number } from './oxidocs_wasm.js';
 import { collectAdvances, familyPresent } from './face-metrics.js';
-import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension } from './vba-runner.js';
+import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
 import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-settings.js';
 import * as vbaProjectApi from './oxidocs_wasm.js';
 
@@ -2993,7 +2993,7 @@ async function downloadEdited() {
         else if (currentFileType === 'pptx') editedBytes = edit_pptx(data, edits);
 
         const savedExtension = currentFileType === 'xlsx' ? vbaWorkbookExtension(currentFileName, currentDocIR, xlsxVbaSourceBound) : currentFileType;
-        const mimeType = savedExtension === 'xlsm' ? 'application/vnd.ms-excel.sheet.macroEnabled.12' : MIME_TYPES[currentFileType];
+        const mimeType = currentFileType === 'xlsx' ? vbaWorkbookMimeType(savedExtension) : MIME_TYPES[currentFileType];
         const blob = new Blob([editedBytes], { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');

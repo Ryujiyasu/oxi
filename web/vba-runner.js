@@ -293,9 +293,20 @@ export function selectVbaWorkbookInWorker(workbookIdentity, workbook, activeShee
 
 // Untitled template copies keep their VBA project or legacy macro sheets.
 export function vbaWorkbookExtension(name, workbook, hasProject) {
+    const template = /\.(xltm|xltx)$/i.exec(name || '');
+    if (template) return template[1].toLowerCase();
     return /\.xlsm$/i.test(name || '') || hasProject
         || workbook?.sheets?.some(sheet => sheet.kind === 'macro_sheet' || sheet.kind === 'international_macro_sheet')
         ? 'xlsm' : 'xlsx';
+}
+
+export function vbaWorkbookMimeType(extension) {
+    return {
+        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        xlsm: 'application/vnd.ms-excel.sheet.macroEnabled.12',
+        xltx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.template',
+        xltm: 'application/vnd.ms-excel.template.macroEnabled.12',
+    }[extension] || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 }
 
 // Both editors use the same application worker and keep only their view

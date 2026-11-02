@@ -341,6 +341,239 @@ fn workbook_project_part(package: &[u8]) -> Result<Option<(String, Vec<u8>)>, St
     Ok(Some((target, bytes)))
 }
 
+/// VBA payloads remain live when Excel saves a macro-free package. Retain only
+/// the project and its related parts, not a second copy of worksheet data.
+#[derive(Clone)]
+pub(crate) struct RetainedVbaProject {
+    target: String,
+    parts: std::collections::BTreeMap<String, Vec<u8>>,
+    types: std::collections::BTreeMap<String, String>,
+}
+
+fn related_part(base: &str, target: &str) -> Result<String, String> {
+    if target.contains([':', '\\', '?', '#']) || target.starts_with("//") {
+        return Err("invalid internal project relationship target".into());
+    }
+    let mut parts: Vec<_> = if target.starts_with('/') { Vec::new() }
+        else { base.rsplit_once('/').map_or(Vec::new(), |(parent, _)| parent.split('/').collect()) };
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => { parts.pop().ok_or("project relationship escapes package root")?; }
+            _ => parts.push(part),
+        }
+    }
+    if parts.is_empty() { return Err("empty project relationship target".into()); }
+    Ok(parts.join("/"))
+}
+
+fn part_relationships(part: &str) -> String {
+    let (parent, leaf) = part.rsplit_once('/').unwrap_or(("", part));
+    if parent.is_empty() { format!("_rels/{leaf}.rels") } else { format!("{parent}/_rels/{leaf}.rels") }
+}
+
+pub(crate) fn retain_workbook_project(package: &[u8]) -> Result<Option<RetainedVbaProject>, String> {
+    use std::collections::BTreeMap;
+    let Some((target, _)) = workbook_project_part(package)? else { return Ok(None); };
+    let mut archive = OoxmlArchive::new(package).map_err(|error| error.to_string())?;
+    let types_xml = archive.read_part("[Content_Types].xml").map_err(|error| error.to_string())?;
+    let mut defaults = BTreeMap::new();
+    let mut overrides = BTreeMap::new();
+    let mut reader = quick_xml::Reader::from_str(&types_xml);
+    loop {
+        match reader.read_event().map_err(|error| error.to_string())? {
+            quick_xml::events::Event::Start(element) | quick_xml::events::Event::Empty(element) => {
+                let attribute = |key| oxidocs_common::xml_utils::get_attr(&element, key);
+                match element.local_name().as_ref() {
+                    b"Default" => { if let (Some(extension), Some(value)) = (attribute("Extension"), attribute("ContentType")) {
+                        defaults.insert(extension.to_ascii_lowercase(), value);
+                    }}
+                    b"Override" => { if let (Some(part), Some(value)) = (attribute("PartName"), attribute("ContentType")) {
+                        overrides.insert(part.trim_start_matches('/').to_string(), value);
+                    }}
+                    _ => {}
+                }
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+    }
+    let mut result = RetainedVbaProject { target: target.clone(), parts: BTreeMap::new(), types: BTreeMap::new() };
+    let mut pending = vec![target];
+    while let Some(part) = pending.pop() {
+        if result.parts.contains_key(&part) { continue; }
+        let bytes = archive.read_binary_part(&part).map_err(|error| error.to_string())?;
+        let content_type = overrides.get(&part).or_else(|| {
+            part.rsplit_once('.').and_then(|(_, extension)| defaults.get(&extension.to_ascii_lowercase()))
+        }).cloned().ok_or_else(|| format!("missing project content type: {part}"))?;
+        result.types.insert(part.clone(), content_type);
+        result.parts.insert(part.clone(), bytes);
+        let rels_part = part_relationships(&part);
+        if let Some(xml) = archive.try_read_part(&rels_part).map_err(|error| error.to_string())? {
+            for relationship in parse_relationships(&xml).map_err(|error| error.to_string())?.values() {
+                if relationship.target_mode.as_deref() != Some("External") {
+                    pending.push(related_part(&part, &relationship.target)?);
+                }
+            }
+            result.parts.insert(rels_part, xml.into_bytes());
+        }
+    }
+    Ok(Some(result))
+}
+
+// Preserve the metadata root's namespace prefix and unrelated XML events.
+// Removing a paired child also consumes its complete subtree.
+fn rewrite_package_metadata(
+    xml: &str,
+    mut child: impl FnMut(quick_xml::events::BytesStart<'static>) -> Result<Option<quick_xml::events::BytesStart<'static>>, String>,
+    additions: &[(&str, Vec<(&str, String)>)],
+) -> Result<Vec<u8>, String> {
+    use quick_xml::events::{BytesStart, Event};
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut writer = quick_xml::Writer::new(Vec::new());
+    let mut depth = 0;
+    let mut prefix = String::new();
+    loop {
+        let event = reader.read_event().map_err(|error| error.to_string())?;
+        let event = match event {
+            Event::Start(element) => {
+                if depth == 0 {
+                    let name = String::from_utf8(element.name().as_ref().to_vec()).map_err(|error| error.to_string())?;
+                    prefix = name.rsplit_once(':').map_or(String::new(), |(prefix,_)| format!("{prefix}:"));
+                }
+                let original_name = element.name().as_ref().to_vec();
+                let element = if depth == 1 { child(element.into_owned())? } else { Some(element.into_owned()) };
+                let Some(element) = element else {
+                    reader.read_to_end(quick_xml::name::QName(&original_name)).map_err(|error| error.to_string())?;
+                    continue;
+                };
+                depth += 1;
+                Event::Start(element)
+            }
+            Event::Empty(element) if depth == 1 => {
+                let Some(element) = child(element.into_owned())? else { continue; };
+                Event::Empty(element)
+            }
+            Event::End(element) => {
+                if depth == 1 {
+                    for (name, attributes) in additions {
+                        let qualified = format!("{prefix}{name}");
+                        let mut addition = BytesStart::new(qualified);
+                        for (key, value) in attributes { addition.push_attribute((*key, value.as_str())); }
+                        writer.write_event(Event::Empty(addition)).map_err(|error| error.to_string())?;
+                    }
+                }
+                depth -= 1;
+                Event::End(element.into_owned())
+            }
+            Event::Eof => break,
+            other => other.into_owned(),
+        };
+        writer.write_event(event).map_err(|error| error.to_string())?;
+    }
+    if depth != 0 { return Err("unclosed package metadata".into()); }
+    Ok(writer.into_inner())
+}
+
+/// Serialize the requested OOXML format without changing the live project's
+/// lifetime. A reopened macro-free book supplies no retained project.
+pub(crate) fn convert_workbook_format(
+    package: &[u8], format: i64, live_project: Option<&RetainedVbaProject>,
+) -> Result<Vec<u8>, String> {
+    use std::{collections::{BTreeMap, BTreeSet}, io::{Cursor, Write}};
+    use oxidocs_common::xml_utils::get_attr;
+    let main_type = match format {
+        51 => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+        52 => "application/vnd.ms-excel.sheet.macroEnabled.main+xml",
+        53 => "application/vnd.ms-excel.template.macroEnabled.main+xml",
+        54 => "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml",
+        _ => return Err("unsupported OOXML workbook format".into()),
+    };
+    let macro_free = matches!(format, 51 | 54);
+    let existing = retain_workbook_project(package)?;
+    let retained = existing.as_ref().or(live_project);
+    let removed: BTreeSet<_> = if macro_free {
+        existing.as_ref().map(|project| project.parts.keys().cloned().collect()).unwrap_or_default()
+    } else { BTreeSet::new() };
+    let restore = if macro_free || existing.is_some() { None } else { retained };
+    let mut parts = OoxmlArchive::new(package).map_err(|error| error.to_string())?;
+    let names = parts.file_names();
+    let mut replacements = BTreeMap::new();
+    let types = parts.read_part("[Content_Types].xml").map_err(|error| error.to_string())?;
+    let mut type_additions = Vec::new();
+    if let Some(project) = restore {
+        for (part, content_type) in &project.types {
+            type_additions.push(("Override", vec![("PartName", format!("/{part}")), ("ContentType", content_type.clone())]));
+        }
+        for (part, bytes) in &project.parts {
+            if names.contains(part) { return Err(format!("retained VBA part collides with workbook part: {part}")); }
+            replacements.insert(part.clone(), bytes.clone());
+        }
+    }
+    let types = rewrite_package_metadata(&types, |mut element| {
+        if macro_free && element.local_name().as_ref() == b"Default"
+            && get_attr(&element, "ContentType").as_deref() == Some("application/vnd.ms-office.vbaProject")
+            && get_attr(&element, "Extension").is_some_and(|extension| !names.iter().any(|name|
+                !removed.contains(name) && name.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case(&extension)))) {
+            return Ok(None);
+        }
+        if element.local_name().as_ref() == b"Override" {
+            let part = get_attr(&element, "PartName").unwrap_or_default();
+            if removed.contains(part.trim_start_matches('/')) { return Ok(None); }
+            if part == "/xl/workbook.xml" {
+                let attributes: Vec<_> = element.attributes().map(|attribute| {
+                    let attribute = attribute.map_err(|error| error.to_string())?;
+                    Ok((attribute.key.as_ref().to_vec(), attribute.value.into_owned()))
+                }).collect::<Result<_, String>>()?;
+                element.clear_attributes();
+                for (key, value) in attributes {
+                    element.push_attribute((key.as_slice(), if key == b"ContentType" { main_type.as_bytes() } else { value.as_slice() }));
+                }
+            }
+        }
+        Ok(Some(element))
+    }, &type_additions)?;
+    replacements.insert("[Content_Types].xml".to_string(), types);
+    let rels_path = "xl/_rels/workbook.xml.rels";
+    let rels = parts.read_part(rels_path).map_err(|error| error.to_string())?;
+    let mut rel_additions = Vec::new();
+    if let Some(project) = restore {
+        let relationships = parse_relationships(&rels).map_err(|error| error.to_string())?;
+        let mut id = "rIdVbaProject".to_string();
+        while relationships.contains_key(&id) { id.push('_'); }
+        rel_additions.push(("Relationship", vec![("Id", id), ("Type", VBA_RELATIONSHIP.to_string()),
+            ("Target", format!("/{}", project.target))]));
+    }
+    let rels = rewrite_package_metadata(&rels, |element| {
+        if macro_free && get_attr(&element, "Type").as_deref() == Some(VBA_RELATIONSHIP) { Ok(None) }
+        else { Ok(Some(element)) }
+    }, &rel_additions)?;
+    replacements.insert(rels_path.to_string(), rels);
+    let mut archive = zip::ZipArchive::new(Cursor::new(package)).map_err(|error| error.to_string())?;
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    writer.set_raw_comment(archive.comment().into());
+    let mut seen = BTreeSet::new();
+    for index in 0..archive.len() {
+        let file = archive.by_index(index).map_err(|error| error.to_string())?;
+        let name = file.name().to_string();
+        if !seen.insert(name.clone()) { return Err("ambiguous workbook package part".into()); }
+        if removed.contains(&name) { continue; }
+        if let Some(bytes) = replacements.remove(&name) {
+            let mut options = zip::write::SimpleFileOptions::default().compression_method(file.compression())
+                .last_modified_time(file.last_modified().unwrap_or_default());
+            if let Some(mode) = file.unix_mode() { options = options.unix_permissions(mode); }
+            writer.start_file(name, options).map_err(|error| error.to_string())?;
+            writer.write_all(&bytes).map_err(|error| error.to_string())?;
+        } else { writer.raw_copy_file(file).map_err(|error| error.to_string())?; }
+    }
+    for (name, bytes) in replacements {
+        writer.start_file(name, zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)).map_err(|error| error.to_string())?;
+        writer.write_all(&bytes).map_err(|error| error.to_string())?;
+    }
+    writer.finish().map(|cursor| cursor.into_inner()).map_err(|error| error.to_string())
+}
+
 /// Save edits to the source of an existing workbook VBA project. Unchanged
 /// source preserves the entire package byte-for-byte. The host code page has
 /// the same meaning as in `spreadsheet_vba_source`.
@@ -635,6 +868,27 @@ mod tests {
         let mut archive = OoxmlArchive::new(&saved).unwrap();
         assert!(archive.try_read_bytes("xl/vbaProject.bin").unwrap().is_none());
         assert!(archive.try_read_bytes("xl/code/project.bin").unwrap().is_some());
+
+        let retained = retain_workbook_project(&saved).unwrap().unwrap();
+        for format in [51, 54] {
+            let macro_free = convert_workbook_format(&saved, format, Some(&retained)).unwrap();
+            assert!(read_project_source(&macro_free).unwrap().is_none());
+            let mut archive = OoxmlArchive::new(&macro_free).unwrap();
+            assert!(archive.try_read_bytes("xl/code/project.bin").unwrap().is_none());
+            let restored = convert_workbook_format(&macro_free, 52, Some(&retained)).unwrap();
+            assert_eq!(read_project_source(&restored).unwrap(), read_project_source(&saved).unwrap());
+            let without_live_project = convert_workbook_format(&macro_free, 52, None).unwrap();
+            assert!(read_project_source(&without_live_project).unwrap().is_none(),
+                "reopening macro-free disk bytes cannot recreate a discarded project");
+            let mut original_parts = OoxmlArchive::new(&saved).unwrap();
+            let mut restored_parts = OoxmlArchive::new(&restored).unwrap();
+            for name in original_parts.file_names() {
+                if !matches!(name.as_str(), "[Content_Types].xml" | "xl/_rels/workbook.xml.rels") {
+                    assert_eq!(original_parts.read_binary_part(&name).unwrap(),
+                        restored_parts.read_binary_part(&name).unwrap(), "{name}");
+                }
+            }
+        }
     }
 
     #[test]
