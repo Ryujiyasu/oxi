@@ -5213,6 +5213,26 @@ impl LayoutEngine {
                 }
             }
         }
+        // OXI_AUM_RENDER_MINCHO (2026-11-02, default ON, opt-out _DISABLE): where the
+        // layout already measured absent Arial Unicode MS as ＭＳ 明朝 (charset 80 /
+        // ja-language AUM run, OXI_AUM_CHARSET80_LATIN), draw it in ＭＳ 明朝 too --
+        // the renderers otherwise hand «Arial Unicode MS» to the system fallback and
+        // draw a sans face over the Mincho advances. en/forms__006c06b0: Word's PDF
+        // spans for every AUM paragraph are MS-Mincho.
+        if !crate::env_flag!("OXI_AUM_RENDER_MINCHO_DISABLE")
+            && crate::font::runtime::resolve("Arial Unicode MS", false, false).is_none()
+            && (self.doc_aum_ja_lang || self.aum_charset_80_absent())
+        {
+            for page in pages.iter_mut() {
+                for el in page.elements.iter_mut() {
+                    if let LayoutContent::Text { font_family: Some(f), .. } = &mut el.content {
+                        if f == "Arial Unicode MS" {
+                            *f = "ＭＳ 明朝".to_string();
+                        }
+                    }
+                }
+            }
+        }
         LayoutResult { pages }
     }
 
@@ -11931,6 +11951,21 @@ cells={} pitch={:.2} text={:?}",
     /// footer's own height, before the bottom-margin clamp -- the height the
     /// footer is painted at (OXI_FTR_TBL_PAINT_DIST).
     fn s755_footer_geom_stack(&self, blocks: &[Block], page: &Page) -> (f32, bool, f32) {
+        // OXI_NEGBOTTOM_FOOTER (2026-11-02, default ON, opt-out _DISABLE): a negative
+        // bottom margin is absolute -- the footer never pushes the body up.
+        // `_pb_negbottom_footer_gen.py` (80 exact 12pt lines, footer 510): bottom
+        // -284 holds 62 lines with 0, 1 or 3 footer lines (last line 817.1 over the
+        // footer at 778.8..); +284 holds 61 / 61 / 59; -1134 holds 59 for all three.
+        // ja/correspondence__04a3e3e1 (bottom -284, page-number footer): Word runs
+        // page 1 to 825.7, Oxi pushed two empty paragraphs and the page-2 box down.
+        if page.margin_bottom_negative && !crate::env_flag!("OXI_NEGBOTTOM_FOOTER_DISABLE") {
+            let (_, _, stack) = self.s755_footer_geom_stack_inner(blocks, page);
+            return (page.margin.bottom, false, stack);
+        }
+        self.s755_footer_geom_stack_inner(blocks, page)
+    }
+
+    fn s755_footer_geom_stack_inner(&self, blocks: &[Block], page: &Page) -> (f32, bool, f32) {
         // S894 (2026-07-17, default ON, opt-out OXI_S894_DISABLE): an
         // INK-FREE footer (only empty/whitespace paragraphs — no text, no
         // table, no image/drawing) reserves the BOTTOM MARGIN ONLY, like no

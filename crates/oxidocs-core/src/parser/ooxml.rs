@@ -1215,6 +1215,7 @@ impl OoxmlParser {
                     size: section.properties.page_size,
                     margin: section.properties.margin,
                     margin_top_negative: section.properties.margin_top_negative,
+                    margin_bottom_negative: section.properties.margin_bottom_negative,
                     grid_line_pitch: section.properties.grid_line_pitch,
                     grid_char_pitch: section.properties.grid_char_pitch,
                     grid_char_space_raw: section.properties.grid_char_space_raw,
@@ -3229,6 +3230,7 @@ fn parse_body(
         page_size: sectionless_page,
         margin: sectionless_margin,
         margin_top_negative: false,
+        margin_bottom_negative: false,
         grid_line_pitch: sectionless_grid,
         grid_char_pitch: None,
         grid_char_space_raw: None,
@@ -8492,11 +8494,46 @@ fn parse_drawing(
                                                     val.parse::<f32>().ok().map(|v| v / 60000.0);
                                             }
                                         }
+                                    } else if matches!(sl.as_str(), "schemeClr" | "srgbClr" | "sysClr")
+                                        && current_gs_pos.is_some()
+                                        && !crate::env_flag!("OXI_SHAPE_GRAD_MEAN_DISABLE")
+                                    {
+                                        // OXI_SHAPE_GRAD_MEAN: a stop colour with modifiers
+                                        // (<a:schemeClr val="accent1"><a:tint .../>) is a
+                                        // Start element; the loop read only empty srgbClr.
+                                        let key = if sl == "sysClr" { "lastClr" } else { "val" };
+                                        let raw = se.attributes().flatten()
+                                            .find(|a| local_name(a.key.as_ref()) == key)
+                                            .map(|a| String::from_utf8_lossy(&a.value).to_string());
+                                        let base = match (sl.as_str(), raw) {
+                                            ("schemeClr", Some(v)) => ctx.theme.resolve(&v).cloned(),
+                                            (_, v) => v,
+                                        };
+                                        if let Some(base) = base {
+                                            let color = parse_color_modifiers(reader, &base, &sl);
+                                            gradient_stops.push(GradientStop {
+                                                position: current_gs_pos.unwrap_or(0.0),
+                                                color,
+                                            });
+                                            gf_depth -= 1; // its End was consumed
+                                        }
                                     }
                                 }
                                 Ok(Event::Empty(se)) => {
                                     let sl = local_name(se.name().as_ref());
-                                    if sl == "srgbClr" {
+                                    if sl == "schemeClr" && current_gs_pos.is_some()
+                                        && !crate::env_flag!("OXI_SHAPE_GRAD_MEAN_DISABLE")
+                                    {
+                                        let base = se.attributes().flatten()
+                                            .find(|a| local_name(a.key.as_ref()) == "val")
+                                            .and_then(|a| ctx.theme.resolve(&String::from_utf8_lossy(&a.value)).cloned());
+                                        if let Some(color) = base {
+                                            gradient_stops.push(GradientStop {
+                                                position: current_gs_pos.unwrap_or(0.0),
+                                                color,
+                                            });
+                                        }
+                                    } else if sl == "srgbClr" {
                                         if let Some(pos) = current_gs_pos {
                                             for attr in se.attributes().flatten() {
                                                 if local_name(attr.key.as_ref()) == "val" {
@@ -10001,6 +10038,16 @@ fn parse_drawing(
     let stroke_color_saved = stroke_color.clone();
     let stroke_width_saved = stroke_width;
 
+    // OXI_SHAPE_GRAD_MEAN (2026-11-02, default ON, opt-out _DISABLE): neither
+    // renderer paints a gradient, so a gradient-only shape drew no fill at all.
+    // Paint the stops' mean colour, as the SmartArt and chart parsers already do
+    // (dml::average). ja/creative__13152ea1: the rotated roundRect behind the
+    // ✓ list (accent1 tint 66% / 44.5% / 23.5%) came out white.
+    if shape_fill.is_none() && !has_no_fill && !gradient_stops.is_empty()
+        && !crate::env_flag!("OXI_SHAPE_GRAD_MEAN_DISABLE")
+    {
+        shape_fill = super::dml::average(gradient_stops.iter().map(|g| g.color.clone()));
+    }
     // A picture's unpainted geometry is not a second drawing. Keep standalone
     // invisible objects, which can still reserve inline flow space.
     let shape_type = if image.is_some() && has_no_fill && has_no_stroke
@@ -14429,6 +14476,7 @@ struct SectionProperties {
     margin: Margin,
     /// S1267: `w:pgMar/@top` was negative (see Page::margin_top_negative).
     margin_top_negative: bool,
+    margin_bottom_negative: bool,
     /// Document grid line pitch in points (from w:docGrid w:linePitch, twips/20)
     grid_line_pitch: Option<f32>,
     /// Character grid pitch in points (for linesAndChars mode)
@@ -14484,6 +14532,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
     let mut saw_pg_sz = false;
     let mut margin = Margin::default();
     let mut margin_top_negative = false;
+    let mut margin_bottom_negative = false;
     let mut grid_line_pitch: Option<f32> = None;
     let mut grid_char_pitch: Option<f32> = None;
     let mut char_space_section: Option<i32> = None;
@@ -14773,6 +14822,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                                         // lines on page 1 for bottom -568/-284/0/+284/+1134,
                                         // i.e. -284 and +284 are indistinguishable.
                                         margin.bottom = if s1267 { to_pt(v.abs()) } else { to_pt(v) };
+                                        margin_bottom_negative = s1267 && v < 0.0;
                                     }
                                 }
                                 "left" => {
@@ -15075,6 +15125,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
         page_size,
         margin,
         margin_top_negative,
+        margin_bottom_negative,
         grid_line_pitch,
         grid_char_pitch,
         grid_char_space_raw: char_space_section,

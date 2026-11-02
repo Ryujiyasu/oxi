@@ -1645,7 +1645,8 @@ impl<'a> ParagraphLayouter<'a> {
         }
         if (crate::env_flag!("OXI_WRAP_WORD_FIT")
                 || !crate::env_flag!("OXI_S1472_DISABLE"))
-            && !self.doc_body_has_real_cjk && body_para_index.is_some()
+            && (!self.doc_body_has_real_cjk || crate::env_flag!("OXI_WRAP_ROWPLAN_CJK"))
+            && body_para_index.is_some()
             && fragments.iter().all(|f| !f.0.chars().any(|c| matches!(c, '\t' | '\u{FFFC}')))
         {
             if let Some((bottom, reduction, shift)) = s758_band.or(future_wrap_band) {

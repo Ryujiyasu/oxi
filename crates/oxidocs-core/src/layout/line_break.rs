@@ -2648,8 +2648,14 @@ impl<'a> LineBreaker<'a> {
                 && !natural_break_jc
                 && !vertical
                 && (!lines_and_chars || (is_justified
+                    // OXI_CATALOG_OWN_WIDTH (2026-11-02, default ON, opt-out
+                    // OXI_CATALOG_OWN_WIDTH_DISABLE): read 、。 off the face's own
+                    // cmap when the calibrated entry holds ASCII only. ja/creative__
+                    // 13152ea1 (UD デジタル 教科書体 N-B 14pt, linesAndChars, jc=both):
+                    // Word packs 35 cells by squeezing 、。、 3.3pt each; the gate
+                    // missed 、 in the 100-width entry and the line broke at 34.
                     && cjk_metrics.is_some_and(|m|
-                        ['\u{3001}', '\u{3002}'].iter().all(|&ch| m.char_widths.contains_key(&ch) && m.char_width_em(ch) >= 0.99))
+                        ['\u{3001}', '\u{3002}'].iter().all(|&ch| m.own_width_em(ch).is_some_and(|w| w >= 0.99)))
                     && style.east_asia_lang.as_deref().is_some_and(|lang|
                         lang.eq_ignore_ascii_case("ja") || lang.to_ascii_lowercase().starts_with("ja-"))))
                 && s476_body

@@ -723,6 +723,21 @@ impl FontMetrics {
         )
     }
 
+    /// The face's own advance for `c` in em: the measured table first, then the
+    /// font catalog's full cmap for the same family. A calibrated entry added
+    /// for line metrics only (S1140/S1142: «UD デジタル 教科書体», «BIZ UD明朝»,
+    /// the HG faces) holds ASCII widths alone, so a CJK lookup in it misses.
+    pub fn own_width_em(&self, c: char) -> Option<f32> {
+        if let Some(w) = self.char_widths.get(&c) {
+            return Some(*w);
+        }
+        if crate::env_flag!("OXI_CATALOG_OWN_WIDTH_DISABLE") {
+            return None;
+        }
+        catalog::resolve(&self.family, false, false)
+            .and_then(|m| m.char_widths.get(&c).copied())
+    }
+
     /// Kana advances narrower than the em (a proportional-kana face such as
     /// UD デジタル 教科書体 NK or the P-faces), read off ト / ル / あ.
     pub fn has_proportional_kana(&self) -> bool {

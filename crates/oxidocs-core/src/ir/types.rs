@@ -185,6 +185,10 @@ pub struct Page {
     /// the absolute value is already in `margin.top`.
     #[serde(default)]
     pub margin_top_negative: bool,
+    /// OXI_NEGBOTTOM_FOOTER: `w:pgMar/@bottom` was negative -- the body runs to
+    /// page height - |bottom| and the footer does not push it up.
+    #[serde(default)]
+    pub margin_bottom_negative: bool,
     /// Document grid line pitch in points (from w:docGrid w:linePitch).
     /// When set with grid_type "lines" or "linesAndChars", line spacing
     /// snaps to multiples of this pitch.

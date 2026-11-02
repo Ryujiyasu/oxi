@@ -250,6 +250,16 @@ impl<'a> TableFitLayouter<'a> {
                 let s1239_negative = !crate::env_flag!("OXI_S1239_DISABLE")
                     && table.style.indent.is_some_and(|v| v < -0.1)
                     && (self.compat_mode <= 14 || !self.compat_mode_explicit);
+                // OXI_UNDECL_POS_TBLIND (2026-11-02, default ON, opt-out _DISABLE): in a
+                // document with NO compatibilityMode a POSITIVE tblInd absorbs the cell
+                // margin the same way, whole table with its borders (the S1239 probe's
+                // +162 arm: 38.04 = margin + ind - cellMar). The per-cell S496 path only
+                // runs for an explicit mode <= 14, so an undeclared document got neither.
+                // en/forms__006c06b0 (no compat, tblInd 108, TableGrid cellMar 108): Word's
+                // rules 71.78 / 173.42 / 533.26, Oxi 77.4 / 179.0 / 538.85 (every column +5.6).
+                let s1239_negative = s1239_negative || (!crate::env_flag!("OXI_UNDECL_POS_TBLIND_DISABLE")
+                    && !self.compat_mode_explicit
+                    && table.style.indent.is_some_and(|v| v > 0.1));
                 let absorb = if !crate::env_flag!("OXI_S621_DISABLE") {
                     (indent_zero && !self.table_modern_compat()) || s1239_negative
                 } else {
