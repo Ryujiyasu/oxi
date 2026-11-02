@@ -5203,9 +5203,16 @@ fn parse_paragraph_with_inline_images_impl(
     // margin) out of scope. The routed runs were pushed in document order, so
     // unwinding here restores the exact pre-S1252 IR.
     if !s1252_slots.is_empty() {
+        // OXI_INLMATH_TAB (2026-11-02, default ON, opt-out _DISABLE): a TAB before
+        // the maths is content too -- it sets the maths at its stop, as text would.
+        // en/educational__0072828f («<tab/>r = ½h» in an ind-360 cell paragraph,
+        // tab stop 1269): Word draws the fraction at the stop (x 103), Oxi on the
+        // cell's left edge on a line of its own.
+        let inlmath_tab = std::env::var_os("OXI_INLMATH_TAB_DISABLE").is_none();
         let has_text = runs
             .iter()
-            .any(|r| r.style.inline_math.is_none() && !r.text.trim().is_empty());
+            .any(|r| r.style.inline_math.is_none()
+                && (!r.text.trim().is_empty() || (inlmath_tab && r.text.contains('\t'))));
         if has_text {
             // The route stands: give up the reserved block slots.
             for slot in s1252_slots.iter().rev() {
@@ -13827,7 +13834,19 @@ fn parse_table_cell(
                         // to its text height — 3a4f p34's 321.75pt calendar EMF
                         // cell rendered ~28pt, the Phase-1 sole-FAIL root cause.
                         if std::env::var("OXI_S331_DISABLE").is_err() {
-                            for mb in pr.math_blocks {
+                            // OXI_CELL_MATH_HOST: an equation-only cell paragraph lends
+                            // its style to its display equations, as S1613 does in the
+                            // body (size, indents).
+                            let cell_math_host = (std::env::var_os("OXI_CELL_MATH_HOST_DISABLE").is_none()
+                                && s971_cell_host.runs.is_empty() && pr.inline_images.is_empty()
+                                && pr.floating_images.is_empty())
+                                .then(|| Box::new(s971_cell_host.style.clone()));
+                            for mut mb in pr.math_blocks {
+                                if let crate::ir::MathBlock::Display { host, .. } = &mut mb {
+                                    if host.is_none() {
+                                        *host = cell_math_host.clone();
+                                    }
+                                }
                                 blocks.push(Block::Math(mb));
                             }
                             // S971: an image-only CELL paragraph is dropped by S536

@@ -14327,6 +14327,24 @@ cells={} pitch={:.2} text={:?}",
             && (self.compat_mode_explicit || crate::env_flag!("OXI_S1623_DISABLE"))
     }
 
+    /// OXI_CELL_MATH_HOST (2026-11-02, default ON, opt-out _DISABLE): a cell's
+    /// display equation takes its host paragraph's run size like the body's
+    /// (S1613) instead of a fixed 10.5. en/educational__0072828f (12pt Cambria
+    /// Math answers in a table cell, ind 360, oMathPara centred): Word centres
+    /// «V = 1/3 πr²h» across the cell at 12pt; Oxi drew it at 10.5 on the
+    /// cell's left edge, 18pt left of the paragraph indent.
+    pub(crate) fn cell_math_font_size(math_block: &crate::ir::MathBlock) -> f32 {
+        if crate::env_flag!("OXI_CELL_MATH_HOST_DISABLE") {
+            return 10.5;
+        }
+        match math_block {
+            crate::ir::MathBlock::Display { host: Some(h), .. } => h.ppr_rpr.as_ref().and_then(|r| r.font_size)
+                .or_else(|| h.default_run_style.as_ref().and_then(|r| r.font_size))
+                .unwrap_or(10.5),
+            _ => 10.5,
+        }
+    }
+
     /// OXI_C15_LEFT_HALF: the drawn width of the first row's leading cell's left
     /// border (the cell's own tcBorders, else the table's lumped outer border).
     fn c15_first_cell_left_width(&self, table: &Table) -> f32 {

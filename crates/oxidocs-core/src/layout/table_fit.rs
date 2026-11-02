@@ -1322,7 +1322,7 @@ impl<'a> TableFitLayouter<'a> {
                             // −67pt per solutions block → Problem 2 pulled up
                             // a page (EN-250 census pcd +1).
                             if !crate::env_flag!("OXI_S1244_DISABLE") {
-                                let mfs: f32 = 10.5;
+                                let mfs: f32 = LayoutEngine::cell_math_font_size(math_block);
                                 let (me, mbb) = crate::layout::math::emit_math_block(
                                     math_block,
                                     0.0,
@@ -3350,10 +3350,34 @@ impl<'a> TableFitLayouter<'a> {
                                 // S1244: emit cell equations at the cell
                                 // content origin and advance by the S652
                                 // model — the estimate arm above mirrors this.
-                                let mfs: f32 = 10.5;
+                                let mfs: f32 = LayoutEngine::cell_math_font_size(math_block);
+                                // OXI_CELL_MATH_HOST: a cell's display equation sits in
+                                // its host paragraph like the body's (S524 / S1613):
+                                // indents, then jc (default centre) across the rest.
+                                let math_x = if !crate::env_flag!("OXI_CELL_MATH_HOST_DISABLE") {
+                                    let host = match math_block {
+                                        crate::ir::MathBlock::Display { host: Some(h), .. } => Some(h.as_ref()),
+                                        _ => None,
+                                    };
+                                    let left = host.map_or(0.0, |h| h.indent_left.unwrap_or(0.0)
+                                        + h.indent_first_line.unwrap_or(0.0));
+                                    let right = host.map_or(0.0, |h| h.indent_right.unwrap_or(0.0));
+                                    let avail = (cell_w - pad_l - pad_r - left - right).max(0.0);
+                                    let adv = crate::layout::math::layout_math_block(math_block, mfs).advance;
+                                    let jc = match math_block {
+                                        crate::ir::MathBlock::Display { jc, .. } => *jc,
+                                        _ => crate::ir::MathAlignment::Left,
+                                    };
+                                    cell_x + pad_l + left + match jc {
+                                        crate::ir::MathAlignment::Center
+                                        | crate::ir::MathAlignment::CenterGroup => ((avail - adv) * 0.5).max(0.0),
+                                        crate::ir::MathAlignment::Right => (avail - adv).max(0.0),
+                                        crate::ir::MathAlignment::Left => 0.0,
+                                    }
+                                } else { cell_x + pad_l };
                                 let (me, mbb) = crate::layout::math::emit_math_block(
                                     math_block,
-                                    cell_x + pad_l,
+                                    math_x,
                                     content_h,
                                     mfs,
                                 );
