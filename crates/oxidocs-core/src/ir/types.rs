@@ -1414,6 +1414,10 @@ pub enum PathSeg {
 /// A geometric shape (DrawingML or VML)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shape {
+    /// OXI_VML_PATH: a VML freeform's `path` outline, normalized 0..1 over its
+    /// `coordsize` (empty for preset / rect shapes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vml_path: Vec<PathSeg>,
     /// Text-wrap contour in normalized shape coordinates; may extend outside the shape.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wrap_polygon: Vec<(f32, f32)>,

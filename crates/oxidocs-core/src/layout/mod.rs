@@ -783,6 +783,15 @@ fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
     if !shape.is_vml {
         return None;
     }
+    // OXI_VML_PATH: a freeform draws its own outline, filled or not.
+    if !shape.vml_path.is_empty() {
+        return Some(LayoutContent::VectorPath {
+            segs: shape.vml_path.clone(),
+            fill: shape.fill.clone(),
+            stroke_color: shape.stroke_width.map(|_| shape.stroke_color.clone().unwrap_or_else(|| "000000".to_string())),
+            stroke_width: shape.stroke_width.unwrap_or(0.0),
+        });
+    }
     let fill = shape.fill.as_deref()?;
     if !matches!(shape.shape_type.as_str(), "rect" | "roundRect") {
         return None;
@@ -9140,6 +9149,15 @@ cells={} pitch={:.2} text={:?}",
                 Some("page") => pos.x,
                 Some("column") => anchor_col_left + pos.x,
                 Some("margin") | Some("character") => page.margin.left + pos.x,
+                // OXI_TXBX_MARGIN_AREA (2026-11-02, default ON, opt-out _DISABLE): the
+                // OOXML values are «leftMargin» / «rightMargin» (ST_RelFromH); only the
+                // «…Area» spellings were matched, so a leftMargin-relative box took
+                // the left margin + offset. ja/creative__8048e30f's numbered badges
+                // (leftMargin +24.75): Word x 25, Oxi 115. Floating images already
+                // read both spellings.
+                Some("leftMargin") if !crate::env_flag!("OXI_TXBX_MARGIN_AREA_DISABLE") => pos.x,
+                Some("rightMargin") if !crate::env_flag!("OXI_TXBX_MARGIN_AREA_DISABLE") =>
+                    (page.size.width - page.margin.right) + pos.x,
                 Some("leftMarginArea") => pos.x,
                 Some("rightMarginArea") => (page.size.width - page.margin.right) + pos.x,
                 _ => page.margin.left + pos.x,
@@ -9177,6 +9195,9 @@ cells={} pitch={:.2} text={:?}",
                     anchor_y + pos.y
                 }
                 Some("margin") => page.margin.top + pos.y,
+                Some("topMargin") if !crate::env_flag!("OXI_TXBX_MARGIN_AREA_DISABLE") => pos.y,
+                Some("bottomMargin") if !crate::env_flag!("OXI_TXBX_MARGIN_AREA_DISABLE") =>
+                    (page.size.height - page.margin.bottom) + pos.y,
                 Some("topMarginArea") => pos.y,
                 Some("bottomMarginArea") => (page.size.height - page.margin.bottom) + pos.y,
                 _ => page.margin.top + pos.y,

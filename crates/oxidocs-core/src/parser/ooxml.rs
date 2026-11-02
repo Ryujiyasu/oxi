@@ -8809,6 +8809,17 @@ fn parse_drawing(
                             match reader.read_event() {
                                 Ok(Event::Start(se)) => {
                                     let sl = local_name(se.name().as_ref());
+                                    // OXI_TXBX_TABLE (2026-11-02, default ON, opt-out _DISABLE):
+                                    // a table inside a text box is a table. This loop read only
+                                    // <w:p>, so every cell paragraph surfaced as a box-level
+                                    // paragraph -- ja/reports__542222d0's 給与格差 table (5 x 5
+                                    // in the framed box) printed one value per line down the box.
+                                    if sl == "tbl" && !crate::env_flag!("OXI_TXBX_TABLE_DISABLE") {
+                                        if let Ok(t) = parse_table(reader, ctx, styles) {
+                                            txbx_blocks.push(Block::Table(t));
+                                        }
+                                        continue;
+                                    }
                                     if sl == "p" {
                                         if let Ok(pr) =
                                             parse_paragraph(reader, ctx, styles, false, false, None)
@@ -10144,6 +10155,7 @@ fn parse_drawing(
     // Build shape if we detected a preset geometry
     let shape = if let Some(ref st) = shape_type {
         Some(Shape {
+            vml_path: Vec::new(),
             shape_type: st.clone(),
             width,
             height,
@@ -10632,6 +10644,7 @@ fn parse_vml_pict(
     styles: &StyleSheet,
 ) -> Result<DrawingResult, ParseError> {
     let mut shape_type = None;
+    let mut vml_path_attr: Option<String> = None;
     let mut shape_wrap = None;
     let mut shape_wrap_points: Vec<(f32, f32)> = Vec::new();
     let mut shape_coord_size = (21600.0_f32, 21600.0_f32);
@@ -10698,19 +10711,40 @@ fn parse_vml_pict(
     // routes it to the run style (reserve a line + draw the rule) instead of a
     // generic inline Shape (which the layout skips because position is None).
     let mut is_hr = false;
+    // OXI_VML_ABS_TXBX: <v:textbox inset="l,t,r,b"> (VML default 7.2,3.6,7.2,3.6).
+    let mut vml_tb_inset: Option<[f32; 4]> = None;
 
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 depth += 1;
+                if local == "textbox" {
+                    if let Some(v) = e.attributes().flatten()
+                        .find(|a| local_name(a.key.as_ref()) == "inset")
+                        .map(|a| String::from_utf8_lossy(&a.value).to_string())
+                    {
+                        let d = [7.2f32, 3.6, 7.2, 3.6];
+                        let mut out = d;
+                        for (k, t) in v.split(',').take(4).enumerate() {
+                            if let Some(x) = parse_css_length_opt(t.trim()) { out[k] = x; }
+                        }
+                        vml_tb_inset = Some(out);
+                    }
+                }
                 match local.as_str() {
                     // VML text box content — consume all paragraphs inside
                     "txbxContent" => {
                         loop {
                             match reader.read_event() {
                                 Ok(Event::Start(se)) => {
-                                    if local_name(se.name().as_ref()) == "p" {
+                                    if local_name(se.name().as_ref()) == "tbl"
+                                        && !crate::env_flag!("OXI_TXBX_TABLE_DISABLE")
+                                    {
+                                        if let Ok(t) = parse_table(reader, ctx, styles) {
+                                            text_blocks.push(Block::Table(t));
+                                        }
+                                    } else if local_name(se.name().as_ref()) == "p" {
                                         if let Ok(pr) =
                                             parse_paragraph(reader, ctx, styles, false, false, None)
                                         {
@@ -10840,6 +10874,9 @@ fn parse_vml_pict(
                         // Check VML type attribute for preset shape identification
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
+                            if key == "path" && local == "shape" {
+                                vml_path_attr = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
                             if key == "wrapcoords" || key == "coordsize" {
                                 let values: Vec<f32> = String::from_utf8_lossy(&attr.value)
                                     .split(|c: char| c.is_whitespace() || c == ',')
@@ -10949,10 +10986,10 @@ fn parse_vml_pict(
                                     }
                                 }
                                 "fillcolor" => {
-                                    fill_color = Some(val.trim_start_matches('#').to_string())
+                                    fill_color = Some(vml_color_token(&val))
                                 }
                                 "strokecolor" => {
-                                    stroke_color_val = Some(val.trim_start_matches('#').to_string())
+                                    stroke_color_val = Some(vml_color_token(&val))
                                 }
                                 "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
                                 "stroked" => {
@@ -11037,7 +11074,7 @@ fn parse_vml_pict(
                             let val = String::from_utf8_lossy(&attr.value).to_string();
                             match key.as_str() {
                                 "color" => {
-                                    stroke_color_val = Some(val.trim_start_matches('#').to_string())
+                                    stroke_color_val = Some(vml_color_token(&val))
                                 }
                                 "weight" => stroke_width_val = parse_css_length_opt(&val),
                                 "on" => {
@@ -11081,6 +11118,9 @@ fn parse_vml_pict(
                         }
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
+                            if key == "path" && local == "shape" {
+                                vml_path_attr = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
                             if key == "wrapcoords" || key == "coordsize" {
                                 let values: Vec<f32> = String::from_utf8_lossy(&attr.value)
                                     .split(|c: char| c.is_whitespace() || c == ',')
@@ -11188,10 +11228,10 @@ fn parse_vml_pict(
                                     }
                                 }
                                 "fillcolor" => {
-                                    fill_color = Some(val.trim_start_matches('#').to_string())
+                                    fill_color = Some(vml_color_token(&val))
                                 }
                                 "strokecolor" => {
-                                    stroke_color_val = Some(val.trim_start_matches('#').to_string())
+                                    stroke_color_val = Some(vml_color_token(&val))
                                 }
                                 "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
                                 "stroked" => {
@@ -11495,6 +11535,82 @@ fn parse_vml_pict(
             text_box,
         });
     }
+    // OXI_VML_ABS_TXBX (2026-11-02, default ON, opt-out _DISABLE): an ABSOLUTE
+    // VML text box (pure VML, no DrawingML alternate) draws its box and text at
+    // its style position -- the "separate S746b render task" above, until now
+    // dropped. ja/educational__066d1d57: «Text Box 2» (the 原稿は A4 サイズ note,
+    // filled="f" stroked="f") and «Text Box 3» (the 1.5pt-framed 本文2段組み box)
+    // anchored text-relative to the section-break paragraph, margin-top
+    // -177.8 / -168.85; Word draws both at the page top, Oxi drew neither.
+    // mso-position-*-relative:text is the column / the anchor paragraph.
+    if is_absolute
+        && !text_blocks.is_empty()
+        && width > 0.0
+        && height > 0.0
+        && image.is_none()
+        && !crate::env_flag!("OXI_VML_ABS_TXBX_DISABLE")
+    {
+        let mut pos = vml_position.clone().unwrap_or(FloatingPosition {
+            flow_page_offset: 0,
+            flow_boundary_offset: 0,
+            flow_source: None,
+            x: margin_left,
+            y: margin_top,
+            h_relative: vml_h_relative.clone(),
+            v_relative: vml_v_relative.clone(),
+            h_align: vml_h_align.clone(),
+            v_align: vml_v_align.clone(),
+            dist_l: vml_dist_l,
+            dist_r: vml_dist_r, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
+        });
+        let map_rel = |r: Option<String>, text_as: &str| match r.as_deref() {
+            None | Some("text") => Some(text_as.to_string()),
+            _ => r,
+        };
+        pos.h_relative = map_rel(pos.h_relative.take(), "column");
+        pos.v_relative = map_rel(pos.v_relative.take(), "paragraph");
+        let inset = vml_tb_inset.unwrap_or([7.2, 3.6, 7.2, 3.6]);
+        let text_box = Some(TextBox {
+            wrap_polygon: Vec::new(),
+            text_outline_inset: 0.0,
+            vertical_text: false,
+            blocks: text_blocks,
+            inline: false,
+            font_ref_color: None,
+            auto_fit: false,
+            width,
+            height,
+            position: Some(pos),
+            border: !no_stroke,
+            stroke_color: if no_stroke { None } else { stroke_color_val.or(Some("000000".to_string())) },
+            stroke_width: if no_stroke { None } else { stroke_width_val.or(Some(0.75)) },
+            fill: if no_fill { None } else { fill_color.or(Some("FFFFFF".to_string())) },
+            anchor_block_index: 0,
+            corner_radius: if shape_type.as_deref() == Some("roundRect") { Some(3.0) } else { None },
+            ellipse: false,
+            inset_left: Some(inset[0]),
+            inset_top: Some(inset[1]),
+            inset_right: Some(inset[2]),
+            inset_bottom: Some(inset[3]),
+            wrap_type: Some(shape_wrap.unwrap_or(WrapType::None)),
+            v_text_anchor: v_text_anchor.clone(),
+            relative_height: 0,
+            behind_doc: vml_negative_z,
+            vert_overflow: None,
+            compat_line_spacing: false,
+            vector_shapes: Vec::new(),
+            host_break_after: false,
+            children: Vec::new(),
+            body_wrap_none: false,
+            children_on_line: false,
+        });
+        return Ok(DrawingResult {
+            symbol_text: None,
+            image: None,
+            shape: None,
+            text_box,
+        });
+    }
     let s746_inline_txbx = !is_absolute
         && !text_blocks.is_empty()
         && width > 0.0
@@ -11594,7 +11710,12 @@ fn parse_vml_pict(
             text_box,
         });
     }
+    let vml_path = vml_path_attr.as_deref()
+        .filter(|_| !crate::env_flag!("OXI_VML_PATH_DISABLE"))
+        .map(|p| parse_vml_path(p, shape_coord_size))
+        .unwrap_or_default();
     let shape = shape_type.as_ref().map(|st| Shape {
+        vml_path: vml_path.clone(),
         shape_type: st.clone(),
         width,
         height,
@@ -11629,6 +11750,94 @@ fn parse_vml_pict(
         shape,
         text_box: None,
     })
+}
+
+/// OXI_VML_PATH (2026-11-02): a VML colour attribute is «#rrggbb», a name, or
+/// either with a trailing «[index]» (fillcolor="#a5a5a5 [2092]"). The suffix was
+/// kept, the hex no longer parsed, and the renderers painted black.
+fn vml_color_token(val: &str) -> String {
+    let base = val.split_whitespace().next().unwrap_or("").trim_start_matches('#');
+    if crate::env_flag!("OXI_VML_PATH_DISABLE") {
+        return val.trim_start_matches('#').to_string();
+    }
+    match base.to_ascii_lowercase().as_str() {
+        "black" => "000000".to_string(),
+        "white" => "FFFFFF".to_string(),
+        "gray" | "grey" => "808080".to_string(),
+        "silver" => "C0C0C0".to_string(),
+        "red" => "FF0000".to_string(),
+        "blue" => "0000FF".to_string(),
+        "green" => "008000".to_string(),
+        "yellow" => "FFFF00".to_string(),
+        h if h.len() == 3 && h.chars().all(|c| c.is_ascii_hexdigit()) =>
+            h.chars().flat_map(|c| [c, c]).collect::<String>().to_uppercase(),
+        _ => base.to_string(),
+    }
+}
+
+/// OXI_VML_PATH (2026-11-02, default ON, opt-out _DISABLE): a VML freeform's
+/// `path` (m / l / r / t / c / v / x / e; an omitted number is 0) as an outline
+/// normalized over `coordsize`. ja/educational__066d1d57's «屈折矢印 2» (a bent-up
+/// arrow drawn as a freeform, fill #a5a5a5) came out as a black bounding box.
+/// An unsupported command returns no outline, so the shape keeps its old box.
+fn parse_vml_path(path: &str, size: (f32, f32)) -> Vec<crate::ir::PathSeg> {
+    use crate::ir::PathSeg;
+    let (w, h) = (size.0.max(1.0), size.1.max(1.0));
+    let mut out = Vec::new();
+    let (mut x, mut y) = (0.0f32, 0.0f32);
+    let mut chars = path.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() || c == ',' { chars.next(); continue; }
+        if !c.is_ascii_alphabetic() { return Vec::new(); }
+        // one letter, except the two-letter families (nf ns ae al at ar wa wr qx qy qb ha..hi)
+        let mut cmd = String::new();
+        chars.next();
+        cmd.push(c);
+        if matches!(c, 'n' | 'a' | 'w' | 'q' | 'h') {
+            if let Some(&c2) = chars.peek() {
+                if c2.is_ascii_alphabetic() { cmd.push(c2); chars.next(); }
+            }
+        }
+        let mut raw = String::new();
+        while let Some(&c) = chars.peek() {
+            if c.is_ascii_alphabetic() { break; }
+            raw.push(c);
+            chars.next();
+        }
+        let raw = raw.trim();
+        let nums: Vec<f32> = if raw.is_empty() { Vec::new() } else {
+            raw.split(|c: char| c == ',' || c.is_whitespace())
+                .map(|t| if t.is_empty() { Some(0.0) } else { t.parse::<f32>().ok() })
+                .collect::<Option<Vec<f32>>>().unwrap_or_else(|| vec![f32::NAN])
+        };
+        if nums.iter().any(|v| v.is_nan()) { return Vec::new(); }
+        let n = |px: f32, py: f32| (px / w, py / h);
+        match cmd.as_str() {
+            "m" | "t" | "l" | "r" => {
+                if nums.len() % 2 != 0 || nums.is_empty() { return Vec::new(); }
+                for (k, p) in nums.chunks_exact(2).enumerate() {
+                    if matches!(cmd.as_str(), "t" | "r") { x += p[0]; y += p[1]; } else { x = p[0]; y = p[1]; }
+                    let (nx, ny) = n(x, y);
+                    if matches!(cmd.as_str(), "m" | "t") && k == 0 { out.push(PathSeg::M(nx, ny)); } else { out.push(PathSeg::L(nx, ny)); }
+                }
+            }
+            "c" | "v" => {
+                if nums.len() % 6 != 0 || nums.is_empty() { return Vec::new(); }
+                for p in nums.chunks_exact(6) {
+                    let (ox, oy) = if cmd == "v" { (x, y) } else { (0.0, 0.0) };
+                    let (a, b) = n(ox + p[0], oy + p[1]);
+                    let (c2, d) = n(ox + p[2], oy + p[3]);
+                    x = ox + p[4]; y = oy + p[5];
+                    let (e2, f) = n(x, y);
+                    out.push(PathSeg::C(a, b, c2, d, e2, f));
+                }
+            }
+            "x" => out.push(PathSeg::Z),
+            "e" | "nf" | "ns" => {}
+            _ => return Vec::new(),
+        }
+    }
+    out
 }
 
 /// Parse CSS-like length value (e.g. "200pt", "2in", "100.5px")
