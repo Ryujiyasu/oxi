@@ -260,6 +260,14 @@ pub trait Host {
         None
     }
 
+    /// Some Automation assignments invoke a method before reporting a language
+    /// error. Return its name, arguments and post-call error number; Err rejects
+    /// the assignment before invoking it. Ordinary setters return None.
+    fn prepare_automation_assignment_call(&self, _receiver: &ObjectRef, _name: &str,
+        _kind: u8, _args: &[Value]) -> Result<Option<(String, Vec<Value>, i64)>, i64> {
+        Ok(None)
+    }
+
     /// Some host setters reject an object value before its default member is
     /// resolved. Source class assignments keep their ordinary VBA conversion.
     /// With no receiver, identify only values and names requiring host validation
@@ -9479,6 +9487,16 @@ impl<'a> Runtime<'a> {
         if self.instance_handles_member(receiver, &member) {
             return self.instance_automation_member(receiver, &member, kind as u8, rest, frame, at,
                 source.map(|(args, values, forced)| (&args[3..], &values[3..], forced)));
+        }
+        if matches!(kind, 4 | 8) {
+            let prepared = self.host.as_deref()
+                .map(|host| host.prepare_automation_assignment_call(receiver, &member, kind as u8, rest))
+                .transpose().map_err(|number| language_error(number, format!("invalid automation assignment: {member}"), at))?
+                .flatten();
+            if let Some((method, arguments, number)) = prepared {
+                self.host_call(Some(receiver), &method, &arguments, at)?.ok_or_else(missing)?;
+                return Err(language_error(number, format!("automation assignment completed its method: {member}"), at));
+            }
         }
         if let Some(number) = self.host.as_deref().and_then(|host| host.automation_invocation_error(receiver, &member, kind as u8)) {
             return Err(language_error(number, format!("invalid automation invocation: {member}"), at));
