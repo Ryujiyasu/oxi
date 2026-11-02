@@ -32,12 +32,13 @@ uuid = { version = "1", optional = true }
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 quick-xml = { version = "0.37", optional = true }
 serde_json = "1.0.151"
+typed-arena = { version = "=2.0.2", optional = true }
 
 [features]
 default = []
 # Full-suite bindings (spreadsheet/presentation/generic-PDF/hanko) used by the
 # in-repo web editor; the published npm package is the default docs-only build.
-suite = ["dep:oxicells-core", "dep:oxicells-calc", "dep:oxivba-core", "dep:oxislides-core", "dep:oxihanko", "dep:oxidocs-common", "dep:ovba", "dep:codepage", "dep:quick-xml", "dep:cfb", "dep:uuid", "dep:zip"]
+suite = ["dep:oxicells-core", "dep:oxicells-calc", "dep:oxivba-core", "dep:oxislides-core", "dep:oxihanko", "dep:oxidocs-common", "dep:ovba", "dep:codepage", "dep:quick-xml", "dep:cfb", "dep:uuid", "dep:zip", "dep:typed-arena"]
 oxidocs-common = ["dep:oxidocs-common"]
 ovba = ["dep:ovba"]
 # Leave the ~34 MB per-face metric catalog out of the module; the page fetches

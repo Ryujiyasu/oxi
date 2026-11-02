@@ -299,6 +299,16 @@ pub trait Host {
         Ok(requested.to_string())
     }
 
+    /// Newly opened native documents whose source contexts must be registered
+    /// before VBA uses their document members or worksheet functions.
+    fn take_application_projects(&mut self) -> Vec<u64> { Vec::new() }
+
+    /// Resolve a macro to an application code owner. None preserves ordinary
+    /// single-project macro_reference handling.
+    fn macro_project(&self, _requested: &str) -> Result<Option<(u64,String)>,String> {
+        Ok(None)
+    }
+
     /// Hosts can supply their own diagnostic for an unavailable macro.
     fn macro_unavailable(&self, requested: &str) -> String {
         host_error(1004, format!("macro is unavailable: {requested}"))
@@ -658,6 +668,8 @@ pub struct Runtime<'a> {
     project_name: String,
     error_environment: Rc<ErrorEnvironment>,
     project_ended: bool,
+    application_projects_enabled:bool,
+    project_loader:Option<&'a mut dyn FnMut(u64)->Result<Runtime<'a>,RuntimeError>>,
     project_identity:u64,
     object_projects:BTreeMap<u64,u64>,
     projects:BTreeMap<u64,Box<Runtime<'a>>>,
@@ -673,6 +685,7 @@ struct ApplicationHeap<'a> {
     due: Rc<RefCell<Vec<u64>>>,
     object_projects: BTreeMap<u64,u64>,
     projects: BTreeMap<u64,Box<Runtime<'a>>>,
+    project_loader:Option<&'a mut dyn FnMut(u64)->Result<Runtime<'a>,RuntimeError>>,
 }
 
 
@@ -686,6 +699,18 @@ pub struct ApplicationStorage {
     due:Rc<RefCell<Vec<u64>>>,
     object_projects:BTreeMap<u64,u64>,
     projects:BTreeMap<u64,ProjectState>,
+}
+
+impl ApplicationStorage {
+    pub fn project_identities(&self)->impl Iterator<Item=u64>+'_ {
+        self.projects.keys().copied()
+    }
+
+    /// Move the actual shared files into the embedding application between
+    /// invocations. Numbered channels and native stream identities stay intact.
+    pub fn take_file_system(&mut self) -> crate::files::Files {
+        std::mem::take(&mut self.files)
+    }
 }
 
 /// Owned project storage between invocations. Move this together with the
@@ -1232,6 +1257,8 @@ impl<'a> Runtime<'a> {
             project_name: "VBAProject".to_string(),
             error_environment: Rc::new(ErrorEnvironment::default()),
             project_ended: false,
+            application_projects_enabled:false,
+            project_loader:None,
             project_identity:0,
             object_projects:BTreeMap::new(),
             projects:BTreeMap::new(),
@@ -1281,7 +1308,7 @@ impl<'a> Runtime<'a> {
                     }
                 }
                 self.document_instances.insert(object.handle);
-                if self.project_identity!=0 {self.object_projects.insert(object.handle,self.project_identity);}
+                if self.application_projects_enabled {self.object_projects.insert(object.handle,self.project_identity);}
             }
             self.document_globals.insert(name,object);
         }
@@ -2014,7 +2041,7 @@ impl<'a> Runtime<'a> {
     }
 
     fn object_matches_type(&self, object: &ObjectRef, declared: &str) -> bool {
-        if self.project_identity!=0 && !declared.eq_ignore_ascii_case("Object") && self.source_class_key(declared).is_some() && self.foreign_project(object).is_some(){return false;}
+        if self.application_projects_enabled && !declared.eq_ignore_ascii_case("Object") && self.source_class_key(declared).is_some() && self.foreign_project(object).is_some(){return false;}
 
         if declared.eq_ignore_ascii_case("Object") { return true; }
         let instance = match self.internal_objects.get(&object.handle) {
@@ -2030,18 +2057,21 @@ impl<'a> Runtime<'a> {
         }
         let expected = self.canonical_object_type(declared);
         if let Some(instance) = instance {
+            let context = self.foreign_project(object)
+                .and_then(|owner| self.projects.get(&owner))
+                .map_or(self, |runtime| runtime.as_ref());
             if self.application_document_instance(&object.handle) {
-                if let Some(references) = &self.document_references {
+                if let Some(references) = &context.document_references {
                     if let Some((_, base)) = references.document_modules.iter()
                         .find(|(name, _)| name.eq_ignore_ascii_case(&instance.class))
                     {
-                        if self.canonical_object_type(base) == expected { return true; }
+                        if context.canonical_object_type(base) == expected { return true; }
                     }
                 }
             }
-            return self.interfaces_of(&instance.class).iter().any(|interface| {
-                self.source_class_key(interface).is_none()
-                    && self.canonical_object_type(interface) == expected
+            return context.interfaces_of(&instance.class).iter().any(|interface| {
+                context.source_class_key(interface).is_none()
+                    && context.canonical_object_type(interface) == expected
             });
         }
         self.canonical_object_type(&object.kind) == expected
@@ -2054,7 +2084,7 @@ impl<'a> Runtime<'a> {
         line: u32,
         this_year: i64,
     ) -> Result<Value, RuntimeError> {
-        if self.project_identity!=0 && self.source_class_key(declared).is_some() && matches!(&value,Value::Object(object) if self.foreign_project(object).is_some()) {return Err(language_error(13,"class identity belongs to a different project",line));}
+        if self.application_projects_enabled && self.source_class_key(declared).is_some() && matches!(&value,Value::Object(object) if self.foreign_project(object).is_some()) {return Err(language_error(13,"class identity belongs to a different project",line));}
 
         let generic_object = declared.eq_ignore_ascii_case("Object");
         let specific_object = !generic_object && self.is_specific_object_type(declared);
@@ -3024,7 +3054,10 @@ impl<'a> Runtime<'a> {
             return Ok(Value::Error(2015));
         }
         let resolved = match self.host.as_deref() {
-            Some(host) => host.macro_reference(normalized).map_err(|message| host_failure(message, at))?,
+            Some(host) => match host.macro_project(normalized).map_err(|message| host_failure(message, at))? {
+                Some((_,resolved)) => resolved,
+                None => host.macro_reference(normalized).map_err(|message| host_failure(message, at))?,
+            },
             None => normalized.to_string(),
         };
         let expression = resolved.contains('(') || resolved.starts_with(|ch: char| ch.is_ascii_digit() || matches!(ch, '+' | '-' | '.'));
@@ -3116,6 +3149,25 @@ impl<'a> Runtime<'a> {
     }
 
     fn call_macro_procedure_source(&mut self, requested: &str, args: Vec<Value>, line: Option<u32>,
+        source: Option<(&[Argument], &[EvaluatedArgument], bool, &mut Frame)>) -> Result<Value, RuntimeError> {
+        let binding=self.host.as_deref().map(|host|host.macro_project(requested))
+            .transpose().map_err(|message|host_failure(message,line.unwrap_or(0)))?.flatten();
+        if let Some((owner,resolved))=binding {
+            if owner==self.project_identity {
+                return self.call_macro_procedure_resolved(&resolved,args,line,source);
+            }
+            let callback=self.worksheet_callback_key.take();
+            return self.in_application_project(owner,|runtime|{
+                let previous=std::mem::replace(&mut runtime.worksheet_callback_key,callback);
+                let result=runtime.call_macro_procedure_resolved(&resolved,args,line,source);
+                runtime.worksheet_callback_key=previous;
+                result
+            });
+        }
+        self.call_macro_procedure_resolved(requested,args,line,source)
+    }
+
+    fn call_macro_procedure_resolved(&mut self, requested: &str, args: Vec<Value>, line: Option<u32>,
         source: Option<(&[Argument], &[EvaluatedArgument], bool, &mut Frame)>) -> Result<Value, RuntimeError> {
         let worksheet_key = self.worksheet_callback_key.take();
         let resolved = match self.host.as_deref() {
@@ -3261,7 +3313,7 @@ impl<'a> Runtime<'a> {
         self.me=None;
         self.owner=None;
         for (handle,object) in &mut self.internal_objects {
-            if self.project_identity!=0 && self.object_projects.get(handle)!=Some(&self.project_identity) {continue;}
+            if self.application_projects_enabled && self.object_projects.get(handle)!=Some(&self.project_identity) {continue;}
             if let InternalObject::Instance(instance)=object {
                 if self.document_instances.contains(handle) {
                     instance.state=None;
@@ -3282,7 +3334,7 @@ impl<'a> Runtime<'a> {
     }
 
     fn application_document_instance(&self,handle:&u64)->bool{
-        self.document_instances.contains(handle) || self.project_identity!=0 &&
+        self.document_instances.contains(handle) || self.application_projects_enabled &&
             self.object_projects.get(handle).and_then(|id|self.projects.get(id))
                 .is_some_and(|runtime|runtime.document_instances.contains(handle))
     }
@@ -3300,7 +3352,7 @@ impl<'a> Runtime<'a> {
     /// Suspend all loaded projects without borrowing their parsed code or hosts.
     /// Rejection returns the actual runtime and graph to the caller.
     pub fn into_application_storage(mut self)->Result<ApplicationStorage,Box<(Self,RuntimeError)>> {
-        if self.project_identity==0 || self.depth!=0 || self.owner.is_some()
+        if !self.application_projects_enabled || self.depth!=0 || self.owner.is_some()
             || self.projects.values().any(|r|r.depth!=0 || r.owner.is_some()) {
             return Err(Box::new((self,Self::context_error("Suspend Application storage outside all VBA frames"))));
         }
@@ -3330,7 +3382,7 @@ impl<'a> Runtime<'a> {
         let fresh=|runtime:&Self|runtime.owner.is_none() && runtime.depth==0 && !runtime.module_initialized
             && !runtime.project_ended && runtime.next_internal_handle==1u64<<63
             && runtime.files.pristine_application_context() && runtime.due.borrow().is_empty();
-        if self.project_identity==0 || !fresh(self) || self.projects.values().any(|r|!fresh(r)) {
+        if !self.application_projects_enabled || !fresh(self) || self.projects.values().any(|r|!fresh(r)) {
             return Err(Self::context_error("Resume storage only into fresh code/host contexts"));
         }
         let owners:BTreeSet<_>=self.projects.keys().copied().chain(std::iter::once(self.project_identity)).collect();
@@ -3363,6 +3415,7 @@ impl<'a> Runtime<'a> {
             else if let Some(runtime)=self.projects.get_mut(&id) {runtime.install_project_state(state);}
         }
         let projects=std::mem::take(&mut self.projects);
+        let project_loader=self.project_loader.take();
         self.install_object_heap(ApplicationHeap{
             files:std::mem::take(&mut storage.files),
             objects:std::mem::take(&mut storage.objects),
@@ -3370,7 +3423,7 @@ impl<'a> Runtime<'a> {
             pointers:std::mem::take(&mut storage.pointers),
             literals:std::mem::take(&mut storage.literals),
             due:std::mem::replace(&mut storage.due,Rc::new(RefCell::new(Vec::new()))),
-            object_projects:std::mem::take(&mut storage.object_projects),projects
+            object_projects:std::mem::take(&mut storage.object_projects),projects,project_loader
         });
         Ok(())
     }
@@ -3380,18 +3433,18 @@ impl<'a> Runtime<'a> {
     }
     /// Assign a stable, nonzero code-project identity before executing or mounting files.
     pub fn set_application_project_identity(&mut self,id:u64)->Result<(),RuntimeError>{
-        if id==0 || self.project_identity!=0 || self.module_initialized || !self.internal_objects.is_empty()
+        if id==0 || self.application_projects_enabled || self.module_initialized || !self.internal_objects.is_empty()
             || !self.projects.is_empty() || self.owner.is_some() || self.depth!=0 || !self.files.pristine_application_context() {
             return Err(Self::context_error("Project identity requires a fresh context and a nonzero identity"));
         }
-        self.project_identity=id;self.files.select_project(id);Ok(())
+        self.project_identity=id;self.application_projects_enabled=true;self.files.select_project(id);Ok(())
     }
     /// Register a fresh code/host context. Rejection returns the unchanged context.
     /// Mount files and create objects in the shared Application after registration.
     pub fn register_application_project(&mut self,mut context:Self)->Result<(),Box<(Self,RuntimeError)>>{
         let id=context.project_identity;
-        if self.project_identity==0 || id==0 || id==self.project_identity || self.projects.contains_key(&id) ||
-           !context.pristine_document_objects() || !context.projects.is_empty() ||
+        if !self.application_projects_enabled || id==0 || id==self.project_identity || self.projects.contains_key(&id) ||
+           !context.pristine_document_objects() || !context.projects.is_empty() || context.project_loader.is_some() ||
            context.internal_objects.keys().any(|handle|self.internal_objects.contains_key(handle)) ||
            context.owner.is_some() || context.depth!=0 ||
            !context.files.pristine_application_context() || !context.due.borrow().is_empty() {
@@ -3411,22 +3464,66 @@ impl<'a> Runtime<'a> {
             due:std::mem::replace(&mut self.due,Rc::new(RefCell::new(Vec::new()))),
             object_projects:std::mem::take(&mut self.object_projects),
             projects:std::mem::take(&mut self.projects),
+            project_loader:self.project_loader.take(),
         }
     }
     fn install_object_heap(&mut self,heap:ApplicationHeap<'a>){
         self.files=heap.files;self.files.select_project(self.project_identity);
         self.internal_objects=heap.objects;self.next_internal_handle=heap.next;
         self.object_pointers=heap.pointers;self.bstr_literals=heap.literals;
-        self.due=heap.due;self.object_projects=heap.object_projects;self.projects=heap.projects;
+        self.due=heap.due;self.object_projects=heap.object_projects;self.projects=heap.projects;self.project_loader=heap.project_loader;
     }
+
+    /// Install one on-demand source/host factory for this application. The
+    /// existing root identity and its Open/Dir namespace stay unchanged.
+    pub fn set_application_project_loader(
+        &mut self,
+        loader: &'a mut dyn FnMut(u64)->Result<Runtime<'a>,RuntimeError>,
+    )->Result<(),RuntimeError> {
+        if self.project_loader.is_some() || self.depth!=0 || self.owner.is_some() {
+            return Err(Self::context_error("Install the application loader outside VBA frames"));
+        }
+        self.application_projects_enabled=true;
+        for (handle,object) in &self.internal_objects {
+            if matches!(object,InternalObject::Instance(_)) {
+                self.object_projects.entry(*handle).or_insert(self.project_identity);
+            }
+        }
+        self.project_loader=Some(loader);
+        Ok(())
+    }
+
+    /// Load an absent owner once. A failed or mismatched load cannot replace
+    /// any existing project or its object/file graph.
+    pub fn ensure_application_project(&mut self,id:u64)->Result<(),RuntimeError> {
+        if id==self.project_identity || self.projects.contains_key(&id) {return Ok(());}
+        let Some(loader)=self.project_loader.take() else {
+            return Err(Self::context_error("The requested code project is not registered"));
+        };
+        let loaded=loader(id);
+        self.project_loader=Some(loader);
+        let context=loaded?;
+        if context.project_identity!=id {
+            return Err(Self::context_error("The application loader returned a different project identity"));
+        }
+        self.register_application_project(context).map_err(|rejected|rejected.1)
+    }
+
+    fn load_host_application_projects(&mut self)->Result<(),RuntimeError> {
+        let requested=self.host.as_deref_mut().map(|host|host.take_application_projects()).unwrap_or_default();
+        for id in requested {self.ensure_application_project(id)?;}
+        Ok(())
+    }
+
     fn foreign_project(&self,receiver:&ObjectRef)->Option<u64>{
-        if self.project_identity==0 {return None;}
+        if !self.application_projects_enabled {return None;}
         self.object_projects.get(&receiver.handle).copied().filter(|id|*id!=self.project_identity)
     }
     /// Run with the target project's declarations, variables and host while moving
     /// the one actual object/file graph. Nested calls share the execution budget.
     pub fn in_application_project<T>(&mut self,id:u64,work:impl FnOnce(&mut Self)->Result<T,RuntimeError>)->Result<T,RuntimeError>{
         if id==self.project_identity {return work(self)}
+        self.ensure_application_project(id)?;
         if self.projects.contains_key(&self.project_identity) {
             return Err(Self::context_error("The active project cannot also be suspended"));
         }
@@ -3469,6 +3566,16 @@ impl<'a> Runtime<'a> {
         Ok(ended)
     }
     pub fn project_ended(&self) -> bool { self.project_ended }
+
+    /// Reset one code owner after a source edit or an unhandled error without
+    /// discarding the other projects or the surviving native object graph.
+    pub fn reset_application_project(&mut self, id: u64) -> Result<(), RuntimeError> {
+        if self.depth != 0 || self.owner.is_some()
+            || self.projects.values().any(|r| r.depth != 0 || r.owner.is_some()) {
+            return Err(Self::context_error("Unwind VBA frames before resetting a project"));
+        }
+        self.in_application_project(id, |runtime| runtime.reset_source_after_end())
+    }
 
     /// Invoke a host member while retaining the project's function callbacks.
     pub fn invoke_host(&mut self, object: &str, member: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -6711,7 +6818,7 @@ impl<'a> Runtime<'a> {
                 .unwrap_or_else(|| type_name.split_once('.').filter(|(project, _)| project.eq_ignore_ascii_case(&self.project_name)).map_or(type_name, |(_, class)| class).to_string());
             let handle = self.next_internal_handle;
             self.next_internal_handle += 1;
-            if self.project_identity!=0 {self.object_projects.insert(handle,self.project_identity);}
+            if self.application_projects_enabled {self.object_projects.insert(handle,self.project_identity);}
             self.internal_objects.insert(
                 handle,
                 InternalObject::Instance(ClassInstance { class: name.clone(), state: None, terminated: false }),
@@ -9864,6 +9971,7 @@ impl<'a> Runtime<'a> {
     /// #VALUE!, as a cell shows it: measured, `=Twice("x")` for a function
     /// taking a Double is #VALUE!.
     fn work_out_user_functions(&mut self) -> Result<bool, RuntimeError> {
+        self.load_host_application_projects()?;
         let Some(host) = self.host.as_deref_mut() else {
             return Ok(false);
         };
@@ -9880,7 +9988,7 @@ impl<'a> Runtime<'a> {
             }
             let owner = self.host.as_deref().and_then(|host| host.user_function_project(key));
             let value = if let Some(owner) = owner.filter(|owner|
-                self.project_identity != 0 && *owner != self.project_identity) {
+                self.application_projects_enabled && *owner != self.project_identity) {
                 self.in_application_project(owner, |runtime|
                     Ok(runtime.call_worksheet_function(key, &name, args)))
                     .unwrap_or(Value::Error(2015))
@@ -19285,6 +19393,171 @@ fn statement_name(statement: &Statement) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn dynamic_projects_keep_zero_root_files_objects_and_storage() {
+        struct LoaderHost {
+            pending: Vec<u64>,
+        }
+        impl Host for LoaderHost {
+            fn call(
+                &mut self,
+                _: Option<&ObjectRef>,
+                name: &str,
+                _: &[Value],
+            ) -> Result<Option<Value>, String> {
+                if name.eq_ignore_ascii_case("Application") {
+                    Ok(Some(Value::Object(ObjectRef::new(13, "Application"))))
+                } else if name.eq_ignore_ascii_case("LoadProject") {
+                    self.pending.push(2);
+                    Ok(Some(Value::Empty))
+                } else {
+                    Ok(None)
+                }
+            }
+            fn get(&mut self, _: &ObjectRef, _: &str) -> Result<Option<Value>, String> {
+                Ok(None)
+            }
+            fn set(&mut self, _: &ObjectRef, _: &str, _: Value) -> Result<bool, String> {
+                Ok(false)
+            }
+            fn take_application_projects(&mut self) -> Vec<u64> {
+                std::mem::take(&mut self.pending)
+            }
+            fn macro_project(&self, name: &str) -> Result<Option<(u64, String)>, String> {
+                Ok(name.split_once('!').and_then(|(project, procedure)| {
+                    let owner = match project {
+                        "root" => 0,
+                        "child" => 2,
+                        _ => return None,
+                    };
+                    Some((owner, procedure.to_string()))
+                }))
+            }
+        }
+        const ROOT: &str = r#"Attribute VB_Name = "Driver"
+Private count As Long
+Private kept As Object
+Public Sub Seed()
+ count = 5
+ Set kept = New Worker
+ kept.Data = 12
+ Open "C:\root-project.dat" For Binary Access Read Write Shared As #1
+ Put #1, , CByte(65)
+End Sub
+Public Function Identity() As Long
+ Identity = count
+End Function
+Public Function Probe() As String
+ LoadProject
+ Probe = Application.Run("child!Driver.Entry", kept) & "|" & CStr(count) & "|" & CStr(Loc(1))
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "Worker"
+Public Data As Long
+"#;
+        const CHILD: &str = r#"Attribute VB_Name = "Driver"
+Private count As Long
+Public Function Entry(ByVal target As Object) As String
+ count = count + 1
+ target.Data = target.Data + 1
+ Open "C:\root-project.dat" For Binary Access Read Write Shared As #1
+ Dim first As Byte
+ Get #1, , first
+ Close #1
+ Entry = CStr(target.Data) & ":" & CStr(count) & ":" & CStr(first) & ":" & CStr(Application.Run("root!Driver.Identity"))
+End Function
+"#;
+        fn epoch(storage: &mut Option<ApplicationStorage>, expected: &str) {
+            let (root, root_classes) = crate::parse_project(ROOT).unwrap();
+            let (child, child_classes) = crate::parse_project(CHILD).unwrap();
+            let mut root_host = LoaderHost {
+                pending: Vec::new(),
+            };
+            let mut child_host = LoaderHost {
+                pending: Vec::new(),
+            };
+            let mut context = Runtime::new(&child)
+                .with_classes(&child_classes)
+                .with_host(&mut child_host);
+            context.set_application_project_identity(2).unwrap();
+            let mut candidate = Some(context);
+            let loads = Rc::new(RefCell::new(Vec::new()));
+            let seen = loads.clone();
+            let mut loader = move |id| {
+                seen.borrow_mut().push(id);
+                if id != 2 {
+                    return Err(Runtime::context_error("unknown test project"));
+                }
+                candidate
+                    .take()
+                    .ok_or_else(|| Runtime::context_error("project loaded twice"))
+            };
+            let mut runtime = Runtime::new(&root)
+                .with_classes(&root_classes)
+                .with_host(&mut root_host);
+            if storage.is_none() {
+                runtime.call("Driver.Seed", vec![]).unwrap();
+            }
+            runtime.set_application_project_loader(&mut loader).unwrap();
+            if let Some(state) = storage.as_mut() {
+                for id in state.project_identities().collect::<Vec<_>>() {
+                    runtime.ensure_application_project(id).unwrap();
+                }
+                runtime.restore_application_storage(state).unwrap();
+            }
+            assert_eq!(
+                runtime.call("Driver.Probe", vec![]).unwrap(),
+                Value::String(expected.into())
+            );
+            assert_eq!(*loads.borrow(), vec![2]);
+            let state = match runtime.into_application_storage() {
+                Ok(state) => state,
+                Err(rejected) => panic!("{}", rejected.1),
+            };
+            assert_eq!(state.project_identities().collect::<Vec<_>>(), vec![0, 2]);
+            *storage = Some(state);
+        }
+        let mut state = None;
+        epoch(&mut state, "13:1:65:5|5|1");
+        epoch(&mut state, "14:2:65:5|5|1");
+    }
+
+    #[test]
+    fn rejected_dynamic_project_load_restores_the_factory_and_existing_graph() {
+        let module =
+            crate::parse_module("Public Function Read() As Long\n Read = 7\nEnd Function").unwrap();
+        let mut valid = Runtime::new(&module);
+        valid.set_application_project_identity(2).unwrap();
+        let mut valid = Some(valid);
+        let loaded_module = &module;
+        let loads = Rc::new(RefCell::new(Vec::new()));
+        let seen = loads.clone();
+        let mut loader = move |id| {
+            seen.borrow_mut().push(id);
+            if id == 2 {
+                Ok(valid.take().unwrap())
+            } else {
+                let mut wrong = Runtime::new(loaded_module);
+                wrong.set_application_project_identity(9).unwrap();
+                Ok(wrong)
+            }
+        };
+        let mut root = Runtime::new(&module);
+        root.set_application_project_loader(&mut loader).unwrap();
+        assert!(root.ensure_application_project(3).is_err());
+        assert_eq!(root.call("Read", vec![]).unwrap(), Value::Integer(7));
+        root.ensure_application_project(2).unwrap();
+        assert_eq!(
+            root.in_application_project(2, |runtime| runtime.call("Read", vec![]))
+                .unwrap(),
+            Value::Integer(7)
+        );
+        assert_eq!(*loads.borrow(), vec![3, 2]);
+        assert!(root.ensure_application_project(2).is_ok());
+        assert_eq!(*loads.borrow(), vec![3, 2]);
+    }
+
 
     #[test]
     fn worksheet_callbacks_dispatch_in_the_owning_application_project() {

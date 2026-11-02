@@ -3582,7 +3582,6 @@ impl<'a> WorkbookHost<'a> {
 
 
 
-    #[cfg(test)]
     fn new_owned_in(
         workbook: Workbook,
         active_sheet: usize,
@@ -13943,6 +13942,49 @@ impl<'a> WorkbookHost<'a> {
             );
         }
         Ok(value)
+    }
+
+    fn flush_workbook_output(&mut self) {
+        // Retain manual pending work in the workbook returned to the caller.
+        self.sync_calculation_settings();
+        self.sync_band_styles_to_workbook();
+        // Notes live in the host during VBA execution. Flush changed notes into
+        // the returned workbook just as SaveCopyAs does, but leave untouched
+        // comments byte-preserving when no note data changed.
+        let original_notes: Vec<_> = self.workbook.sheets.iter().map(|sheet| sheet.comments.clone()).collect();
+        let changed_sheets: Vec<_> = self.workbook.sheets.iter().enumerate().map(|(sheet, held)| {
+            let notes: Vec<_> = self.notes.iter().filter(|note| note.at.sheet == sheet).collect();
+            let comments: Vec<_> = held.comments.iter().filter(|comment| !comment.author.strip_prefix("tc=").is_some_and(|id| self.threaded_notes.iter().any(|thread| !thread.deleted && thread.at.sheet == sheet && thread.at.row == comment.cell.0 + 1 && thread.at.column == comment.cell.1 && thread.id.eq_ignore_ascii_case(id)))).collect();
+            notes.len() != comments.len() || comments.iter().any(|comment| {
+                let at = CellAddress { sheet, row: comment.cell.0 + 1, column: comment.cell.1 };
+                let text = comment.text.paragraphs.iter().map(|paragraph| paragraph.text.as_str()).collect::<Vec<_>>().join("\n");
+                !notes.iter().any(|note| note.at == at && note.text == text && note.utf16_text == comment.utf16_text && note.author == comment.author && note.visible == comment.visible)
+            })
+        }).collect();
+        if changed_sheets.iter().any(|changed| *changed) {
+            self.sync_legacy_notes_for_save();
+            for (sheet, original) in original_notes.into_iter().enumerate() {
+                if !changed_sheets[sheet] {
+                    self.workbook.sheets[sheet].comments = original;
+                    continue;
+                }
+                for comment in &mut self.workbook.sheets[sheet].comments {
+                    if let Some(before) = original.iter().find(|before| before.cell == comment.cell) {
+                        let changed_text = comment.text.clone();
+                        let changed_utf16 = comment.utf16_text.clone();
+                        let author = comment.author.clone();
+                        let visible = comment.visible;
+                        *comment = before.clone();
+                        comment.author = author;
+                        comment.visible = visible;
+                        comment.utf16_text = changed_utf16;
+                        if changed_text.paragraphs.iter().map(|p| &p.text).collect::<Vec<_>>() != before.text.paragraphs.iter().map(|p| &p.text).collect::<Vec<_>>() {
+                            comment.text = changed_text;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn take_debug_output(&mut self) -> Vec<String> {
@@ -25278,6 +25320,12 @@ struct WorkbookApplication<'a> {
     active: u64,
     application: ObjectRef,
     applications: BTreeMap<u64, ObjectRef>,
+    workbooks: ObjectRef,
+    next_workbook: u64,
+    code: BTreeMap<u64, ApplicationCode>,
+    pending_projects: Vec<u64>,
+    debug_output: Vec<String>,
+    messages: Vec<BrowserMessage>,
     member_owners: Vec<u64>,
     last_owner: u64,
     next_callback: u64,
@@ -25294,6 +25342,9 @@ impl<'a> WorkbookApplication<'a> {
         let Value::Object(application) = host.object(HostObject::Application) else {
             unreachable!("Application has an Automation identity");
         };
+        let Value::Object(workbooks) = host.object(HostObject::Workbooks) else {
+            unreachable!("Workbooks has an Automation identity");
+        };
         let mut registry = Self {
             hosts: BTreeMap::new(),
             application_owner: None,
@@ -25302,6 +25353,12 @@ impl<'a> WorkbookApplication<'a> {
             active: owner,
             application,
             applications: BTreeMap::new(),
+            workbooks,
+            next_workbook: owner.saturating_add(1).max(1),
+            code: BTreeMap::new(),
+            pending_projects: Vec::new(),
+            debug_output: Vec::new(),
+            messages: Vec::new(),
             member_owners: Vec::new(),
             last_owner: owner,
             next_callback: 0,
@@ -25334,6 +25391,7 @@ impl<'a> WorkbookApplication<'a> {
         let Value::Object(application) = host.object(HostObject::Application) else {
             unreachable!("Application has an Automation identity");
         };
+        self.next_workbook = self.next_workbook.max(owner.saturating_add(1));
         self.applications.insert(owner, application);
         self.hosts.insert(owner, host);
         Ok(())
@@ -25376,6 +25434,101 @@ impl<'a> WorkbookApplication<'a> {
             .sync_calculation_settings();
     }
 
+
+    fn is_workbooks(&self, object: &ObjectRef) -> bool {
+        self.native_owner(object).and_then(|owner| self.hosts.get(&owner))
+            .is_some_and(|host| host.is_workbooks(object))
+    }
+
+    fn workbook_item(&mut self, index: &Value) -> Result<Value, String> {
+        let owner = match index {
+            Value::String(_) | Value::Utf16(_) => {
+                let units = index.string_units().expect("string index");
+                self.hosts.iter().find_map(|(owner, host)| {
+                    let own = host.file_name.as_deref().unwrap_or("Book1");
+                    crate::vba_automation::workbook_name_matches(own, &units).then_some(*owner)
+                })
+            }
+            Value::NullString | Value::Empty | Value::Boolean(_) => None,
+            value => {
+                let number = match value {
+                    Value::Decimal(number) => Some(number.to_f64()),
+                    value => any_number(value),
+                }.ok_or_else(|| host_error(13, "workbook index must be a name or number"))?;
+                let number = number.round_ties_even();
+                if !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&number) {
+                    return Err(host_error(6, "workbook index overflows a Long"));
+                }
+                if number < 1.0 { None }
+                else { self.hosts.keys().nth(number as usize - 1).copied() }
+            }
+        }.ok_or_else(|| host_error(9, "there is no such workbook open"))?;
+        Ok(self.hosts.get_mut(&owner).expect("selected workbook")
+            .object(HostObject::Workbook))
+    }
+
+    fn open_workbook(
+        &mut self,
+        code_owner: u64,
+        args: &[Value],
+        files: &oxivba_core::files::Files,
+    ) -> Result<Value, String> {
+        let value = args.first().filter(|value| !matches!(value, Value::Missing))
+            .ok_or_else(|| host_error(450, "Workbooks.Open requires Filename"))?;
+        let path = match value {
+            Value::String(path) => path.clone(),
+            Value::Utf16(units) => String::from_utf16(units)
+                .map_err(|_| host_error(1004, "Workbook filename contains an invalid character"))?,
+            Value::Null => return Err(host_error(94, "Workbook filename is Null")),
+            Value::Error(_) | Value::Array(_) | Value::Object(_) | Value::Record(_) =>
+                return Err(host_error(13, "Workbook filename must be text")),
+            value => shown_text(value, None),
+        };
+        let path = files.absolute_path(&path);
+        if let Some(owner) = self.hosts.iter().find_map(|(owner, host)|
+            host.file_io.full_name.as_deref().filter(|name| name.eq_ignore_ascii_case(&path)).map(|_| *owner)) {
+            self.active = owner;
+            return Ok(self.hosts.get_mut(&owner).expect("open workbook")
+                .object(HostObject::Workbook));
+        }
+        let package = files.bytes(&path).map_err(|_| host_error(1004, format!("Cannot open workbook: {path}")))?;
+        let workbook = oxicells_core::parse_xlsx_preserving_values(package)
+            .map_err(|error| host_error(1004, error.to_string()))?;
+        let source = crate::vba_project::read_project_source_with_code_page(package, None)
+            .map_err(|error| host_error(1004, error))?.unwrap_or_default();
+        let project_name = crate::vba_project::read_project_name(package, None)
+            .map_err(|error| host_error(1004, error))?.unwrap_or_else(|| "VBAProject".into());
+        let documents = crate::vba_project::read_document_modules(package)
+            .map_err(|error| host_error(1004, error))?;
+        // Validate before publishing either native objects or a source request.
+        oxivba_core::parse_project(&source).map_err(|error| host_error(1004, error.to_string()))?;
+        let read_only = args.get(2).filter(|value| !matches!(value, Value::Missing))
+            .map(|value| application_switch(value, "ReadOnly")).transpose()?.unwrap_or(false);
+        let owner = self.next_workbook;
+        let next = owner.checked_add(1).ok_or_else(|| host_error(7, "No workbook identities remain"))?;
+        let mut host = WorkbookHost::new_owned_in(workbook, 0, owner, self.arena.clone())?;
+        let caller = self.hosts.get(&code_owner).expect("opening code owner");
+        host.error_language = caller.error_language;
+        host.automation_code_page = caller.automation_code_page;
+        host.now = caller.now;
+        host.file_name = Some(path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string());
+        host.file_io.set_package(package.to_vec())?;
+        host.file_io.full_name = Some(path);
+        host.file_io.read_only = read_only;
+        host.file_io.source = source.clone();
+        host.configure_documents(&documents)?;
+        host.saved = true;
+        let Value::Object(book) = host.object(HostObject::Workbook) else {
+            unreachable!("Workbook has an Automation identity");
+        };
+        self.insert(host).map_err(|rejected| host_error(1004, rejected.1))?;
+        self.code.insert(owner, ApplicationCode { source, project_name, documents });
+        self.pending_projects.push(owner);
+        self.next_workbook = next;
+        self.active = owner;
+        Ok(Value::Object(book))
+    }
+
     fn native_owner(&self, object: &ObjectRef) -> Option<u64> {
         if object.is_native_stream() || object.handle >= (1_u64 << 63) {
             return None;
@@ -25409,7 +25562,7 @@ impl<'a> WorkbookApplication<'a> {
         if name.eq_ignore_ascii_case("ThisWorkbook") {
             return code_owner;
         }
-        if name.eq_ignore_ascii_case("Caller") {
+        if name.eq_ignore_ascii_case("Caller") || name.eq_ignore_ascii_case("ThisCell") {
             if let Some((_, owner)) = self.running_callbacks.last() {
                 return *owner;
             }
@@ -25451,6 +25604,50 @@ struct ApplicationArrayAssignment {
 }
 
 impl<'a> ApplicationHost<'a> {
+
+    fn workbooks_call(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+        names: &[Option<String>],
+        files: Option<&oxivba_core::files::Files>,
+    ) -> Option<Result<Option<Value>, String>> {
+        let mut application = self.application.borrow_mut();
+        let collection = receiver.is_some_and(|object| application.is_workbooks(object));
+        let global = receiver.is_none_or(|object| application.is_application(object))
+            && name.eq_ignore_ascii_case("Workbooks");
+        if !collection && !global { return None; }
+        if global && args.is_empty() {
+            return Some(Ok(Some(Value::Object(application.workbooks.clone()))));
+        }
+        let normalize = |parameters: &[&str], method: &str| {
+            if names.is_empty() { Ok(args.to_vec()) }
+            else { normalize_named_arguments(args, names, parameters, method) }
+        };
+        let item = global || name.eq_ignore_ascii_case("Item") || name.eq_ignore_ascii_case("_default");
+        if item {
+            return Some(normalize(&["Index"], "Workbooks.Item")
+                .and_then(|args| match args.as_slice() {
+                    [index] => application.workbook_item(index).map(Some),
+                    _ => Err(host_error(450, "Workbooks.Item requires one index")),
+                }));
+        }
+        if name.eq_ignore_ascii_case("Count") && args.is_empty() {
+            return Some(Ok(Some(Value::Integer(application.hosts.len() as i64))));
+        }
+        if name.eq_ignore_ascii_case("Open") {
+            return Some(normalize(
+                &["Filename", "UpdateLinks", "ReadOnly", "Format", "Password", "WriteResPassword",
+                  "IgnoreReadOnlyRecommended", "Origin", "Delimiter", "Editable", "Notify",
+                  "Converter", "AddToMru", "Local", "CorruptLoad"], "Workbooks.Open")
+                .and_then(|args| {
+                    let files = files.ok_or_else(|| host_error(1004, "Workbooks.Open requires the application filesystem"))?;
+                    application.open_workbook(self.code_owner, &args, files).map(Some)
+                }));
+        }
+        None
+    }
     fn read<R>(
         &self,
         receiver: Option<&ObjectRef>,
@@ -25517,6 +25714,11 @@ impl<'a> ApplicationHost<'a> {
             local.as_ref().or(receiver),
         );
 
+        let host = application.hosts.get_mut(&owner).expect("operation owner");
+        let debug = host.take_debug_output();
+        let messages = host.take_messages();
+        application.debug_output.extend(debug);
+        application.messages.extend(messages);
         if let Some(name) = separator {
             let new_setting = application
                 .hosts
@@ -25886,6 +26088,23 @@ impl Host for ApplicationHost<'_> {
             host.error_help(_number, _source)
         })
     }
+    fn take_application_projects(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.application.borrow_mut().pending_projects)
+    }
+    fn macro_project(&self, requested: &str) -> Result<Option<(u64, String)>, String> {
+        let Some((book, procedure)) = requested.rsplit_once('!') else { return Ok(None); };
+        let book = book.strip_prefix('\'').and_then(|book| book.strip_suffix('\''))
+            .map(|book| book.replace("''", "'")).unwrap_or_else(|| book.to_string());
+        let units: Vec<_> = book.encode_utf16().collect();
+        let application = self.application.borrow();
+        application.hosts.iter().find_map(|(owner, host)| {
+            let name = host.file_name.as_deref().unwrap_or("Book1");
+            (crate::vba_automation::workbook_name_matches(name, &units) && !procedure.is_empty())
+                .then(|| (*owner, procedure.to_string()))
+        }).map(Some).ok_or_else(|| {
+            application.hosts.get(&self.code_owner).expect("macro caller").macro_unavailable(requested)
+        })
+    }
     fn macro_reference(&self, requested: &str) -> Result<String, String> {
         self.read(None, "", true, |host, _receiver| {
             host.macro_reference(requested)
@@ -25902,6 +26121,7 @@ impl Host for ApplicationHost<'_> {
         name: &str,
         args: &[Value],
     ) -> Result<Option<Value>, String> {
+        if let Some(result) = self.workbooks_call(receiver, name, args, &[], None) { return result; }
         let mut result = self.write(receiver, name, false, |host, receiver| {
             host.call(receiver, name, args)
         });
@@ -25915,6 +26135,7 @@ impl Host for ApplicationHost<'_> {
         args: &[Value],
         _argument_names: &[Option<String>],
     ) -> Result<Option<Value>, String> {
+        if let Some(result) = self.workbooks_call(receiver, name, args, _argument_names, None) { return result; }
         let mut result = self.write(receiver, name, false, |host, receiver| {
             host.call_named(receiver, name, args, _argument_names)
         });
@@ -25928,6 +26149,7 @@ impl Host for ApplicationHost<'_> {
         args: &[Value],
         _files: &mut oxivba_core::files::Files,
     ) -> Result<Option<Value>, String> {
+        if let Some(result) = self.workbooks_call(receiver, name, args, &[], Some(_files)) { return result; }
         let mut result = self.write(receiver, name, false, |host, receiver| {
             host.call_with_files(receiver, name, args, _files)
         });
@@ -25942,6 +26164,7 @@ impl Host for ApplicationHost<'_> {
         argument_names: &[Option<String>],
         _files: &mut oxivba_core::files::Files,
     ) -> Result<Option<Value>, String> {
+        if let Some(result) = self.workbooks_call(receiver, name, args, argument_names, Some(_files)) { return result; }
         let mut result = self.write(receiver, name, false, |host, receiver| {
             host.call_named_with_files(receiver, name, args, argument_names, _files)
         });
@@ -25949,6 +26172,7 @@ impl Host for ApplicationHost<'_> {
         result
     }
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+        if let Some(result) = self.workbooks_call(Some(receiver), name, &[], &[], None) { return result; }
         let mut result = self.write(Some(receiver), name, false, |host, receiver| {
             host.get(receiver.expect("native receiver"), name)
         });
@@ -26005,6 +26229,12 @@ impl Host for ApplicationHost<'_> {
         })
     }
     fn enumerate(&mut self, _receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
+        let mut application = self.application.borrow_mut();
+        if application.is_workbooks(_receiver) {
+            return Ok(Some(application.hosts.values_mut()
+                .map(|host| host.object(HostObject::Workbook)).collect()));
+        }
+        drop(application);
         self.write(Some(_receiver), "", false, |host, receiver| {
             host.enumerate(receiver.expect("native receiver"))
         })
@@ -40071,6 +40301,19 @@ struct OutputArrayDimension {
 }
 
 #[derive(Serialize)]
+struct OpenWorkbookOutput {
+    identity: String,
+    name: String,
+    full_name: Option<String>,
+    read_only: bool,
+    saved: bool,
+    active_sheet: usize,
+    source: String,
+    document_modules: Vec<VbaDocumentModule>,
+    workbook: Workbook,
+}
+
+#[derive(Serialize)]
 struct RunResult {
     workbook: Workbook,
     result: OutputValue,
@@ -40085,6 +40328,10 @@ struct RunResult {
     files: Vec<file_io::ProducedFile>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     deleted_files: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    other_workbooks: Vec<OpenWorkbookOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_workbook: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -40112,12 +40359,17 @@ struct RunOutcome {
     files: Vec<file_io::ProducedFile>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     deleted_files: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    other_workbooks: Vec<OpenWorkbookOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_workbook: Option<String>,
 }
 
 impl RunOutcome {
     fn into_result(self) -> RunResult {
         RunResult { workbook: self.workbook, result: self.result, debug_output: self.debug_output,
-            messages: self.messages, status_bar: self.status_bar, files: self.files, deleted_files: self.deleted_files }
+            messages: self.messages, status_bar: self.status_bar, files: self.files, deleted_files: self.deleted_files,
+            other_workbooks: self.other_workbooks, active_workbook: self.active_workbook }
     }
 }
 
@@ -40397,9 +40649,91 @@ fn value_owns_project_reference(value: &Value) -> bool {
     }
 }
 
+
+// Parsed code and proxy hosts live only for one invocation. The arenas own
+// destructors as well as allocations; ApplicationStorage owns the surviving
+// object graph and does not borrow either arena.
+type ApplicationParsedCode = (oxivba_core::ast::Module, Vec<(String, oxivba_core::ast::Module)>);
+
+struct ApplicationCode {
+    source: String,
+    project_name: String,
+    documents: Vec<VbaDocumentModule>,
+}
+
+fn application_runtime_error(message: impl Into<String>) -> oxivba_core::RuntimeError {
+    oxivba_core::RuntimeError {
+        kind: oxivba_core::RuntimeErrorKind::Host,
+        message: message.into(),
+        line: None,
+        vba_number: None,
+        vba_source: None,
+        vba_help_file: None,
+        vba_help_context: None,
+        vba_default_description: false,
+    }
+}
+
+struct ApplicationExecutionContext {
+    environment: ErrorEnvironment,
+    current_time: f64,
+    random_seed: u64,
+    constants: std::sync::Arc<BTreeMap<String, i64>>,
+}
+
+fn loaded_application_runtime<'code>(
+    owner: u64,
+    application: &std::rc::Rc<std::cell::RefCell<WorkbookApplication<'static>>>,
+    code: &'code typed_arena::Arena<ApplicationParsedCode>,
+    hosts: &'code typed_arena::Arena<ApplicationHost<'static>>,
+    context: &ApplicationExecutionContext,
+) -> Result<Runtime<'code>, oxivba_core::RuntimeError> {
+    let (parsed, project_name, references, bindings) = {
+        let mut books = application.borrow_mut();
+        let definition = books.code.get(&owner)
+            .ok_or_else(|| application_runtime_error("No source definition for the opened workbook"))?;
+        let parsed = oxivba_core::parse_project(&definition.source)
+            .map_err(|error| application_runtime_error(error.to_string()))?;
+        let project_name = definition.project_name.clone();
+        let mut references = builtin_compilation_references().clone();
+        references.document_modules = definition.documents.iter()
+            .map(|document| (document.name.clone(), document.base_type.clone())).collect();
+        let host = books.hosts.get_mut(&owner)
+            .ok_or_else(|| application_runtime_error("The opened workbook is no longer registered"))?;
+        host.user_functions.borrow_mut().fixed_reference_functions =
+            fixed_reference_functions(&parsed.0, &parsed.1);
+        let bindings = host.document_objects.iter()
+            .map(|(name, object)| (name.clone(), object.clone())).collect();
+        (parsed, project_name, std::sync::Arc::new(references), bindings)
+    };
+    let (module, classes) = code.alloc(parsed);
+    let host = hosts.alloc(ApplicationHost {
+        application: application.clone(),
+        code_owner: owner,
+    });
+    let mut runtime = Runtime::new(module)
+        .with_classes(classes)
+        .with_host(host)
+        .with_error_environment(context.environment.clone())
+        .with_project_name(project_name)
+        .with_current_time(context.current_time)
+        .with_random_seed(context.random_seed)
+        .with_reference_constants(context.constants.clone());
+    runtime.set_application_project_identity(owner)?;
+    runtime.with_document_objects(bindings, references)
+}
+
+struct ApplicationSessionState {
+    // The invoking host is retained separately in ProjectSessionState so the
+    // editor can supply its current IR without replacing any other workbook.
+    application: WorkbookApplication<'static>,
+    runtime: oxivba_core::ApplicationStorage,
+}
+
 struct ProjectSessionState {
     source: String,
     runtime: Option<oxivba_core::ProjectState>,
+    application: Option<ApplicationSessionState>,
     host: WorkbookHostState,
     workbook: Vec<u8>,
     documents: Vec<VbaDocumentModule>,
@@ -41166,6 +41500,10 @@ fn execute_workbook_invocation(
             return Err("invalid VBA object reference: source edit resets its owning project".into());
         }
     }
+    if documents_changed && session.as_ref().is_some_and(|state| state.application.is_some()) {
+        return Err("VBA document declarations changed in a multi-workbook session; their native identities require rebinding".into());
+    }
+    let mut application_session = session.as_mut().and_then(|state| state.application.take());
     let mut workbook_slot=Some(workbook);
     let (mut host, mut project_state, mut external_references) = match session.take() {
         Some(previous) => {
@@ -41207,7 +41545,7 @@ fn execute_workbook_invocation(
         }
         None if procedure.is_none() && action.is_none() =>
             (WorkbookHost::new_owned(workbook_slot.take().ok_or("missing workbook input")?,active_sheet)?,None,ExternalReferences::default()),
-        None => (WorkbookHost::new(workbook_slot.as_mut().ok_or("missing workbook input")?,active_sheet)?,None,ExternalReferences::default()),
+        None => (WorkbookHost::new_owned(workbook_slot.take().ok_or("missing workbook input")?,active_sheet)?,None,ExternalReferences::default()),
     };
     if reset_storage { external_references.reset_project(); }
     if documents_changed { host.configure_documents(&documents)?; }
@@ -41261,7 +41599,29 @@ fn execute_workbook_invocation(
             std::sync::Arc::new(values)
         }).clone();
         let code_owner = host.objects.owner;
-        let application = std::rc::Rc::new(std::cell::RefCell::new(WorkbookApplication::new(host)));
+        let (registry, mut stored_application) = match application_session.take() {
+            Some(mut stored) => {
+                stored.application.insert(host).map_err(|rejected| rejected.1.to_string())?;
+                for held in stored.application.hosts.values_mut() {
+                    *held.user_functions.borrow_mut() = UserFunctions::default();
+                }
+                (stored.application, Some(stored.runtime))
+            }
+            None => (WorkbookApplication::new(host), None),
+        };
+        let application = std::rc::Rc::new(std::cell::RefCell::new(registry));
+        let project_code = typed_arena::Arena::new();
+        let project_hosts = typed_arena::Arena::new();
+        let (result, next_application_storage) = {
+        let factory_application = application.clone();
+        let factory_context = ApplicationExecutionContext {
+            environment: context.environment.clone(),
+            current_time: context.current_time,
+            random_seed: context.random_seed,
+            constants: constants.clone(),
+        };
+        let mut loader = |owner| loaded_application_runtime(owner, &factory_application,
+            &project_code, &project_hosts, &factory_context);
         let mut application_host = ApplicationHost { application: application.clone(), code_owner };
         let mut runtime = Runtime::new(&module)
             .with_error_environment(context.environment)
@@ -41273,7 +41633,17 @@ fn execute_workbook_invocation(
             .with_reference_constants(constants);
         if let Some(state) = project_state.take() { runtime = runtime.with_project_state(state); }
         runtime=runtime.with_document_objects(bindings,references).map_err(|error|error.to_string())?;
+        runtime.set_application_project_loader(&mut loader).map_err(|error| error.to_string())?;
+        if let Some(stored) = stored_application.as_mut() {
+            for owner in stored.project_identities().collect::<Vec<_>>() {
+                runtime.ensure_application_project(owner).map_err(|error| error.to_string())?;
+            }
+            runtime.restore_application_storage(stored).map_err(|error| error.to_string())?;
+        }
         *runtime.file_system_mut() = file_system;
+        if stored_application.is_some() && reset_storage {
+            runtime.reset_application_project(code_owner).map_err(|error| error.to_string())?;
+        }
         let external_action = action.is_some();
         let mut result = match action {
             Some(ExternalObjectAction::Invoke { reference, member, kind }) => {
@@ -41307,7 +41677,19 @@ fn execute_workbook_invocation(
         let ended = ended_before_finish || runtime.project_ended();
         let reset_unhandled = !external_action && result.as_ref().err().is_some_and(|error| !matches!(error.kind,
             oxivba_core::RuntimeErrorKind::ExecutionTerminated | oxivba_core::RuntimeErrorKind::Compile));
-        project_state = if ended {
+        let multiple_books = application.borrow().hosts.len() > 1;
+        let mut next_application_storage = None;
+        project_state = if multiple_books {
+            if reset_unhandled && !ended {
+                runtime.reset_application_project(code_owner).map_err(|error| error.to_string())?;
+                external_references.reset_project();
+            }
+            let mut storage = runtime.into_application_storage()
+                .map_err(|rejected| rejected.1.to_string())?;
+            file_system = storage.take_file_system();
+            next_application_storage = Some(storage);
+            None
+        } else if ended {
             // Caller-held native objects keep their actual graph. Source class
             // capabilities stay owned, but dispatch through disconnected code.
             let mut state = runtime.into_project_state_after_end().map_err(|error| error.to_string())?;
@@ -41321,54 +41703,46 @@ fn execute_workbook_invocation(
                 None
             } else { Some(runtime.into_project_state()) }
         };
-        drop(application_host);
-        application.borrow_mut().ensure_application_owner(code_owner);
-        host = application.borrow_mut().hosts.remove(&code_owner).expect("invoking workbook remains registered");
+        (result, next_application_storage)
+        };
+        drop(project_hosts);
+        drop(project_code);
+        let mut registry = std::rc::Rc::try_unwrap(application)
+            .map_err(|_| "Application execution retained a borrowed host".to_string())?.into_inner();
+        for owner in registry.hosts.keys().copied().filter(|owner| *owner != code_owner).collect::<Vec<_>>() {
+            registry.ensure_application_owner(owner);
+            registry.hosts.get_mut(&owner).expect("open workbook").flush_workbook_output();
+        }
+        registry.ensure_application_owner(code_owner);
+        host = registry.hosts.remove(&code_owner).expect("invoking workbook remains registered");
+        host.debug_output.append(&mut registry.debug_output);
+        host.messages.append(&mut registry.messages);
+        if let Some(runtime) = next_application_storage {
+            application_session = Some(ApplicationSessionState { application: registry, runtime });
+        }
         result
     } else { Ok(Value::Empty) };
+    let other_workbooks = application_session.as_ref().map(|state| {
+        state.application.hosts.iter().map(|(owner, host)| {
+            let code = state.application.code.get(owner).expect("opened workbook source");
+            OpenWorkbookOutput {
+                identity: owner.to_string(),
+                name: host.file_name.clone().unwrap_or_else(|| "Book1".into()),
+                full_name: host.file_io.full_name.clone(),
+                read_only: host.file_io.read_only,
+                saved: host.saved,
+                active_sheet: host.active_sheet,
+                source: code.source.clone(),
+                document_modules: code.documents.clone(),
+                workbook: (*host.workbook).clone(),
+            }
+        }).collect()
+    }).unwrap_or_default();
+    let active_workbook = application_session.as_ref().map(|state| state.application.active.to_string());
     host.file_io.files = file_system;
     let files = host.file_io.produced_files(&files_before);
     let deleted_files = host.file_io.files.deleted_files(&files_before);
-    // Retain manual pending work in the workbook returned to the caller.
-    host.sync_calculation_settings();
-    host.sync_band_styles_to_workbook();
-    // Notes live in the host during VBA execution. Flush changed notes into
-    // the returned workbook just as SaveCopyAs does, but leave untouched
-    // comments byte-preserving when no note data changed.
-    let original_notes: Vec<_> = host.workbook.sheets.iter().map(|sheet| sheet.comments.clone()).collect();
-    let changed_sheets: Vec<_> = host.workbook.sheets.iter().enumerate().map(|(sheet, held)| {
-        let notes: Vec<_> = host.notes.iter().filter(|note| note.at.sheet == sheet).collect();
-        let comments: Vec<_> = held.comments.iter().filter(|comment| !comment.author.strip_prefix("tc=").is_some_and(|id| host.threaded_notes.iter().any(|thread| !thread.deleted && thread.at.sheet == sheet && thread.at.row == comment.cell.0 + 1 && thread.at.column == comment.cell.1 && thread.id.eq_ignore_ascii_case(id)))).collect();
-        notes.len() != comments.len() || comments.iter().any(|comment| {
-            let at = CellAddress { sheet, row: comment.cell.0 + 1, column: comment.cell.1 };
-            let text = comment.text.paragraphs.iter().map(|paragraph| paragraph.text.as_str()).collect::<Vec<_>>().join("\n");
-            !notes.iter().any(|note| note.at == at && note.text == text && note.utf16_text == comment.utf16_text && note.author == comment.author && note.visible == comment.visible)
-        })
-    }).collect();
-    if changed_sheets.iter().any(|changed| *changed) {
-        host.sync_legacy_notes_for_save();
-        for (sheet, original) in original_notes.into_iter().enumerate() {
-            if !changed_sheets[sheet] {
-                host.workbook.sheets[sheet].comments = original;
-                continue;
-            }
-            for comment in &mut host.workbook.sheets[sheet].comments {
-                if let Some(before) = original.iter().find(|before| before.cell == comment.cell) {
-                    let changed_text = comment.text.clone();
-                    let changed_utf16 = comment.utf16_text.clone();
-                    let author = comment.author.clone();
-                    let visible = comment.visible;
-                    *comment = before.clone();
-                    comment.author = author;
-                    comment.visible = visible;
-                    comment.utf16_text = changed_utf16;
-                    if changed_text.paragraphs.iter().map(|p| &p.text).collect::<Vec<_>>() != before.text.paragraphs.iter().map(|p| &p.text).collect::<Vec<_>>() {
-                        comment.text = changed_text;
-                    }
-                }
-            }
-        }
-    }
+    host.flush_workbook_output();
     let conditions_changed = host.condition_modified;
     let application_setting_dirtied = host.application_setting_dirtied;
     let debug_output = host.take_debug_output();
@@ -41401,7 +41775,7 @@ fn execute_workbook_invocation(
     };
     external_references.retain(&mut result);
     let reference_state = external_references.snapshot();
-    *session = Some(ProjectSessionState { source: stored_source, runtime: project_state, host: host_state, documents,
+    *session = Some(ProjectSessionState { source: stored_source, runtime: project_state, application: application_session, host: host_state, documents,
         external_references, workbook: serde_json::to_vec(&workbook).map_err(|error| error.to_string())? });
     Ok(RunOutcome {
         workbook,
@@ -41417,6 +41791,8 @@ fn execute_workbook_invocation(
         file_system_state,
         files,
         deleted_files,
+        other_workbooks,
+        active_workbook,
     })
 }
 
@@ -41424,6 +41800,145 @@ fn execute_workbook_invocation(
 mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
+
+    #[test]
+    fn opened_workbooks_keep_vba_objects_files_and_cells_across_session_calls() {
+        const ROOT: &str = r#"Attribute VB_Name = "Driver"
+Private reader As Object
+Private held As Object
+Private count As Long
+Public Sub Seed()
+ count = 40
+ Set held = New Counter
+ held.Data = 10
+ Open "C:\shared.dat" For Binary Access Read Write Shared As #1
+ Dim first As Byte
+ first = 65
+ Put #1, , first
+ Dim book As Workbook
+ Set book = Workbooks.Open(Filename:="C:\B.xlsm", ReadOnly:=True)
+ Set reader = Application.Run("'B.xlsm'!Driver.MakeReader")
+End Sub
+Public Function Identity() As Long
+ Identity = count
+End Function
+Public Function Which() As String
+ Which = ThisWorkbook.Name
+End Function
+Public Function Names() As String
+ Names = Application.Run("Which") & "|" & Application.Run("'B.xlsm'!Driver.Which") & "|" & ActiveWorkbook.Name
+End Function
+Public Function Probe() As String
+ count = count + 1
+ ThisWorkbook.Activate
+ Debug.Print "A:start"
+ reader.Advance
+ Dim answer As String
+ answer = Application.Run("'B.xlsm'!Driver.Entry", held)
+ Debug.Print "A:end"
+ Probe = answer & "|" & CStr(count) & "|" & CStr(reader.Data) & "|" & CStr(Workbooks.Count) & "|" & CStr(Loc(1)) & "|" & ActiveWorkbook.Name
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "Counter"
+Public Data As Long
+"#;
+        const CHILD: &str = r#"Attribute VB_Name = "Driver"
+Private count As Long
+Public Function MakeReader() As Object
+ Dim reader As New Reader
+ reader.Data = 7
+ Set MakeReader = reader
+End Function
+Public Function Which() As String
+ Which = ThisWorkbook.Name
+End Function
+Public Function Entry(ByVal target As Object) As String
+ count = count + 1
+ target.Data = target.Data + 1
+ Open "C:\shared.dat" For Binary Access Read Write Shared As #1
+ Dim first As Byte
+ Get #1, , first
+ Close #1
+ Debug.Print "B:entry"
+ ThisWorkbook.Worksheets(1).Range("A1").Value = count
+ Entry = CStr(target.Data) & ":" & CStr(count) & ":" & CStr(first) & ":" & CStr(Application.Run("'A.xlsm'!Driver.Identity"))
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "Reader"
+Public Data As Long
+Public Sub Advance()
+ Data = Data + 1
+ ThisWorkbook.Activate
+ ThisWorkbook.Worksheets(1).Range("A2").Value = Data
+End Sub
+"#;
+        let seed = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let package = crate::vba_project::write_project_source(seed, CHILD, None).unwrap();
+        let mut context = failure_context();
+        context.file_name = Some("A.xlsm".into());
+        context.file_context = Some(file_io::FileContext {
+            files: vec![file_io::ProducedFile { path: "C:\\B.xlsm".into(), bytes: package }],
+            ..Default::default()
+        });
+        let mut session = None;
+        let seeded = execute_workbook_action_in_session(workbook(), ROOT, Some("Driver.Seed"), vec![],
+            0, context, &mut session).unwrap();
+        assert!(seeded.error.is_none(), "{:?}", seeded.error.as_ref().map(|error| &error.message));
+        assert!(session.as_ref().unwrap().application.is_some());
+        let mut book = seeded.workbook;
+        for expected in ["11:1:65:41|41|8|2|1|B.xlsm", "12:2:65:42|42|9|2|1|B.xlsm"] {
+            let mut context = failure_context();
+            context.file_name = Some("A.xlsm".into());
+            let outcome = execute_workbook_action_in_session(book, ROOT, Some("Driver.Probe"), vec![],
+                0, context, &mut session).unwrap();
+            assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected);
+            assert_eq!(outcome.debug_output, ["A:start", "B:entry", "A:end"]);
+            assert_eq!(outcome.active_workbook.as_deref(), Some("1"));
+            assert_eq!(outcome.other_workbooks.len(), 1);
+            let output = &outcome.other_workbooks[0];
+            assert_eq!(output.name, "B.xlsm");
+            assert!(output.read_only);
+            let CellValue::Number(value) = &output.workbook.sheets[0].rows.iter()
+                .find(|row| row.index == 2).unwrap().cells.iter()
+                .find(|cell| cell.col == 0).unwrap().value else { panic!("numeric cell"); };
+            assert_eq!(*value, if expected.starts_with("11:") {8.0} else {9.0});
+            let state = session.as_mut().unwrap().application.as_mut().unwrap();
+            assert_eq!(state.runtime.project_identities().collect::<Vec<_>>(), [0, 1]);
+            assert_eq!(state.application.active, 1);
+            let peer = state.application.hosts.get_mut(&1).unwrap();
+            assert!(peer.file_io.read_only);
+            let Value::Object(native_book) = peer.object(HostObject::Workbook) else { panic!("Workbook"); };
+            assert_eq!(peer.get(&native_book, "FileFormat").unwrap(), Some(Value::Double(52.0)));
+            let Value::Object(range) = peer.call(None, "Range", &[Value::String("A1:A2".into())]).unwrap().unwrap() else { panic!("range"); };
+            let values = peer.get(&range, "Value2").unwrap().unwrap();
+            let Value::Array(values) = values else { panic!("array"); };
+            let first = if expected.starts_with("11:") {1.0} else {2.0};
+            assert_eq!(values.values, vec![Value::Double(first), Value::Double(first + 7.0)]);
+            book = serde_json::from_slice(&serde_json::to_vec(&outcome.workbook).unwrap()).unwrap();
+        }
+        let mut context = failure_context();
+        context.file_name = Some("A.xlsm".into());
+        let outcome = execute_workbook_action_in_session(book, ROOT, Some("Driver.Names"), vec![],
+            0, context, &mut session).unwrap();
+        assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
+        assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], "A.xlsm|B.xlsm|B.xlsm");
+    }
+
+    #[test]
+    fn failed_workbook_open_does_not_publish_a_book_or_source_owner() {
+        let mut host = WorkbookHost::new_owned(workbook(), 0).unwrap();
+        host.file_name = Some("A.xlsm".into());
+        let mut app = WorkbookApplication::new(host);
+        let mut files = oxivba_core::files::Files::default();
+        files.replace_bytes("C:\\broken.xlsm", b"broken zip".to_vec()).unwrap();
+        assert!(app.open_workbook(0, &[Value::String("C:\\broken.xlsm".into())], &files).is_err());
+        assert_eq!(app.hosts.len(), 1);
+        assert!(app.pending_projects.is_empty());
+        assert!(app.code.is_empty());
+        assert_eq!(app.next_workbook, 1);
+        assert_eq!(app.active, 0);
+    }
 
     #[test]
     fn shared_application_properties_follow_native_across_book_activation() {

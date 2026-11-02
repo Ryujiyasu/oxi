@@ -123,6 +123,19 @@ impl WorkbookFiles {
         Ok(())
     }
 
+    pub(super) fn set_package(&mut self, package: Vec<u8>) -> Result<(), String> {
+        // Reject invalid packages before replacing a loaded host's source.
+        oxicells_core::XlsxEditor::new(&package).map_err(|error| error.to_string())?;
+        let mut archive = oxidocs_common::archive::OoxmlArchive::new(&package).map_err(|error| error.to_string())?;
+        let types = archive.read_part("[Content_Types].xml").map_err(|error| error.to_string())?.to_ascii_lowercase();
+        self.format = Some(if types.contains("application/vnd.ms-excel.template.macroenabled.main+xml") { 53.0 }
+            else if types.contains("application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml") { 54.0 }
+            else if types.contains("application/vnd.ms-excel.sheet.macroenabled.main+xml") { 52.0 }
+            else { 51.0 });
+        self.package = Some(package);
+        Ok(())
+    }
+
     pub(super) fn configure(&mut self, context: Option<FileContext>, source: &str, file_name: &mut Option<String>) -> Result<(), String> {
         self.exports.clear();
         self.source = source.to_string();
@@ -133,15 +146,7 @@ impl WorkbookFiles {
         }
         let Some(context) = context else { return Ok(()); };
         if let Some(package) = context.package_bytes {
-            // Reject invalid packages before replacing a loaded host's source.
-            oxicells_core::XlsxEditor::new(&package).map_err(|error| error.to_string())?;
-            let mut archive = oxidocs_common::archive::OoxmlArchive::new(&package).map_err(|error| error.to_string())?;
-            let types = archive.read_part("[Content_Types].xml").map_err(|error| error.to_string())?.to_ascii_lowercase();
-            self.format = Some(if types.contains("application/vnd.ms-excel.template.macroenabled.main+xml") { 53.0 }
-                else if types.contains("application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml") { 54.0 }
-                else if types.contains("application/vnd.ms-excel.sheet.macroenabled.main+xml") { 52.0 }
-                else { 51.0 });
-            self.package = Some(package);
+            self.set_package(package)?;
         }
         if let Some(full_name) = context.full_name {
             if full_name.is_empty() { return Err("invalid VBA file context: empty fullName".into()); }
