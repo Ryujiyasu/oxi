@@ -546,4 +546,71 @@ assert.equal(demoNode('compile').disabled,true);
 assert.equal(demoNode('result').classList.values.has('error'),false);
 closeVbaProject();
 
-console.log(JSON.stringify({ main_editor_failure_save_cases: 8, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));
+
+async function seedCollectionCloseUI(route,cancel){
+ closeVbaProject();
+ const prefix='CollectionUI-'+route+'-'+cancel;
+ const a=prefix+'-A.xlsm',b=prefix+'-B.xlsm';
+ const source='Attribute VB_Name = "Driver"\nPublic Sub Seed()\nApplication.DisplayAlerts = False\nDim peer As Workbook\nSet peer = Workbooks.Open("C:\\'+b+'")\nThisWorkbook.Worksheets(1).Range("A1").Value = "current"\n'
+  +(cancel?'ThisWorkbook.Worksheets(1).Range("A2").Value = "cancel"\n':'')
+  +'End Sub\nPublic Sub FinishAll()\nWorkbooks.Close\nEnd Sub\nVERSION 1.0 CLASS\nAttribute VB_Name = "ThisWorkbook"\nPrivate Sub Workbook_BeforeClose(Cancel As Boolean)\nIf CStr(ThisWorkbook.Worksheets(1).Range("A2").Value) = "cancel" Then Cancel = True\nEnd Sub\n';
+ const packet=wasm.save_spreadsheet_vba_source(bytes,source);
+ const seeded=await runVbaInWorker(wasm.parse_spreadsheet(packet),source,'Driver.Seed',[],0,a,
+  {documentModules:wasm.spreadsheet_vba_document_modules(packet),fileContext:{fullName:'C:\\'+a,files:[{path:'C:\\'+b,bytes:packet}]}},packet);
+ return {seeded,packet,source,a};
+}
+for(const cancel of [true,false]){
+ try{
+  const fixture=await seedCollectionCloseUI('main',cancel);
+  context.collectionUI=fixture;
+  vm.runInContext('currentDocIR=collectionUI.seeded.workbook;currentFileBytes=collectionUI.packet;currentFileName=collectionUI.a;currentXlsxSheetIndex=0;currentXlsxVbaSource="";vbaWorkbookPicker.reset(currentFileName);applyVbaExecution(collectionUI.seeded,currentDocIR);',context);
+  node('vbaSource').value=fixture.source;
+  node('vbaProcedure').value='Driver.FinishAll';node('vbaArguments').value='[]';
+  node('vbaRun').disabled=node('vbaCompile').disabled=node('btnDownload').disabled=false;
+  await vm.runInContext('executeVbaFromDialog()',context);
+  assert.equal(node('vbaResult').classList.values.has('error'),false,node('vbaResult').textContent);
+  if(cancel){
+   assert.equal(vm.runInContext('currentFileName',context),fixture.a);
+   assert.equal(savedCell(vm.runInContext('currentDocIR',context),0).value.String,'current');
+   assert.deepEqual(node('vbaWorkbook').children.map(child=>child.value),['0','1']);
+   assert.equal(node('vbaRun').disabled,false);
+   assert.equal(node('btnDownload').disabled,false);
+   assert.match(node('vbaSource').value,/FinishAll/);
+  }else{
+   assert.equal(vm.runInContext('currentDocIR',context),null);
+   assert.equal(vm.runInContext('currentFileBytes',context),null);
+   assert.equal(node('vbaSource').value,'');
+   assert.deepEqual(node('vbaWorkbook').children,[]);
+   assert.deepEqual(node('vbaProcedureList').children,[]);
+   assert.equal(node('vbaRun').disabled,true);
+   assert.equal(node('btnDownload').disabled,true);
+  }
+ }finally{closeVbaProject();}
+}
+for(const cancel of [true,false]){
+ try{
+  const fixture=await seedCollectionCloseUI('canvas',cancel);
+  demo.collectionUI=fixture;
+  vm.runInContext('book=collectionUI.seeded.workbook;source=collectionUI.packet;fileName=collectionUI.a;shown=0;geom={};macroProjectSource="";macroSourceBound=false;macroSourceDirty=false;macroWorkbookPicker.reset(fileName);applyMacroExecution(collectionUI.seeded);',demo);
+  demoNode('source').value=fixture.source;demoNode('proc').value='Driver.FinishAll';demoNode('args').value='[]';
+  demoNode('run').disabled=demoNode('compile').disabled=demoNode('save').disabled=false;
+  await vm.runInContext('macroRun.onclick()',demo);
+  assert.equal(demoNode('result').classList.values.has('error'),false,demoNode('result').textContent);
+  if(cancel){
+   assert.equal(vm.runInContext('fileName',demo),fixture.a);
+   assert.equal(savedCell(vm.runInContext('book',demo),0).value.String,'current');
+   assert.deepEqual(demoNode('picker').children.map(child=>child.value),['0','1']);
+   assert.equal(demoNode('run').disabled,false);
+   assert.equal(demoNode('save').disabled,false);
+  }else{
+   assert.equal(vm.runInContext('book',demo),null);
+   assert.equal(vm.runInContext('source',demo),null);
+   assert.deepEqual(demoNode('picker').children,[]);
+   assert.equal(demoNode('sheetInk').width,0);
+   assert.equal(demoNode('run').disabled,true);
+   assert.equal(demoNode('save').disabled,true);
+  }
+ }finally{closeVbaProject();}
+}
+
+console.log(JSON.stringify({ main_editor_failure_save_cases: 8, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));

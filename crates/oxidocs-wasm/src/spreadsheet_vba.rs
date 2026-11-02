@@ -25395,6 +25395,13 @@ enum WorkbookClosePhase {
     Finish,
 }
 
+struct WorkbooksCloseOperation {
+    owners: Vec<u64>,
+    next: usize,
+    waiting: Option<u64>,
+    activation_attempted: bool,
+}
+
 struct WorkbookCloseOperation {
     phase: WorkbookClosePhase,
     activation_attempted: bool,
@@ -25404,7 +25411,7 @@ struct WorkbookCloseOperation {
 struct WorkbookEventContext {
     frame: usize,
     owner: u64,
-    lock_activation: bool,
+    activation_owner: Option<u64>,
     saving: bool,
 }
 
@@ -25423,6 +25430,7 @@ struct WorkbookApplication<'a> {
     closed: std::collections::BTreeSet<u64>,
     pending_closed: Vec<u64>,
     close_operations: BTreeMap<usize, WorkbookCloseOperation>,
+    collection_close_operations: BTreeMap<usize, WorkbooksCloseOperation>,
     pending_events: std::collections::VecDeque<HostEventCall>,
     event_contexts: BTreeMap<u64, WorkbookEventContext>,
     running_events: Vec<(u64, WorkbookEventContext)>,
@@ -25462,6 +25470,7 @@ impl<'a> WorkbookApplication<'a> {
             closed: Default::default(),
             pending_closed: Vec::new(),
             close_operations: BTreeMap::new(),
+            collection_close_operations: BTreeMap::new(),
             pending_events: std::collections::VecDeque::new(),
             event_contexts: BTreeMap::new(),
             running_events: Vec::new(),
@@ -25553,7 +25562,10 @@ impl<'a> WorkbookApplication<'a> {
 
     fn activate(&mut self, owner: u64) {
         if let Some((_, context)) = self.running_events.last().copied() {
-            if context.lock_activation && context.owner != owner {
+            if context.activation_owner.is_some_and(|locked| locked != owner) {
+                if let Some(operation) = self.collection_close_operations.get_mut(&context.frame) {
+                    operation.activation_attempted = true;
+                }
                 if context.saving {
                     if let Some(operation) = self.close_operations.get_mut(&context.frame) {
                         operation.activation_attempted = true;
@@ -25620,6 +25632,7 @@ impl<'a> WorkbookApplication<'a> {
 
     fn discard_close_operation(&mut self, frame: usize) {
         self.close_operations.remove(&frame);
+        self.collection_close_operations.remove(&frame);
         let events: Vec<_> = self.event_contexts.iter()
             .filter_map(|(key, context)| (context.frame == frame).then_some(*key)).collect();
         for key in events {
@@ -25672,7 +25685,7 @@ impl<'a> WorkbookApplication<'a> {
                 WorkbookClosePhase::BeforeClose => {
                     self.force_activate(owner);
                     if self.hosts[&owner].enable_events {
-                        let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, lock_activation: true, saving: false },
+                        let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, activation_owner: Some(owner), saving: false },
                             "BeforeClose", vec![Value::Boolean(false)], vec![0]);
                         self.close_operations.get_mut(&frame).unwrap().phase = WorkbookClosePhase::WaitingClose(event);
                         return Ok(Value::Empty);
@@ -25702,7 +25715,7 @@ impl<'a> WorkbookApplication<'a> {
                         self.force_activate(owner);
                         self.close_operations.get_mut(&frame).unwrap().activation_attempted = false;
                         if self.hosts[&owner].enable_events {
-                            let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, lock_activation: !prefix, saving: true },
+                            let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, activation_owner: (!prefix).then_some(owner), saving: true },
                                 "BeforeSave", vec![Value::Boolean(false), Value::Boolean(false)], vec![1]);
                             self.close_operations.get_mut(&frame).unwrap().phase = WorkbookClosePhase::WaitingSave {
                                 event, prefix, previous_active,
@@ -25729,7 +25742,7 @@ impl<'a> WorkbookApplication<'a> {
                     if cancelled {
                         if prefix { self.force_activate(previous_active); }
                         if self.hosts[&owner].enable_events {
-                            let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, lock_activation: !prefix, saving: false },
+                            let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, activation_owner: (!prefix).then_some(owner), saving: false },
                                 "AfterSave", vec![Value::Boolean(false)], vec![]);
                             self.close_operations.get_mut(&frame).unwrap().phase = WorkbookClosePhase::WaitingAfterSave {
                                 event, prefix, outcome: CloseSaveOutcome::Cancelled,
@@ -25755,7 +25768,7 @@ impl<'a> WorkbookApplication<'a> {
                         }
                     };
                     if self.hosts[&owner].enable_events {
-                        let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, lock_activation: !prefix, saving: false },
+                        let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, activation_owner: (!prefix).then_some(owner), saving: false },
                             "AfterSave", vec![Value::Boolean(matches!(outcome, CloseSaveOutcome::Saved))], vec![]);
                         self.close_operations.get_mut(&frame).unwrap().phase = WorkbookClosePhase::WaitingAfterSave {
                             event, prefix, outcome,
@@ -25789,7 +25802,12 @@ impl<'a> WorkbookApplication<'a> {
             self.close_operations.get_mut(&frame).unwrap().phase = next;
         }
         self.discard_close_operation(frame);
-        self.closed.insert(owner);
+        self.finish_closing_workbook(owner);
+        Ok(Value::Empty)
+    }
+
+    fn finish_closing_workbook(&mut self, owner: u64) {
+        if !self.closed.insert(owner) { return; }
         self.pending_closed.push(owner);
         *self.hosts.get_mut(&owner).expect("registered closed workbook").user_functions.borrow_mut()=UserFunctions::default();
         if self.active==owner {
@@ -25798,6 +25816,57 @@ impl<'a> WorkbookApplication<'a> {
             }
         }
         self.activation_order.retain(|id|*id!=owner);
+    }
+
+    fn close_workbooks(&mut self) -> Result<Value, String> {
+        let frame = self.member_owners.len();
+        if let std::collections::btree_map::Entry::Vacant(entry) = self.collection_close_operations.entry(frame) {
+            let owners = self.hosts.keys().filter(|owner| !self.closed.contains(owner)).copied().collect();
+            entry.insert(WorkbooksCloseOperation {
+                owners, next: 0, waiting: None, activation_attempted: false,
+            });
+        }
+        loop {
+            let operation = &self.collection_close_operations[&frame];
+            if let Some(event) = operation.waiting {
+                let Some(answer) = self.event_answers.remove(&event) else { return Ok(Value::Empty); };
+                self.event_contexts.remove(&event);
+                let cancelled = answer?.args.last().is_some_and(|value| matches!(value, Value::Boolean(true)));
+                if cancelled || self.collection_close_operations[&frame].activation_attempted {
+                    self.discard_close_operation(frame);
+                    return Ok(Value::Empty);
+                }
+                let operation = self.collection_close_operations.get_mut(&frame).unwrap();
+                operation.waiting = None;
+                operation.next += 1;
+                continue;
+            }
+            let Some(owner) = operation.owners.get(operation.next).copied() else { break; };
+            if !self.closed.contains(&owner) {
+                self.ensure_application_owner(owner);
+                if self.hosts[&owner].enable_events {
+                    let event = self.queue_workbook_event(WorkbookEventContext {
+                        frame, owner, activation_owner: Some(self.active), saving: false,
+                    }, "BeforeClose", vec![Value::Boolean(false)], vec![0]);
+                    self.collection_close_operations.get_mut(&frame).unwrap().waiting = Some(event);
+                    return Ok(Value::Empty);
+                }
+            }
+            self.collection_close_operations.get_mut(&frame).unwrap().next += 1;
+        }
+        let owners = self.collection_close_operations[&frame].owners.clone();
+        for owner in &owners {
+            if self.closed.contains(owner) { continue; }
+            self.ensure_application_owner(*owner);
+            let host = &self.hosts[owner];
+            if !host.saved && host.display_alerts {
+                return Err(host_error(1004, "Workbooks.Close requires a response to the save prompt"));
+            }
+        }
+        // A cancellation leaves every book available. Publish the closed
+        // projects together only after every notification has completed.
+        self.discard_close_operation(frame);
+        for owner in owners { self.finish_closing_workbook(owner); }
         Ok(Value::Empty)
     }
 
@@ -26147,6 +26216,12 @@ impl<'a> ApplicationHost<'a> {
         }
         if name.eq_ignore_ascii_case("Count") && args.is_empty() {
             return Some(Ok(Some(Value::Integer(application.open_count() as i64))));
+        }
+        if name.eq_ignore_ascii_case("Close") {
+            return Some(normalize(&[], "Workbooks.Close").and_then(|args| {
+                if !args.is_empty() { return Err(host_error(450, "Workbooks.Close takes no arguments")); }
+                application.close_workbooks().map(Some)
+            }));
         }
         if name.eq_ignore_ascii_case("Add") {
             return Some(normalize(&["Template"], "Workbooks.Add")
@@ -43267,6 +43342,142 @@ End Function
                 assert_eq!(serde_json::to_value(&read.result).unwrap()["value"], state, "case {kind} document fields");
             }
             drop(opened);
+        }
+    }
+
+
+    #[test]
+    fn closing_the_workbooks_collection_preserves_all_books_until_events_accept() {
+        const SOURCE: &str = r##"Attribute VB_Name = "Driver"
+Public Function Probe(ByVal kind As Long) As String
+ On Error GoTo failed
+ If kind = 9 Then
+  Workbooks("close-collection-A.xlsm").Activate
+ ElseIf kind = 10 Or kind = 12 Or kind = 13 Or kind = 14 Then
+  Workbooks("close-collection-C.xlsm").Activate
+ Else
+  Workbooks("close-collection-B.xlsm").Activate
+ End If
+ Application.EnableEvents = True
+ Dim held As Workbooks
+ If kind = 7 Then
+  Set held = Workbooks
+  held.Close
+ ElseIf kind = 8 Then
+  Application.Workbooks.Close
+ Else
+  Workbooks.Close
+ End If
+ RecordEvent "continued"
+ Probe = "ok|" & CStr(Workbooks.Count)
+ Exit Function
+failed:
+ Probe = "error|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & CStr(Workbooks.Count)
+End Function
+Public Sub RecordEvent(ByVal label As String)
+ Dim stream As Integer
+ stream = FreeFile
+ Open ThisWorkbook.Path & "\close-collection-events.txt" For Append As #stream
+ Print #stream, label & "|" & ThisWorkbook.Name & "|" & ActiveWorkbook.Name & "|" & CStr(Workbooks.Count)
+ Close #stream
+End Sub
+VERSION 1.0 CLASS
+Attribute VB_Name = "ThisWorkbook"
+Private Sub Workbook_BeforeClose(Cancel As Boolean)
+ Driver.RecordEvent "close"
+ If CStr(ThisWorkbook.Worksheets(1).Range("A2").Value) = "cancel" Then Cancel = True
+ If CStr(ThisWorkbook.Worksheets(1).Range("A2").Value) = "disable-events" Then Application.EnableEvents = False
+ If CStr(ThisWorkbook.Worksheets(1).Range("A2").Value) = "cancel-and-activate" Then Cancel = True
+ If CStr(ThisWorkbook.Worksheets(1).Range("A2").Value) = "activate-peer" Or CStr(ThisWorkbook.Worksheets(1).Range("A2").Value) = "cancel-and-activate" Then
+  Workbooks("close-collection-B.xlsm").Activate
+  Driver.RecordEvent "activated-peer"
+ End If
+ If CStr(ThisWorkbook.Worksheets(1).Range("A2").Value) = "activate-self" Then
+  ThisWorkbook.Activate
+  Driver.RecordEvent "activated-self"
+ End If
+End Sub
+Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)
+ Driver.RecordEvent "save(" & CStr(SaveAsUI) & ")"
+End Sub
+Private Sub Workbook_AfterSave(ByVal Success As Boolean)
+ Driver.RecordEvent "after(" & CStr(Success) & ")"
+End Sub
+"##;
+        const SETUP: &str = r##"Public Sub SeedCollection(ByVal kind As Long)
+ Application.DisplayAlerts = False
+ Application.EnableEvents = False
+ Dim peer As Workbook
+ Set peer = Workbooks.Open("C:\close-collection-B.xlsm")
+ Set peer = Workbooks.Open("C:\close-collection-C.xlsm")
+ If kind = 1 Or kind = 4 Then ThisWorkbook.Worksheets(1).Range("A2").Value = "cancel"
+ If kind = 2 Or kind = 4 Or kind = 11 Then Workbooks("close-collection-B.xlsm").Worksheets(1).Range("A2").Value = "cancel"
+ If kind = 3 Then Workbooks("close-collection-C.xlsm").Worksheets(1).Range("A2").Value = "cancel"
+ If kind = 5 Then ThisWorkbook.Worksheets(1).Range("A2").Value = "disable-events"
+ If kind = 12 Then ThisWorkbook.Worksheets(1).Range("A2").Value = "activate-peer"
+ If kind = 13 Then ThisWorkbook.Worksheets(1).Range("A2").Value = "cancel-and-activate"
+ If kind = 14 Then ThisWorkbook.Worksheets(1).Range("A2").Value = "activate-self"
+ For Each peer In Workbooks
+  peer.Saved = True
+ Next
+ If kind = 6 Or kind = 11 Then ThisWorkbook.Worksheets(1).Range("A1").Value = 321
+End Sub
+"##;
+        let cases: serde_json::Value = serde_json::from_str(r##"[{"kind":0,"value":{"com_error":-2147352567,"excepinfo":[0,null,null,null,0,-2146788248]},"event_log":"close|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose|close-collection-C.xlsm|close-collection-B.xlsm|3\n","count_after":0,"live_books":[],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":null},{"kind":1,"value":"ok|3","event_log":"close|close-collection-A.xlsm|close-collection-B.xlsm|3\ncontinued|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":2,"value":"ok|3","event_log":"close|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose|close-collection-B.xlsm|close-collection-B.xlsm|3\ncontinued|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":3,"value":"ok|3","event_log":"close|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose|close-collection-C.xlsm|close-collection-B.xlsm|3\ncontinued|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":4,"value":"ok|3","event_log":"close|close-collection-A.xlsm|close-collection-B.xlsm|3\ncontinued|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":5,"value":{"com_error":-2147352567,"excepinfo":[0,null,null,null,0,-2146788248]},"event_log":"close|close-collection-A.xlsm|close-collection-B.xlsm|3\n","count_after":0,"live_books":[],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":null},{"kind":6,"value":{"com_error":-2147352567,"excepinfo":[0,null,null,null,0,-2146788248]},"event_log":"close|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose|close-collection-C.xlsm|close-collection-B.xlsm|3\n","count_after":0,"live_books":[],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":null},{"kind":7,"value":{"com_error":-2147352567,"excepinfo":[0,null,null,null,0,-2146788248]},"event_log":"close|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose|close-collection-C.xlsm|close-collection-B.xlsm|3\n","count_after":0,"live_books":[],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":null},{"kind":8,"value":{"com_error":-2147352567,"excepinfo":[0,null,null,null,0,-2146788248]},"event_log":"close|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose|close-collection-C.xlsm|close-collection-B.xlsm|3\n","count_after":0,"live_books":[],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":null},{"kind":9,"value":{"com_error":-2147352567,"excepinfo":[0,null,null,null,0,-2146788248]},"event_log":"close|close-collection-A.xlsm|close-collection-A.xlsm|3\nclose|close-collection-B.xlsm|close-collection-A.xlsm|3\nclose|close-collection-C.xlsm|close-collection-A.xlsm|3\n","count_after":0,"live_books":[],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":null},{"kind":10,"value":{"com_error":-2147352567,"excepinfo":[0,null,null,null,0,-2146788248]},"event_log":"close|close-collection-A.xlsm|close-collection-C.xlsm|3\nclose|close-collection-B.xlsm|close-collection-C.xlsm|3\nclose|close-collection-C.xlsm|close-collection-C.xlsm|3\n","count_after":0,"live_books":[],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":null},{"kind":11,"value":"ok|3","event_log":"close|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose|close-collection-B.xlsm|close-collection-B.xlsm|3\ncontinued|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":12,"value":"ok|3","event_log":"close|close-collection-A.xlsm|close-collection-C.xlsm|3\nactivated-peer|close-collection-A.xlsm|close-collection-C.xlsm|3\ncontinued|close-collection-B.xlsm|close-collection-C.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-C.xlsm"},{"kind":13,"value":"ok|3","event_log":"close|close-collection-A.xlsm|close-collection-C.xlsm|3\nactivated-peer|close-collection-A.xlsm|close-collection-C.xlsm|3\ncontinued|close-collection-B.xlsm|close-collection-C.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-C.xlsm"},{"kind":14,"value":"ok|3","event_log":"close|close-collection-A.xlsm|close-collection-C.xlsm|3\nactivated-self|close-collection-A.xlsm|close-collection-C.xlsm|3\ncontinued|close-collection-B.xlsm|close-collection-C.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-C.xlsm"}]"##).unwrap();
+        for case in cases.as_array().unwrap() {
+            let kind = case["kind"].as_i64().unwrap();
+            let a = SOURCE.replacen("VERSION 1.0 CLASS",
+                &format!("{SETUP}VERSION 1.0 CLASS"), 1);
+            let seed = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+            let original_a = crate::vba_project::write_project_source(seed, &a, None).unwrap();
+            let original_peer = crate::vba_project::write_project_source(seed, SOURCE, None).unwrap();
+            let mut context = failure_context();
+            context.file_name = Some("close-collection-A.xlsm".into());
+            context.document_modules = Some(crate::vba_project::read_document_modules(&original_a).unwrap());
+            context.file_context = Some(file_io::FileContext {
+                package_bytes: Some(original_a.clone()),
+                full_name: Some(r"C:\close-collection-A.xlsm".into()),
+                files: ["B", "C"].into_iter().map(|name| file_io::ProducedFile {
+                    path: format!(r"C:\close-collection-{name}.xlsm"),
+                    bytes: original_peer.clone(),
+                }).collect(),
+                ..Default::default()
+            });
+            let mut session = None;
+            let book = oxicells_core::parse_xlsx_preserving_values(&original_a).unwrap();
+            let opened = execute_workbook_action_in_session(book, &a, Some("Driver.SeedCollection"),
+                vec![Value::Integer(kind)], 0, context, &mut session).unwrap();
+            assert!(opened.error.is_none(), "case {kind}: {:?}", opened.error.as_ref().map(|error| &error.message));
+            let view = select_session_workbook(&mut session, "1").unwrap();
+            let outcome = close_fixture_run(view.selected.workbook, &view.selected.source,
+                "Driver.Probe", vec![Value::Integer(kind)], &view.selected.name, &mut session);
+            let count = case["count_after"].as_u64().unwrap() as usize;
+            if case["value"].is_object() {
+                assert_eq!(outcome.error.as_ref().map(|error| error.kind), Some("terminated"), "case {kind}");
+                assert_eq!(outcome.workbook_closed, Some(true), "case {kind}");
+                assert!(outcome.active_workbook.is_none(), "case {kind}");
+                assert!(outcome.other_workbooks.is_empty(), "case {kind}");
+            } else {
+                assert!(outcome.error.is_none(), "case {kind}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], case["value"], "case {kind}");
+                assert_eq!(outcome.other_workbooks.len() + 1, count, "case {kind}");
+                let active = if outcome.active_workbook.as_deref() == Some("1") { view.selected.name.as_str() }
+                    else { outcome.other_workbooks.iter().find(|book| Some(book.identity.as_str()) ==
+                        outcome.active_workbook.as_deref()).unwrap().name.as_str() };
+                assert_eq!(active, case["active_after"].as_str().unwrap(), "case {kind}");
+            }
+            let registry = &session.as_ref().unwrap().application.as_ref().unwrap().application;
+            assert_eq!(registry.closed.len(), 3 - count, "case {kind} closed projects");
+            let snapshot = serde_json::to_value(&outcome.file_system_state).unwrap();
+            let files: Vec<file_io::ProducedFile> = serde_json::from_value(snapshot["files"].clone()).unwrap();
+            let log = files.iter().find(|file| file.path.eq_ignore_ascii_case(r"C:\close-collection-events.txt")).unwrap();
+            assert_eq!(String::from_utf8_lossy(&log.bytes).replace("\r\n", "\n"),
+                case["event_log"].as_str().unwrap(), "case {kind} event sequence and active workbook");
+            for (name, expected) in [("A", &original_a), ("B", &original_peer), ("C", &original_peer)] {
+                let path = format!(r"C:\close-collection-{name}.xlsm");
+                let file = files.iter().find(|file| file.path.eq_ignore_ascii_case(&path)).unwrap();
+                assert_eq!(&file.bytes, expected, "case {kind} unchanged {name} package");
+            }
         }
     }
 
