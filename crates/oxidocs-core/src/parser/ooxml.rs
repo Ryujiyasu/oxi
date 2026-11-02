@@ -527,8 +527,21 @@ fn s1425_merge_styles_xml(doc: &str, tpl: &str) -> String {
 }
 
 fn paragraph_base_run_style(styles: &StyleSheet, id: Option<&str>) -> RunStyle {
-    let mut base = id.or(styles.default_paragraph_style_id.as_deref())
-        .and_then(|id| styles.styles.get(id))
+    // OXI_PSTYLE_UNDEFINED_NORMAL (2026-11-02, default ON, opt-out _DISABLE): a
+    // pStyle the package does not define falls back to the default paragraph
+    // style, as Word does. en/reference__00f2bb61's footer names «Footer», which
+    // its styles.xml lacks: Word draws it in Normal's Segoe UI 11, Oxi in the
+    // application default (Times New Roman).
+    let defined = id.and_then(|id| styles.styles.get(id));
+    let fallback = if defined.is_none() && id.is_some()
+        && std::env::var_os("OXI_PSTYLE_UNDEFINED_NORMAL_DISABLE").is_none()
+    {
+        styles.default_paragraph_style_id.as_deref().and_then(|id| styles.styles.get(id))
+    } else { None };
+    let mut base = defined.or(fallback)
+        .or_else(|| if id.is_none() {
+            styles.default_paragraph_style_id.as_deref().and_then(|id| styles.styles.get(id))
+        } else { None })
         .and_then(|s| s.paragraph.default_run_style.clone())
         .unwrap_or_default();
     if let Some(defaults) = styles.effective_doc_default_run_style() {
@@ -1442,6 +1455,7 @@ impl OoxmlParser {
             apply_cs_run_flags_doc(&mut document);
         }
         apply_font_table_aliases(&mut document);
+        resolve_ptab_sentinels(&mut document);
         // Application font fallbacks belong to layout; retain authored defaults.
         // Glyph fallback is resolved once on the private layout copy.
         Ok(document)
@@ -3444,6 +3458,53 @@ fn preceding_page_boundaries(runs: &[Run]) -> usize {
     runs.iter().flat_map(|run| run.text.chars()).filter(|ch| *ch == '\x0C').count()
 }
 
+const PTAB_LEFT_MARK: char = '\u{F8F0}';
+const PTAB_RIGHT_SENTINEL: f32 = 1.0e6;
+const PTAB_CENTER_SENTINEL: f32 = 2.0e6;
+thread_local! {
+    static PTAB_STOPS: std::cell::RefCell<Vec<TabStopAlignment>> = std::cell::RefCell::new(Vec::new());
+}
+
+/// OXI_PTAB: give the positional stops their place in each section's text column.
+fn resolve_ptab_sentinels(document: &mut Document) {
+    fn fix(blocks: &mut [Block], column: f32) {
+        for block in blocks.iter_mut() {
+            match block {
+                Block::Paragraph(p) => {
+                    if p.style.tab_stops.iter().any(|t| t.position >= PTAB_RIGHT_SENTINEL) {
+                        let width = (column - p.style.indent_left.unwrap_or(0.0)
+                            - p.style.indent_right.unwrap_or(0.0)).max(0.0);
+                        for t in p.style.tab_stops.iter_mut() {
+                            if t.position >= PTAB_CENTER_SENTINEL { t.position = width * 0.5; }
+                            else if t.position >= PTAB_RIGHT_SENTINEL { t.position = width; }
+                        }
+                        p.style.tab_stops.sort_by(|a, b| a.position.total_cmp(&b.position));
+                    }
+                }
+                Block::Table(t) => {
+                    for row in t.rows.iter_mut() {
+                        for cell in row.cells.iter_mut() {
+                            let w = cell.width.unwrap_or(column);
+                            fix(&mut cell.blocks, w);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for page in document.pages.iter_mut() {
+        let column = page.size.width - page.margin.left - page.margin.right;
+        fix(&mut page.blocks, column);
+        fix(&mut page.header, column);
+        fix(&mut page.footer, column);
+        fix(&mut page.header_first, column);
+        fix(&mut page.footer_first, column);
+        fix(&mut page.header_even, column);
+        fix(&mut page.footer_even, column);
+    }
+}
+
 fn parse_paragraph(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
@@ -5224,6 +5285,37 @@ fn parse_paragraph_with_inline_images_impl(
             let removed:Vec<_>=runs.iter().enumerate().filter_map(|(index,run)|run.style.inline_math.is_some().then_some(index)).collect();
             remove_source_runs(&mut images,&mut found_shapes,&mut found_text_boxes,&removed);
             runs.retain(|r| r.style.inline_math.is_none());
+        }
+    }
+
+    // OXI_PTAB: the positional stops of this paragraph (positions resolved per
+    // section in resolve_ptab_sentinels), and its left ptabs.
+    for alignment in PTAB_STOPS.with(|v| std::mem::take(&mut *v.borrow_mut())) {
+        style.tab_stops.push(TabStop {
+            position: if alignment == TabStopAlignment::Center { PTAB_CENTER_SENTINEL } else { PTAB_RIGHT_SENTINEL },
+            alignment,
+            leader: None,
+            clear: false,
+        });
+    }
+    if runs.iter().any(|r| r.text.contains(PTAB_LEFT_MARK)) {
+        let mut seen = false;
+        for run in runs.iter_mut() {
+            if !run.text.contains(PTAB_LEFT_MARK) {
+                if run.text.chars().any(|c| !c.is_whitespace()) { seen = true; }
+                if run.text.contains('\n') { seen = run.text.rsplit('\n').next().map_or(false, |t| !t.trim().is_empty()); }
+                continue;
+            }
+            let mut out = String::new();
+            for ch in run.text.chars() {
+                if ch == PTAB_LEFT_MARK {
+                    if seen { out.push('\n'); seen = false; }
+                } else {
+                    if ch == '\n' { seen = false; } else if !ch.is_whitespace() { seen = true; }
+                    out.push(ch);
+                }
+            }
+            run.text = out;
         }
     }
 
@@ -7184,6 +7276,27 @@ fn parse_run(
                         if depth == 0 && ctx.in_field_code() => {}
                     "sym" if depth == 0 => {
                         append_run_symbol(&e, &mut text, &mut symbol_spans);
+                    }
+                    // OXI_PTAB (2026-11-02, default ON, opt-out _DISABLE): a positional
+                    // tab (`w:ptab`) is an absolute stop: right / center at the right
+                    // edge / middle of the text column, left at its start -- which the
+                    // line has already passed, so the text after it takes a new line.
+                    // en/reference__00f2bb61 footer «ptab left / Metadata 578365 / ptab
+                    // right / Page 3 of 4 / ptab left / Downloaded …»: Word «Page 3 of 4»
+                    // right-aligned to 547.4, «Downloaded» on the next line at 50.04;
+                    // Oxi dropped the ptabs and ran all three into one line.
+                    "ptab" if depth == 0 && std::env::var_os("OXI_PTAB_DISABLE").is_none() => {
+                        let mut align = String::from("left");
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "alignment" {
+                                align = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                        match align.as_str() {
+                            "right" => { text.push('\t'); PTAB_STOPS.with(|v| v.borrow_mut().push(TabStopAlignment::Right)); }
+                            "center" => { text.push('\t'); PTAB_STOPS.with(|v| v.borrow_mut().push(TabStopAlignment::Center)); }
+                            _ => text.push(PTAB_LEFT_MARK),
+                        }
                     }
                     // S927 (2026-07-18, default ON, opt-out
                     // OXI_S927_DISABLE): CT_Cr is the legacy carriage-return

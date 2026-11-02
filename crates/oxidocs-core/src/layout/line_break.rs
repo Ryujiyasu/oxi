@@ -5514,8 +5514,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let s1318_next_mark = following_punctuation.first().map_or(false, |&nc| {
                         matches!(nc, '、' | '。' | '，' | '．' | '：' | '；' | '・') || kinsoku::is_yakumono_closing(nc)
                     });
+                    // OXI_QMARK_FINAL (2026-11-02, default ON, opt-out _DISABLE): a line-final
+                    // full-width ？ / ！ (line-start prohibited) spends the line's capacity like
+                    // 、。 do -- it gives none itself. ja/reference__2296511c «…なりますか？»:
+                    // Word keeps the ？ (10.46) on the line by squeezing «　「» and «」»
+                    // (`_pb_yahei_latin_gen.py`, every arm one line); Oxi refused it as a
+                    // plain character and pushed «か？» down.
                     let s1318_ch_mark = matches!(ch, '、' | '。' | '，' | '．' | '：' | '；' | '・')
-                        || kinsoku::is_yakumono_closing(ch);
+                        || kinsoku::is_yakumono_closing(ch)
+                        || (matches!(ch, '？' | '！') && !crate::env_flag!("OXI_QMARK_FINAL_DISABLE"));
                     let s1318_prev_open = char_index > 0
                         && chars_vec
                             .get(char_index - 1)

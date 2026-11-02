@@ -11950,6 +11950,60 @@ impl<'a> TableFitLayouter<'a> {
                     } else {
                         Default::default()
                     };
+                // OXI_ZERO_CELL_MOVES_ROW (2026-11-02, default ON, opt-out _DISABLE): a
+                // split may not leave a cell with NOTHING on the first page. When a
+                // cell's first line -- with its paragraph's own after when the paragraph
+                // ends on that line, and the cell's bottom frame -- does not fit while
+                // another cell's first line does, Word moves the row whole (the
+                // per-cell widow probe's 0-line arms; golden uklocalspending p36 row 2
+                // with today's Word: «2.» and «Optional» are one-line paragraphs with
+                // after 6, 439.4 + 0.75 + 5.25 + 6 + 11.5 + 6 + 5.25 + 0.75 = 474.9 >
+                // the 473.2 body bottom, so the row goes to p37 although «A unique code
+                // to», whose paragraph continues, would fit). Checked against the page
+                // bottom, so an LRPB-pulled cut is held to it too.
+                if !short_widow_moves_row && !crate::env_flag!("OXI_ZERO_CELL_MOVES_ROW_DISABLE") {
+                    let q_full = {
+                        let pad_b = row.cells.first()
+                            .and_then(|c| c.margins.as_ref().and_then(|m| m.bottom))
+                            .unwrap_or(row_default_pad_b);
+                        let bw = row.cells.first()
+                            .and_then(|c| c.borders.as_ref())
+                            .and_then(|b| b.bottom.as_ref())
+                            .map(|bd| bd.width)
+                            .unwrap_or_else(|| if table.style.border { table.style.border_width.unwrap_or(0.4) } else { 0.0 });
+                        pad_b + bw
+                    };
+                    let tps = table.style.para_style.as_ref();
+                    // (cell, paragraph) -> last line bottom; cell -> first line (top, bottom, para)
+                    let mut para_last: std::collections::HashMap<(usize, usize), f32> = Default::default();
+                    let mut cell_first: std::collections::HashMap<usize, (f32, f32, usize)> = Default::default();
+                    for e in row_elements.iter() {
+                        if !matches!(e.content, LayoutContent::Text { .. }) { continue; }
+                        let Some(key) = e.cell_flow_key() else { continue; };
+                        if !key.0.is_empty() { continue; }
+                        let (ci, pi) = (key.2, key.3);
+                        let b = e.y + e.height;
+                        let last = para_last.entry((ci, pi)).or_insert(b);
+                        if b > *last { *last = b; }
+                        let f = cell_first.entry(ci).or_insert((e.y, b, pi));
+                        if e.y < f.0 - 0.1 { *f = (e.y, b, pi); }
+                        else if (e.y - f.0).abs() <= 0.1 && b > f.1 { f.1 = b; }
+                    }
+                    let mut any_fit = false;
+                    let mut any_miss = false;
+                    for (ci, (_, bottom, pi)) in cell_first.iter() {
+                        let ends_here = para_last.get(&(*ci, *pi)).map_or(false, |l| (l - bottom).abs() < 0.01);
+                        let after = if ends_here {
+                            row.cells.get(*ci)
+                                .and_then(|c| c.blocks.iter().filter_map(|b| match b { Block::Paragraph(p) => Some(p), _ => None }).nth(*pi))
+                                .map_or(0.0, |para| self.cell_para_spacing(para, tps, table_grid_pitch).1)
+                        } else { 0.0 };
+                        if bottom + after + q_full <= page_bottom + row_fit_epsilon { any_fit = true; } else { any_miss = true; }
+                    }
+                    if any_fit && any_miss {
+                        short_widow_moves_row = true;
+                    }
+                }
                 let split_y = if short_widow_moves_row { row_top } else { split_y };
                 // Use exactly the same fit decision for the fragment's natural
                 // content extent and its final element partition. Retain only
