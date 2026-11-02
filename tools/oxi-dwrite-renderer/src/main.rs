@@ -1626,6 +1626,12 @@ unsafe fn render_text(
         Some(w) => (render_family, w, bold),
         None => (font_family, weight, false),
     };
+    // OXI_UD_KYOKASHO_ALIAS: a renamed face drawn under its current family.
+    let ud_alias = oxidocs_core::font::legacy_face_alias(font_family);
+    let (font_family, weight) = match ud_alias {
+        Some((base, b)) => (base, if b || bold { DWRITE_FONT_WEIGHT_BOLD } else { DWRITE_FONT_WEIGHT_NORMAL }),
+        None => (font_family, weight),
+    };
     let family_wide: Vec<u16> = font_family.encode_utf16()
         .chain(std::iter::once(0)).collect();
     let locale_wide: Vec<u16> = "ja-jp".encode_utf16()

@@ -311,7 +311,10 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         // top; we shift x by font_size to anchor at the right
                         // edge of the first (top-most) rotated character
                         // since rotated chars extend leftward from origin.
-                        let weight = if *bold { 700i32 } else { 400i32 };
+                        // OXI_UD_KYOKASHO_ALIAS: a renamed face drawn under its current family.
+                        let ud_alias = oxidocs_core::font::legacy_face_alias(family);
+                        let family = ud_alias.map_or(family, |(f, _)| f);
+                        let weight = if *bold || ud_alias.is_some_and(|(_, b)| b) { 700i32 } else { 400i32 };
                         let ital = if *italic { 1u32 } else { 0u32 };
                         let family_wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
                         // S489 (2026-06-02): Japanese vertical writing draws CJK

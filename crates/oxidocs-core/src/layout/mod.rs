@@ -14348,6 +14348,18 @@ cells={} pitch={:.2} text={:?}",
         if style == "none" || style == "nil" {
             return 0.0;
         }
+        // OXI_CELL_COMPOUND_BORDER (2026-11-02, default ON, opt-out _DISABLE): every
+        // compound / art-like style takes the paragraph-border extent law
+        // (pbdr_stroke_extent; double 3w and triple 5w are unchanged by it).
+        // `_pb_cell_compound_border_gen.py` (one-cell table, top border on
+        // tcBorders and on tblBorders, COM Information(6) of the cell text):
+        // dashDotStroked 3 / 3 / 3 at sz 4 / 12 / 24, thinThickSmallGap 2.25 / 3 / 4.5,
+        // threeDEmboss 2.25 / 3 / 6 (0.75-quantised readings of w + 1.5 and
+        // max(2w, w + 1.5)); single w, double 3w. ja/administrative__0ba21b0c: a
+        // dashDotStroked sz4 row top, Word's text 3pt under it, Oxi 0.5.
+        if !crate::env_flag!("OXI_CELL_COMPOUND_BORDER_DISABLE") {
+            return crate::layout::paragraph::pbdr_stroke_extent(style, width);
+        }
         width
             * match style {
                 "double" => 3.0,
@@ -23219,6 +23231,9 @@ cells={} pitch={:.2} text={:?}",
                 self.cellpair_active() && para.runs.iter().any(|r| !r.text.trim().is_empty());
             let ignore_ascii_spaces = in_cell && !self.doc_body_has_real_cjk
                 && para.runs.iter().any(|r| !r.text.trim().is_empty());
+            // OXI_CELL_WS_HEIGHT estimate mirror (see table_fit.rs).
+            let cell_ws_est = in_cell && !crate::env_flag!("OXI_CELL_WS_HEIGHT_DISABLE")
+                && para.runs.iter().any(|r| r.text.chars().any(|c| !c.is_whitespace()));
             // S986 (Task reports__00253cd4): a bookmark anchor is metadata, not
             // glyph content. The parser makes an empty default-styled anchor Run
             // for `<w:bookmarkStart>`; in a CELL it was folded into
@@ -23283,6 +23298,11 @@ cells={} pitch={:.2} text={:?}",
                 }
                 if ignore_ascii_spaces && !run.text.is_empty()
                     && run.text.chars().all(|c| c == ' ' || c == '\t')
+                {
+                    continue;
+                }
+                if cell_ws_est && !run.text.is_empty()
+                    && run.text.chars().all(|c| c == ' ' || c == '\u{3000}')
                 {
                     continue;
                 }

@@ -2602,6 +2602,31 @@ pub fn vertical_rotated_char(ch: char) -> bool {
         && matches!(ch, '\u{30FC}' | '\u{301C}' | '\u{FF5E}' | '\u{FF0D}' | '\u{2212}' | '\u{2015}' | '\u{FF1D}')
 }
 
+/// OXI_UD_KYOKASHO_ALIAS (2026-11-02, default ON, opt-out _DISABLE): Windows
+/// renamed «UD デジタル 教科書体 N-R / N-B / NP-R / NP-B / NK-R / NK-B» to the
+/// families «… N / NP / NK» with Regular and Bold faces. A document saved under
+/// an old name finds no such family on a current machine and the renderers fell
+/// back to a thin Gothic; Word draws the new family at the suffix's weight
+/// (ja/administrative__0ba21b0c: 340 «NP-B» runs, Word's PDF glyphs are
+/// UD Digi Kyokasho NP Bold). Returns the family to draw and whether the suffix
+/// asks for bold, only when the old name is absent and the new one present.
+pub fn legacy_face_alias(name: &str) -> Option<(&'static str, bool)> {
+    if crate::env_flag!("OXI_UD_KYOKASHO_ALIAS_DISABLE") {
+        return None;
+    }
+    let (base, bold) = match name {
+        "UD デジタル 教科書体 N-R" => ("UD デジタル 教科書体 N", false),
+        "UD デジタル 教科書体 N-B" => ("UD デジタル 教科書体 N", true),
+        "UD デジタル 教科書体 NP-R" => ("UD デジタル 教科書体 NP", false),
+        "UD デジタル 教科書体 NP-B" => ("UD デジタル 教科書体 NP", true),
+        "UD デジタル 教科書体 NK-R" => ("UD デジタル 教科書体 NK", false),
+        "UD デジタル 教科書体 NK-B" => ("UD デジタル 教科書体 NK", true),
+        _ => return None,
+    };
+    (runtime::resolve(name, false, false).is_none() && runtime::resolve(base, bold, false).is_some())
+        .then_some((base, bold))
+}
+
 pub fn render_family_name(name: &str) -> &str {
     if crate::env_flag!("OXI_S844_DISABLE") {
         return name;

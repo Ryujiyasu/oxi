@@ -399,7 +399,21 @@ impl<'a> TableFitLayouter<'a> {
             && table.style.border
             && !separate_outer_edges
         {
-            table.style.border_width.unwrap_or(0.4)
+            // OXI_FOOT_BOTTOM_EDGE (2026-11-02, default ON, opt-out _DISABLE): the
+            // advance below the table is the BOTTOM edge's drawn extent -- the
+            // lumped `border_width` answered with whichever edge declared first.
+            // `_pb_cell_compound_border_gen.py` tbl arms (tblBorders = top only,
+            // single sz 4 / 24, thinThickSmallGap sz 24): Word's next paragraph sits
+            // 0.00 below the row; Oxi added 0.5 / 3.0 / 3.0.
+            if !crate::env_flag!("OXI_FOOT_BOTTOM_EDGE_DISABLE")
+                && (table.style.top_border.is_some() || table.style.bottom_border.is_some())
+            {
+                table.style.bottom_border.as_ref()
+                    .filter(|b| !matches!(b.style.as_str(), "none" | "nil"))
+                    .map_or(0.0, |b| b.width)
+            } else {
+                table.style.border_width.unwrap_or(0.4)
+            }
         } else {
             0.0
         };
@@ -8114,6 +8128,18 @@ impl<'a> TableFitLayouter<'a> {
                                         let cellpair_ws = self.cellpair_active();
                                         let ignore_ascii_spaces = !self.doc_body_has_real_cjk
                                             && line.iter().any(|(t, ..)| !t.trim().is_empty());
+                                        // OXI_CELL_WS_HEIGHT (2026-11-02, default ON, opt-out _DISABLE):
+                                        // a cell line is sized by what it draws in a CJK document too --
+                                        // a run of spaces / ideographic spaces taller than the text adds
+                                        // nothing. `_pb_bigspace_line_gen.py` (ＭＳ 明朝 9pt text + a 24pt
+                                        // «　» or « » leading / mid / trailing, jc left / center, body /
+                                        // cell, 24 arms): every line 12.00 in Word; a 24pt «Ａ» 31.50.
+                                        // Oxi's body already gave 11.67, the cell 31.12. ja/administrative__
+                                        // 0ba21b0c: «　 ７・８月の主な予定» (24pt «　») pushed its cell 18pt.
+                                        let cell_ws_height = !crate::env_flag!("OXI_CELL_WS_HEIGHT_DISABLE")
+                                            && line.iter().any(|(t, ..)| t.chars().any(|c| !c.is_whitespace()));
+                                        let cell_ws_only = |t: &str| cell_ws_height && !t.is_empty()
+                                            && t.chars().all(|c| c == ' ' || c == '\u{3000}');
                                         let tab_mark_line = !self.doc_body_has_real_cjk
                                             && !explicit_break_lines.contains(&line_idx)
                                             && line.iter().any(|f| f.0.contains('\t'))
@@ -8124,6 +8150,7 @@ impl<'a> TableFitLayouter<'a> {
                                         let mut lh: f32 = line
                                             .iter()
                                             .filter(|(t, ..)| !cellpair_ws || !t.trim().is_empty())
+                                            .filter(|(t, ..)| !cell_ws_only(t))
                                             .filter(|(t, ..)| !ignore_ascii_spaces || t.is_empty()
                                                 || !t.chars().all(|c| c == ' ' || c == '\t'))
                                             .map(
@@ -8857,6 +8884,7 @@ impl<'a> TableFitLayouter<'a> {
                                         let cell_max_fs: f32 = line
                                             .iter()
                                             .filter(|(t, ..)| !ignore_ascii_spaces || t.is_empty() || !t.chars().all(|c| c == ' ' || c == '\t'))
+                                            .filter(|(t, ..)| !cell_ws_only(t))
                                             .map(|(_, fs, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| *fs)
                                             .fold(0.0_f32, f32::max);
                                         // S175 (2026-05-22): match body's S166 fix — use word_line_height_table_cell
@@ -8872,6 +8900,7 @@ impl<'a> TableFitLayouter<'a> {
                                             cell_max_fs
                                         } else {
                                             line.iter().filter(|(t, ..)| !ignore_ascii_spaces || t.is_empty() || !t.chars().all(|c| c == ' ' || c == '\t'))
+                                    .filter(|(t, ..)| !cell_ws_only(t))
                                     .map(|(text, fs, _, bold, italic, _underline, _us, _strikethrough, font_family, _color, _hl, _cs, _ts, _, ea, _ruby, _)| {
                                         let mut rs = RunStyle::default();
                                         rs.font_size = Some(*fs);
