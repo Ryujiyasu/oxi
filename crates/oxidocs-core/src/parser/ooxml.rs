@@ -8469,6 +8469,91 @@ fn parse_drawing(
                         // We consumed ln's End, decrement outer depth
                         depth -= 1;
                     }
+                    // OXI_PATT_MEAN (2026-11-02, default ON, opt-out _DISABLE): a
+                    // percentage pattern (<a:pattFill prst="pct10">) is foreground
+                    // ink on N% of the cells. Neither renderer draws hatches, and the
+                    // fgClr's colour reached the plain-fill arms below as a SOLID fill
+                    // -- ja/reports__1fd371a8's masthead (pct10, windowText on window)
+                    // came out solid black and hid its black title. Paint the
+                    // area-weighted mean, as the gradient arm does (dml::average).
+                    // Other presets have no density in their name and keep the old path.
+                    "pattFill" if !crate::env_flag!("OXI_PATT_MEAN_DISABLE")
+                        && e.attributes().flatten().any(|a| local_name(a.key.as_ref()) == "prst"
+                            && String::from_utf8_lossy(&a.value).starts_with("pct")) =>
+                    {
+                        let pct = e.attributes().flatten()
+                            .find(|a| local_name(a.key.as_ref()) == "prst")
+                            .and_then(|a| String::from_utf8_lossy(&a.value)[3..].parse::<f32>().ok())
+                            .unwrap_or(50.0)
+                            .clamp(0.0, 100.0) / 100.0;
+                        let mut fg: Option<String> = None;
+                        let mut bg: Option<String> = None;
+                        let mut slot = 0u8; // 1 = fgClr, 2 = bgClr
+                        let mut pf_depth = 1;
+                        loop {
+                            let (se, start) = match reader.read_event() {
+                                Ok(Event::Start(se)) => (se.into_owned(), true),
+                                Ok(Event::Empty(se)) => (se.into_owned(), false),
+                                Ok(Event::End(se)) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if sl == "fgClr" || sl == "bgClr" { slot = 0; }
+                                    pf_depth -= 1;
+                                    if pf_depth == 0 { break; }
+                                    continue;
+                                }
+                                Ok(Event::Eof) => break,
+                                _ => continue,
+                            };
+                            let sl = local_name(se.name().as_ref());
+                            match sl.as_str() {
+                                "fgClr" | "bgClr" => {
+                                    if start {
+                                        slot = if sl == "fgClr" { 1 } else { 2 };
+                                        pf_depth += 1;
+                                    }
+                                }
+                                "srgbClr" | "sysClr" | "schemeClr" if slot != 0 => {
+                                    let key = if sl == "sysClr" { "lastClr" } else { "val" };
+                                    let raw = se.attributes().flatten()
+                                        .find(|a| local_name(a.key.as_ref()) == key)
+                                        .map(|a| String::from_utf8_lossy(&a.value).to_string());
+                                    let base = match (sl.as_str(), raw) {
+                                        ("schemeClr", Some(v)) => ctx.theme.resolve(&v).cloned(),
+                                        (_, v) => v,
+                                    };
+                                    let color = match (base, start) {
+                                        (Some(b), true) => Some(parse_color_modifiers(reader, &b, &sl)),
+                                        (Some(b), false) => Some(b),
+                                        (None, true) => {
+                                            // skip the unresolved element's children
+                                            let _ = parse_color_modifiers(reader, "000000", &sl);
+                                            None
+                                        }
+                                        (None, false) => None,
+                                    };
+                                    if slot == 1 { fg = color.or(fg); } else { bg = color.or(bg); }
+                                }
+                                _ => {
+                                    if start { pf_depth += 1; }
+                                }
+                            }
+                        }
+                        let rgb = |h: &str| u32::from_str_radix(h.get(..6)?, 16).ok()
+                            .map(|v| [(v >> 16) as f32, ((v >> 8) & 0xFF) as f32, (v & 0xFF) as f32]);
+                        let f = fg.as_deref().and_then(rgb).unwrap_or([0.0; 3]);
+                        let b = bg.as_deref().and_then(rgb).unwrap_or([255.0; 3]);
+                        let mix = |i: usize| (f[i] * pct + b[i] * (1.0 - pct)).round().clamp(0.0, 255.0) as u32;
+                        let mean = format!("{:02X}{:02X}{:02X}", mix(0), mix(1), mix(2));
+                        if let Some(wsp) = s839_wsp.as_mut() {
+                            if wsp.fill.is_none() && !wsp.no_fill {
+                                wsp.fill = Some(mean.clone());
+                            }
+                        }
+                        if shape_fill.is_none() && !has_no_fill {
+                            shape_fill = Some(mean);
+                        }
+                        depth -= 1; // consumed pattFill End
+                    }
                     // Gradient fill
                     "gradFill" => {
                         let mut gf_depth = 1;

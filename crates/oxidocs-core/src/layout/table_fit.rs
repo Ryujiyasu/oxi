@@ -4890,6 +4890,22 @@ impl<'a> TableFitLayouter<'a> {
                                         )
                                         && !crate::env_flag!("OXI_S1082_DISABLE")
                                         && !crate::env_flag!("OXI_S825_DISABLE");
+                                    // OXI_CELL_S1585_GAP (2026-11-02, default ON, opt-out _DISABLE):
+                                    // a justified CJK cell line keeps its overflowing CJK unit by
+                                    // squeezing its CJK<->digit/Latin autoSpace gaps, exactly as the
+                                    // body line does (S1585's CJK-unit arm, 1.5 x fs/4 x G/(G+2)).
+                                    // `_pb_cell_gap_squeeze_gen.py` (BIZ UDPゴシック 10.5, compat 15,
+                                    // docGrid lines, 2tw width sweeps): «317万人» keeps 万人 down to
+                                    // 1.3pt under natural in a cell and in the body alike, doNotCompress
+                                    // or compressPunctuation; jc=left 0. ja/reports__1fd371a8: the
+                                    // 1134tw column broke «317万 / 人» (0.3pt over) where Word keeps it.
+                                    let cell_s1585_gap = self.doc_body_has_real_cjk
+                                        && self.compat_mode >= 15
+                                        && self.compat_mode_explicit
+                                        && grid_char_pitch.is_none()
+                                        && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+                                        && !crate::env_flag!("OXI_CELL_S1585_GAP_DISABLE")
+                                        && !crate::env_flag!("OXI_S1585_DISABLE");
                                     // S1174 (opt-in): the derived legacy cell 約物
                                     // compression. Both settings must be declared --
                                     // compat 15 turns the mechanism off entirely.
@@ -6042,6 +6058,26 @@ impl<'a> TableFitLayouter<'a> {
                                                         .map(|c| c.natural_advance)
                                                         .sum::<f32>())
                                                         * 0.25
+                                                } else {
+                                                    0.0
+                                                };
+                                            let effective_wrap = effective_wrap
+                                                + if cell_s1585_gap && kinsoku::is_cjk(ch) && ch != '\u{3000}' {
+                                                    let solid = |c: char| kinsoku::is_cjk(c) && c != '\u{3000}';
+                                                    let mut g = 0usize;
+                                                    let mut prev: Option<char> = None;
+                                                    for c in current_line_chars.iter().chain(buf_chars.iter())
+                                                        .map(|c| c.ch).chain(std::iter::once(ch))
+                                                    {
+                                                        if let Some(a) = prev {
+                                                            if (solid(a) && c.is_ascii_alphanumeric())
+                                                                || (a.is_ascii_alphanumeric() && solid(c)) {
+                                                                g += 1;
+                                                            }
+                                                        }
+                                                        prev = Some(c);
+                                                    }
+                                                    if g == 0 { 0.0 } else { 1.5 * (font_size / 4.0) * g as f32 / (g as f32 + 2.0) }
                                                 } else {
                                                     0.0
                                                 };

@@ -7414,7 +7414,7 @@ impl LayoutEngine {
                 .map(|a| a.map_or(top, |(_, _, y)| y)).collect();
             // A vertical section's bands divide the vertical axis; each band
             // retains the full physical text-area width.
-            let column_left = vec![left; page.blocks.len()];
+            let column_left = Self::vertical_column_origins(page, &block_starts);
             let mut drawings: Vec<(bool, u32, usize, Vec<LayoutElement>)> = Vec::new();
             for tb in &page.text_boxes {
                 if tb.inline { continue; }
@@ -7438,6 +7438,7 @@ impl LayoutEngine {
                 let target = Self::vertical_page_of(&block_starts, shape.anchor_block_index);
                 let ay = anchor_y.get(shape.anchor_block_index).copied().unwrap_or(top);
                 let (x, y) = Self::vertical_shape_origin(page, shape, ay);
+                let x = Self::vertical_shape_column_x(page, shape, x, column_left.get(shape.anchor_block_index).copied());
                 let content = shape_fill_boxrect(shape).unwrap_or_else(|| LayoutContent::PresetShape {
                     shape_type: shape.shape_type.clone(),
                     stroke_color: shape.stroke_color.clone(),
@@ -7533,7 +7534,7 @@ impl LayoutEngine {
         let top = page.margin.top;
         let left = page.margin.left;
         let anchor_y: Vec<f32> = starts.iter().map(|a| a.map_or(top, |(_, _, y)| y)).collect();
-        let column_left = vec![left; page.blocks.len()];
+        let column_left = Self::vertical_column_origins(page, starts);
         let page_of = |b: usize| Self::vertical_page_of(starts, b);
         let mut out: Vec<(usize, VertObstacle)> = Vec::new();
         let dbg = crate::env_flag!("OXI_DBG_VWRAP");
@@ -7586,10 +7587,122 @@ impl LayoutEngine {
         for (block, shape) in page.shapes.iter().map(|s| (s.anchor_block_index, s)).chain(para_shapes) {
             let Some(pos) = shape.position.as_ref() else { continue };
             let (x, y) = Self::vertical_shape_origin(page, shape, anchor_y.get(block).copied().unwrap_or(top));
+            let x = Self::vertical_shape_column_x(page, shape, x, column_left.get(block).copied());
             push(block, x, y, shape.width, shape.height, pos, shape.wrap_type.or(shape.anchor_wrap));
+        }
+        // OXI_VERTICAL_TABLE_OBSTACLE (2026-11-02, default ON, opt-out _DISABLE): a
+        // floating table is a square-wrapped obstacle to the vertical columns like
+        // any S1411 anchor, its keep-out being leftFromText / rightFromText /
+        // topFromText / bottomFromText. ja/reports__1fd371a8 (tbRl, 5 bands, table 1
+        // page-anchored over bands 2-3, Word COM per-paragraph Information(5/6)):
+        // band 2 keeps the three columns right of the table and walls the rest
+        // (no free height under it), band 3 keeps three and starts the columns
+        // left of it at 569.25 under the table; Oxi ran every column straight
+        // through, so the second float table's text anchor sat three columns left.
+        if !crate::env_flag!("OXI_VERTICAL_TABLE_OBSTACLE_DISABLE") {
+            for (blk, block) in page.blocks.iter().enumerate() {
+                let Block::Table(table) = block else { continue };
+                let Some(tp) = table.style.position.as_ref() else { continue };
+                let Some((x, y, w, h)) = self.vertical_float_table_box(page, blk, table, starts) else { continue };
+                if dbg {
+                    eprintln!("[VWRAP] table blk={} page={} x {:.1}..{:.1} y {:.1}..{:.1}", blk, page_of(blk), x, x + w, y, y + h);
+                }
+                out.push((blk, VertObstacle {
+                    x0: x - tp.left_from_text,
+                    x1: x + w + tp.right_from_text,
+                    y0: y - tp.top_from_text,
+                    y1: y + h + tp.bottom_from_text,
+                    wall: false,
+                }));
+            }
         }
         out.sort_by_key(|(b, _)| *b);
         out
+    }
+
+    /// The box a vertical page's floating table occupies -- the S1405 placement
+    /// (text-relative x from the next column's right edge, tbRl offsets running
+    /// left) with the height of the laid-out rows.
+    fn vertical_float_table_box(
+        &self,
+        page: &Page,
+        block_idx: usize,
+        table: &crate::ir::Table,
+        starts: &[Option<(usize, f32, f32)>],
+    ) -> Option<(f32, f32, f32, f32)> {
+        let pos = table.style.position.as_ref()?;
+        let page_w = page.size.width;
+        let page_h = page.size.height;
+        let left = page.margin.left;
+        let right = page_w - page.margin.right;
+        let top = page.margin.top;
+        let bottom = page_h - page.margin.bottom;
+        let content_h = (bottom - top).max(0.0);
+        let anchor = starts.iter().skip(block_idx + 1).flatten().next().copied()
+            .or_else(|| starts[..block_idx.min(starts.len())].iter().rev().flatten().next().copied())
+            .unwrap_or((0, right, top));
+        let mut placed = table.clone();
+        let table_width: f32 = self.resolve_table_col_widths_n(table, right - left, false).iter().sum();
+        if matches!(pos.h_anchor.as_deref(), None | Some("text")) && pos.h_align.is_none() {
+            let p = placed.style.position.as_mut().unwrap();
+            p.h_anchor = Some("page".to_owned());
+            p.x = anchor.1 - table_width - pos.x;
+        }
+        let bottom_aligned = pos.y_spec.as_deref() == Some("bottom")
+            && !matches!(pos.v_anchor.as_deref(), Some("text"));
+        let y = if bottom_aligned { 0.0 } else {
+            match pos.v_anchor.as_deref() {
+                Some("page") => pos.y,
+                Some("margin") => top + pos.y,
+                _ => anchor.2 + pos.y,
+            }
+        };
+        let mut cursor = LayoutCursor::new(y);
+        let mut float_pages = Vec::new();
+        let mut current = Vec::new();
+        let els = self.layout_table(
+            &placed, left, &mut cursor, right - left,
+            page.grid_line_pitch, page.grid_char_pitch, page.grid_char_cw_ratio,
+            if bottom_aligned { 0.0 } else { top },
+            if bottom_aligned { page_h } else { content_h },
+            page_w, page_h, &mut float_pages, &mut current,
+            Some(block_idx), page, false, None, None, 0.0, 0.0, false, None,
+        );
+        if !float_pages.is_empty() {
+            return None; // a float that splits across pages is left to the flow
+        }
+        let (mut x0, mut x1, mut y0, mut y1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+        // the rules alone: a cell may anchor its own drawings outside the table
+        for e in current.iter().chain(els.iter()) {
+            if let LayoutContent::TableBorder { x1: bx1, y1: by1, x2: bx2, y2: by2, .. } = &e.content {
+                x0 = x0.min(bx1.min(*bx2)); x1 = x1.max(bx1.max(*bx2));
+                y0 = y0.min(by1.min(*by2)); y1 = y1.max(by1.max(*by2));
+            }
+        }
+        if x0 > x1 || y0 > y1 { return None; }
+        let dy = if bottom_aligned {
+            (if pos.v_anchor.as_deref() == Some("page") { page_h } else { bottom }) - cursor.cursor_y
+        } else { 0.0 };
+        Some((x0, y0 + dy, x1 - x0, y1 - y0))
+    }
+
+    /// OXI_VERTICAL_COLUMN_ORIGIN (2026-11-02, default ON, opt-out _DISABLE): in a
+    /// tbRl section a drawing's `positionH relativeFrom="column"` offset is taken
+    /// from the RIGHT edge of its anchor paragraph's vertical line, not from the
+    /// left margin. ja/reports__1fd371a8 (A4 tbRl, 5 bands, Word PDF + COM
+    /// Information(5)): «四角形6» anchor line 91.5..109.5, offset -15.55 -> 93.95
+    /// (Word 93); «四角形1» line 55.5..73.5, -39.55 -> 33.95 (Word 33.6);
+    /// «長方形3» page-2 line 55.5..73.5, -25.3 -> 48.2 (Word 48). Oxi took 54 + offset.
+    fn vertical_column_origins(page: &Page, starts: &[Option<(usize, f32, f32)>]) -> Vec<f32> {
+        let left = page.margin.left;
+        if crate::env_flag!("OXI_VERTICAL_COLUMN_ORIGIN_DISABLE") {
+            return vec![left; page.blocks.len()];
+        }
+        (0..page.blocks.len())
+            .map(|b| starts.get(b).copied().flatten()
+                .or_else(|| starts.iter().skip(b + 1).flatten().next().copied())
+                .map_or(left, |(_, x, _)| x))
+            .collect()
     }
 
     /// S1411: the page a block starts on; a block that never took a column
@@ -7603,6 +7716,16 @@ impl LayoutEngine {
             return *p;
         }
         starts.iter().skip(blk).flatten().next().map_or(0, |(p, _, _)| *p)
+    }
+
+    /// OXI_VERTICAL_COLUMN_ORIGIN for a shape: an unaligned column-relative
+    /// offset moves from the left margin to the anchor line's right edge.
+    fn vertical_shape_column_x(page: &Page, shape: &crate::ir::Shape, x: f32, col: Option<f32>) -> f32 {
+        match (shape.position.as_ref(), col) {
+            (Some(pos), Some(col)) if pos.h_align.is_none()
+                && matches!(pos.h_relative.as_deref(), None | Some("column")) => x - page.margin.left + col,
+            _ => x,
+        }
     }
 
     /// S1411: a page shape's top-left from its anchor position (the horizontal
@@ -20373,6 +20496,14 @@ cells={} pitch={:.2} text={:?}",
             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
             && !crate::env_flag!("OXI_S1082_DISABLE")
             && !crate::env_flag!("OXI_S825_DISABLE");
+        // OXI_CELL_S1585_GAP estimate mirror (see table_fit.rs).
+        let cell_s1585_gap = self.doc_body_has_real_cjk
+            && self.compat_mode >= 15
+            && self.compat_mode_explicit
+            && grid_char_pitch.is_none()
+            && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+            && !crate::env_flag!("OXI_CELL_S1585_GAP_DISABLE")
+            && !crate::env_flag!("OXI_S1585_DISABLE");
         // S1174 estimate mirror -- must match the render loop or pagination and
         // drawing disagree about how many lines a cell holds.
         // Estimate mirror of the corrected gate: alignment first, compatibility second.
@@ -20785,6 +20916,26 @@ cells={} pitch={:.2} text={:?}",
                             .map(|c| c.natural_advance)
                             .sum::<f32>())
                             * 0.25
+                    } else {
+                        0.0
+                    };
+                let effective_wrap = effective_wrap
+                    + if cell_s1585_gap && kinsoku::is_cjk(ch) && ch != '\u{3000}' {
+                        let solid = |c: char| kinsoku::is_cjk(c) && c != '\u{3000}';
+                        let mut g = 0usize;
+                        let mut prev: Option<char> = None;
+                        for c in current_line_chars.iter().chain(buf_chars.iter())
+                            .map(|c| c.ch).chain(std::iter::once(ch))
+                        {
+                            if let Some(a) = prev {
+                                if (solid(a) && c.is_ascii_alphanumeric())
+                                    || (a.is_ascii_alphanumeric() && solid(c)) {
+                                    g += 1;
+                                }
+                            }
+                            prev = Some(c);
+                        }
+                        if g == 0 { 0.0 } else { 1.5 * (font_size / 4.0) * g as f32 / (g as f32 + 2.0) }
                     } else {
                         0.0
                     };
