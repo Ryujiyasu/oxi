@@ -40531,6 +40531,7 @@ struct OpenWorkbookOutput {
     saved: bool,
     active_sheet: usize,
     source: String,
+    project_name: String,
     document_modules: Vec<VbaDocumentModule>,
     workbook: Workbook,
 }
@@ -40954,12 +40955,106 @@ struct ApplicationSessionState {
 
 struct ProjectSessionState {
     source: String,
+    project_name: String,
     runtime: Option<oxivba_core::ProjectState>,
     application: Option<ApplicationSessionState>,
     host: WorkbookHostState,
     workbook: Vec<u8>,
     documents: Vec<VbaDocumentModule>,
     external_references: ExternalReferences,
+}
+
+#[derive(Serialize)]
+struct WorkbookSelection {
+    selected: OpenWorkbookOutput,
+    other_workbooks: Vec<OpenWorkbookOutput>,
+    application_state: VbaApplicationState,
+    file_system_state: file_io::FileSystemState,
+}
+
+fn selection_snapshot(state: &ProjectSessionState) -> Result<WorkbookSelection, String> {
+    let selected = OpenWorkbookOutput {
+        identity: state.host.objects.owner.to_string(),
+        name: state.host.file_name.clone().unwrap_or_else(|| "Book1".into()),
+        full_name: state.host.file_io.full_name.clone(),
+        read_only: state.host.file_io.read_only,
+        saved: state.host.saved,
+        active_sheet: state.host.active_sheet,
+        source: state.source.clone(),
+        project_name: state.project_name.clone(),
+        document_modules: state.documents.clone(),
+        workbook: serde_json::from_slice(&state.workbook).map_err(|error| error.to_string())?,
+    };
+    let other_workbooks = state.application.as_ref().map(|application| {
+        application.application.hosts.iter().map(|(owner, host)| {
+            let code = &application.application.code[owner];
+            OpenWorkbookOutput {
+                identity: owner.to_string(),
+                name: host.file_name.clone().unwrap_or_else(|| "Book1".into()),
+                full_name: host.file_io.full_name.clone(),
+                read_only: host.file_io.read_only,
+                saved: host.saved,
+                active_sheet: host.active_sheet,
+                source: code.source.clone(),
+                project_name: code.project_name.clone(),
+                document_modules: code.documents.clone(),
+                workbook: (*host.workbook).clone(),
+            }
+        }).collect()
+    }).unwrap_or_default();
+    let host = &state.host;
+    let application_state = VbaApplicationState {
+        calculation: host.calculation,
+        calculate_before_save: host.app_settings.get("calculatebeforesave") == Some(&Value::Boolean(true)),
+        screen_updating: host.screen_updating, enable_events: host.enable_events,
+        display_alerts: host.display_alerts, status_bar: host.status_bar.clone(),
+        cursor: host.cursor, interactive: host.interactive,
+        directory_state: Some(VbaDirectoryState::capture(&host.file_io.files)),
+    };
+    Ok(WorkbookSelection { selected, other_workbooks, application_state,
+        file_system_state: host.file_io.snapshot() })
+}
+
+fn select_session_workbook(session: &mut Option<ProjectSessionState>, identity: &str) -> Result<WorkbookSelection, String> {
+    let owner: u64 = identity.parse().map_err(|_| "invalid workbook identity".to_string())?;
+    if identity != owner.to_string() { return Err("invalid workbook identity".into()); }
+    let previous = session.as_ref().ok_or("no loaded VBA project")?;
+    let old_owner = previous.host.objects.owner;
+    if old_owner == owner {
+        if let Some(application) = session.as_mut().and_then(|state| state.application.as_mut()) {
+            application.application.active = owner;
+        }
+        return selection_snapshot(session.as_ref().expect("loaded project"));
+    }
+    let application = previous.application.as_ref().ok_or("workbook is not open in this session")?;
+    let selected = application.application.hosts.get(&owner).ok_or("workbook is not open in this session")?;
+    let definition = application.application.code.get(&owner).ok_or("missing workbook source")?;
+    let source = definition.source.clone();
+    let project_name = definition.project_name.clone();
+    let documents = definition.documents.clone();
+    let workbook = serde_json::to_vec(&*selected.workbook).map_err(|error| error.to_string())?;
+    let old_workbook = serde_json::from_slice(&previous.workbook).map_err(|error| error.to_string())?;
+    // All validation precedes the move. The actual native handle table,
+    // application object heap and every project's code storage stay owned.
+    let previous = session.take().expect("validated project");
+    let mut application = previous.application.expect("validated application");
+    let old_host = WorkbookHost::resume_storage(WorkbookStorage::Owned(Box::new(old_workbook)), previous.host);
+    application.application.code.insert(old_owner, ApplicationCode {
+        source: previous.source, project_name: previous.project_name, documents: previous.documents,
+    });
+    assert!(application.application.insert(old_host).is_ok(), "detached root has a unique native owner");
+    application.application.ensure_application_owner(owner);
+    application.application.active = owner;
+    let mut selected = application.application.hosts.remove(&owner).expect("validated selected workbook");
+    selected.file_io.swap_application_files(&mut application.application.hosts
+        .get_mut(&old_owner).expect("previous root").file_io);
+    selected.file_io.files.select_project(owner);
+    let (_, host) = selected.into_parts();
+    *session = Some(ProjectSessionState {
+        source, project_name, documents, workbook, host, runtime: None,
+        application: Some(application), external_references: previous.external_references,
+    });
+    selection_snapshot(session.as_ref().expect("selected project"))
 }
 
 // A single-call entry may return live objects. Keep its actual project/host
@@ -41112,6 +41207,14 @@ impl SpreadsheetVbaSession {
 
     pub fn compile(&self,source:&str,options:JsValue) -> Result<JsValue,JsError> {
         compile_spreadsheet_vba(source,options)
+    }
+
+    /// Select an existing book without replacing any project's storage or
+    /// rebuilding its references. Use the returned source and IR for run/save.
+    pub fn select_workbook(&mut self, identity: &str) -> Result<JsValue, JsError> {
+        let selection = select_session_workbook(&mut self.state, identity)
+            .map_err(|error| JsError::new(&error))?;
+        serde_wasm_bindgen::to_value(&selection).map_err(|error| JsError::new(&error.to_string()))
     }
 
     pub fn document_modules(&self,package:&[u8]) -> Result<JsValue,JsError> {
@@ -41542,7 +41645,8 @@ fn prepare_spreadsheet_vba(
     if matches!(&action, Some(ExternalObjectAction::Release { .. })) && options.source_edits.is_some() {
         return Err(JsError::new("invalid VBA source edits: releasing references cannot edit source"));
     }
-    let project_name = options.project_name.clone().unwrap_or_else(|| "VBAProject".to_string());
+    let project_name = options.project_name.clone().unwrap_or_else(||
+        session.as_ref().map_or_else(|| "VBAProject".to_string(), |state| state.project_name.clone()));
     let source_edits = options.source_edits.clone().map(|edits| edits.into_iter().map(|edit| oxivba_core::SourceEdit {
         line: edit.line, delete_lines: edit.delete_lines, text: edit.text,
     }).collect());
@@ -41620,6 +41724,7 @@ fn execute_workbook_invocation(
     active_sheet: usize, context: VbaRunContext, session: &mut Option<ProjectSessionState>,
 ) -> Result<RunOutcome, String> {
     let VbaInvocation { procedure, args, action } = invocation;
+    let stored_project_name = context.project_name.clone();
     // Validate before taking the previous state: invalid API inputs must not
     // destroy a loaded project or leave its host handles disconnected.
     if active_sheet >= workbook.sheets.len() { return Err(format!("active sheet index {active_sheet} is out of bounds")); }
@@ -41821,7 +41926,7 @@ fn execute_workbook_invocation(
             std::sync::Arc::new(values)
         }).clone();
         let code_owner = host.objects.owner;
-        let (registry, mut stored_application) = match application_session.take() {
+        let (mut registry, mut stored_application) = match application_session.take() {
             Some(mut stored) => {
                 stored.application.insert(host).map_err(|rejected| rejected.1.to_string())?;
                 for held in stored.application.hosts.values_mut() {
@@ -41831,6 +41936,14 @@ fn execute_workbook_invocation(
             }
             None => (WorkbookApplication::new(host), None),
         };
+        registry.code.insert(code_owner, ApplicationCode {
+            source: stored_source.clone(),
+            project_name: stored_project_name.clone(),
+            documents: documents.clone(),
+        });
+        // Export requests belong to this invocation, including calls made
+        // through a foreign Workbook reference.
+        for held in registry.hosts.values_mut() { held.file_io.exports.clear(); }
         let application = std::rc::Rc::new(std::cell::RefCell::new(registry));
         let project_code = typed_arena::Arena::new();
         let project_hosts = typed_arena::Arena::new();
@@ -41853,6 +41966,7 @@ fn execute_workbook_invocation(
             .with_random_seed(context.random_seed)
             .with_current_time(context.current_time)
             .with_reference_constants(constants);
+        runtime.set_application_project_identity(code_owner).map_err(|error| error.to_string())?;
         if let Some(state) = project_state.take() { runtime = runtime.with_project_state(state); }
         runtime=runtime.with_document_objects(bindings,references).map_err(|error|error.to_string())?;
         runtime.set_application_project_loader(&mut loader).map_err(|error| error.to_string())?;
@@ -41862,7 +41976,7 @@ fn execute_workbook_invocation(
             }
             runtime.restore_application_storage(stored).map_err(|error| error.to_string())?;
         }
-        *runtime.file_system_mut() = file_system;
+        runtime.replace_file_system(file_system);
         if stored_application.is_some() && reset_storage {
             runtime.reset_application_project(code_owner).map_err(|error| error.to_string())?;
         }
@@ -41935,8 +42049,11 @@ fn execute_workbook_invocation(
             registry.ensure_application_owner(owner);
             registry.hosts.get_mut(&owner).expect("open workbook").flush_workbook_output();
         }
+        let exports = registry.hosts.values_mut()
+            .flat_map(|host| std::mem::take(&mut host.file_io.exports)).collect::<BTreeSet<_>>();
         registry.ensure_application_owner(code_owner);
         host = registry.hosts.remove(&code_owner).expect("invoking workbook remains registered");
+        host.file_io.exports.extend(exports);
         host.debug_output.append(&mut registry.debug_output);
         host.messages.append(&mut registry.messages);
         if let Some(runtime) = next_application_storage {
@@ -41955,6 +42072,7 @@ fn execute_workbook_invocation(
                 saved: host.saved,
                 active_sheet: host.active_sheet,
                 source: code.source.clone(),
+                project_name: code.project_name.clone(),
                 document_modules: code.documents.clone(),
                 workbook: (*host.workbook).clone(),
             }
@@ -41997,7 +42115,7 @@ fn execute_workbook_invocation(
     };
     external_references.retain(&mut result);
     let reference_state = external_references.snapshot();
-    *session = Some(ProjectSessionState { source: stored_source, runtime: project_state, application: application_session, host: host_state, documents,
+    *session = Some(ProjectSessionState { source: stored_source, project_name: stored_project_name, runtime: project_state, application: application_session, host: host_state, documents,
         external_references, workbook: serde_json::to_vec(&workbook).map_err(|error| error.to_string())? });
     Ok(RunOutcome {
         workbook,
@@ -42026,6 +42144,113 @@ mod tests {
 
 
 
+
+    #[test]
+    fn selecting_workbooks_preserves_code_owners_references_files_and_consumed_mounts() {
+        const CODE: &str = r#"Attribute VB_Name = "Driver"
+Private count As Long
+Private kept As Object
+Private heldBook As Workbook
+Public Function Seed() As Object
+ SeedLocal 10
+ Dim peer As Workbook
+ Set peer = Workbooks.Open("C:\B.xlsm", , True)
+ Application.Run "'B.xlsm'!Driver.SeedLocal", 20
+ Application.StatusBar = "shared"
+ Kill "C:\a1.txt"
+ Set Seed = kept
+End Function
+Public Sub SeedLocal(ByVal start As Long)
+ count = start
+ Set kept = New Counter
+ kept.Data = start * 10
+ Set heldBook = ThisWorkbook
+ ThisWorkbook.Worksheets(1).Range("A1").Value = start
+ Open "C:\" & ThisWorkbook.Name & ".dat" For Binary Access Read Write Shared As #1
+ Put #1, , CByte(start)
+ Dim first As String
+ first = Dir("C:\" & LCase(Left(ThisWorkbook.Name, 1)) & "*.txt")
+End Sub
+Public Function Read() As String
+ Read = CStr(count) & ":" & CStr(kept.Data)
+End Function
+Public Function Probe(ByVal peer As String) As String
+ count = count + 1
+ kept.Data = kept.Data + 1
+ Put #1, , CByte(count)
+ ThisWorkbook.Worksheets(1).Range("A1").Value = count
+ Probe = ThisWorkbook.Name & "|" & CStr(count) & "|" & CStr(kept.Data) & "|" & CStr(Loc(1)) & "|" & Dir() & "|" & CStr(heldBook Is ThisWorkbook) & "|" & ActiveWorkbook.Name & "|" & Application.Run("'" & peer & "'!Driver.Read") & "|" & CStr(Application.StatusBar)
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "Counter"
+Public Data As Long
+"#;
+        let seed = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let package = crate::vba_project::write_project_source(seed, CODE, None).unwrap();
+        let mounted = || file_io::FileContext {
+            files: std::iter::once(file_io::ProducedFile { path: r"C:\B.xlsm".into(), bytes: package.clone() })
+                .chain(["a1", "a2", "b1", "b2"].into_iter().map(|name| file_io::ProducedFile {
+                    path: format!(r"C:\{name}.txt"), bytes: b"original".to_vec(),
+                })).collect(),
+            ..Default::default()
+        };
+        let mut context = failure_context();
+        context.file_name = Some("A.xlsm".into());
+        context.project_name = "RootProject".into();
+        context.file_context = Some(mounted());
+        let mut session = None;
+        let seeded = execute_workbook_action_in_session(workbook(), CODE, Some("Driver.Seed"),
+            vec![], 0, context, &mut session).unwrap();
+        assert!(seeded.error.is_none(), "{:?}", seeded.error.as_ref().map(|error| &error.message));
+        let lease = match seeded.result {
+            OutputValue::Object { reference: Some(reference), .. } => reference,
+            _ => panic!("retained source reference"),
+        };
+        let arena = session.as_ref().unwrap().host.objects.arena.clone();
+        let original_reference = session.as_ref().unwrap().external_references.values[&lease].clone();
+        let before = selection_snapshot(session.as_ref().unwrap()).unwrap();
+        assert!(select_session_workbook(&mut session, "999").is_err());
+        assert!(select_session_workbook(&mut session, "01").is_err());
+        assert_eq!(selection_snapshot(session.as_ref().unwrap()).unwrap().selected.name, before.selected.name);
+        for (identity, name, peer, expected) in [
+            ("1", "B.xlsm", "A.xlsm", "B.xlsm|21|201|2|b2.txt|True|B.xlsm|10:100|shared"),
+            ("0", "A.xlsm", "B.xlsm", "A.xlsm|11|101|2|a2.txt|True|A.xlsm|21:201|shared"),
+            ("1", "B.xlsm", "A.xlsm", "B.xlsm|22|202|3||True|B.xlsm|11:101|shared"),
+        ] {
+            let view = select_session_workbook(&mut session, identity).unwrap();
+            assert_eq!(view.selected.name, name);
+            assert_eq!(view.other_workbooks.len(), 1);
+            assert_eq!(view.selected.read_only, identity == "1");
+            let state = session.as_ref().unwrap();
+            assert!(std::rc::Rc::ptr_eq(&arena, &state.host.objects.arena));
+            assert_eq!(state.host.file_io.files.project_scope(), identity.parse::<u64>().unwrap());
+            assert!(!state.host.file_io.files.exists(r"C:\a1.txt"));
+            assert_eq!(state.external_references.values[&lease], original_reference);
+            let mut context = failure_context();
+            context.file_name = Some(view.selected.name);
+            context.project_name = view.selected.project_name;
+            context.file_context = Some(mounted());
+            let outcome = execute_workbook_action_in_session(view.selected.workbook, &view.selected.source,
+                Some("Driver.Probe"), vec![Value::String(peer.into())], view.selected.active_sheet,
+                context, &mut session).unwrap();
+            assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected);
+            assert_eq!(outcome.active_workbook.as_deref(), Some(identity));
+            assert!(!session.as_ref().unwrap().host.file_io.files.exists(r"C:\a1.txt"));
+        }
+        // A source object remains callable while B supplies the editor's IR.
+        let view = select_session_workbook(&mut session, "1").unwrap();
+        let mut context = failure_context();
+        context.file_name = Some(view.selected.name);
+        context.project_name = view.selected.project_name;
+        let outcome = execute_workbook_invocation(view.selected.workbook, &view.selected.source,
+            VbaInvocation { procedure: None, args: vec![], action: Some(ExternalObjectAction::Invoke {
+                reference: lease, member: "Data".into(), kind: 2,
+            }) }, 0, context, &mut session).unwrap();
+        assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
+        assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], 101);
+        assert_eq!(select_session_workbook(&mut session, "0").unwrap().selected.project_name, "RootProject");
+    }
 
     #[test]
     fn legacy_chart_types_match_native_families() {

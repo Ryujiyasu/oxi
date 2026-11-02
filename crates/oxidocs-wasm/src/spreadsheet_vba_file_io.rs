@@ -76,6 +76,15 @@ enum CopyFailure {
 
 impl WorkbookFiles {
 
+    /// Move the shared namespace together with consumed mount identities.
+    /// Package bytes, source and filename continue to belong to each book.
+    pub(super) fn swap_application_files(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.files, &mut other.files);
+        std::mem::swap(&mut self.exports, &mut other.exports);
+        std::mem::swap(&mut self.mounted_folders, &mut other.mounted_folders);
+        std::mem::swap(&mut self.mounted_files, &mut other.mounted_files);
+    }
+
     /// A fresh package gives a created workbook the same differential save
     /// path as an opened workbook, including unsupported-part preservation.
     pub(super) fn blank_package(

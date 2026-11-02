@@ -281,4 +281,79 @@ try{
 assert.equal(endDirectCalls,endWorkerCalls);
 assert.equal(endDirectCalls,113);
 
-console.log(JSON.stringify({native_cases:163,direct,worker,text_stream_cases:360,text_stream_close_reset_cases:4,text_stream_direct_calls:textStreamDirectCalls,text_stream_worker_calls:textStreamWorkerCalls,end_direct_calls:endDirectCalls,end_worker_calls:endWorkerCalls,complete_results:true,post_file_bytes_and_folders:true,post_attributes:true,deletion_outputs:true,passed:true}));
+
+// Switch editor views through one actual application, including returning to
+// owner zero and invoking an object retained before leaving that workbook.
+const selectionSource="Attribute VB_Name = \"Driver\"\nPrivate count As Long\nPrivate kept As Object\nPrivate heldBook As Workbook\nPublic Function Seed() As Object\n SeedLocal 10\n Dim peer As Workbook\n Set peer = Workbooks.Open(\"C:\\B.xlsm\", , True)\n Application.Run \"'B.xlsm'!Driver.SeedLocal\", 20\n Application.StatusBar = \"shared\"\n Kill \"C:\\a1.txt\"\n Set Seed = kept\nEnd Function\nPublic Sub SeedLocal(ByVal start As Long)\n count = start\n Set kept = New Counter\n kept.Data = start * 10\n Set heldBook = ThisWorkbook\n ThisWorkbook.Worksheets(1).Range(\"A1\").Value = start\n Open \"C:\\\" & ThisWorkbook.Name & \".dat\" For Binary Access Read Write Shared As #1\n Put #1, , CByte(start)\n Dim first As String\n first = Dir(\"C:\\\" & LCase(Left(ThisWorkbook.Name, 1)) & \"*.txt\")\nEnd Sub\nPublic Function Read() As String\n Read = CStr(count) & \":\" & CStr(kept.Data)\nEnd Function\nPublic Function Probe(ByVal peer As String) As String\n count = count + 1\n kept.Data = kept.Data + 1\n Put #1, , CByte(count)\n ThisWorkbook.Worksheets(1).Range(\"A1\").Value = count\n Probe = ThisWorkbook.Name & \"|\" & CStr(count) & \"|\" & CStr(kept.Data) & \"|\" & CStr(Loc(1)) & \"|\" & Dir() & \"|\" & CStr(heldBook Is ThisWorkbook) & \"|\" & ActiveWorkbook.Name & \"|\" & Application.Run(\"'\" & peer & \"'!Driver.Read\") & \"|\" & CStr(Application.StatusBar)\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"Counter\"\nPublic Data As Long\n";
+const selectionSeed=new Uint8Array(await readFile(path.join(root,'tests/fixtures/vba/array_argument_rank.xlsm')));
+const selectionPackage=wasm.save_spreadsheet_vba_source(selectionSeed,selectionSource);
+async function verifyWorkbookSelection(mode){
+ const session=mode==='direct'?new wasm.SpreadsheetVbaSession():null;
+ let book=wasm.parse_spreadsheet(selectionSeed),source=selectionSource,fileName='A.xlsm',projectName='RootProject',calls=0;
+ const files=[{path:'C:\\B.xlsm',bytes:selectionPackage},
+  ...['a1','a2','b1','b2'].map(name=>({path:'C:\\'+name+'.txt',bytes:[111,114,105,103,105,110,97,108]}))];
+ async function run(procedure,args=[]){
+  const options={projectName,fileContext:{files}};
+  const execution=session?session.run(book,source,procedure,args,0,fileName,options)
+   :await runner.runVbaInWorker(book,source,procedure,args,0,fileName,options);
+  assert.equal(execution.error,undefined,mode+' '+procedure);
+  calls++;book=execution.workbook;return execution;
+ }
+ async function select(identity){
+  const view=session?session.select_workbook(identity):await runner.selectVbaWorkbookInWorker(identity);
+  calls++;book=view.selected.workbook;source=view.selected.source;fileName=view.selected.name;projectName=view.selected.project_name;
+  assert.equal(view.selected.identity,identity);
+  assert.ok(!view.file_system_state.files.some(file=>file.path.toLowerCase()==='c:\\a1.txt'));
+  return view;
+ }
+ try{
+  const seeded=await run('Driver.Seed');
+  const reference=seeded.result.value.reference;
+  const invalid=()=>session?session.select_workbook('999'):runner.selectVbaWorkbookInWorker('999');
+  await assert.rejects(async()=>invalid(),/workbook is not open/);
+  for(const [identity,name,peer,expected] of [
+   ['1','B.xlsm','A.xlsm','B.xlsm|21|201|2|b2.txt|True|B.xlsm|10:100|shared'],
+   ['0','A.xlsm','B.xlsm','A.xlsm|11|101|2|a2.txt|True|A.xlsm|21:201|shared'],
+   ['1','B.xlsm','A.xlsm','B.xlsm|22|202|3||True|B.xlsm|11:101|shared'],
+  ]){
+   const view=await select(identity);
+   assert.equal(view.selected.name,name);
+   assert.equal(view.selected.read_only,identity==='1');
+   assert.equal(view.other_workbooks.length,1);
+   if(!session)assert.ok(runner.getVbaObjectReferences().includes(reference));
+   const outcome=await run('Driver.Probe',[peer]);
+   assert.deepEqual(outcome.result,{type:'string',value:expected},mode+' '+name);
+   assert.equal(outcome.active_workbook,identity);
+   assert.ok(!outcome.file_system_state.files.some(file=>file.path.toLowerCase()==='c:\\a1.txt'));
+  }
+  const held=session?session.invoke_member(book,source,{reference,member:'Data',kind:2,args:[]},0,fileName,{projectName})
+   :await runner.invokeVbaMemberInWorker(book,source,reference,'Data',2,[],0,fileName,{projectName});
+  calls++;book=held.workbook;
+  assert.equal(held.error,undefined);
+  assert.deepEqual(held.result,{type:'integer',value:101});
+  if(!session){
+   assert.ok(runner.getVbaObjectReferences().includes(reference));
+   const edited=source+"\n' pending edit in B\n";
+   assert.equal(runner.recordVbaSourceChange(source,edited),true);
+   await select('0');
+   const restored=await select('1');
+   assert.equal(restored.selected.source,edited,'B pending edits survive A selection');
+   assert.equal(runner.getVbaSourceForSave(),edited);
+   assert.deepEqual((await run('Driver.Read')).result,{type:'string',value:'22:202'});
+  }
+  const rootView=await select('0');
+  assert.equal(rootView.selected.project_name,'RootProject');
+  assert.deepEqual((await run('Driver.Read')).result,{type:'string',value:'11:101'});
+ }finally{session?.free();if(!session)runner.closeVbaProject();}
+ return calls;
+}
+let workbookSelectionDirectCalls,workbookSelectionWorkerCalls;
+try{
+ workbookSelectionDirectCalls=await verifyWorkbookSelection('direct');
+ globalThis.Worker=BrowserWorker;
+ workbookSelectionWorkerCalls=await verifyWorkbookSelection('worker');
+}finally{runner.closeVbaProject();globalThis.Worker=originalWorker;}
+assert.equal(workbookSelectionDirectCalls,10);
+assert.equal(workbookSelectionWorkerCalls,13);
+
+console.log(JSON.stringify({native_cases:163,direct,worker,text_stream_cases:360,text_stream_close_reset_cases:4,text_stream_direct_calls:textStreamDirectCalls,text_stream_worker_calls:textStreamWorkerCalls,end_direct_calls:endDirectCalls,end_worker_calls:endWorkerCalls,workbook_selection_direct_calls:workbookSelectionDirectCalls,workbook_selection_worker_calls:workbookSelectionWorkerCalls,complete_results:true,post_file_bytes_and_folders:true,post_attributes:true,deletion_outputs:true,passed:true}));

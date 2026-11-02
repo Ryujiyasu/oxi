@@ -6,6 +6,8 @@ let projectWorkerType;
 let compilationWorker;
 let compilationWorkerType;
 let sourceHistory;
+let selectedWorkbookIdentity = '0';
+const workbookSourceHistory = new Map();
 let objectReferences = [];
 // Project resets discard VBA globals and open handles, while produced files
 // remain part of the containing application's filesystem.
@@ -120,8 +122,20 @@ function getProjectWorker(action = 'run') {
                 sourceHistory = execution.source?.trim() ? { source: execution.source, edits: [] } : undefined;
             }
         }
+        if (event.data?.selection) {
+            const selection = event.data.selection;
+            if (sourceHistory) workbookSourceHistory.set(selectedWorkbookIdentity, sourceHistory);
+            else workbookSourceHistory.delete(selectedWorkbookIdentity);
+            selectedWorkbookIdentity = selection.selected.identity;
+            sourceHistory = workbookSourceHistory.get(selectedWorkbookIdentity)
+                ?? (selection.selected.source.trim() ? {source: selection.selected.source, edits: []} : undefined);
+            if (sourceHistory) selection.selected.source = sourceHistory.source;
+            applicationState = copyApplicationState(selection.application_state);
+            fileSystemState = copyFileSystemState(selection.file_system_state);
+            workersWithFiles.add(worker);
+        }
         if (event.data?.ok) {
-            execution.resolve(event.data.compilation ?? event.data.execution);
+            execution.resolve(event.data.selection ?? event.data.compilation ?? event.data.execution);
         } else {
             const error = new Error(event.data?.error || 'VBA worker failed.');
             if (event.data?.compilation) {
@@ -138,7 +152,7 @@ function getProjectWorker(action = 'run') {
     worker.addEventListener('error', event => {
         if (projectWorker === worker) projectWorker = null;
         if (compilationWorker === worker) compilationWorker = null;
-        if (!compiling) { sourceHistory = undefined; objectReferences = []; }
+        if (!compiling) { sourceHistory = undefined; selectedWorkbookIdentity = '0'; workbookSourceHistory.clear(); objectReferences = []; }
         worker.terminate();
         const execution = activeExecution;
         if (!execution || execution.worker !== worker) return;
@@ -260,6 +274,14 @@ export function releaseVbaResultInWorker(workbook, source, result,
         activeSheet, fileName, options, packageBytes);
 }
 
+// The same worker owns every open workbook. A selection moves the editor's
+// view while preserving unsent source edits and all caller-owned references.
+export function selectVbaWorkbookInWorker(workbookIdentity) {
+    if (typeof workbookIdentity !== 'string') return Promise.reject(new Error('Invalid workbook identity.'));
+    return startVbaWorker('select-workbook', undefined, undefined, undefined, [], undefined, undefined, {}, undefined,
+        {workbookIdentity});
+}
+
 export function prepareVbaSaveInWorker(workbook, source, activeSheet, fileName, options = {}, packageBytes) {
     return startVbaWorker('save', workbook, source, undefined, [], activeSheet, fileName, options, packageBytes);
 }
@@ -311,7 +333,7 @@ export function cancelActiveVbaExecution() {
     worker.terminate();
     if (projectWorker === worker) projectWorker = null;
     if (compilationWorker === worker) compilationWorker = null;
-    if (action !== 'compile') { sourceHistory = undefined; objectReferences = []; }
+    if (action !== 'compile') { sourceHistory = undefined; selectedWorkbookIdentity = '0'; workbookSourceHistory.clear(); objectReferences = []; }
     const error = new Error(action === 'compile' ? 'VBA compilation cancelled.' : 'VBA execution cancelled.');
     error.name = 'AbortError';
     reject(error);
@@ -320,6 +342,8 @@ export function cancelActiveVbaExecution() {
 
 export function closeVbaProject() {
     sourceHistory = undefined;
+    selectedWorkbookIdentity = '0';
+    workbookSourceHistory.clear();
     objectReferences = [];
     let closed = cancelActiveVbaExecution();
     if (projectWorker) { projectWorker.terminate(); projectWorker = null; closed = true; }

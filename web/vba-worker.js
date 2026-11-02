@@ -4,10 +4,16 @@ const ready = init();
 const project = ready.then(() => new SpreadsheetVbaSession());
 
 self.addEventListener('message', async event => {
-    const { workbook, source, procedure, args, activeSheet, fileName, options, packageBytes, reference, member, callKind, references, action = 'run' } = event.data;
+    const { workbook, source, procedure, args, activeSheet, fileName, options, packageBytes, reference, member, callKind, references, workbookIdentity, action = 'run' } = event.data;
     try {
         await ready;
         const session = await project;
+        if (action === 'select-workbook') {
+            if (typeof workbookIdentity !== 'string') throw new Error('Invalid workbook identity.');
+            const selection = session.select_workbook(workbookIdentity);
+            self.postMessage({ ok: true, selection });
+            return;
+        }
         const { projectNameCodePage, projectSourceCodePage, ...runtimeOptions } = options || {};
         if (projectSourceCodePage != null && (!Number.isInteger(projectSourceCodePage) || projectSourceCodePage < 1 || projectSourceCodePage > 65535)) {
             throw new Error('Invalid VBA source code page.');

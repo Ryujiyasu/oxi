@@ -1274,6 +1274,13 @@ impl<'a> Runtime<'a> {
     /// creating a second store disconnected from VBA Open/Dir/FileLen.
     pub fn file_system_mut(&mut self) -> &mut crate::files::Files { &mut self.files }
 
+    /// Move the actual application filesystem into this invocation, selecting
+    /// this code owner's numbered channels and Dir cursor before execution.
+    pub fn replace_file_system(&mut self, mut files: crate::files::Files) -> crate::files::Files {
+        files.select_project(self.project_identity);
+        std::mem::replace(&mut self.files, files)
+    }
+
     /// The project's class modules, each by its name.
     pub fn with_classes(mut self, classes: &'a [(String, Module)]) -> Self {
         for (name, module) in classes {
@@ -3431,11 +3438,13 @@ impl<'a> Runtime<'a> {
     fn context_error(message:&str)->RuntimeError {
         error(RuntimeErrorKind::Unsupported,message.to_string(),None)
     }
-    /// Assign a stable, nonzero code-project identity before executing or mounting files.
+    /// Assign a stable code-project identity before executing or mounting files.
+    /// Zero is an explicit application owner too; an unassigned standalone
+    /// runtime cannot be registered as that owner.
     pub fn set_application_project_identity(&mut self,id:u64)->Result<(),RuntimeError>{
-        if id==0 || self.application_projects_enabled || self.module_initialized || !self.internal_objects.is_empty()
+        if self.application_projects_enabled || self.module_initialized || !self.internal_objects.is_empty()
             || !self.projects.is_empty() || self.owner.is_some() || self.depth!=0 || !self.files.pristine_application_context() {
-            return Err(Self::context_error("Project identity requires a fresh context and a nonzero identity"));
+            return Err(Self::context_error("Project identity requires a fresh context"));
         }
         self.project_identity=id;self.application_projects_enabled=true;self.files.select_project(id);Ok(())
     }
@@ -3443,7 +3452,7 @@ impl<'a> Runtime<'a> {
     /// Mount files and create objects in the shared Application after registration.
     pub fn register_application_project(&mut self,mut context:Self)->Result<(),Box<(Self,RuntimeError)>>{
         let id=context.project_identity;
-        if !self.application_projects_enabled || id==0 || id==self.project_identity || self.projects.contains_key(&id) ||
+        if !self.application_projects_enabled || !context.application_projects_enabled || id==self.project_identity || self.projects.contains_key(&id) ||
            !context.pristine_document_objects() || !context.projects.is_empty() || context.project_loader.is_some() ||
            context.internal_objects.keys().any(|handle|self.internal_objects.contains_key(handle)) ||
            context.owner.is_some() || context.depth!=0 ||
@@ -28940,6 +28949,29 @@ End Function
             c.release_external_object(idle).unwrap();
             assert_eq!(call(&mut c,3,"State",vec![]).unwrap(),Value::String("41|I31;T31;|2".into()));
         }
+    }
+
+    #[test]
+    fn explicit_zero_owner_accepts_files_from_another_root_but_rejects_unassigned_context() {
+        let module = crate::parse_module("Sub Main()\nEnd Sub\n").unwrap();
+        let mut root = Runtime::new(&module);
+        root.set_application_project_identity(1).unwrap();
+        assert!(root.register_application_project(Runtime::new(&module)).is_err());
+        let mut zero = Runtime::new(&module);
+        zero.set_application_project_identity(0).unwrap();
+        assert!(root.register_application_project(zero).is_ok());
+        let mut files = crate::files::Files::default();
+        files.select_project(7);
+        files.replace_bytes("C:\\shared.txt", b"kept".to_vec()).unwrap();
+        root.replace_file_system(files);
+        assert_eq!(root.file_system_mut().project_scope(), 1);
+        assert_eq!(root.file_system_mut().bytes("C:\\shared.txt").unwrap(), b"kept");
+        root.in_application_project(0, |runtime| {
+            assert_eq!(runtime.file_system_mut().project_scope(), 0);
+            assert_eq!(runtime.file_system_mut().bytes("C:\\shared.txt").unwrap(), b"kept");
+            runtime.call("Main", vec![])
+        }).unwrap();
+        assert_eq!(root.file_system_mut().project_scope(), 1);
     }
 
     #[test]
