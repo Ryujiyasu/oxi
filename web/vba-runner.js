@@ -114,16 +114,25 @@ function getProjectWorker(action = 'run') {
         if (event.data?.execution) {
             if (event.data.execution.file_system_state) fileSystemState = copyFileSystemState(event.data.execution.file_system_state);
             rememberProducedFiles(event.data.execution);
+            const live = new Set((event.data.execution.other_workbooks || []).map(book => book.identity));
+            if (!event.data.execution.workbook_closed) live.add(selectedWorkbookIdentity);
+            for (const identity of workbookSourceHistory.keys()) {
+                if (!live.has(identity)) workbookSourceHistory.delete(identity);
+            }
             workersWithFiles.add(worker);
             if (Array.isArray(event.data.execution.reference_state?.tokens)) {
                 objectReferences = event.data.execution.reference_state.tokens.slice();
             }
-            if (execution.action !== 'release' && execution.action !== 'release-all') {
+            if (event.data.execution.workbook_closed) {
+                workbookSourceHistory.delete(selectedWorkbookIdentity);
+                sourceHistory = undefined;
+            } else if (execution.action !== 'release' && execution.action !== 'release-all') {
                 sourceHistory = execution.source?.trim() ? { source: execution.source, edits: [] } : undefined;
             }
         }
-        if (event.data?.selection) {
-            const selection = event.data.selection;
+        const selected = event.data?.selection ?? event.data?.execution?.workbook_selection;
+        if (selected) {
+            const selection = selected;
             if (sourceHistory) workbookSourceHistory.set(selectedWorkbookIdentity, sourceHistory);
             else workbookSourceHistory.delete(selectedWorkbookIdentity);
             selectedWorkbookIdentity = selection.selected.identity;
@@ -308,11 +317,22 @@ export function bindVbaWorkbookPicker(control, {capture, apply, busy, report}) {
         refresh();
     };
     const update = (execution, name) => {
-        if (identity !== selectedWorkbookIdentity) { names.clear(); views.clear(); }
+        if (identity !== selectedWorkbookIdentity && !execution.workbook_selection) { names.clear(); views.clear(); }
+        const previousIdentity = identity;
         identity = selectedWorkbookIdentity;
         names.clear();
-        names.set(identity, name || 'Book1');
-        for (const book of execution.other_workbooks || []) names.set(book.identity, book.name);
+        const selection = execution.workbook_selection;
+        if (selection) {
+            views.delete(previousIdentity);
+            identity = selection.selected.identity;
+            apply(selection, views.get(identity));
+            names.set(identity, selection.selected.name);
+            for (const book of selection.other_workbooks) names.set(book.identity, book.name);
+        } else if (!execution.workbook_closed) {
+            names.set(identity, name || 'Book1');
+            for (const book of execution.other_workbooks || []) names.set(book.identity, book.name);
+        }
+        for (const key of views.keys()) if (!names.has(key)) views.delete(key);
         fill();
     };
     control.addEventListener('change', async () => {

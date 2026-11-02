@@ -442,4 +442,56 @@ try{
 assert.equal(workbooksIdentityDirectCalls,4);
 assert.equal(workbooksIdentityWorkerCalls,4);
 
-console.log(JSON.stringify({native_cases:163,direct,worker,text_stream_cases:360,text_stream_close_reset_cases:4,text_stream_direct_calls:textStreamDirectCalls,text_stream_worker_calls:textStreamWorkerCalls,end_direct_calls:endDirectCalls,end_worker_calls:endWorkerCalls,workbook_selection_direct_calls:workbookSelectionDirectCalls,workbook_selection_worker_calls:workbookSelectionWorkerCalls,project_name_direct_calls:projectNameDirectCalls,project_name_worker_calls:projectNameWorkerCalls,workbooks_identity_direct_calls:workbooksIdentityDirectCalls,workbooks_identity_worker_calls:workbooksIdentityWorkerCalls,complete_results:true,post_file_bytes_and_folders:true,post_attributes:true,deletion_outputs:true,passed:true}));
+// Native Close controls cover typed Variant flags and saved file contents,
+// through the direct API and the production worker. Fresh path names avoid
+// reviving consumed filesystem mounts from earlier worker invocations.
+const closeSaveSource = "Attribute VB_Name = \"Driver\"\nPublic Function Probe(ByVal name As String, ByVal kind As Long, ByVal destination As String) As String\n On Error GoTo failed\n Dim target As Workbook\n Set target = Workbooks(name)\n Select Case kind\n Case 0: target.Close False\n Case 1: target.Close True\n Case 2: target.Close\n Case 3: target.Close Null\n Case 4: target.Close Empty\n Case 5: target.Close 0\n Case 6: target.Close -1\n Case 7: target.Close \"False\"\n Case 8: target.Close \"abc\"\n Case 9: target.Close False, Null\n Case 10: target.Close True, destination\n Case 11: target.Close False, destination\n Case 12\n  target.Saved = True\n  target.Close Null\n Case 13: target.Close Array(0)\n Case 14: target.Close False, Array(0)\n Case 15: target.Close 1\n Case 16: target.Close 2\n Case 17: target.Close 0.5\n Case 18: target.Close \"True\"\n Case 19: target.Close \"1\"\n Case 20: target.Close CVar(True)\n Case 21: target.Close DateSerial(2026, 1, 1)\n Case 22: target.Close CVErr(5)\n Case 23: target.Close 0.6\n Case 24: target.Close -0.6\n Case 25: target.Close 1.5\n Case 26: target.Close 0.49\n Case 27: target.Close CCur(1)\n Case 28: target.Close CSng(1)\n Case 29: target.Close CDec(1)\n Case 30: target.Close 2147483648#\n Case 31: target.Close CDate(0)\n Case 32: target.Close Nothing\n Case 33: target.Close CByte(1)\n Case 34: target.Close CLng(1)\n Case 35: target.Close CLngLng(1)\n Case 36: target.Close CDbl(1)\n Case 37: target.Close CInt(-2)\n Case 38: target.Close ThisWorkbook.Worksheets(1).Range(\"Z9\")\n Case 39: target.Close True, Null\n Case 40: target.Close True, Empty\n Case 41: target.Close True, Array(0)\n Case 42: target.Close True, CVErr(5)\n Case 43: target.Close True, Nothing\n Case 44: target.Saved = True: target.Close True, destination\n Case 45: target.Saved = True: target.Close CVErr(5)\n Case 46: target.Close False, CVErr(5)\n Case 47: target.Close False, Nothing\n Case 48: target.Close Filename:=destination\n Case 49: target.Close True, \"\"\n End Select\n Probe = \"ok|\" & CStr(Workbooks.Count)\n Exit Function\nfailed:\n Probe = \"error|\" & CStr(Err.Number) & \"|\" & Err.Source & \"|\" & Err.Description & \"|\" & CStr(Workbooks.Count)\nEnd Function\n";
+const closeSaveSeed = "Attribute VB_Name = \"Driver\"\nPublic Sub Seed(ByVal peerPath As String)\n Dim peer As Workbook\n Set peer = Workbooks.Open(peerPath)\n ThisWorkbook.Worksheets(1).Range(\"A1\").Value = 321\nEnd Sub\n";
+const closeSaveCases = [{"kind":0,"expected":"ok|1","original":"a😀b","destination":null},{"kind":1,"expected":"ok|1","original":321.0,"destination":null},{"kind":2,"expected":"ok|1","original":"a😀b","destination":null},{"kind":3,"expected":"ok|1","original":"a😀b","destination":null},{"kind":4,"expected":"ok|1","original":"a😀b","destination":null},{"kind":5,"expected":"ok|1","original":"a😀b","destination":null},{"kind":6,"expected":"ok|1","original":321.0,"destination":null},{"kind":7,"expected":"ok|1","original":"a😀b","destination":null},{"kind":8,"expected":"ok|1","original":"a😀b","destination":null},{"kind":9,"expected":"ok|1","original":"a😀b","destination":null},{"kind":10,"expected":"ok|1","original":"a😀b","destination":321.0},{"kind":11,"expected":"ok|1","original":"a😀b","destination":null},{"kind":12,"expected":"ok|1","original":"a😀b","destination":null},{"kind":13,"expected":"ok|1","original":"a😀b","destination":null},{"kind":14,"expected":"ok|1","original":"a😀b","destination":null},{"kind":15,"expected":"ok|1","original":321.0,"destination":null},{"kind":16,"expected":"ok|1","original":321.0,"destination":null},{"kind":17,"expected":"ok|1","original":"a😀b","destination":null},{"kind":18,"expected":"ok|1","original":"a😀b","destination":null},{"kind":19,"expected":"ok|1","original":"a😀b","destination":null},{"kind":20,"expected":"ok|1","original":321.0,"destination":null},{"kind":21,"expected":"ok|1","original":"a😀b","destination":null},{"kind":22,"expected":"error|13|VBAProject|型が一致しません。|2","original":"a😀b","destination":null},{"kind":23,"expected":"ok|1","original":"a😀b","destination":null},{"kind":24,"expected":"ok|1","original":"a😀b","destination":null},{"kind":25,"expected":"ok|1","original":"a😀b","destination":null},{"kind":26,"expected":"ok|1","original":"a😀b","destination":null},{"kind":27,"expected":"ok|1","original":"a😀b","destination":null},{"kind":28,"expected":"ok|1","original":"a😀b","destination":null},{"kind":29,"expected":"ok|1","original":"a😀b","destination":null},{"kind":30,"expected":"ok|1","original":"a😀b","destination":null},{"kind":31,"expected":"ok|1","original":"a😀b","destination":null},{"kind":32,"expected":"error|5|VBAProject|プロシージャの呼び出し、または引数が不正です。|2","original":"a😀b","destination":null},{"kind":33,"expected":"ok|1","original":321.0,"destination":null},{"kind":34,"expected":"ok|1","original":321.0,"destination":null},{"kind":35,"expected":"ok|1","original":"a😀b","destination":null},{"kind":36,"expected":"ok|1","original":"a😀b","destination":null},{"kind":37,"expected":"ok|1","original":321.0,"destination":null},{"kind":38,"expected":"ok|1","original":"a😀b","destination":null},{"kind":39,"expected":"ok|1","original":321.0,"destination":null},{"kind":40,"expected":"error|1004|Microsoft Excel|ファイルにアクセスできませんでした。次のいずれかを確認してみてください:\n\n• 指定したフォルダーが存在することを確認します。\n• ファイルが保存されているフォルダーが読み取り専用でないことを確認します。\n• ファイル名とフォルダーのパスに次の文字が含まれていないことを確認します: <  >  ?  [  ]  :  | *\n• ファイル名とフォルダーのパスが 218 文字以下になっていることを確認します。|2","original":"a😀b","destination":null},{"kind":41,"expected":"ok|1","original":"a😀b","destination":null},{"kind":42,"expected":"error|13|VBAProject|型が一致しません。|2","original":"a😀b","destination":null},{"kind":43,"expected":"error|5|VBAProject|プロシージャの呼び出し、または引数が不正です。|2","original":"a😀b","destination":null},{"kind":44,"expected":"ok|1","original":"a😀b","destination":null},{"kind":45,"expected":"error|13|VBAProject|型が一致しません。|2","original":"a😀b","destination":null},{"kind":46,"expected":"error|13|VBAProject|型が一致しません。|2","original":"a😀b","destination":null},{"kind":47,"expected":"error|5|VBAProject|プロシージャの呼び出し、または引数が不正です。|2","original":"a😀b","destination":null},{"kind":48,"expected":"ok|1","original":"a😀b","destination":null},{"kind":49,"expected":"error|1004|Microsoft Excel|ファイルにアクセスできませんでした。次のいずれかを確認してみてください:\n\n• 指定したフォルダーが存在することを確認します。\n• ファイルが保存されているフォルダーが読み取り専用でないことを確認します。\n• ファイル名とフォルダーのパスに次の文字が含まれていないことを確認します: <  >  ?  [  ]  :  | *\n• ファイル名とフォルダーのパスが 218 文字以下になっていることを確認します。|2","original":"a😀b","destination":null}];
+const closeSaveFixture=new Uint8Array(await readFile(path.join(root,'tests/fixtures/vba/array_argument_rank.xlsm')));
+const closeSaveA=wasm.save_spreadsheet_vba_source(closeSaveFixture,closeSaveSeed);
+const closeSaveB=wasm.save_spreadsheet_vba_source(closeSaveFixture,closeSaveSource);
+async function verifyCloseSaves(mode){
+ let checked=0;
+ for(const item of closeSaveCases){
+  const stem='Close-'+mode+'-'+item.kind;
+  const a='C:\\'+stem+'-A.xlsm',b='C:\\'+stem+'-B.xlsm',destination='C:\\'+stem+'-result.xlsm';
+  const settings={errorLanguage:'ja-JP',applicationState:{displayAlerts:false},
+   fileContext:{packageBytes:closeSaveA,fullName:a,files:[{path:b,bytes:closeSaveB}]}};
+  const session=mode==='direct'?new wasm.SpreadsheetVbaSession():undefined;
+  if(!session)runner.closeVbaProject();
+  try{
+   const seeded=session?session.run(wasm.parse_spreadsheet(closeSaveA),closeSaveSeed,'Driver.Seed',[b],0,stem+'-A.xlsm',settings)
+    :await runner.runVbaInWorker(wasm.parse_spreadsheet(closeSaveA),closeSaveSeed,'Driver.Seed',[b],0,stem+'-A.xlsm',settings,closeSaveA);
+   assert.equal(seeded.error,undefined,mode+' seed '+item.kind);
+   const selected=session?session.select_workbook('1'):await runner.selectVbaWorkbookInWorker('1');
+   const args=[stem+'-A.xlsm',item.kind,destination],options={errorLanguage:'ja-JP'};
+   const execution=session?session.run(selected.selected.workbook,selected.selected.source,'Driver.Probe',args,0,stem+'-B.xlsm',options)
+    :await runner.runVbaInWorker(selected.selected.workbook,selected.selected.source,'Driver.Probe',args,0,stem+'-B.xlsm',options,closeSaveB);
+   const label=mode+' Close '+item.kind;
+   assert.equal(execution.error,undefined,label);
+   assert.deepEqual(execution.result,{type:'string',value:item.expected},label);
+   const original=execution.file_system_state.files.find(file=>file.path.toLowerCase()===a.toLowerCase());
+   const cell=wasm.parse_spreadsheet(new Uint8Array(original.bytes)).sheets[0].rows.find(row=>row.index===1).cells.find(cell=>cell.col===0);
+   assert.deepEqual(cell.value,typeof item.original==='number'?{Number:item.original}:{String:item.original},label+' original bytes');
+   const saved=execution.file_system_state.files.find(file=>file.path.toLowerCase()===destination.toLowerCase());
+   assert.equal(!!saved,item.destination!==null,label+' destination');
+   if(saved){
+    const cell=wasm.parse_spreadsheet(new Uint8Array(saved.bytes)).sheets[0].rows.find(row=>row.index===1).cells.find(cell=>cell.col===0);
+    assert.deepEqual(cell.value,{Number:item.destination},label+' destination bytes');
+   }
+   assert.equal((execution.files||[]).length,Number(item.original===321)+Number(item.destination!==null),label+' published files');
+   checked++;
+  }finally{session?.free();if(!session)runner.closeVbaProject();}
+ }
+ return checked;
+}
+let closeSaveDirect,closeSaveWorker;
+try{
+ closeSaveDirect=await verifyCloseSaves('direct');
+ globalThis.Worker=BrowserWorker;
+ closeSaveWorker=await verifyCloseSaves('worker');
+}finally{runner.closeVbaProject();globalThis.Worker=originalWorker;}
+assert.equal(closeSaveDirect,50);assert.equal(closeSaveWorker,50);
+
+console.log(JSON.stringify({native_cases:163,direct,worker,close_save_native_cases:50,close_save_direct:closeSaveDirect,close_save_worker:closeSaveWorker,text_stream_cases:360,text_stream_close_reset_cases:4,text_stream_direct_calls:textStreamDirectCalls,text_stream_worker_calls:textStreamWorkerCalls,end_direct_calls:endDirectCalls,end_worker_calls:endWorkerCalls,workbook_selection_direct_calls:workbookSelectionDirectCalls,workbook_selection_worker_calls:workbookSelectionWorkerCalls,project_name_direct_calls:projectNameDirectCalls,project_name_worker_calls:projectNameWorkerCalls,workbooks_identity_direct_calls:workbooksIdentityDirectCalls,workbooks_identity_worker_calls:workbooksIdentityWorkerCalls,complete_results:true,post_file_bytes_and_folders:true,post_attributes:true,deletion_outputs:true,passed:true}));

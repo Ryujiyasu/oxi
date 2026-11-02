@@ -576,6 +576,7 @@ const I18N = {
     tooSlow: 'too slow to work out formulas as you type — Excel will do it on open',
     macroTitle: 'Macros', macroWorkbook: 'Workbook', macroSource: 'VBA source', macroProc: 'Procedure',
     macroArgs: 'Arguments (JSON array)', close: 'Close', run: 'Run',
+    noWorkbook: 'No workbook is open.',
     macroNeeds: 'A procedure name and some VBA are both needed.',
     macroRunning: 'Running…',
     compile: 'Compile', macroCompiling: 'Compiling…', macroCompiled: 'Compilation succeeded.',
@@ -631,6 +632,7 @@ const I18N = {
     tooSlow: '入力のたびに数式を計算するには重すぎます — 開いたときに Excel が計算します',
     macroTitle: 'マクロ', macroWorkbook: 'ブック', macroSource: 'VBA ソース', macroProc: 'プロシージャ',
     macroArgs: '引数（JSON 配列）', close: '閉じる', run: '実行',
+    noWorkbook: '開いているブックはありません。',
     macroNeeds: 'プロシージャ名と VBA の両方が必要です。',
     macroRunning: '実行しています…',
     compile: 'コンパイル', macroCompiling: 'コンパイルしています…', macroCompiled: 'コンパイルに成功しました。',
@@ -5050,6 +5052,7 @@ async function open(data, name) {
     markSaved();
     markSteps();
     book = parse_spreadsheet(new Uint8Array(data));
+    macroRun.disabled = macroCompile.disabled = false;
     savedCalculation = { mode: book.calculation?.mode ?? 'auto', on_save: book.calculation?.on_save ?? true };
     markSaved();
   } catch (error) {
@@ -5251,7 +5254,8 @@ function reportMacro(execution) {
   }
   const result = execution.result;
   if (execution.error) {
-    parts.push(execution.error.message);
+    parts.push(execution.workbook_closed && execution.error.kind === 'terminated'
+      ? 'Workbook closed.' : execution.error.message);
   } else if (!result || result.type === 'empty' || result.type === 'null') {
     parts.push('Completed.');
   } else if (['array', 'object', 'record', 'utf16'].includes(result.type)) {
@@ -5262,9 +5266,34 @@ function reportMacro(execution) {
   return parts.join('\n\n');
 }
 
+function clearClosedMacroWorkbookView() {
+  book = null; source = null; fileName = ''; shown = 0; geom = null;
+  macroProjectSource = ''; macroSourceBound = false; macroSourceBaseline = '';
+  macroSourceDirty = false; macroSourceRevision++;
+  beyondValues = false; conditional.clear();
+  changes.clear(); pristine.clear(); undone.length = 0; redone.length = 0;
+  macroSource.value = ''; macroProc.value = ''; macroArgs.value = '[]';
+  macroProcList.replaceChildren();
+  const closedEditor = editor; editor = null;
+  closedEditor?.input.remove();
+  savedCalculation = { mode: 'auto', on_save: true };
+  formulaBox.value = ''; whereBox.textContent = ''; widthBox.textContent = '';
+  const canvas = document.getElementById('sheetInk');
+  if (canvas) canvas.width = 0;
+  const paper = document.getElementById('paper');
+  if (paper) { paper.style.width = '0px'; paper.style.height = '0px'; }
+  tabsBox.replaceChildren(); factsBox.replaceChildren(); cellBox.replaceChildren(); missingBox.replaceChildren();
+  stateBox.style.display = 'block'; stateBox.textContent = t('noWorkbook');
+  markSaved(); markSteps();
+}
+
 function applyMacroExecution(execution) {
   macroWorkbookPicker?.update(execution, fileName);
   showMacroFiles(execution);
+  if (execution.workbook_closed) {
+    if (!execution.workbook_selection) clearClosedMacroWorkbookView();
+    return;
+  }
   const changed = execution.workbook_changed !== false;
   const previousSheet = shown;
   if (changed) {
@@ -5347,10 +5376,11 @@ macroRun.onclick = async () => {
     if (error?.execution) macroProjectSource = submittedSource;
     if (error?.execution) applyMacroExecution(error.execution);
     // Cancelling is something the person did, not something that went wrong.
-    sayMacro(error?.execution ? reportMacro(error.execution) : error?.message || String(error), error?.name !== 'AbortError');
+    const closed = error?.execution?.workbook_closed && error.execution.error?.kind === 'terminated';
+    sayMacro(error?.execution ? reportMacro(error.execution) : error?.message || String(error), error?.name !== 'AbortError' && !closed);
   } finally {
-    macroRun.disabled = false;
-    macroCompile.disabled = false;
+    macroRun.disabled = !book;
+    macroCompile.disabled = !book;
     macroWorkbookPicker?.refresh();
     endVbaOperation();
   }
@@ -5366,7 +5396,7 @@ macroCompile.onclick = async () => {
     await compileVbaInWorker(macroSource.value, macroEditorSettings.options(), book, source);
     sayMacro(t('macroCompiled'));
   } catch (error) { sayMacro(error?.message || String(error), error?.name !== 'AbortError'); }
-  finally { macroCompile.disabled = macroRun.disabled = false; macroWorkbookPicker?.refresh(); endVbaOperation(); }
+  finally { macroCompile.disabled = macroRun.disabled = !book; macroWorkbookPicker?.refresh(); endVbaOperation(); }
 };
 
 applyLang();

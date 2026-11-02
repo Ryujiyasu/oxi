@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import {Worker as ThreadWorker} from 'node:worker_threads';
 import { bindVbaEditorSettings } from './vba-editor-settings.js';
 import { closeVbaProject, getVbaSourceForSave, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension } from './vba-runner.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -15,66 +16,44 @@ const pkg = path.resolve(process.argv[2] || path.join(root, 'crates/oxidocs-wasm
 const wasm = await import('data:text/javascript;base64,' + Buffer.from(await readFile(path.join(pkg, 'oxidocs_wasm.js'))).toString('base64'));
 await wasm.default({ module_or_path: await readFile(path.join(pkg, 'oxidocs_wasm_bg.wasm')) });
 const page = await readFile(path.join(root, 'web/index.html'), 'utf8');
-function lift(name) {
-  const at = page.indexOf(`function ${name}(`);
+function lift(name, source = page) {
+  if (typeof source !== 'string') source = page;
+  const at = source.indexOf(`function ${name}(`);
   assert.ok(at >= 0, name);
   let depth = 0;
-  for (let i = page.indexOf('{', at); i < page.length; i++) {
-    if (page[i] === '{') depth++;
-    if (page[i] === '}' && --depth === 0) {
-      return (page.slice(at - 6, at) === 'async ' ? 'async ' : '') + page.slice(at, i + 1);
+  for (let i = source.indexOf('{', at); i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    if (source[i] === '}' && --depth === 0) {
+      return (source.slice(at - 6, at) === 'async ' ? 'async ' : '') + source.slice(at, i + 1);
     }
   }
   assert.fail(`unclosed ${name}`);
 }
 const functions = ['xlsxEditKey', 'collectXlsxEdits', 'defaultCellStyle', 'cellStringValue', 'cellUtf16Text', 'setWorkbookCellString',
   'syncPendingXlsxEditsToIr', 'workbookCellMap', 'typedXlsxEdit', 'recordVbaWorkbookChanges',
-  'captureVbaWorkbookView', 'applyVbaWorkbookView', 'formatVbaResult', 'formatVbaExecution', 'updateVbaReferenceButton', 'applyVbaExecution', 'executeVbaFromDialog', 'releaseVbaResultsFromDialog', 'compileVbaFromDialog', 'downloadEdited'];
+  'captureVbaWorkbookView', 'applyVbaWorkbookView', 'clearClosedVbaWorkbookView', 'formatVbaResult', 'formatVbaExecution', 'updateVbaReferenceButton', 'applyVbaExecution', 'executeVbaFromDialog', 'releaseVbaResultsFromDialog', 'compileVbaFromDialog', 'downloadEdited'];
 const macroSource = await readFile(path.join(root, 'tests/fixtures/vba/failure_state.bas'), 'utf8');
 const applicationSource = await readFile(path.join(root, 'tests/fixtures/vba/application_state.bas'), 'utf8');
 const applicationFixture = JSON.parse(await readFile(path.join(root, 'tests/fixtures/vba/application_state.json'), 'utf8'));
-globalThis.Worker = class {
-  session = new wasm.SpreadsheetVbaSession();
-  handlers = new Map();
-  addEventListener(type, handler) { this.handlers.set(type, handler); }
-  terminate() { this.session.free(); }
-  postMessage(data) {
-    queueMicrotask(() => {
-      try {
-        if (data.action === 'select-workbook') {
-          const selection = data.workbook === undefined ? this.session.select_workbook(data.workbookIdentity)
-            : this.session.select_workbook_with_edits(data.workbookIdentity,data.workbook,data.activeSheet);
-          this.handlers.get('message')({data:{ok:true,selection}});
-          return;
-        }
-        if (data.action === 'compile') {
-          const compilation = this.session.compile(data.source, { ...data.options,
-            documentModules: [...(data.packageBytes ? this.session.document_modules(data.packageBytes) : []),
-              ...(data.options?.documentModules || [])] });
-          this.handlers.get('message')({ data: { ok: compilation.compiled, compilation, error: compilation.error?.message } });
-          return;
-        }
-        if (data.packageBytes) data.options = {...data.options, fileContext: {...data.options?.fileContext, packageBytes:data.packageBytes}};
-        const execution = data.action === 'release-all'
-          ? this.session.release_all_objects(data.workbook, data.activeSheet, data.fileName, data.options)
-          : data.action === 'release'
-          ? this.session.release_objects(data.workbook, data.references, data.activeSheet, data.fileName, data.options)
-          : data.action === 'invoke'
-          ? this.session.invoke_member(data.workbook, data.source, {reference:data.reference,member:data.member,kind:data.callKind,args:data.args}, data.activeSheet, data.fileName, data.options)
-          : data.action === 'save'
-          ? this.session.prepare_save(data.workbook, data.source || (data.packageBytes ? wasm.spreadsheet_vba_source(data.packageBytes) || '' : ''), data.activeSheet, data.fileName, data.options)
-          : this.session.run(data.workbook, data.source, data.procedure, data.args, data.activeSheet, data.fileName, data.options);
-        this.handlers.get('message')({ data: { ok: !execution.error, execution, error: execution.error?.message } });
-      } catch (error) {
-        this.handlers.get('message')({ data: { ok: false, error: error.message } });
-      }
-    });
-  }
+const bindingUrl='data:text/javascript;base64,'+Buffer.from(await readFile(path.join(pkg,'oxidocs_wasm.js'))).toString('base64');
+const shim=`import init, {SpreadsheetVbaSession,spreadsheet_vba_source,spreadsheet_vba_project_name} from ${JSON.stringify(bindingUrl)};
+import {readFile} from 'node:fs/promises';await init({module_or_path:await readFile(${JSON.stringify(path.join(pkg,'oxidocs_wasm_bg.wasm'))})});
+export {SpreadsheetVbaSession,spreadsheet_vba_source,spreadsheet_vba_project_name};export default function ready(){return Promise.resolve();}`;
+const workerSource=(await readFile(path.join(root,'web/vba-worker.js'),'utf8')).replace("'./oxidocs_wasm.js'",JSON.stringify('data:text/javascript;base64,'+Buffer.from(shim).toString('base64')));
+const bridge=`import {parentPort,workerData} from 'node:worker_threads';const queued=[];let listener;
+globalThis.self={postMessage:value=>parentPort.postMessage(value),addEventListener:(type,handler)=>{listener=handler;for(const data of queued)listener({data});}};
+parentPort.on('message',data=>listener?listener({data}):queued.push(data));await import('data:text/javascript;base64,'+Buffer.from(workerData).toString('base64'));`;
+globalThis.Worker = class BrowserWorker {
+    constructor(){this.thread=new ThreadWorker(new URL('data:text/javascript;base64,'+Buffer.from(bridge).toString('base64')),{workerData:workerSource});}
+    addEventListener(type,handler){this.thread.on(type,value=>handler(type==='message'?{data:value}:value));}
+    postMessage(value){this.thread.postMessage(value);}
+    terminate(){void this.thread.terminate();}
 };
+
 const bytes = new Uint8Array(await readFile(path.join(root, 'tests/fixtures/vba/named_project_ascii.xlsm')));
 const nodes = new Map();
 const node = id => {
-  if (!nodes.has(id)) nodes.set(id, { value: '', textContent: '', disabled: false,
+  if (!nodes.has(id)) nodes.set(id, { value: '', textContent: '', disabled: false, style: {},
     listeners: new Map(),
     addEventListener(type, handler) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(handler); },
     fire(type) { return Promise.all((this.listeners.get(type) || []).map(handler => handler({ target: this }))); },
@@ -112,7 +91,7 @@ let vbaWorkbookPicker; let xlsxWorkbookChanged = false, currentXlsxVbaSource = '
 let xlsxVbaSourceBound = false, xlsxVbaSourceBaseline = '', xlsxVbaSourceDirty = false, xlsxVbaSourceRevision = 0;
 let currentXlsxSavedCalculation = { mode: 'auto', on_save: true }; const xlsxVbaEdits = new Map();
 const MIME_TYPES = { xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
-${functions.map(lift).join('\n')}`, context);
+${functions.map(name => lift(name)).join('\n')}`, context);
 const editorSettings = page.slice(page.indexOf('const vbaEditorSettings ='), page.indexOf('\nfunction refreshVbaProcedures('));
 assert.ok(editorSettings.includes('bindVbaEditorSettings'));
 vm.runInContext(editorSettings, context);
@@ -461,4 +440,110 @@ assert.equal(vbaWorkbookExtension('Book1',{sheets:[{kind:'international_macro_sh
 assert.equal(vbaWorkbookExtension('Book1',{sheets:[{}]},false),'xlsx');
 closeVbaProject();
 
-console.log(JSON.stringify({ main_editor_failure_save_cases: 8, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));
+// The production worker and page handlers switch the backing package and
+// source together, then clear the editor when the surviving workbook closes.
+const closeSource = "Attribute VB_Name = \"Driver\"\nPublic Sub Seed()\n Dim peer As Workbook\n Set peer = Workbooks.Open(\"C:\\CloseUI-B.xlsm\")\n peer.Worksheets(1).Range(\"A1\").Value = \"survivor\"\nEnd Sub\nPublic Sub Finish()\n ThisWorkbook.Close False\nEnd Sub\n\nPublic Sub ClosePeer()\n Workbooks(\"CloseUI-B.xlsm\").Close False\nEnd Sub\n";
+const closePacketA = wasm.save_spreadsheet_vba_source(bytes,closeSource);
+const closePacketB = wasm.save_spreadsheet_vba_source(mixedSeed,closeSource);
+closeVbaProject();
+const closeSeed = await runVbaInWorker(wasm.parse_spreadsheet(closePacketA),closeSource,'Driver.Seed',[],0,'CloseUI-A.xlsm',
+ {applicationState:{},fileContext:{fullName:'C:\\CloseUI-A.xlsm',files:[{path:'C:\\CloseUI-B.xlsm',bytes:closePacketB}]}},closePacketA);
+context.closeSeed=closeSeed;context.closePacketA=closePacketA;
+vm.runInContext('currentDocIR=closeSeed.workbook;currentFileBytes=closePacketA;currentFileName="CloseUI-A.xlsm";currentXlsxSheetIndex=0;currentXlsxVbaSource="";vbaWorkbookPicker.reset(currentFileName);applyVbaExecution(closeSeed,currentDocIR);',context);
+node('vbaSource').value=closeSource;
+node('vbaRun').disabled=node('vbaCompile').disabled=false;
+node('vbaProcedure').value='Driver.Finish';node('vbaArguments').value='[]';
+await vm.runInContext('executeVbaFromDialog()',context);
+assert.equal(vm.runInContext('currentFileName',context),'CloseUI-B.xlsm');
+assert.equal(savedCell(vm.runInContext('currentDocIR',context),0).value.String,'survivor');
+assert.deepEqual(Array.from(vm.runInContext('new Uint8Array(currentFileBytes)',context)),Array.from(closePacketB));
+assert.equal(node('vbaSource').value.replace(/\r\n/g,'\n').trim(),wasm.spreadsheet_vba_source(closePacketB).replace(/\r\n/g,'\n').trim());
+assert.deepEqual(node('vbaWorkbook').children.map(child=>child.value),['1']);
+assert.equal(node('vbaRun').disabled,false);
+assert.equal(node('vbaResult').classList.values.has('error'),false);
+node('vbaProcedure').value='Driver.Finish';
+await vm.runInContext('executeVbaFromDialog()',context);
+assert.equal(vm.runInContext('currentDocIR',context),null);
+assert.equal(vm.runInContext('currentFileBytes',context),null);
+assert.equal(node('vbaSource').value,'');
+assert.deepEqual(node('vbaProcedureList').children,[]);
+assert.deepEqual(node('vbaWorkbook').children,[]);
+assert.equal(node('vbaWorkbook').disabled,true);
+assert.equal(node('vbaRun').disabled,true);
+assert.equal(node('vbaCompile').disabled,true);
+assert.equal(node('btnDownload').disabled,true);
+assert.equal(node('vbaResult').classList.values.has('error'),false);
+assert.match(node('pages-container').textContent,/No workbook/);
+closeVbaProject();
+
+// Closing only a peer keeps the current source editable while removing
+// the peer from the live picker.
+const peerSeed = await runVbaInWorker(wasm.parse_spreadsheet(closePacketA),closeSource,'Driver.Seed',[],0,'CloseUI-A.xlsm',
+ {applicationState:{},fileContext:{fullName:'C:\\CloseUI-A.xlsm',files:[{path:'C:\\CloseUI-B.xlsm',bytes:closePacketB}]}},closePacketA);
+context.peerSeed=peerSeed;
+vm.runInContext('currentDocIR=peerSeed.workbook;currentFileBytes=closePacketA;currentFileName="CloseUI-A.xlsm";currentXlsxSheetIndex=0;vbaWorkbookPicker.reset(currentFileName);applyVbaExecution(peerSeed,currentDocIR);',context);
+node('vbaSource').value=closeSource;node('vbaProcedure').value='Driver.ClosePeer';
+node('vbaRun').disabled=node('vbaCompile').disabled=false;
+await vm.runInContext('executeVbaFromDialog()',context);
+assert.equal(vm.runInContext('currentFileName',context),'CloseUI-A.xlsm');
+assert.notEqual(vm.runInContext('currentDocIR',context),null);
+assert.deepEqual(node('vbaWorkbook').children.map(child=>child.value),['0']);
+assert.equal(node('vbaRun').disabled,false);
+assert.equal(node('vbaResult').classList.values.has('error'),false);
+closeVbaProject();
+
+// The canvas editor uses the same production worker, with its own real
+// execution/view handlers and empty-grid cleanup.
+const demoPage = await readFile(path.join(root,'web/xlsx-demo.html'),'utf8');
+const demoNode = id => node('demo-'+id);
+let demoPaints = 0;
+const demo = vm.createContext({
+ ...wasm, Uint8Array, Map, Set, parseVbaArguments: JSON.parse, runVbaInWorker, bindVbaWorkbookPicker,
+ document:{getElementById:demoNode}, measureDigit:()=>7,
+ weighCalc(){}, markConditional(){}, markFrozen(){}, markSteps(){}, describe(){}, sayFaces(){},
+ goTo(){}, listMacroProcedures(){}, showMacroFiles(){}, draw(){demoPaints++;},
+ sayMacro(message,bad){demoNode('result').textContent=message;demoNode('result').classList.toggle('error',bad);},
+ closeSeed, closePacketA,
+});
+const demoFunctions=['captureMacroWorkbookView','applyMacroWorkbookView','clearClosedMacroWorkbookView',
+ 'applyMacroExecution','reportMacro','calculationPendingSave','markSaved'];
+vm.runInContext('let book=closeSeed.workbook, source=closePacketA, fileName="CloseUI-A.xlsm", shown=0, geom={};\n'
+ +'let macroProjectSource="",macroSourceBound=false,macroSourceBaseline="",macroSourceDirty=false,macroSourceRevision=0,beyondValues=false,digitWidth=7,editor=null;\n'
+ +'let savedCalculation={mode:"auto",on_save:true};const at={row:1,col:0},changes=new Map(),pristine=new Map(),conditional=new Map(),undone=[],redone=[];\n'
+ +'const macroSource=document.getElementById("source"),macroProc=document.getElementById("proc"),macroArgs=document.getElementById("args");\n'
+ +'const macroRun=document.getElementById("run"),macroCompile=document.getElementById("compile"),saveButton=document.getElementById("save"),macroProcList=document.getElementById("list");\n'
+ +'const tabsBox=document.getElementById("tabs"),factsBox=document.getElementById("facts"),cellBox=document.getElementById("cell"),missingBox=document.getElementById("missing"),stateBox=document.getElementById("state");\n'
+ +'const formulaBox=document.getElementById("formula"),whereBox=document.getElementById("where"),widthBox=document.getElementById("width");\n'
+ +'const t=key=>key==="noWorkbook"?"No workbook is open.":key; const macroEditorSettings={options:()=>({}),beginOperation:()=>()=>{}};\n'
+ +demoFunctions.map(name=>lift(name,demoPage)).join('\n')
+ +'\nconst macroWorkbookPicker=bindVbaWorkbookPicker(document.getElementById("picker"),{capture:captureMacroWorkbookView,apply:applyMacroWorkbookView,busy:()=>false,report:sayMacro});\n',demo);
+const handlerStart=demoPage.indexOf('macroRun.onclick = async () => {');
+vm.runInContext(demoPage.slice(handlerStart,demoPage.indexOf('macroCompile.onclick =',handlerStart)),demo);
+closeVbaProject();
+const demoSeed=await runVbaInWorker(wasm.parse_spreadsheet(closePacketA),closeSource,'Driver.Seed',[],0,'CloseUI-A.xlsm',
+ {applicationState:{},fileContext:{fullName:'C:\\CloseUI-A.xlsm',files:[{path:'C:\\CloseUI-B.xlsm',bytes:closePacketB}]}},closePacketA);
+demo.demoSeed=demoSeed;
+vm.runInContext('book=demoSeed.workbook;macroWorkbookPicker.reset(fileName);applyMacroExecution(demoSeed);',demo);
+demoNode('source').value=closeSource;demoNode('proc').value='Driver.Finish';demoNode('args').value='[]';
+await vm.runInContext('macroRun.onclick()',demo);
+assert.equal(vm.runInContext('fileName',demo),'CloseUI-B.xlsm');
+assert.equal(savedCell(vm.runInContext('book',demo),0).value.String,'survivor');
+assert.deepEqual(Array.from(vm.runInContext('new Uint8Array(source)',demo)),Array.from(closePacketB));
+assert.deepEqual(demoNode('picker').children.map(child=>child.value),['1']);
+assert.ok(demoPaints>0);
+demoNode('proc').value='Driver.Finish';
+demoNode('list').children=[{value:'Driver.Finish'}];
+await vm.runInContext('macroRun.onclick()',demo);
+assert.equal(vm.runInContext('book',demo),null);
+assert.equal(vm.runInContext('source',demo),null);
+assert.equal(vm.runInContext('geom',demo),null);
+assert.deepEqual(demoNode('picker').children,[]);
+assert.deepEqual(demoNode('list').children,[]);
+assert.equal(demoNode('sheetInk').width,0);
+assert.equal(demoNode('save').disabled,true);
+assert.equal(demoNode('run').disabled,true);
+assert.equal(demoNode('compile').disabled,true);
+assert.equal(demoNode('result').classList.values.has('error'),false);
+closeVbaProject();
+
+console.log(JSON.stringify({ main_editor_failure_save_cases: 8, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));

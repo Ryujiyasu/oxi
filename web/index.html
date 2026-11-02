@@ -2578,7 +2578,8 @@ function formatVbaExecution(execution) {
     if (execution.status_bar !== null && execution.status_bar !== undefined) {
         sections.push(`StatusBar:\n${execution.status_bar}`);
     }
-    sections.push(execution.error?.message || result);
+    sections.push(execution.workbook_closed && execution.error?.kind === 'terminated'
+        ? 'Workbook closed.' : execution.error?.message || result);
     return sections.join('\n\n');
 }
 
@@ -2591,8 +2592,36 @@ function updateVbaReferenceButton() {
         || document.getElementById('vbaCompile').disabled;
 }
 
+function clearClosedVbaWorkbookView() {
+    currentDocIR = null;
+    currentFileBytes = null;
+    currentFileName = '';
+    currentXlsxSheetIndex = 0;
+    currentXlsxVbaSource = '';
+    xlsxVbaSourceBound = false;
+    xlsxVbaSourceBaseline = '';
+    xlsxVbaSourceDirty = false;
+    xlsxVbaSourceRevision++;
+    xlsxWorkbookChanged = false;
+    xlsxVbaEdits.clear();
+    document.getElementById('vbaSource').value = '';
+    document.getElementById('vbaProcedure').value = '';
+    document.getElementById('vbaProcedureList').replaceChildren();
+    document.getElementById('vbaArguments').value = '[]';
+    document.getElementById('titleText').textContent = 'Oxi';
+    document.getElementById('btnDownload').disabled = true;
+    document.getElementById('pages-container').replaceChildren();
+    document.getElementById('pages-container').textContent = currentLang === 'ja'
+        ? '開いているブックはありません。' : 'No workbook is open.';
+}
+
 function applyVbaExecution(execution, before) {
     vbaWorkbookPicker?.update(execution, currentFileName);
+    if (execution.workbook_closed) {
+        if (!execution.workbook_selection) clearClosedVbaWorkbookView();
+        updateVbaReferenceButton();
+        return;
+    }
     updateVbaReferenceButton();
     const changed = execution.workbook_changed !== false;
     const previousSheet = currentXlsxSheetIndex;
@@ -2793,12 +2822,13 @@ async function executeVbaFromDialog() {
             applyVbaExecution(error.execution, before);
         }
         resultElement.textContent = error?.execution ? formatVbaExecution(error.execution) : message;
-        resultElement.classList.add('error');
-        showStatus('VBA error: ' + message, 'error');
-        console.error(error);
+        const closed = error?.execution?.workbook_closed && error.execution.error?.kind === 'terminated';
+        resultElement.classList.toggle('error', !closed);
+        showStatus(closed ? 'Workbook closed.' : 'VBA error: ' + message, closed ? 'info' : 'error');
+        if (!closed) console.error(error);
     } finally {
-        runButton.disabled = false;
-        document.getElementById('vbaCompile').disabled = false;
+        runButton.disabled = !currentDocIR;
+        document.getElementById('vbaCompile').disabled = !currentDocIR;
         updateVbaReferenceButton();
         endVbaOperation();
     }
@@ -4749,6 +4779,9 @@ async function handleFile(file) {
     updateVbaReferenceButton();
     currentFileType = ext;
     currentFileName = file.name;
+    document.getElementById('vbaRun').disabled = false;
+    document.getElementById('vbaCompile').disabled = false;
+    btnDownload.disabled = false;
     vbaWorkbookPicker?.reset(ext === 'xlsx' ? currentFileName : undefined);
     btnDownload.textContent = `${t('download')} .${fileExtension}`;
 

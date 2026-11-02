@@ -16,24 +16,25 @@ self.addEventListener('message', async event => {
             return;
         }
         const { projectNameCodePage, projectSourceCodePage, ...runtimeOptions } = options || {};
+        const inputPackage = packageBytes ?? runtimeOptions.fileContext?.packageBytes;
         if (projectSourceCodePage != null && (!Number.isInteger(projectSourceCodePage) || projectSourceCodePage < 1 || projectSourceCodePage > 65535)) {
             throw new Error('Invalid VBA source code page.');
         }
         if (runtimeOptions.hostAnsiCodePage != null && ![932, 1252].includes(runtimeOptions.hostAnsiCodePage)) {
             throw new Error('Unsupported VBA host ANSI code page.');
         }
-        if (runtimeOptions.projectName == null && packageBytes) {
+        if (runtimeOptions.projectName == null && inputPackage) {
             if (projectNameCodePage != null && (!Number.isInteger(projectNameCodePage) || projectNameCodePage < 1 || projectNameCodePage > 65535)) {
                 throw new Error('Invalid VBA project name code page.');
             }
-            runtimeOptions.projectName = spreadsheet_vba_project_name(packageBytes, projectNameCodePage);
+            runtimeOptions.projectName = spreadsheet_vba_project_name(inputPackage, projectNameCodePage);
         }
         if (action === 'compile') {
             const compilationOptions = { ...runtimeOptions };
             delete compilationOptions.hostAnsiCodePage;
             delete compilationOptions.worksheetDbcsLanguage;
             const compilation = session.compile(source, { ...compilationOptions,
-                documentModules: [...(packageBytes ? session.document_modules(packageBytes) : []),
+                documentModules: [...(inputPackage ? session.document_modules(inputPackage) : []),
                     ...(runtimeOptions.documentModules || [])],
                 referenceSymbols: [...(workbook?.sheets || []).map(sheet => ({ name: sheet.codeName })),
                     ...(runtimeOptions.referenceSymbols || [])] });
@@ -45,13 +46,13 @@ self.addEventListener('message', async event => {
             || !Number.isSafeInteger(callKind))) throw new Error('Invalid VBA member invocation.');
         if (action === 'release' && (!Array.isArray(references)
             || !references.every(reference => typeof reference === 'string'))) throw new Error('Invalid VBA object references.');
-        if (runtimeOptions.documentModules == null && packageBytes) {
-            runtimeOptions.documentModules = session.document_modules(packageBytes);
+        if (runtimeOptions.documentModules == null && inputPackage) {
+            runtimeOptions.documentModules = session.document_modules(inputPackage);
         }
-        const calculationSource = action === 'save' && !source.trim() && packageBytes
-            ? spreadsheet_vba_source(packageBytes, projectSourceCodePage) || '' : source;
-        if (packageBytes) {
-            runtimeOptions.fileContext = { ...runtimeOptions.fileContext, packageBytes };
+        const calculationSource = action === 'save' && !source.trim() && inputPackage
+            ? spreadsheet_vba_source(inputPackage, projectSourceCodePage) || '' : source;
+        if (inputPackage) {
+            runtimeOptions.fileContext = { ...runtimeOptions.fileContext, packageBytes: inputPackage };
         }
         const execution = action === 'invoke'
             ? session.invoke_member(workbook, source, { reference, member, kind: callKind, args }, activeSheet, fileName, runtimeOptions)
@@ -73,6 +74,11 @@ self.addEventListener('message', async event => {
             fileName,
             runtimeOptions,
         );
+        // The completed macro still belongs to its original source owner.
+        // Move the editor only after that owner's frames have unwound.
+        if (execution.workbook_closed && execution.active_workbook !== undefined) {
+            execution.workbook_selection = session.select_workbook(execution.active_workbook);
+        }
         self.postMessage({ ok: !execution.error, execution, error: execution.error?.message });
     } catch (error) {
         self.postMessage({

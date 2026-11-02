@@ -40663,6 +40663,8 @@ struct RunResult {
     other_workbooks: Vec<OpenWorkbookOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     active_workbook: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workbook_closed: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -40694,13 +40696,15 @@ struct RunOutcome {
     other_workbooks: Vec<OpenWorkbookOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     active_workbook: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workbook_closed: Option<bool>,
 }
 
 impl RunOutcome {
     fn into_result(self) -> RunResult {
         RunResult { workbook: self.workbook, result: self.result, debug_output: self.debug_output,
             messages: self.messages, status_bar: self.status_bar, files: self.files, deleted_files: self.deleted_files,
-            other_workbooks: self.other_workbooks, active_workbook: self.active_workbook }
+            other_workbooks: self.other_workbooks, active_workbook: self.active_workbook, workbook_closed: self.workbook_closed }
     }
 }
 
@@ -41919,6 +41923,12 @@ fn execute_workbook_invocation(
     active_sheet: usize, context: VbaRunContext, session: &mut Option<ProjectSessionState>,
 ) -> Result<RunOutcome, String> {
     let VbaInvocation { procedure, args, action } = invocation;
+    // The editor can retain the old IR after Close. It cannot revive that
+    // project's macros or save its discarded edits as a new invocation.
+    if action.is_none() && session.as_ref().is_some_and(|state| state.application.as_ref()
+        .is_some_and(|app| app.application.closed.contains(&state.host.objects.owner))) {
+        return Err("The invoking workbook is closed".to_string());
+    }
     let selected_project_name = session.as_ref().and_then(|state| state.selected_project_name.clone());
     let stored_project_name = selected_project_name.clone().unwrap_or_else(|| context.project_name.clone());
     // Validate before taking the previous state: invalid API inputs must not
@@ -42254,6 +42264,8 @@ fn execute_workbook_invocation(
     }).unwrap_or_default();
     let active_workbook = application_session.as_ref().and_then(|state|
         (!state.application.closed.contains(&state.application.active)).then(||state.application.active.to_string()));
+    let workbook_closed = application_session.as_ref()
+        .filter(|state| state.application.closed.contains(&host.objects.owner)).map(|_| true);
     host.file_io.files = file_system;
     let files = host.file_io.produced_files(&files_before);
     let deleted_files = host.file_io.files.deleted_files(&files_before);
@@ -42308,6 +42320,7 @@ fn execute_workbook_invocation(
         deleted_files,
         other_workbooks,
         active_workbook,
+        workbook_closed,
     })
 }
 
@@ -42512,6 +42525,7 @@ Public Data As Long
                 "Application.Run \"'close-flow-state-B.xlsm'!Driver.SeedState\"");
             let stopped=close_fixture_run(opened.workbook,&source,procedure,vec![Value::String("close-flow-state-B.xlsm".into())],"close-flow-state-A.xlsm",&mut session);
             assert_eq!(stopped.error.as_ref().map(|error|error.kind),Some("terminated"));
+            assert_eq!(stopped.workbook_closed, Some(true));
             let view=select_session_workbook(&mut session,"1").unwrap();
             let outcome=close_fixture_run(view.selected.workbook,&view.selected.source,"Driver.State",vec![],"close-flow-state-B.xlsm",&mut session);
             assert!(outcome.error.is_none(),"{:?}",outcome.error.as_ref().map(|error|&error.message));
@@ -42713,6 +42727,23 @@ End Function
             assert_eq!(outcome.other_workbooks.len(), usize::from(expected.starts_with("error|")), "case {kind}");
             drop(opened);
         }
+    }
+
+    #[test]
+    fn closing_the_last_book_reports_empty_application_and_rejects_stale_editor_calls() {
+        const CODE: &str = "Attribute VB_Name = \"Driver\"\nPublic Sub Finish()\n ThisWorkbook.Close False\nEnd Sub\nPublic Function State() As Long\n State = Workbooks.Count\nEnd Function\n";
+        let mut session = None;
+        let outcome = close_fixture_run(workbook(), CODE, "Driver.Finish", vec![], "last.xlsm", &mut session);
+        assert_eq!(outcome.error.as_ref().map(|error| error.kind), Some("terminated"));
+        assert_eq!(outcome.workbook_closed, Some(true));
+        assert!(outcome.active_workbook.is_none());
+        assert!(outcome.other_workbooks.is_empty());
+        assert!(select_session_workbook(&mut session, "0").is_err());
+        let mut context = failure_context(); context.file_name = Some("last.xlsm".into());
+        let result = execute_workbook_action_in_session(outcome.workbook, CODE, Some("Driver.State"),
+            vec![], 0, context, &mut session);
+        assert_eq!(result.err().as_deref(), Some("The invoking workbook is closed"));
+        assert!(session.as_ref().unwrap().application.as_ref().unwrap().application.closed.contains(&0));
     }
 
     #[test]
