@@ -35,6 +35,7 @@ pub use glyph_bounds::static_glyph_bounds;
 pub(crate) mod cjk_fallback;
 pub(crate) mod system_spacing_fallback;
 mod catalog;
+mod gdi_widths;
 pub(crate) use catalog::{CatalogGlyphMetrics, glyph_metrics as catalog_glyph_metrics, glyph_corner_kern as catalog_glyph_corner_kern, glyph_face_metrics as catalog_glyph_face_metrics, glyph_rule_thickness as catalog_glyph_rule_thickness, glyph_strikeout as catalog_glyph_strikeout};
 pub use catalog::{MissingCatalogMember, take_missing_members as take_missing_catalog_members, register_member as register_catalog_member};
 pub mod shape;
@@ -74,27 +75,27 @@ fn default_upm() -> u16 {
 pub fn vertical_char_grid_on() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
-        std::env::var_os("OXI_VERTICAL_CHAR_GRID").is_some()
-            || std::env::var_os("OXI_S1447_DISABLE").is_none()
+        crate::env_flag!("OXI_VERTICAL_CHAR_GRID")
+            || !crate::env_flag!("OXI_S1447_DISABLE")
     })
 }
 
 pub fn vertical_font_advance_on() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
-        std::env::var_os("OXI_VERTICAL_FONT_ADVANCE").is_some()
-            || std::env::var_os("OXI_S1445_DISABLE").is_none()
+        crate::env_flag!("OXI_VERTICAL_FONT_ADVANCE")
+            || !crate::env_flag!("OXI_S1445_DISABLE")
     })
 }
 
 /// was a 96dpi paint-snap artifact. Opt-out: OXI_S546_DISABLE.
 pub fn s1202_proportional_cjk_exact() -> bool {
-    std::env::var("OXI_S1202").is_ok()
+    crate::env_flag!("OXI_S1202")
 }
 
 pub fn s546_exact_halfwidth() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("OXI_S546_DISABLE").is_err())
+    *V.get_or_init(|| !crate::env_flag!("OXI_S546_DISABLE"))
 }
 
 /// S892 (default ON, opt-out OXI_S892_DISABLE): U+00A0 NO-BREAK SPACE
@@ -111,7 +112,7 @@ pub fn s546_exact_halfwidth() -> bool {
 /// framework is PASS 1.0000 with S892 ON.
 pub fn s892_nbsp_as_space() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("OXI_S892_DISABLE").is_err())
+    *V.get_or_init(|| !crate::env_flag!("OXI_S892_DISABLE"))
 }
 
 /// S1088 (2026-08-07): use the MEASURED U+2026 advance now present in the
@@ -125,7 +126,7 @@ pub fn s892_nbsp_as_space() -> bool {
 /// fallback bit-for-bit (is_fullwidth('…') is true).
 pub fn s1088_ellipsis_width() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("OXI_S1088_DISABLE").is_err())
+    *V.get_or_init(|| !crate::env_flag!("OXI_S1088_DISABLE"))
 }
 
 /// Pixel-rounded multiplication matching Word's font metrics.
@@ -311,11 +312,11 @@ impl FontMetrics {
     pub fn char_width_em(&self, c: char) -> f32 {
         // S1330: a zero-width format character advances nothing (Word).
         if is_nonspacing_kana_mark(c)
-            && std::env::var_os("OXI_KANA_COMBINING_DISABLE").is_none()
+            && !crate::env_flag!("OXI_KANA_COMBINING_DISABLE")
         {
             return 0.0;
         }
-        if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
+        if is_zero_width_char(c) && !crate::env_flag!("OXI_S1330_DISABLE") {
             return 0.0;
         }
         self.char_widths
@@ -358,7 +359,7 @@ impl FontMetrics {
             // paragraph and one paragraph over on the page.
             if s1416_jis_fullwidth(c)
                 && self.is_jis_fullwidth_face()
-                && std::env::var_os("OXI_S1416_DISABLE").is_none()
+                && !crate::env_flag!("OXI_S1416_DISABLE")
             {
                 1.0
             } else if is_halfwidth_katakana(c) {
@@ -390,11 +391,11 @@ impl FontMetrics {
         // Word keeps every such row on one line (PDF: 19 rows, none
         // ending in a lone mark).
         if is_nonspacing_kana_mark(c)
-            && std::env::var_os("OXI_KANA_COMBINING_DISABLE").is_none()
+            && !crate::env_flag!("OXI_KANA_COMBINING_DISABLE")
         {
             return 0.0;
         }
-        if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
+        if is_zero_width_char(c) && !crate::env_flag!("OXI_S1330_DISABLE") {
             return 0.0;
         }
         let _ppem = (font_size * 96.0 / 72.0).round();
@@ -409,7 +410,7 @@ impl FontMetrics {
         // CJK monospace fonts (UPM=256): COM confirmed — fullwidth = fontSize, halfwidth = fontSize/2
         // No GDI pixel rounding; Word uses the point value directly.
         if self.units_per_em == 256 && is_fullwidth(c) {
-            if std::env::var_os("OXI_DBG_CW").is_some() && (c as u32) == 0x3000 {
+            if crate::env_flag!("OXI_DBG_CW") && (c as u32) == 0x3000 {
                 eprintln!("[CW] fullwidth256 family={:?} fs={} -> {:.4}",
                     self.family, font_size, font_size + extra);
             }
@@ -423,7 +424,7 @@ impl FontMetrics {
         // Word rounds char widths to 10tw (0.5pt), not 1tw.
         let width_tw = (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0;
         let out = width_tw / 20.0 + extra;
-        if std::env::var_os("OXI_DBG_CW").is_some() && (c as u32) == 0x3000 {
+        if crate::env_flag!("OXI_DBG_CW") && (c as u32) == 0x3000 {
             eprintln!("[CW] tail family={:?} upm={} em={:.6} fs={} extra={:.4} -> {:.4}",
                 self.family, self.units_per_em, advance_em, font_size, extra, out);
         }
@@ -507,7 +508,7 @@ impl FontMetrics {
             && self.typo_descent > 0.0
             && typo > 0.0
             && (self.win_ascent + self.win_descent) > 2.0 * typo
-            && std::env::var_os("OXI_WORD_BOX_TYPO_DISABLE").is_none()
+            && !crate::env_flag!("OXI_WORD_BOX_TYPO_DISABLE")
         {
             (self.typo_ascent + self.typo_line_gap, self.typo_descent)
         } else {
@@ -610,7 +611,7 @@ impl FontMetrics {
                 return typo * font_size;
             }
         }
-        if std::env::var("OXI_S950_DISABLE").is_err() {
+        if !crate::env_flag!("OXI_S950_DISABLE") {
             let win = self.win_ascent + self.win_descent;
             return hhea.max(win) * font_size;
         }
@@ -654,7 +655,7 @@ impl FontMetrics {
         if self.ascent >= self.win_ascent {
             self.ascent + self.line_gap
         } else if !self.is_cjk_83_64_font()
-            && std::env::var_os("OXI_WINASC_LEAD_DISABLE").is_none()
+            && !crate::env_flag!("OXI_WINASC_LEAD_DISABLE")
         {
             // OXI_WINASC_LEAD (2026-10-16, default ON, opt-out _DISABLE): GDI puts the
             // external leading (hhea box - win box, when positive) ABOVE the win ascent
@@ -763,7 +764,7 @@ impl FontMetrics {
             return true;
         }
         if self.family.as_str() == "HGPGothicM" {
-            return std::env::var("OXI_S580_DISABLE").is_err();
+            return !crate::env_flag!("OXI_S580_DISABLE");
         }
         // S612z (2026-06-20): Zen Old Mincho is NOT installed on the runner; Word
         // renders it at its OWN natural line height 19.5pt@12pt (1.625×, the embedded
@@ -777,10 +778,10 @@ impl FontMetrics {
         // height/pagination is the Phase-1 fix; glyph fidelity is a separate font-install
         // task). Opt-out OXI_S612Z_DISABLE. See [[corpus_collection_wheel_a]].
         if self.family.as_str() == "Zen Old Mincho" {
-            return std::env::var("OXI_S612Z_DISABLE").is_err();
+            return !crate::env_flag!("OXI_S612Z_DISABLE");
         }
         if self.family.starts_with("Malgun Gothic") {
-            return std::env::var_os("OXI_MALGUN_METRICS").is_some();
+            return crate::env_flag!("OXI_MALGUN_METRICS");
         }
         // Runtime font metrics retain the requested family name, including
         // localized names. These faces use the same CJK single-line spacing
@@ -794,9 +795,9 @@ impl FontMetrics {
         }
         if self.family.starts_with("DengXian") {
             // S1496: default ON (was an opt-in left by a wip checkpoint).
-            return std::env::var_os("OXI_DENGXIAN_METRICS_DISABLE").is_none();
+            return !crate::env_flag!("OXI_DENGXIAN_METRICS_DISABLE");
         }
-        let canonical_family = if std::env::var_os("OXI_CJK_METRIC_ALIAS").is_some() {
+        let canonical_family = if crate::env_flag!("OXI_CJK_METRIC_ALIAS") {
             normalize_family_name(&self.family)
         } else {
             self.family.clone()
@@ -875,9 +876,6 @@ pub struct FontMetricsRegistry {
     default_family: String,
     /// COM-measured line heights: font → size_str → grid_key → height_pt
     com_line_heights: HashMap<String, HashMap<String, HashMap<String, f32>>>,
-    /// GDI-measured character widths: font → ppem → codepoint → width_px
-    /// These override the formula-based widths where GDI hinting produces different results.
-    gdi_widths: HashMap<String, HashMap<u32, HashMap<u32, u32>>>,
     /// GDI-measured tmHeight/tmAscent/tmDescent: font → ppem → (height, ascent, descent) in pixels
     /// ceil(winAscent/upm*ppem) + ceil(winDescent/upm*ppem) ≠ tmHeight due to hinting.
     gdi_heights: HashMap<String, HashMap<u32, (u32, u32, u32)>>,
@@ -981,7 +979,7 @@ impl FontMetricsRegistry {
     /// unobfuscated). default ON, opt-out OXI_EMBEDDED_FONTS_DISABLE.
     pub(crate) fn for_document(doc: &crate::ir::Document) -> Self {
         let mut registry = Self::load();
-        if std::env::var_os("OXI_EMBEDDED_FONTS_DISABLE").is_some() {
+        if crate::env_flag!("OXI_EMBEDDED_FONTS_DISABLE") {
             return registry;
         }
         let usable = usable_embedded_families(doc);
@@ -1027,7 +1025,7 @@ impl FontMetricsRegistry {
         let mut raw_list: Vec<RawFontMetrics> =
             serde_json::from_str(raw_json).expect("embedded font metrics should be valid JSON");
 
-        if std::env::var("OXI_LATIN_ITALIC_METRICS").is_ok() {
+        if crate::env_flag!("OXI_LATIN_ITALIC_METRICS") {
             let italic_faces: Vec<RawFontMetrics> = serde_json::from_str(
                 include_str!("data/latin_italic_metrics.json")
             ).expect("embedded italic metrics should be valid JSON");
@@ -1040,7 +1038,7 @@ impl FontMetricsRegistry {
         // every size 8..16pt; the same in GDI at 2048px), where the fallback set
         // them ~0.83em (MS UI Gothic). policies__0af65d45 (5): Word 56 chars on
         // line 1, Oxi 60 -> one paragraph too many on p2.
-        if std::env::var_os("OXI_PGOTHIC_FACE_METRICS_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_PGOTHIC_FACE_METRICS_DISABLE") {
             let widths: HashMap<u32, u16> = serde_json::from_str(
                 include_str!("data/pgothic_face_widths.json")
             ).expect("embedded proportional Gothic widths should be valid JSON");
@@ -1049,14 +1047,14 @@ impl FontMetricsRegistry {
             }
         }
 
-        if std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_SOEI_FACE_METRICS_DISABLE") {
             let faces: Vec<RawFontMetrics> = serde_json::from_str(
                 include_str!("data/soei_face_metrics.json")
             ).expect("embedded Soei face metrics should be valid JSON");
             raw_list.extend(faces);
         }
 
-        if std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_SOEI_POP_METRICS_DISABLE") {
             let faces: Vec<RawFontMetrics> = serde_json::from_str(
                 include_str!("data/soei_pop_metrics.json")
             ).expect("embedded Soei Pop face metrics should be valid JSON");
@@ -1086,7 +1084,7 @@ impl FontMetricsRegistry {
         // default-metrics 13.8; Word PDF confirms EVERY Symbol-marker line
         // grows). Widths are EMPTY (S579 pattern) so advances keep the
         // existing path. Opt-out for A/B: OXI_SYMBOL_METRICS_DISABLE.
-        let skip_symbol = std::env::var("OXI_SYMBOL_METRICS_DISABLE").is_ok();
+        let skip_symbol = crate::env_flag!("OXI_SYMBOL_METRICS_DISABLE");
         // S1119 (2026-08-14, opt-out OXI_SYMFB_METRICS_DISABLE): the two faces
         // Word's symbol FALLBACK chain lands on. Added as data (see
         // tools/metrics/add_symbol_fallback_metrics.py); this switch exists so a
@@ -1100,14 +1098,14 @@ impl FontMetricsRegistry {
         // the S950 max(hhea, win) rule would give a 100pt line at 18pt. The font
         // sets fsSelection bit 7 and its typo sum 1.1724 em is Word's measured
         // 1.1719, so the existing typo branch is correct once the flag is there.
-        let skip_symfb = std::env::var("OXI_SYMFB_METRICS_DISABLE").is_ok();
+        let skip_symfb = crate::env_flag!("OXI_SYMFB_METRICS_DISABLE");
         // S1138/S1139/S1140 (2026-08-15, opt-out OXI_S1140_METRICS_DISABLE): the
         // sweep of families the corpus names in a real run and this machine has
         // installed, but the table did not hold -- every one of them was being
         // measured as Calibri. Word agrees with each new entry to within 0.0003em
         // (_pb_linepitch_gen.py, 12 arms + Trebuchet + Meiryo UI). Same flag
         // shape as the two above so a data-only change is still A/B-able.
-        let skip_s1140 = std::env::var("OXI_S1140_METRICS_DISABLE").is_ok();
+        let skip_s1140 = crate::env_flag!("OXI_S1140_METRICS_DISABLE");
         const S1140_FAMILIES: &[&str] = &[
             "Trebuchet MS", "Trebuchet MS Bold", "Meiryo UI", "Segoe UI Emoji",
             "Ink Free", "Franklin Gothic Book", "Wingdings", "Sylfaen",
@@ -1122,11 +1120,11 @@ impl FontMetricsRegistry {
         ];
 
         for raw in raw_list {
-            if raw.family.starts_with("DengXian") && std::env::var_os("OXI_DENGXIAN_METRICS_DISABLE").is_some() {
+            if raw.family.starts_with("DengXian") && crate::env_flag!("OXI_DENGXIAN_METRICS_DISABLE") {
                 continue;
             }
             if raw.family.starts_with("Malgun Gothic")
-                && std::env::var_os("OXI_MALGUN_METRICS").is_none() {
+                && !crate::env_flag!("OXI_MALGUN_METRICS") {
                 continue;
             }
 
@@ -1202,8 +1200,8 @@ impl FontMetricsRegistry {
             }
         }
 
-        if std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none()
-            || std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_SOEI_FACE_METRICS_DISABLE")
+            || !crate::env_flag!("OXI_SOEI_POP_METRICS_DISABLE") {
             // Replace legacy alias entries as well as canonical entries: exact
             // name lookup otherwise returns the older, incomplete width table.
             let aliases: Vec<_> = fonts.keys().filter_map(|name| {
@@ -1248,7 +1246,7 @@ impl FontMetricsRegistry {
         // visible wrapping stays on the existing fallback). Family-scoped: no
         // golden/JP/word_png doc references Gill Sans Nova (census) → byte-
         // identical by construction. Opt-out OXI_S990B_DISABLE.
-        if std::env::var("OXI_S990B_DISABLE").is_err() {
+        if !crate::env_flag!("OXI_S990B_DISABLE") {
             if let Some(calibri) = fonts.get("Calibri").cloned() {
                 let gill = FontMetrics {
                     synthetic_bold_advance: 0.0,
@@ -1283,42 +1281,6 @@ impl FontMetricsRegistry {
             {
                 HashMap::new()
             }
-        };
-
-        // Load GDI-measured character width overrides
-        // These correct for GDI hinting that round(advance * ppem / upm) cannot reproduce
-        // Stored gzipped (30.5MB JSON -> 5.5MB): crates.io caps packages at 10MB
-        // and the raw table dominated the crate size. Same bytes after inflate.
-        let gdi_widths: HashMap<String, HashMap<u32, HashMap<u32, u32>>> = {
-            let gdi_gz: &[u8] = include_bytes!("data/gdi_width_overrides.json.gz");
-            let mut gdi_json = String::new();
-            {
-                use std::io::Read;
-                let mut dec = flate2::read::GzDecoder::new(gdi_gz);
-                dec.read_to_string(&mut gdi_json)
-                    .expect("gdi_width_overrides.json.gz: inflate failed");
-            }
-            // Parse: font_name -> ppem_str -> {codepoint_str: width_px}
-            let raw: HashMap<String, HashMap<String, HashMap<String, u32>>> =
-                serde_json::from_str(&gdi_json).unwrap_or_default();
-            // Convert string keys to numeric
-            let mut result = HashMap::new();
-            for (font, ppem_map) in raw {
-                let mut ppem_result = HashMap::new();
-                for (ppem_str, char_map) in ppem_map {
-                    if let Ok(ppem) = ppem_str.parse::<u32>() {
-                        let mut char_result = HashMap::new();
-                        for (cp_str, width) in char_map {
-                            if let Ok(cp) = cp_str.parse::<u32>() {
-                                char_result.insert(cp, width);
-                            }
-                        }
-                        ppem_result.insert(ppem, char_result);
-                    }
-                }
-                result.insert(font, ppem_result);
-            }
-            result
         };
 
         // Load GDI-measured tmHeight table
@@ -1412,14 +1374,14 @@ impl FontMetricsRegistry {
         // «WHOQOL-BREF» (Meiryo Italic 11, w:kern 2): Word advances L 5.30 before the
         // hyphen = hmtx 6.13 + the L,hyphen pair -160/2048 em; without it the word
         // measured 83.4 in an 83.06pt cell and broke after the hyphen.
-        if std::env::var_os("OXI_MEIRYO_KERN_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_MEIRYO_KERN_DISABLE") {
             let meiryo_pairs: HashMap<String, HashMap<String, i32>> =
                 serde_json::from_str(include_str!("data/meiryo_kern_pairs.json"))
                     .expect("valid bundled Meiryo kerning metrics");
             latin_kern.extend(meiryo_pairs);
         }
 
-        if std::env::var_os("OXI_YU_GOTHIC_KERN").is_some() {
+        if crate::env_flag!("OXI_YU_GOTHIC_KERN") {
             // GPOS kern-feature advances, in the same 2048-unit coordinates
             // as the corresponding font metrics. Used by layout and painting.
             let yu_pairs: HashMap<String, HashMap<String, i32>> =
@@ -1457,7 +1419,6 @@ impl FontMetricsRegistry {
             synthetic_bold_fonts,
             default_family: "Calibri".to_string(),
             com_line_heights,
-            gdi_widths,
             gdi_heights,
             gdi_height_supplements,
             com_twips_widths,
@@ -1590,7 +1551,7 @@ impl FontMetricsRegistry {
     /// Scoped to CJK families with no GDI table: the Latin pipeline is
     /// calibrated against the GDI advances and must keep them (the S1171 note).
     fn cjk_table_lacks_cjk_widths(&self, family: &str) -> bool {
-        if std::env::var("OXI_S1272_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_S1272_DISABLE") {
             return false;
         }
         // `is_cjk_font_family` lists NORMALISED English names, so a face
@@ -1618,9 +1579,9 @@ impl FontMetricsRegistry {
     }
 
     fn has_gdi_widths(&self, family: &str) -> bool {
-        self.gdi_widths.contains_key(family)
-            || self.gdi_widths.contains_key(&normalize_family_name(family))
-            || self.gdi_widths.contains_key(&base_family_name(family))
+        gdi_widths::has_family(family)
+            || gdi_widths::has_family(&normalize_family_name(family))
+            || gdi_widths::has_family(&base_family_name(family))
     }
 
     /// Does the shipped table carry the BOLD/ITALIC face itself, as opposed to
@@ -1666,7 +1627,7 @@ impl FontMetricsRegistry {
 
     pub fn get_with_style(&self, family: &str, bold: bool, italic: bool) -> FontMetricsRef<'_> {
         if let Some(metrics) = runtime::resolve_registered(family, bold, italic) { return metrics; }
-        if std::env::var_os("OXI_YU_MINCHO_STYLE_FACE").is_some()
+        if crate::env_flag!("OXI_YU_MINCHO_STYLE_FACE")
             && normalize_family_name(family) == "Yu Mincho Regular"
         {
             return (self.get_regular_with_synthetic_bold(family, bold)).into();
@@ -1676,7 +1637,7 @@ impl FontMetricsRegistry {
         // face. Prefer the catalog's exact style before weaker substitutions,
         // while keeping an existing calibrated entry for that exact style.
         if (bold || italic)
-            && (!italic || std::env::var("OXI_ITALIC_METRICS_DISABLE").is_err())
+            && (!italic || !crate::env_flag!("OXI_ITALIC_METRICS_DISABLE"))
             && !self.table_has_styled_face(family, bold, italic)
         {
             if let Some(metrics) = catalog::resolve_styled(family, bold, italic) {
@@ -1684,7 +1645,7 @@ impl FontMetricsRegistry {
             }
         }
 
-        if italic && std::env::var("OXI_ITALIC_METRICS_DISABLE").is_err() {
+        if italic && !crate::env_flag!("OXI_ITALIC_METRICS_DISABLE") {
             let normalized = normalize_family_name(family);
             let base = if normalized.ends_with(" Regular") {
                 normalized[..normalized.len() - 8].to_string()
@@ -1746,7 +1707,7 @@ impl FontMetricsRegistry {
     /// return that variant's metrics; otherwise fall back to the regular variant.
     pub fn get_with_bold(&self, family: &str, bold: bool) -> FontMetricsRef<'_> {
         if let Some(metrics) = runtime::resolve_registered(family, bold, false) { return metrics; }
-        if std::env::var_os("OXI_YU_MINCHO_STYLE_FACE").is_some()
+        if crate::env_flag!("OXI_YU_MINCHO_STYLE_FACE")
             && normalize_family_name(family) == "Yu Mincho Regular"
         {
             return (self.get_regular_with_synthetic_bold(family, bold)).into();
@@ -1824,7 +1785,7 @@ impl FontMetricsRegistry {
         if base != family
             && base != normalized
             && self.fonts.contains_key(&base)
-            && std::env::var_os("OXI_S1610_DISABLE").is_none()
+            && !crate::env_flag!("OXI_S1610_DISABLE")
         {
             if let Some(m) = catalog::resolve(family, false, false).map(FontMetricsRef::from)
                 .or_else(|| runtime::resolve(family, false, false))
@@ -1893,7 +1854,7 @@ impl FontMetricsRegistry {
         // Oxi sent every one of them to Calibri (1.22070em): 0.05em too tall for
         // the Latin half and 0.45em too short for the CJK half. The corpus names
         // 57 such families across 50 documents.
-        if std::env::var("OXI_S1146_DISABLE").is_err() {
+        if !crate::env_flag!("OXI_S1146_DISABLE") {
             let cjk_named = family.chars().any(|c| {
                 matches!(c as u32,
                     0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF
@@ -1983,11 +1944,11 @@ impl FontMetricsRegistry {
 
         // S1330: zero-width format characters advance nothing on every path.
         if is_nonspacing_kana_mark(c)
-            && std::env::var_os("OXI_KANA_COMBINING_DISABLE").is_none()
+            && !crate::env_flag!("OXI_KANA_COMBINING_DISABLE")
         {
             return 0.0;
         }
-        if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
+        if is_zero_width_char(c) && !crate::env_flag!("OXI_S1330_DISABLE") {
             return 0.0;
         }
         if metrics.synthetic_bold_advance > 0.0 {
@@ -2090,7 +2051,7 @@ impl FontMetricsRegistry {
             // compression machinery, which is calibrated on them (BIZ UDPGothic
             // 11pt «甲乙、「丙丁戊己庚辛» in a 91pt cell: exact 、「 let 辛 fit where
             // Word wraps -- tests/fixtures/cell_pair_boundaries).
-            if std::env::var_os("OXI_PROP_CJK_EXACT_DISABLE").is_none()
+            if !crate::env_flag!("OXI_PROP_CJK_EXACT_DISABLE")
                 && matches!(c, '\u{3041}'..='\u{30FA}' | '\u{30FC}'..='\u{30FF}'
                     | '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}')
                 && metrics.units_per_em != 256
@@ -2106,7 +2067,7 @@ impl FontMetricsRegistry {
             // 0.5; rounded to 7.0 the word measured 44.5 and broke after «0.» in a
             // 43.3pt cell, where Word keeps it (`_pb_condensed_fit_gen.py`: fits
             // from 43.4 = the exact sum 43.28; the body breaker already used it).
-            if std::env::var_os("OXI_CJK_LATIN_EXACT_DISABLE").is_none()
+            if !crate::env_flag!("OXI_CJK_LATIN_EXACT_DISABLE")
                 && c.is_ascii_graphic()
                 && metrics.units_per_em != 256
                 && metrics.is_cjk_83_64_font()
@@ -2119,18 +2080,16 @@ impl FontMetricsRegistry {
 
         // S1592: the S1519 catalog step, which only the gdi-map path had. Cells
         // (and every other caller of this function) went straight to the pixel map.
-        if std::env::var_os("OXI_S1592_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_S1592_DISABLE") {
             if let Some(w) = self.catalog_width_before_gdi(c, font_size, metrics) {
                 return w;
             }
         }
         // GDI hinting override: fallback for fonts not in compact.json
         let ppem = (font_size * 96.0 / 72.0).round() as u32;
-        if let Some(font_ppems) = self.gdi_widths.get(&metrics.family) {
-            if let Some(char_widths) = font_ppems.get(&ppem) {
-                if let Some(&width_px) = char_widths.get(&(c as u32)) {
-                    return width_px as f32 * 72.0 / 96.0;
-                }
+        if let Some(char_widths) = gdi_widths::widths(&metrics.family, ppem) {
+            if let Some(&width_px) = char_widths.get(&(c as u32)) {
+                return width_px as f32 * 72.0 / 96.0;
             }
         }
 
@@ -2166,7 +2125,7 @@ impl FontMetricsRegistry {
     /// «Pītau» 22.93 = Oxi's «Pitau»); the +3pt wrapped «Administrator.» and
     /// shifted the rest of the page 13.4pt. é / ā were off by 0.5 / 3.0 the same way.
     fn runtime_width_fallback(&self, c: char, font_size: f32, metrics: &FontMetrics) -> Option<f32> {
-        if std::env::var_os("OXI_RUNTIME_WIDTH_FALLBACK_DISABLE").is_some() {
+        if crate::env_flag!("OXI_RUNTIME_WIDTH_FALLBACK_DISABLE") {
             return None;
         }
         let f = metrics.family.as_str();
@@ -2184,7 +2143,7 @@ impl FontMetricsRegistry {
     /// repeated HashMap lookups in per-character loops.
     pub fn get_gdi_char_widths(&self, family: &str, font_size: f32) -> Option<&HashMap<u32, u32>> {
         let ppem = (font_size * 96.0 / 72.0).round() as u32;
-        self.gdi_widths.get(family)?.get(&ppem)
+        gdi_widths::widths(family, ppem)
     }
 
     /// Character width using a pre-resolved GDI width map.
@@ -2198,19 +2157,19 @@ impl FontMetricsRegistry {
     /// 252.77 where the design widths sum to 252.80 and the 10tw-rounded ones to
     /// 254.50; katakana 247.61 vs 247.50 / 246.50.
     fn catalog_width_before_gdi(&self, c: char, font_size: f32, metrics: &FontMetrics) -> Option<f32> {
-        if std::env::var_os("OXI_CATALOG_BEFORE_GDI_DISABLE").is_some()
+        if crate::env_flag!("OXI_CATALOG_BEFORE_GDI_DISABLE")
             || !metrics.char_widths.is_empty()
         {
             return None;
         }
         let cat = catalog::resolve(&metrics.family, false, false)?;
         let &advance_em = cat.char_widths.get(&c)?;
-        let w = if std::env::var_os("OXI_S1592_DISABLE").is_none() {
+        let w = if !crate::env_flag!("OXI_S1592_DISABLE") {
             advance_em * font_size
         } else {
             (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0 / 20.0
         };
-        if std::env::var_os("OXI_DBG_CW").is_some() && (c as u32) == 0x3000 {
+        if crate::env_flag!("OXI_DBG_CW") && (c as u32) == 0x3000 {
             eprintln!("[CW] catalog family={:?} em={:.6} fs={} -> {:.4}",
                 metrics.family, advance_em, font_size, w);
         }
@@ -2230,11 +2189,11 @@ impl FontMetricsRegistry {
 
         // S1330: zero-width format characters advance nothing on every path.
         if is_nonspacing_kana_mark(c)
-            && std::env::var_os("OXI_KANA_COMBINING_DISABLE").is_none()
+            && !crate::env_flag!("OXI_KANA_COMBINING_DISABLE")
         {
             return 0.0;
         }
-        if is_zero_width_char(c) && std::env::var("OXI_S1330_DISABLE").is_err() {
+        if is_zero_width_char(c) && !crate::env_flag!("OXI_S1330_DISABLE") {
             return 0.0;
         }
         if metrics.synthetic_bold_advance > 0.0 {
@@ -2329,8 +2288,8 @@ impl FontMetricsRegistry {
             // sums to 424.996 at hmtx on a 425.2 line and Word keeps 方; the
             // 10tw-rounded kana pushed it down. Word's PDF steps by hmtx (た 17.640,
             // し 15.293 -- `_pb_advance_round_gen.py`).
-            if std::env::var_os("OXI_PROP_CJK_EXACT_DISABLE").is_none()
-                && std::env::var_os("OXI_PROP_CJK_EXACT_GDI_DISABLE").is_none()
+            if !crate::env_flag!("OXI_PROP_CJK_EXACT_DISABLE")
+                && !crate::env_flag!("OXI_PROP_CJK_EXACT_GDI_DISABLE")
                 && matches!(c, '\u{3041}'..='\u{30FA}' | '\u{30FC}'..='\u{30FF}'
                     | '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}')
                 && ((metrics.units_per_em != 256
@@ -2343,12 +2302,12 @@ impl FontMetricsRegistry {
                     // rounding put Oxi 0.86pt right of Word by «に» and pushed «が» down.
                     || (metrics.units_per_em == 256
                         && metrics.family == "MS PMincho"
-                        && std::env::var_os("OXI_PMINCHO_EXACT_DISABLE").is_none()))
+                        && !crate::env_flag!("OXI_PMINCHO_EXACT_DISABLE")))
             {
                 return advance_em * font_size;
             }
             let width_tw = (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0;
-            if std::env::var_os("OXI_DBG_CW").is_some() && (c as u32) == 0x3000 {
+            if crate::env_flag!("OXI_DBG_CW") && (c as u32) == 0x3000 {
                 eprintln!("[CW] {} family={:?} upm={} has_cw={} fs={} -> {:.4}",
                     "gdimap-charwidths", metrics.family, metrics.units_per_em,
                     metrics.char_widths.contains_key(&c), font_size, width_tw / 20.0);
@@ -2381,7 +2340,7 @@ impl FontMetricsRegistry {
         // PDF's 11.04 size) and «'» at 2.42 (design 2.444); the 15ppem pixel map
         // gave 3.75 / 2.25, and the 0.1pt short bullet let «quarter» fit a line
         // Word wraps.
-        if std::env::var_os("OXI_RUNTIME_BEFORE_GDI_DISABLE").is_none()
+        if !crate::env_flag!("OXI_RUNTIME_BEFORE_GDI_DISABLE")
             && !metrics.char_widths.is_empty()
             && metrics.units_per_em != 256
             && !is_cjk_font_family(&metrics.family)
@@ -2394,7 +2353,7 @@ impl FontMetricsRegistry {
         // GDI hinting override via pre-resolved map (for fonts without metric data)
         if let Some(char_widths) = gdi_map {
             if let Some(&width_px) = char_widths.get(&(c as u32)) {
-                if std::env::var_os("OXI_DBG_CW").is_some() && (c as u32) == 0x3000 {
+                if crate::env_flag!("OXI_DBG_CW") && (c as u32) == 0x3000 {
                     eprintln!("[CW] gdimap-PX family={:?} has_cw={} px={} fs={}",
                         metrics.family, metrics.char_widths.contains_key(&c), width_px, font_size);
                 }
@@ -2460,9 +2419,9 @@ fn is_cjk_or_symbol(c: char) -> bool {
 fn is_soei_family(family: &str) -> bool {
     matches!(family, "HGSoeiPresenceEB" | "HGPSoeiPresenceEB" | "HGSSoeiPresenceEB")
         || matches!(family, "HGSoeiKakugothicUB" | "HGPSoeiKakugothicUB" | "HGSSoeiKakugothicUB")
-        && std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none()
+        && !crate::env_flag!("OXI_SOEI_FACE_METRICS_DISABLE")
         || matches!(family, "HGSoeiKakupoptai" | "HGPSoeiKakupoptai" | "HGSSoeiKakupoptai")
-            && std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none()
+            && !crate::env_flag!("OXI_SOEI_POP_METRICS_DISABLE")
 }
 
 fn is_cjk_font_family(family: &str) -> bool {
@@ -2583,8 +2542,53 @@ pub(crate) fn is_metric_incompatible_substitution(family: &str) -> bool {
 /// Word substitutes these with Calibri / Times New Roman (PDF span fonts,
 /// S796/S831 derivations). JP maps are NOT routed here (their render
 /// calibration predates this and the JP names resolve natively).
+/// OXI_VERT_FORMS (2026-11-01, default ON, opt-out _DISABLE): the glyph Word
+/// draws for `ch` in upright vertical writing, where Unicode has a vertical
+/// presentation form (the face's `vert` substitution): corner brackets turn,
+/// parentheses open downward, 、。 move to the upper right. ja/creative__9132c5a8
+/// (tbRl): Word draws «「» as ﹁ and «、» in the cell's upper right; Oxi drew
+/// the horizontal forms.
+pub fn vertical_presentation_form(ch: char) -> Option<char> {
+    if std::env::var_os("OXI_VERT_FORMS_DISABLE").is_some() {
+        return None;
+    }
+    Some(match ch {
+        '\u{3001}' => '\u{FE11}', // 、
+        '\u{3002}' => '\u{FE12}', // 。
+        '\u{FF0C}' => '\u{FE10}', // ，
+        '\u{FF1A}' => '\u{FE13}', // ：
+        '\u{FF1B}' => '\u{FE14}', // ；
+        '\u{FF01}' => '\u{FE15}', // ！
+        '\u{FF1F}' => '\u{FE16}', // ？
+        '\u{3016}' => '\u{FE17}', '\u{3017}' => '\u{FE18}',
+        '\u{2026}' => '\u{FE19}', // …
+        '\u{2025}' => '\u{FE30}', // ‥
+        '\u{2014}' => '\u{FE31}', // —
+        '\u{2013}' => '\u{FE32}', // –
+        '\u{FF3F}' => '\u{FE33}', // ＿
+        '\u{FF08}' => '\u{FE35}', '\u{FF09}' => '\u{FE36}', // （）
+        '\u{FF5B}' => '\u{FE37}', '\u{FF5D}' => '\u{FE38}', // ｛｝
+        '\u{3014}' => '\u{FE39}', '\u{3015}' => '\u{FE3A}', // 〔〕
+        '\u{3010}' => '\u{FE3B}', '\u{3011}' => '\u{FE3C}', // 【】
+        '\u{300A}' => '\u{FE3D}', '\u{300B}' => '\u{FE3E}', // 《》
+        '\u{3008}' => '\u{FE3F}', '\u{3009}' => '\u{FE40}', // 〈〉
+        '\u{300C}' => '\u{FE41}', '\u{300D}' => '\u{FE42}', // 「」
+        '\u{300E}' => '\u{FE43}', '\u{300F}' => '\u{FE44}', // 『』
+        '\u{FF3B}' => '\u{FE47}', '\u{FF3D}' => '\u{FE48}', // ［］
+        _ => return None,
+    })
+}
+
+/// OXI_VERT_FORMS: characters with no vertical presentation form that Word
+/// turns a quarter clockwise in upright vertical writing (the long-vowel mark
+/// and the wave dashes / tildes / hyphen-minus).
+pub fn vertical_rotated_char(ch: char) -> bool {
+    std::env::var_os("OXI_VERT_FORMS_DISABLE").is_none()
+        && matches!(ch, '\u{30FC}' | '\u{301C}' | '\u{FF5E}' | '\u{FF0D}' | '\u{2212}' | '\u{2015}' | '\u{FF1D}')
+}
+
 pub fn render_family_name(name: &str) -> &str {
-    if std::env::var("OXI_S844_DISABLE").is_ok() {
+    if crate::env_flag!("OXI_S844_DISABLE") {
         return name;
     }
     if matches!(name, "標楷體" | "DFKai-SB")
@@ -2596,7 +2600,7 @@ pub fn render_family_name(name: &str) -> &str {
         "Calibri"
     } else if name == "CG Times" || name.starts_with("CG Times ") {
         "Times New Roman"
-    } else if name == "Courier" && std::env::var("OXI_S1137_DISABLE").is_err() {
+    } else if name == "Courier" && !crate::env_flag!("OXI_S1137_DISABLE") {
         // S1137 (2026-08-15): bare "Courier" is the legacy raster face; Word
         // draws it as Courier New. Measured, not assumed (_pb_linepitch_gen.py):
         // a 10pt "Courier" paragraph's Word line pitch is 11.3300 = Courier New's
@@ -2606,7 +2610,7 @@ pub fn render_family_name(name: &str) -> &str {
         // reach today is zero: all 118 docs that name it do so only in latent
         // MacroText styles no paragraph applies. Correct, not load-bearing.
         "Courier New"
-    } else if name == "Times" && std::env::var("OXI_S1005_DISABLE").is_err() {
+    } else if name == "Times" && !crate::env_flag!("OXI_S1005_DISABLE") {
         // S1005: bare "Times" (PostScript) → Times New Roman (FontSubstitutes).
         "Times New Roman"
     } else if name == "宋体" || name == "新宋体" || name == "NSimSun" {
@@ -2635,7 +2639,7 @@ pub fn render_family_name(name: &str) -> &str {
 /// case-sensitive lookup. Cached — the lookup sits on a hot path.
 fn s1070_case_insensitive_font_lookup() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("OXI_S1070_DISABLE").is_err())
+    *ON.get_or_init(|| !crate::env_flag!("OXI_S1070_DISABLE"))
 }
 
 pub(crate) fn normalize_family_name(name: &str) -> String {
@@ -2651,16 +2655,16 @@ pub(crate) fn normalize_family_name(name: &str) -> String {
         "HG創英ﾌﾟﾚｾﾞﾝｽEB" => "HGSoeiPresenceEB".to_string(),
         "HGP創英ﾌﾟﾚｾﾞﾝｽEB" => "HGPSoeiPresenceEB".to_string(),
         "HGS創英ﾌﾟﾚｾﾞﾝｽEB" => "HGSSoeiPresenceEB".to_string(),
-        "HG創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() => "HGSoeiKakupoptai".to_string(),
-        "HGP創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() => "HGPSoeiKakupoptai".to_string(),
-        "HGS創英角ﾎﾟｯﾌﾟ体" if std::env::var_os("OXI_SOEI_POP_METRICS_DISABLE").is_none() => "HGSSoeiKakupoptai".to_string(),
-        "Yu Mincho" if std::env::var_os("OXI_CJK_METRIC_ALIAS").is_some()
-            || std::env::var_os("OXI_YU_MINCHO_STYLE_FACE").is_some() => "Yu Mincho Regular".to_string(),
-        "等线" if std::env::var_os("OXI_DENGXIAN_METRICS_DISABLE").is_none() => "DengXian".to_string(),
-        "맑은 고딕" if std::env::var_os("OXI_MALGUN_METRICS").is_some() => "Malgun Gothic".to_string(),
-        "HG創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none() => "HGSoeiKakugothicUB".to_string(),
-        "HGP創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none() => "HGPSoeiKakugothicUB".to_string(),
-        "HGS創英角ｺﾞｼｯｸUB" if std::env::var_os("OXI_SOEI_FACE_METRICS_DISABLE").is_none() => "HGSSoeiKakugothicUB".to_string(),
+        "HG創英角ﾎﾟｯﾌﾟ体" if !crate::env_flag!("OXI_SOEI_POP_METRICS_DISABLE") => "HGSoeiKakupoptai".to_string(),
+        "HGP創英角ﾎﾟｯﾌﾟ体" if !crate::env_flag!("OXI_SOEI_POP_METRICS_DISABLE") => "HGPSoeiKakupoptai".to_string(),
+        "HGS創英角ﾎﾟｯﾌﾟ体" if !crate::env_flag!("OXI_SOEI_POP_METRICS_DISABLE") => "HGSSoeiKakupoptai".to_string(),
+        "Yu Mincho" if crate::env_flag!("OXI_CJK_METRIC_ALIAS")
+            || crate::env_flag!("OXI_YU_MINCHO_STYLE_FACE") => "Yu Mincho Regular".to_string(),
+        "等线" if !crate::env_flag!("OXI_DENGXIAN_METRICS_DISABLE") => "DengXian".to_string(),
+        "맑은 고딕" if crate::env_flag!("OXI_MALGUN_METRICS") => "Malgun Gothic".to_string(),
+        "HG創英角ｺﾞｼｯｸUB" if !crate::env_flag!("OXI_SOEI_FACE_METRICS_DISABLE") => "HGSoeiKakugothicUB".to_string(),
+        "HGP創英角ｺﾞｼｯｸUB" if !crate::env_flag!("OXI_SOEI_FACE_METRICS_DISABLE") => "HGPSoeiKakugothicUB".to_string(),
+        "HGS創英角ｺﾞｼｯｸUB" if !crate::env_flag!("OXI_SOEI_FACE_METRICS_DISABLE") => "HGSSoeiKakugothicUB".to_string(),
         // S831 (2026-07-13): CG Times is the PCL metric CLONE of Times New
         // Roman; Windows FontSubstitutes resolves it to TNR and Word renders
         // TNR metrics. The comment on is_metric_incompatible_substitution
@@ -2678,7 +2682,7 @@ pub(crate) fn normalize_family_name(name: &str) -> String {
         // "Times" (not "Times New Roman") appears in 0 golden / 0 real_en / 19
         // docx_corpus/en (incl. forms__002a6444) / 2 ja — no word_png doc → SSIM
         // byte-identical by construction. Gated OXI_S1005_DISABLE for A/B.
-        "Times" if std::env::var("OXI_S1005_DISABLE").is_err() => "Times New Roman".to_string(),
+        "Times" if !crate::env_flag!("OXI_S1005_DISABLE") => "Times New Roman".to_string(),
         // S846 (2026-07-14): Helvetica family → Arial (metric-compatible clone,
         // uninstalled on Windows; Word substitutes Arial). Feeds the METRICS
         // side so layout uses Arial's wider space (3.05pt vs the Calibri
@@ -2714,7 +2718,7 @@ pub(crate) fn normalize_family_name(name: &str) -> String {
         // at 12pt), grid-independent (NOGRID identical). Map to MS Gothic so the
         // UPM=256 fullwidth path returns font_size. Opt-out OXI_S567_DISABLE.
         "HGSｺﾞｼｯｸM" | "HGSｺﾞｼｯｸE" | "HGｺﾞｼｯｸM" | "HGｺﾞｼｯｸE"
-            if std::env::var("OXI_S567_DISABLE").is_err() =>
+            if !crate::env_flag!("OXI_S567_DISABLE") =>
         {
             "MS Gothic".to_string()
         }
@@ -2729,7 +2733,7 @@ pub(crate) fn normalize_family_name(name: &str) -> String {
         // on kojin (kana/kanji/punct all match; Word adds ~0.2pt justify on top).
         // Mapped to the canonical "HGPGothicM" (is_cjk_font_family / is_pgothic_family).
         // Opt-out OXI_S579_DISABLE → falls back to MS UI Gothic.
-        "HGPｺﾞｼｯｸM" if std::env::var("OXI_S579_DISABLE").is_err() => {
+        "HGPｺﾞｼｯｸM" if !crate::env_flag!("OXI_S579_DISABLE") => {
             "HGPGothicM".to_string()
         }
         "游ゴシック" | "Yu Gothic UI" | "游ゴシック Light" => {
@@ -2784,7 +2788,7 @@ pub(crate) fn normalize_family_name(name: &str) -> String {
         // them all with Calibri (PDF span font = Calibri, letter advances
         // match Calibri exactly).
         "Humnst777 Lt BT" | "Humnst777 BT" | "Humnst777 Cn BT" | "Humnst777-lt-bt-light"
-            if std::env::var("OXI_S796_DISABLE").is_err() =>
+            if !crate::env_flag!("OXI_S796_DISABLE") =>
         {
             "Calibri".to_string()
         }
@@ -2799,13 +2803,13 @@ pub(crate) fn normalize_family_name(name: &str) -> String {
         // 020B0503020203020204 = swiss/normal-sans/book — Tw Cen MT's shape).
         // creative__00d0925f sets its whole body in Avenir Book 11pt: Word fits
         // it on ONE page at 12.0 pitch, Oxi needed two at 13.0.
-        "Avenir Book" | "Avenir Next" | "Avenir" if std::env::var("OXI_S1132_DISABLE").is_err() => {
+        "Avenir Book" | "Avenir Next" | "Avenir" if !crate::env_flag!("OXI_S1132_DISABLE") => {
             "Tw Cen MT".to_string()
         }
         // S1137: see render_family_name -- Word draws bare "Courier" as
         // Courier New, and the metrics have to follow the same face or the line
         // height stays Calibri's.
-        "Courier" if std::env::var("OXI_S1137_DISABLE").is_err() => "Courier New".to_string(),
+        "Courier" if !crate::env_flag!("OXI_S1137_DISABLE") => "Courier New".to_string(),
         // OSS metric-compatible fonts
         "Carlito" => "Carlito".to_string(),
         "Caladea" => "Caladea".to_string(),
@@ -2832,7 +2836,7 @@ pub(crate) fn normalize_family_name(name: &str) -> String {
 /// Arial when Arial Narrow is absent, as Word's did.
 pub(crate) fn postscript_family_name(name: &str) -> Option<String> {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ON.get_or_init(|| std::env::var_os("OXI_PSNAME_FAMILY_DISABLE").is_none()) {
+    if !*ON.get_or_init(|| !crate::env_flag!("OXI_PSNAME_FAMILY_DISABLE")) {
         return None;
     }
     if name.is_empty() || name.contains(' ') || !name.is_ascii() {

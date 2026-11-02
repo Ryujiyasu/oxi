@@ -20,9 +20,21 @@ fn main() {
 
     match args.get(1).map(|s| s.as_str()) {
         Some("docx-to-pdf") => {
-            let input = args.get(2).expect("Usage: oxi docx-to-pdf <input.docx> <output.pdf>");
-            let output = args.get(3).expect("Usage: oxi docx-to-pdf <input.docx> <output.pdf>");
-            docx_to_pdf(input, output);
+            let usage = "Usage: oxi docx-to-pdf [--strict] <input.docx> <output.pdf>";
+            let strict = args[2..].iter().any(|a| a == "--strict");
+            let paths: Vec<&String> = args[2..].iter().filter(|a| *a != "--strict").collect();
+            let input = paths.first().expect(usage);
+            let output = paths.get(1).expect(usage);
+            docx_to_pdf(input, output, strict);
+        }
+        Some("serve") => {
+            let threads = args[2..]
+                .windows(2)
+                .find(|w| w[0] == "--threads")
+                .and_then(|w| w[1].parse::<usize>().ok())
+                .unwrap_or(1)
+                .max(1);
+            serve(threads);
         }
         Some("fonts-index") => {
             // Instrument for the font resolver: report what the machine
@@ -126,7 +138,12 @@ fn main() {
             eprintln!("Oxi CLI - Document processing toolkit");
             eprintln!();
             eprintln!("Usage:");
-            eprintln!("  oxi docx-to-pdf <input.docx> <output.pdf>");
+            eprintln!("  oxi docx-to-pdf [--strict] <input.docx> <output.pdf>");
+            eprintln!("  oxi serve [--threads N]");
+            eprintln!("      one JSON request per stdin line, {{\"input\", \"output\", \"strict\", \"id\"}};");
+            eprintln!("      one JSON answer per stdout line, in completion order");
+            eprintln!("      --strict: write nothing and exit {EXIT_UNSUPPORTED} when the document holds");
+            eprintln!("                content Oxi does not draw (listed as JSON on stderr)");
             eprintln!("  oxi vba-analyze <input.xlsm>");
             eprintln!("  oxi vba-safety <input.xlsm>");
             eprintln!("  oxi vba-seal <input.xlsm> <key.pk8> [note]");
@@ -138,20 +155,139 @@ fn main() {
     }
 }
 
-fn docx_to_pdf(input: &str, output: &str) {
-    let data = fs::read(input).expect("Failed to read input file");
-    let doc = oxidocs_core::parse_docx(&data).expect("Failed to parse docx");
+/// `docx-to-pdf --strict` exit status when the document holds content Oxi does
+/// not draw. Distinct from usage errors (1) and panics (101), so a caller can
+/// tell "use another engine" from "this file is broken".
+const EXIT_UNSUPPORTED: i32 = 3;
+
+/// `docx-to-pdf` exit status when the input cannot be read or parsed.
+const EXIT_FAILED: i32 = 2;
+
+/// Why a conversion produced no PDF.
+enum ConvertError {
+    /// `strict` was asked and the document holds content Oxi does not draw.
+    Unsupported(Vec<oxidocs_core::ir::UnsupportedContent>),
+    /// The input could not be read or parsed, or the output not written.
+    Failed(String),
+}
+
+/// What a conversion wrote.
+struct Converted {
+    bytes: usize,
+    pages: usize,
+}
+
+/// Convert `input` to the PDF at `output`. Shared by `docx-to-pdf` and every
+/// request `serve` handles, so neither exits the process on a bad document.
+fn convert(input: &str, output: &str, strict: bool) -> Result<Converted, ConvertError> {
+    let data = fs::read(input).map_err(|e| ConvertError::Failed(format!("read {input}: {e}")))?;
+    let doc = oxidocs_core::parse_docx(&data).map_err(|e| ConvertError::Failed(format!("parse {input}: {e}")))?;
 
     eprintln!("Parsed: {} section(s), {} blocks total",
         doc.pages.len(),
         doc.pages.iter().map(|p| p.blocks.len()).sum::<usize>());
 
+    if !doc.unsupported.is_empty() {
+        if strict {
+            // Checked before layout, so a caller falling back loses no time.
+            return Err(ConvertError::Unsupported(doc.unsupported));
+        }
+        for u in &doc.unsupported {
+            eprintln!("Warning: {} x{} in {} is not drawn - the PDF is missing it", u.kind, u.count, u.part);
+        }
+    }
+
     let pdf_doc = doc_to_pdf(&doc);
     let pdf_bytes = oxipdf_core::write_pdf(&pdf_doc);
 
-    fs::write(output, &pdf_bytes).expect("Failed to write output file");
-    println!("Converted {} -> {} ({} bytes, {} pages)",
-        input, output, pdf_bytes.len(), pdf_doc.pages.len());
+    fs::write(output, &pdf_bytes).map_err(|e| ConvertError::Failed(format!("write {output}: {e}")))?;
+    Ok(Converted { bytes: pdf_bytes.len(), pages: pdf_doc.pages.len() })
+}
+
+fn docx_to_pdf(input: &str, output: &str, strict: bool) {
+    match convert(input, output, strict) {
+        Ok(c) => println!("Converted {} -> {} ({} bytes, {} pages)", input, output, c.bytes, c.pages),
+        Err(ConvertError::Unsupported(u)) => {
+            eprintln!("{}", serde_json::json!({ "unsupported": u }));
+            std::process::exit(EXIT_UNSUPPORTED);
+        }
+        Err(ConvertError::Failed(why)) => {
+            eprintln!("Error: {why}");
+            std::process::exit(EXIT_FAILED);
+        }
+    }
+}
+
+/// Convert documents for as long as stdin stays open, one request per line:
+/// `{"input": "a.docx", "output": "a.pdf", "strict": true, "id": 7}` (strict
+/// and id optional). One answer per line goes to stdout as each finishes,
+/// carrying the request's id:
+/// `{"id":7,"ok":true,"pages":3,"bytes":51234,"ms":412.5}`, or `"ok":false`
+/// with `"exit"` -- the status `docx-to-pdf` would have exited with (3 with
+/// `"unsupported"`, 2 or 101 with `"error"`) -- so a caller treats both the
+/// same way. A panic fails its own request and the server goes on.
+///
+/// Fonts, metrics and the font index load once and stay warm, which is the
+/// point: a process per document pays for them every time. `threads` workers
+/// convert side by side.
+fn serve(threads: usize) {
+    use std::io::{BufRead, Write};
+    use std::sync::{mpsc, Arc, Mutex};
+
+    let (jobs_tx, jobs_rx) = mpsc::channel::<String>();
+    let jobs_rx = Arc::new(Mutex::new(jobs_rx));
+    let out = Arc::new(Mutex::new(std::io::stdout()));
+    let workers: Vec<_> = (0..threads)
+        .map(|_| {
+            let jobs_rx = Arc::clone(&jobs_rx);
+            let out = Arc::clone(&out);
+            std::thread::spawn(move || loop {
+                let Ok(line) = jobs_rx.lock().expect("job queue").recv() else { break };
+                let answer = serve_one(&line);
+                let mut out = out.lock().expect("stdout");
+                let _ = writeln!(out, "{answer}");
+                let _ = out.flush();
+            })
+        })
+        .collect();
+    for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+        if !line.trim().is_empty() && jobs_tx.send(line).is_err() {
+            break;
+        }
+    }
+    drop(jobs_tx);
+    for w in workers {
+        let _ = w.join();
+    }
+}
+
+fn serve_one(line: &str) -> serde_json::Value {
+    use serde_json::json;
+    let req: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => return json!({ "ok": false, "exit": EXIT_FAILED, "error": format!("request: {e}") }),
+    };
+    let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let (Some(input), Some(output)) = (req["input"].as_str(), req["output"].as_str()) else {
+        return json!({ "id": id, "ok": false, "exit": EXIT_FAILED, "error": "request needs input and output" });
+    };
+    let strict = req["strict"].as_bool().unwrap_or(false);
+    let start = std::time::Instant::now();
+    let result = std::panic::catch_unwind(|| convert(input, output, strict));
+    let ms = start.elapsed().as_secs_f64() * 1000.0;
+    match result {
+        Ok(Ok(c)) => json!({ "id": id, "ok": true, "pages": c.pages, "bytes": c.bytes, "ms": ms }),
+        Ok(Err(ConvertError::Unsupported(u))) => json!({ "id": id, "ok": false, "exit": EXIT_UNSUPPORTED, "unsupported": u, "ms": ms }),
+        Ok(Err(ConvertError::Failed(why))) => json!({ "id": id, "ok": false, "exit": EXIT_FAILED, "error": why, "ms": ms }),
+        Err(panic) => {
+            let why = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "panic".into());
+            json!({ "id": id, "ok": false, "exit": 101, "error": why, "ms": ms })
+        }
+    }
 }
 
 // --- Direct Document IR → PDF conversion (no LayoutEngine) ---
@@ -973,6 +1109,14 @@ fn bundled_font_dirs() -> Vec<std::path::PathBuf> {
     dirs
 }
 
+/// One shipped face's file, from the first of `bundled_font_dirs` that holds it.
+fn bundled_face_file(file: &str) -> Option<std::path::PathBuf> {
+    bundled_font_dirs()
+        .into_iter()
+        .map(|dir| dir.join(file))
+        .find(|path| path.is_file())
+}
+
 /// Write the compiled-in faces into `where_to`, and say where they landed.
 ///
 /// Nothing is overwritten: a face already there is somebody's deliberate copy,
@@ -1164,7 +1308,8 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
     let registry = FontMetricsRegistry::load();
 
     // Build embedded fonts for CJK text
-    let embedded_fonts = build_embedded_fonts(doc, &layout_result);
+    let mut embedded_fonts = build_embedded_fonts(doc, &layout_result);
+    embed_fallback_faces(&layout_result, &mut embedded_fonts);
 
     // Convert LayoutResult pages → PDF pages
     let pages: Vec<Page> = layout_result.pages.iter().map(|lp| {
@@ -1208,73 +1353,24 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
 
                     // Resolve font name for PDF (map to Type1 base fonts or CJK)
                     let font_name = resolve_font_styled(font_family.as_deref(), *bold, *italic);
-
-                    // Split text into ASCII (Type1) and CJK (embedded) segments
-                    // When font_name IS a CJK font, use it for all characters (no splitting).
-                    let is_cjk_font_name = font_name.contains("Gothic") || font_name.contains("Mincho") || font_name.contains("ゴシック") || font_name.contains("明朝")
-                        || font_name.contains("游") || font_name.contains("ＭＳ")
-                        || font_name.contains("ゴシック") || font_name.contains("明朝")
-                        || font_name.contains("メイリオ") || font_name.contains("Meiryo");
+                    let text = &symbol_text(font_family.as_deref(), &font_name, text, &embedded_fonts);
                     let chars: Vec<char> = text.chars().collect();
                     let mut seg_x = x;
                     let mut segments: Vec<(String, String, f64, f64)> = Vec::new();
 
-                    // Route a character to the CJK font only when the resolved
-                    // face has no glyph for it. The old test was "codepoint >
-                    // 0x7F", which sent curly quotes, dashes and accented Latin
-                    // — all present in the Latin face — into a Japanese Gothic
-                    // font. Without an embedded face there is no cmap to ask,
-                    // so the codepoint test remains the fallback.
-                    let latin_face = embedded_fonts.get(&font_name);
-                    // Only divert to a font that was actually loaded. The
-                    // decision to load one is made from the document's text;
-                    // this decision was made per character, and the two
-                    // disagreed — a bullet or a non-breaking hyphen missing
-                    // from the Latin subset sent a run to OxiCJK in a document
-                    // with no East Asian text in it, naming a font the PDF
-                    // never carried, and taking the ordinary English after it
-                    // along for the ride.
-                    let cjk_loaded = embedded_fonts.contains_key("OxiCJK-Regular");
-                    let needs_cjk = |c: char| {
-                        if !cjk_loaded {
-                            return false;
-                        }
-                        // A tab carries no glyph and is in no font's cmap, so
-                        // "the face does not cover it" is true of every face —
-                        // which used to hand a plain English document to the
-                        // East Asian font on the strength of one indent.
-                        if (c as u32) < 0x20 {
-                            return false;
-                        }
-                        match latin_face {
-                            Some(face) => !face.unicode_to_gid.contains_key(&(c as u32)),
-                            // With no face to ask, only real East Asian text is
-                            // worth diverting; a curly quote or an accented
-                            // letter is representable where it already is.
-                            None => is_cjk_char(c),
-                        }
-                    };
-
+                    // Consecutive characters drawn with the same face make one
+                    // segment: the run's own face, the East Asian face for what
+                    // a Latin face lacks, a fallback face for what both lack.
                     let mut raw_segments: Vec<(String, String, f64)> = Vec::new();
                     let mut total_est = 0.0_f64;
                     let mut i = 0;
                     while i < chars.len() {
-                        let is_cjk = needs_cjk(chars[i]);
+                        let seg_font = pdf_face_for(chars[i], &font_name, *bold, &embedded_fonts);
                         let mut j = i + 1;
-                        // If using a CJK font, don't split — keep everything in one segment
-                        if !is_cjk_font_name {
-                            while j < chars.len() && needs_cjk(chars[j]) == is_cjk {
-                                j += 1;
-                            }
-                        } else {
-                            j = chars.len(); // entire text as one segment
+                        while j < chars.len() && pdf_face_for(chars[j], &font_name, *bold, &embedded_fonts) == seg_font {
+                            j += 1;
                         }
                         let seg_text: String = chars[i..j].iter().collect();
-                        let seg_font = if is_cjk_font_name {
-                            font_name.clone()
-                        } else if is_cjk {
-                            if *bold { "OxiCJK-Bold".to_string() } else { "OxiCJK-Regular".to_string() }
-                        } else { font_name.clone() };
                         let seg_w: f64 = seg_text.chars()
                             .map(|c| char_width(c, fs))
                             .sum();
@@ -1557,7 +1653,30 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                 oxidocs_core::layout::LayoutContent::Balloon { .. } => {}
                 oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => {}
                 // S1120 custGeom paths: not surfaced in the CLI page model yet
-                oxidocs_core::layout::LayoutContent::VectorPath { .. } => {}
+                oxidocs_core::layout::LayoutContent::VectorPath { segs, fill, stroke_color, stroke_width } => {
+                    // A group member's outline (custGeom curves, presets, SmartArt
+                    // shapes), its points normalized 0..1 over the element box.
+                    // This arm drew nothing, so every such outline was missing
+                    // from docx-to-pdf while the screen renderers drew it.
+                    use oxidocs_core::ir::PathSeg;
+                    let px = |u: f32| x + u as f64 * ew;
+                    let py = |v: f32| y + v as f64 * eh;
+                    let ops: Vec<PathOp> = segs.iter().map(|seg| match *seg {
+                        PathSeg::M(a, b) => PathOp::MoveTo(px(a), py(b)),
+                        PathSeg::L(a, b) => PathOp::LineTo(px(a), py(b)),
+                        PathSeg::C(a, b, c, d, e, f) => PathOp::CurveTo(px(a), py(b), px(c), py(d), px(e), py(f)),
+                        PathSeg::Z => PathOp::ClosePath,
+                    }).collect();
+                    let fill_color = fill.as_deref().and_then(parse_hex_color);
+                    let stroke = stroke_color.as_deref().and_then(parse_hex_color)
+                        .filter(|_| *stroke_width > 0.0)
+                        .map(|color| StrokeStyle {
+                            color, width: *stroke_width as f64, line_cap: LineCap::Butt, line_join: LineJoin::Round,
+                        });
+                    if !ops.is_empty() && (fill_color.is_some() || stroke.is_some()) {
+                        contents.push(ContentElement::Path(PathData { operations: ops, stroke, fill: fill_color }));
+                    }
+                }
             }
         }
 
@@ -2542,6 +2661,150 @@ const CJK_FONT_PATHS_BOLD: &[&str] = &[
 /// Path to Python3 for font subsetting (requires fonttools)
 const PYTHON3: &str = "python3";
 
+/// Faces asked, in order, for a character no face of the document has: the
+/// check boxes, ≒ and Wingdings bullets of a Japanese form drawn in a stand-in
+/// Gothic that lacks them. Read off the machine, never shipped: DejaVu and the
+/// Noto symbol faces are in the Debian images a server runs (Gotenberg ships
+/// both), Segoe UI Symbol on Windows.
+const FALLBACK_FACES: &[&str] = &[
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansMath-Regular.ttf",
+    "C:\\Windows\\Fonts\\seguisym.ttf",
+];
+
+/// PDF font name of the `n`th fallback face that was embedded.
+fn fallback_face_name(n: usize) -> String {
+    format!("OxiFallback-{n}")
+}
+
+/// Whether `font_name` is an East Asian face, which then draws every
+/// character of its run rather than handing the Latin ones to another face.
+fn is_cjk_pdf_font(font_name: &str) -> bool {
+    ["Gothic", "Mincho", "ゴシック", "明朝", "游", "ＭＳ", "メイリオ", "Meiryo"]
+        .iter()
+        .any(|k| font_name.contains(k))
+}
+
+/// `text` with a symbol font's codes turned into the Unicode symbols they
+/// draw, for each code the face embedded under the font's name has no glyph
+/// for. The real Wingdings maps its codes (at U+F0xx, however the run spells
+/// them) and keeps drawing them; the face a machine without it substitutes
+/// under the same name does not.
+fn symbol_text(family: Option<&str>, font_name: &str, text: &str, fonts: &HashMap<String, EmbeddedFont>) -> String {
+    let Some(family) = family else { return text.to_string() };
+    let face = fonts.get(font_name);
+    text.chars()
+        .map(|c| match oxidocs_fonts::symbol_font_to_unicode(family, c) {
+            Some(u) if face.map_or(true, |f| !f.unicode_to_gid.contains_key(&(0xF000 | (c as u32 & 0xFF)))) => u,
+            _ => c,
+        })
+        .collect()
+}
+
+/// The face a character of a run in `font_name` is drawn with, before any
+/// fallback: the run's face, or the East Asian face for what a Latin face
+/// lacks.
+fn primary_face_for(c: char, font_name: &str, bold: bool, fonts: &HashMap<String, EmbeddedFont>) -> String {
+    // An East Asian face draws its whole run.
+    if is_cjk_pdf_font(font_name) {
+        return font_name.to_string();
+    }
+    // Only divert to a font that was actually loaded. The decision to load one
+    // is made from the document's text; this one is made per character, and
+    // when the two disagreed a bullet missing from the Latin subset sent a run
+    // to OxiCJK in a document with no East Asian text, naming a font the PDF
+    // never carried.
+    // A tab carries no glyph and is in no font's cmap, so "the face does not
+    // cover it" is true of every face -- which used to hand a plain English
+    // document to the East Asian font on the strength of one indent.
+    if !fonts.contains_key("OxiCJK-Regular") || (c as u32) < 0x20 {
+        return font_name.to_string();
+    }
+    // Route to the CJK font only when the resolved face has no glyph for the
+    // character. The old test was "codepoint > 0x7F", which sent curly quotes,
+    // dashes and accented Latin into a Japanese Gothic font. With no face to
+    // ask, only real East Asian text is worth diverting.
+    let needs_cjk = match fonts.get(font_name) {
+        Some(face) => !face.unicode_to_gid.contains_key(&(c as u32)),
+        None => is_cjk_char(c),
+    };
+    if !needs_cjk {
+        font_name.to_string()
+    } else if bold {
+        "OxiCJK-Bold".to_string()
+    } else {
+        "OxiCJK-Regular".to_string()
+    }
+}
+
+/// Whether the face `name` is embedded and has no glyph for `c` -- the case a
+/// fallback face exists for. Spaces and control characters draw nothing and
+/// need no glyph.
+fn lacks_glyph(name: &str, c: char, fonts: &HashMap<String, EmbeddedFont>) -> bool {
+    !c.is_whitespace()
+        && (c as u32) >= 0x20
+        && fonts.get(name).is_some_and(|face| !face.unicode_to_gid.contains_key(&(c as u32)))
+}
+
+/// The face a character is drawn with: its primary face, or the first
+/// embedded fallback face that has the glyph the primary one lacks.
+fn pdf_face_for(c: char, font_name: &str, bold: bool, fonts: &HashMap<String, EmbeddedFont>) -> String {
+    let primary = primary_face_for(c, font_name, bold, fonts);
+    if lacks_glyph(&primary, c, fonts) {
+        for n in 0.. {
+            let Some(face) = fonts.get(&fallback_face_name(n)) else { break };
+            if face.unicode_to_gid.contains_key(&(c as u32)) {
+                return fallback_face_name(n);
+            }
+        }
+    }
+    primary
+}
+
+/// Embed, from `FALLBACK_FACES`, the glyphs of every character whose primary
+/// face lacks it, so it is drawn instead of left as .notdef.
+fn embed_fallback_faces(layout: &oxidocs_core::layout::LayoutResult, fonts: &mut HashMap<String, EmbeddedFont>) {
+    let mut missing: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
+    for page in &layout.pages {
+        for elem in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Text { text, font_family, bold, italic, .. } = &elem.content {
+                let font_name = resolve_font_styled(font_family.as_deref(), *bold, *italic);
+                for c in symbol_text(font_family.as_deref(), &font_name, text, fonts).chars() {
+                    if lacks_glyph(&primary_face_for(c, &font_name, *bold, fonts), c, fonts) {
+                        missing.insert(c);
+                    }
+                }
+            }
+        }
+    }
+    let mut n = 0;
+    for path in FALLBACK_FACES {
+        if missing.is_empty() {
+            break;
+        }
+        if !std::path::Path::new(path).exists() {
+            continue;
+        }
+        let Some(face) = subset_font_file(path, &missing, &format!("fallback{n}")) else { continue };
+        let covered: Vec<char> = missing.iter().copied().filter(|c| face.unicode_to_gid.contains_key(&(*c as u32))).collect();
+        if covered.is_empty() {
+            continue;
+        }
+        eprintln!("Embedding fallback face {} for {} character(s) no document face has", path, covered.len());
+        for c in covered {
+            missing.remove(&c);
+        }
+        fonts.insert(fallback_face_name(n), face);
+        n += 1;
+    }
+    if !missing.is_empty() {
+        let list: String = missing.iter().collect();
+        eprintln!("Warning: no face on this machine has {list:?} - drawn as missing glyphs");
+    }
+}
+
 /// True for characters that actually need an East Asian face.
 ///
 /// The test used to be `c > 0x7F`, which is true of a curly quote, an en dash
@@ -2751,8 +3014,24 @@ fn build_embedded_fonts(
         }
     }
 
+    // Every character the pages draw. The IR's body blocks miss whatever the
+    // layout produces or pulls in itself -- page numbers and other field
+    // results, list labels, headers, footers, footnotes, shape text -- and a
+    // character missing from the subset is drawn as .notdef.
+    let mut drawn_chars: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
+    for page in &layout.pages {
+        for elem in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Text { text, font_family, bold, italic, .. } = &elem.content {
+                drawn_chars.extend(text.chars());
+                // and the Unicode a symbol font's codes are drawn as without it
+                let font_name = resolve_font_styled(font_family.as_deref(), *bold, *italic);
+                drawn_chars.extend(symbol_text(font_family.as_deref(), &font_name, text, &fonts).chars());
+            }
+        }
+    }
+
     // Embed Latin fonts (Calibri + Cambria) regardless of CJK usage
-    let mut used_chars_latin: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
+    let mut used_chars_latin: std::collections::BTreeSet<char> = drawn_chars.clone();
     for page in &doc.pages {
         for block in &page.blocks {
             collect_chars_from_block(block, &mut used_chars_latin);
@@ -2766,7 +3045,7 @@ fn build_embedded_fonts(
     }
 
     // Collect all unique characters used in the document (for font subsetting)
-    let mut used_chars: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
+    let mut used_chars: std::collections::BTreeSet<char> = drawn_chars;
     for page in &doc.pages {
         for block in &page.blocks {
             collect_chars_from_block(block, &mut used_chars);
@@ -2779,39 +3058,50 @@ fn build_embedded_fonts(
         }
     }
 
-    // Per-family CJK font embedding: map font families to system font files
-    // Try system fonts first, fall back to bundled OxiGothic/OxiMincho (Noto-based, OFL)
-    let exe_dir = std::env::current_exe().ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_default();
-    let oxi_gothic = exe_dir.join("fonts").join("OxiGothic.ttf");
-    let oxi_mincho = exe_dir.join("fonts").join("OxiMincho.ttf");
-    let oxi_gothic_str = oxi_gothic.to_string_lossy().to_string();
-    let oxi_mincho_str = oxi_mincho.to_string_lossy().to_string();
-
-    let family_font_map: Vec<(&str, Vec<&str>)> = vec![
-        ("MS-Gothic",  vec!["C:\\Windows\\Fonts\\msgothic.ttc", oxi_gothic_str.as_str()]),
-        ("MS-PGothic", vec!["C:\\Windows\\Fonts\\msgothic.ttc", oxi_gothic_str.as_str()]),
-        ("MS-Mincho",  vec!["C:\\Windows\\Fonts\\msmincho.ttc", oxi_mincho_str.as_str()]),
-        ("MS-PMincho", vec!["C:\\Windows\\Fonts\\msmincho.ttc", oxi_mincho_str.as_str()]),
-    ];
-
-    // Embed per-family fonts: resolve original font names to PDF names, match against map
-    let mut embedded_families: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for name in &font_names_used {
-        let resolved = resolve_font(Some(name), false);
-        for (family, paths) in &family_font_map {
-            if resolved == *family {
-                if !embedded_families.contains(&resolved) {
-                    let label = resolved.replace('-', "_");
-                    let found_path = paths.iter().find(|p| std::path::Path::new(p).exists());
-                    if let Some(result) = found_path.and_then(|p| subset_font_file(p, &used_chars, &label)) {
-                        eprintln!("Embedding CJK font '{}' ({}) from {} ({} bytes)", resolved, name, found_path.unwrap(), result.data.len());
-                        fonts.insert(resolved.clone(), result);
-                        embedded_families.insert(resolved.clone());
-                    }
+    // The East Asian families the text is actually drawn in. The IR alone
+    // misses a family that only a style names -- ＭＳ 明朝 on Normal's
+    // eastAsia slot is the common case -- and the layout has already resolved
+    // every run to the family it draws with.
+    for page in &layout.pages {
+        for elem in &page.elements {
+            if let oxidocs_core::layout::LayoutContent::Text { font_family: Some(family), .. } = &elem.content {
+                if is_cjk_family(family) && !font_names_used.contains(family) {
+                    font_names_used.push(family.clone());
                 }
-                break;
+            }
+        }
+    }
+
+    // Per-family CJK font embedding: the family's own file where the machine
+    // has it, then the shipped stand-in of the same kind -- Mincho for a
+    // Mincho family, Gothic otherwise. The stand-in is looked for where every
+    // other shipped face is, so a Mincho document is never handed to whatever
+    // sans face the system happens to carry.
+    let system_files: &[(&str, &str)] = &[
+        ("MS-Gothic", "C:\\Windows\\Fonts\\msgothic.ttc"),
+        ("MS-PGothic", "C:\\Windows\\Fonts\\msgothic.ttc"),
+        ("MS-Mincho", "C:\\Windows\\Fonts\\msmincho.ttc"),
+        ("MS-PMincho", "C:\\Windows\\Fonts\\msmincho.ttc"),
+    ];
+    for name in &font_names_used {
+        if !is_cjk_family(name) {
+            continue;
+        }
+        let resolved = resolve_font(Some(name), false);
+        if fonts.contains_key(&resolved) {
+            continue;
+        }
+        let system = system_files
+            .iter()
+            .find(|(family, _)| *family == resolved)
+            .map(|(_, path)| std::path::PathBuf::from(path))
+            .filter(|path| path.exists());
+        let found_path = system.or_else(|| bundled_face_file(oxidocs_fonts::cjk_stand_in(name).1));
+        let label = resolved.replace(['-', ' '], "_");
+        if let Some(path) = found_path {
+            if let Some(result) = subset_font_file(&path.to_string_lossy(), &used_chars, &label) {
+                eprintln!("Embedding CJK font '{}' ({}) from {} ({} bytes)", resolved, name, path.display(), result.data.len());
+                fonts.insert(resolved, result);
             }
         }
     }
@@ -2964,6 +3254,59 @@ fn embed_whole_font(font_path: &str, label: &str) -> Option<EmbeddedFont> {
     Some(font)
 }
 
+enum NativeSubset {
+    /// The face draws none of the characters asked for.
+    NoGlyph,
+    /// The font is one the in-process subsetter cannot cut (CFF2, say).
+    Failed(String),
+}
+
+/// Subset the first face of `font_path` to `chars` in-process. Glyphs are
+/// renumbered from 1 in the order the characters come, and the new number is
+/// the CID for TrueType and CFF alike, which is what the PDF writer encodes
+/// with. The subset carries no cmap: `unicode_to_gid` is the mapping.
+///
+/// This replaced nine `python3 -c fontTools` runs per document -- three
+/// quarters of a conversion's time, and a dependency a server image need
+/// not have.
+fn subset_font_native(font_path: &str, chars: &std::collections::BTreeSet<char>) -> Result<EmbeddedFont, NativeSubset> {
+    use oxipdf_core::font_util;
+    let file = fs::read(font_path).map_err(|e| NativeSubset::Failed(e.to_string()))?;
+    let lifted = font_util::extract_ttc_face(&file, 0);
+    let data: &[u8] = lifted.as_deref().unwrap_or(&file);
+    // The best cmap, a symbol font's (3,0) table included, so a Wingdings
+    // code finds its glyph.
+    let cmap = font_util::parse_cmap_table(data);
+    let widths = font_util::parse_ttf_widths(data);
+
+    let mut remapper = subsetter::GlyphRemapper::new();
+    let mut unicode_to_gid = HashMap::new();
+    let mut cid_widths = HashMap::new();
+    for &c in chars {
+        let Some(&gid) = cmap.get(&(c as u32)) else { continue };
+        if gid == 0 {
+            continue;
+        }
+        let new = remapper.remap(gid);
+        unicode_to_gid.insert(c as u32, new);
+        if let Some(&w) = widths.get(&gid) {
+            cid_widths.insert(new, w);
+        }
+    }
+    if unicode_to_gid.is_empty() {
+        return Err(NativeSubset::NoGlyph);
+    }
+    let subset = subsetter::subset(data, 0, &remapper).map_err(|e| NativeSubset::Failed(e.to_string()))?;
+    let ps_name = font_util::parse_ps_name(data);
+    let (data, format) = if subset.starts_with(b"OTTO") || has_cff_table(&subset) {
+        let cff = extract_cff_from_otf(&subset).ok_or_else(|| NativeSubset::Failed("no CFF table in the subset".into()))?;
+        (cff, FontFormat::OpenTypeCff)
+    } else {
+        (subset, FontFormat::TrueType)
+    };
+    Ok(EmbeddedFont { ps_name, data, format, unicode_to_gid, cid_widths })
+}
+
 /// Subset a single font file and return EmbeddedFont. Falls back to embedding
 /// the whole file when the external subsetter is unavailable or fails.
 fn subset_font_file(font_path: &str, chars: &std::collections::BTreeSet<char>, label: &str) -> Option<EmbeddedFont> {
@@ -2973,6 +3316,22 @@ fn subset_font_file(font_path: &str, chars: &std::collections::BTreeSet<char>, l
     if chars.is_empty() {
         return None;
     }
+    // OXI_NATIVE_SUBSET_DISABLE: go straight to fontTools, to compare.
+    let native = if std::env::var_os("OXI_NATIVE_SUBSET_DISABLE").is_some() {
+        Err(NativeSubset::Failed("disabled".into()))
+    } else {
+        subset_font_native(font_path, chars)
+    };
+    match native {
+        Ok(font) => {
+            eprintln!("Font subset ({}): {} mappings, {} bytes", label, font.unicode_to_gid.len(), font.data.len());
+            return Some(font);
+        }
+        Err(NativeSubset::NoGlyph) => return None,
+        Err(NativeSubset::Failed(why)) => {
+            eprintln!("Font subset ({}) in-process failed ({}); trying fontTools", label, why);
+        }
+    }
     let char_string: String = chars.iter()
         .filter(|c| { let cp = **c as u32; !(0xD800..=0xDFFF).contains(&cp) })
         .collect();
@@ -2981,7 +3340,10 @@ fn subset_font_file(font_path: &str, chars: &std::collections::BTreeSet<char>, l
     // write the same three files and read back each other's subset, producing
     // a PDF built from another document's glyph set with no error anywhere.
     let scratch = std::env::temp_dir();
-    let stem = format!("oxi-font-{}-{}", label, std::process::id());
+    // and a counter: `serve` runs conversions side by side in one process.
+    static SCRATCH_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let seq = SCRATCH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stem = format!("oxi-font-{}-{}-{}", label, std::process::id(), seq);
     let subset_path = scratch.join(format!("{stem}.otf")).to_string_lossy().replace('\\', "/");
     let cidmap_path = scratch.join(format!("{stem}-cidmap.json")).to_string_lossy().replace('\\', "/");
     let widths_path = scratch.join(format!("{stem}-widths.json")).to_string_lossy().replace('\\', "/");
@@ -3243,9 +3605,16 @@ fn collect_cjk_fonts_from_block(block: &Block, needs_cjk: &mut bool, font_names:
 }
 
 fn find_and_subset_cjk_font(used_chars: &std::collections::BTreeSet<char>) -> Option<EmbeddedFont> {
-    let font_path = CJK_FONT_PATHS.iter().find(|p| std::path::Path::new(p).exists())?;
-    eprintln!("Found CJK font: {}", font_path);
-    subset_font_file(font_path, used_chars, "cjk")
+    // The shipped Gothic is the last resort, so a machine with no Japanese
+    // face at all -- a server container, typically -- still draws the text
+    // rather than warning and dropping it.
+    let font_path = CJK_FONT_PATHS
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.exists())
+        .or_else(|| bundled_face_file("OxiGothic.ttf"))?;
+    eprintln!("Found CJK font: {}", font_path.display());
+    subset_font_file(&font_path.to_string_lossy(), used_chars, "cjk")
 }
 
 fn find_and_subset_cjk_font_bold(used_chars: &std::collections::BTreeSet<char>) -> Option<EmbeddedFont> {
@@ -3621,4 +3990,26 @@ fn extract_cff_from_otf(data: &[u8]) -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod serve_tests {
+    use super::*;
+
+    /// A bad request, a missing file and a document the strict check refuses
+    /// each answer with the status `docx-to-pdf` would exit with, and carry
+    /// their id back.
+    #[test]
+    fn requests_answer_with_docx_to_pdf_statuses() {
+        let bad = serve_one("not json");
+        assert_eq!((bad["ok"].as_bool(), bad["exit"].as_i64()), (Some(false), Some(EXIT_FAILED as i64)));
+
+        let missing = serve_one(r#"{"id": 7, "input": "/no/such.docx", "output": "/tmp/x.pdf"}"#);
+        assert_eq!(missing["id"], 7);
+        assert_eq!(missing["exit"].as_i64(), Some(EXIT_FAILED as i64));
+
+        let no_output = serve_one(r#"{"id": "a", "input": "x.docx"}"#);
+        assert_eq!(no_output["id"], "a");
+        assert_eq!(no_output["ok"].as_bool(), Some(false));
+    }
 }

@@ -252,7 +252,14 @@ fn render_pages_dwrite(
                 0xF900..=0xFAFF | 0xFF66..=0xFF9F))
         } else { false }
     }));
-    let s1352 = std::env::var("OXI_S1352").ok().as_deref() == Some("1");
+    // S1352 default ON since 2026-11-02 (opt-out OXI_S1352_DISABLE): golden ssim_ab
+    // with today's font resolution, CJK documents WITH underlines vs without:
+    // +0.0431 net, 15 better (kojin +0.0245, 1ec1 +0.0067, c7b923 +0.0061,
+    // 2ea81a +0.0047 -- the two that used to lose), 8 worse (worst
+    // kyodokenkyuyoushiki06 -0.0049, tokyoshugyo -0.0041). ja/reports__6ea8e1cc's
+    // underlined hyperlinks were missing.
+    let s1352 = std::env::var("OXI_S1352").ok().as_deref() == Some("1")
+        || std::env::var_os("OXI_S1352_DISABLE").is_none();
     if (!doc_has_cjk || s1352) && std::env::var("OXI_UNDERLINE_DISABLE").is_err() {
         std::env::set_var("OXI_UNDERLINE", "1");
     }
@@ -1244,6 +1251,60 @@ unsafe fn render_line(
 /// ascent DrawTextLayout puts the baseline at — come from the fallback face.
 /// Cached per family: the answer costs a system-font-collection lookup and the
 /// question is asked once per drawn run.
+/// OXI_DW_SIMBOLD_OVERPRINT (2026-11-02, default ON, opt-out _DISABLE): a family
+/// with no bold face (DirectWrite answers a BOLD request with a simulated
+/// emboldening of the regular face). DirectWrite's simulation also WIDENS every
+/// advance, so a word drawn as one layout outgrows the layout's regular-width
+/// slot and swallows the following space; Word emboldens in place (its PDF
+/// keeps FranklinGothic-Book at the regular advances). en/administrative__00777f39:
+/// bold Franklin Gothic Book agenda items, Word «Recovering» 144.0..195.6 with
+/// the space to 198.4 = the Book advances; Oxi drew «RecoveringAmerica's».
+unsafe fn dwrite_bold_is_simulated(
+    dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+    font_family: &str,
+    italic: bool,
+) -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::Graphics::DirectWrite::*;
+    if std::env::var_os("OXI_DW_SIMBOLD_OVERPRINT_DISABLE").is_some() {
+        return false;
+    }
+    thread_local! {
+        static SIM: std::cell::RefCell<std::collections::HashMap<(String, bool), bool>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    let key = (font_family.to_string(), italic);
+    if let Some(hit) = SIM.with(|k| k.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let mut ans = false;
+    let mut coll: Option<IDWriteFontCollection> = None;
+    if dwrite_factory.GetSystemFontCollection(&mut coll, BOOL(0)).is_ok() {
+        if let Some(c) = coll {
+            let fw: Vec<u16> = font_family.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut idx = 0u32;
+            let mut exists = BOOL(0);
+            if c.FindFamilyName(PCWSTR(fw.as_ptr()), &mut idx, &mut exists).is_ok() && exists.as_bool() {
+                if let Ok(fam) = c.GetFontFamily(idx) {
+                    if let Ok(font) = fam.GetFirstMatchingFont(DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STRETCH_NORMAL,
+                        if italic { DWRITE_FONT_STYLE_ITALIC } else { DWRITE_FONT_STYLE_NORMAL })
+                    {
+                        // A CJK face keeps DirectWrite's emboldening: golden
+                        // kojin_000505813's bold HGPｺﾞｼｯｸM lost 0.0205 overprinted
+                        // (its glyphs draw one element per character, so the
+                        // widened advance never overran a space).
+                        ans = (font.GetSimulations().0 & DWRITE_FONT_SIMULATIONS_BOLD.0) != 0
+                            && !font.HasCharacter(0x3042).map(|b| b.as_bool()).unwrap_or(false);
+                    }
+                }
+            }
+        }
+    }
+    SIM.with(|k| k.borrow_mut().insert(key, ans));
+    ans
+}
+
 unsafe fn dwrite_knows_family(
     dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
     font_family: &str,
@@ -1588,8 +1649,11 @@ unsafe fn render_text(
     let is_ms_legacy = font_family.starts_with("ＭＳ")
         || font_family.to_ascii_lowercase().starts_with("ms ");
     // Default ON (opt-out OXI_S493F_DISABLE): faux-bold MS-legacy CJK bold to match Word.
+    let sim_bold = bold && !is_ms_legacy && !light_faux_bold
+        && dwrite_bold_is_simulated(dwrite_factory, font_family, italic);
+    let weight = if sim_bold { DWRITE_FONT_WEIGHT_NORMAL } else { weight };
     let faux_bold: bool = (bold && is_ms_legacy && std::env::var("OXI_S493F_DISABLE").is_err())
-        || light_faux_bold;
+        || light_faux_bold || sim_bold;
     // dx=0.4pt overprint => bold-line ink ratio 1.41 ≈ Word's measured 1.396 (calibrated
     // on the MS Gothic/Mincho repro: REG vs BOLD lines, Word bold/reg=1.396).
     let faux_dx: f32 = std::env::var("OXI_FAUXBOLD_DX").ok()
@@ -1791,10 +1855,47 @@ unsafe fn render_text(
         let mut yy = (y_pt - 1.0) * PT_TO_DIP;
         for ch in text.chars() {
             if !ch.is_whitespace() {
-                let cw: Vec<u16> = ch.to_string().encode_utf16().collect();
+                // OXI_VERT_FORMS: vertical presentation forms; the long-vowel
+                // mark and dashes turn a quarter about the cell's top right.
+                let rotated = oxidocs_core::font::vertical_rotated_char(ch);
+                // OXI_DW_VERT_FEATURE (2026-11-02, default ON, opt-out _DISABLE):
+                // the vertical form comes from the face's own `vert` substitution,
+                // not the U+FE1x presentation code points -- ＭＳ 明朝/ゴシック carry
+                // no U+FE10..FE48, so DirectWrite drew a fallback face's glyph
+                // left of centre. ja/reference__6358c5e9 (tbRl section, ＭＳ 明朝):
+                // Word's 、。 sit in the cell's upper right.
+                let vert_feature = !rotated
+                    && oxidocs_core::font::vertical_presentation_form(ch).is_some()
+                    && std::env::var_os("OXI_DW_VERT_FEATURE_DISABLE").is_none();
+                let v = if rotated || vert_feature { ch } else { oxidocs_core::font::vertical_presentation_form(ch).unwrap_or(ch) };
+                let cw: Vec<u16> = v.to_string().encode_utf16().collect();
                 if let Ok(clayout) = dwrite_factory.CreateTextLayout(
                     &cw, &format, layout_w_dip, layout_h_dip,
                 ) {
+                    if vert_feature {
+                        if let Ok(typo) = dwrite_factory.CreateTypography() {
+                            let _ = typo.AddFontFeature(DWRITE_FONT_FEATURE {
+                                nameTag: DWRITE_FONT_FEATURE_TAG_VERTICAL_WRITING,
+                                parameter: 1,
+                            });
+                            let _ = clayout.SetTypography(&typo, DWRITE_TEXT_RANGE {
+                                startPosition: 0,
+                                length: cw.len() as u32,
+                            });
+                        }
+                    }
+                    if rotated {
+                        let mut saved = windows::Foundation::Numerics::Matrix3x2::default();
+                        rt.GetTransform(&mut saved);
+                        let pivot = D2D_POINT_2F { x: cx_dip + font_size_pt * PT_TO_DIP, y: yy };
+                        let mut rot = windows::Foundation::Numerics::Matrix3x2::default();
+                        windows::Win32::Graphics::Direct2D::D2D1MakeRotateMatrix(90.0, pivot, &mut rot);
+                        rt.SetTransform(&(rot * saved));
+                        rt.DrawTextLayout(pivot, &clayout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        rt.SetTransform(&saved);
+                        yy += adv_dip;
+                        continue;
+                    }
                     let corigin = D2D_POINT_2F { x: cx_dip, y: yy };
                     rt.DrawTextLayout(
                         corigin, &clayout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);

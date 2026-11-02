@@ -13,6 +13,10 @@ pub struct Document {
     /// Comments referenced in the document
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
+    /// Content in the package that the renderer does not draw. Empty means
+    /// nothing known to Oxi was dropped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported: Vec<UnsupportedContent>,
     /// Authors known to the document (from `word/people.xml`, MS-DOCX w15).
     /// Seeds the renderer's author-color palette (attack-matrix row R-02).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -125,6 +129,13 @@ pub struct Document {
     /// Add neighboring paragraph spacing contributions instead of collapsing them.
     #[serde(default)]
     pub additive_paragraph_spacing: bool,
+    /// w:mirrorMargins: even pages swap the left and right margins (the gutter
+    /// stays on the inside).
+    #[serde(default)]
+    pub mirror_margins: bool,
+    /// w:gutterAtTop: the gutter goes on the top edge and mirroring is off.
+    #[serde(default)]
+    pub gutter_at_top: bool,
 }
 
 /// S1553: one merged continuous section's header/footer set (see
@@ -415,6 +426,21 @@ pub enum Block {
     Math(crate::ir::math::MathBlock),
     /// Placeholder for unsupported content (SmartArt, Chart, etc.)
     UnsupportedElement(UnsupportedElement),
+}
+
+/// Content the package carries that Oxi parses past without drawing it, found
+/// by a static scan of the story parts (see `parser::unsupported`). A caller
+/// that must not return a document with missing content checks this list and
+/// hands the file to another engine instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnsupportedContent {
+    /// What was dropped: "chart", "smartart", "ink", "altChunk", "subDoc",
+    /// "ole-without-preview", or "graphic:<uri>" for any other DrawingML
+    /// graphic type.
+    pub kind: String,
+    /// The package part it sits in, e.g. "word/document.xml".
+    pub part: String,
+    pub count: usize,
 }
 
 /// Represents an unsupported OOXML element that was skipped during parsing
@@ -759,6 +785,10 @@ pub struct RunStyle {
     /// the run's U+FFFC object fragment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub form_checkbox: Option<bool>,
+    /// OXI_INLINE_GROUP_LINE: the run's U+FFFC object is a chart or SmartArt
+    /// group drawn on its line; its line grows and snaps like an inline picture.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inline_group_object: bool,
     /// S1252: a STRUCTURED inline `<m:oMath>` that flows in its host line.
     /// Carried on the same run whose `inline_object_extent` reserves the
     /// maths box (advance × ascent+descent); the emit draws the expression
@@ -854,6 +884,7 @@ impl Default for RunStyle {
             run_border: None,
             inline_object_extent: None,
             inline_object_image: None,
+            inline_group_object: false,
             hr_rule: None,
             form_checkbox: None,
             inline_math: None,
@@ -1316,6 +1347,11 @@ pub struct TextBox {
     /// plus that offset. Empty for every non-group drawing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<TextBox>,
+    /// The text members are drawn with the shapes on the host line, from the
+    /// same origin, instead of by the page-level text box pass (whose origin
+    /// is the column, not where the line put the group). Set for SmartArt.
+    #[serde(default)]
+    pub children_on_line: bool,
     /// S1270 (2026-09-02): the host paragraph ends with an explicit page break
     /// that sits AFTER this drawing's run.
     ///
@@ -2038,6 +2074,21 @@ pub struct ParagraphBorders {
 }
 
 /// A single border definition
+
+/// OXI_TABLE_BORDER_TWIPS (2026-11-02, default ON, opt-out _DISABLE): Word keeps a
+/// table border's width in whole twips, flooring the eighth-point `w:sz` -- an
+/// odd sz loses half a twip. `_pb_thin_border_row_gen.py` (20 rows, trHeight 400
+/// atLeast, all borders sz 1..7, compat 12 and 15): Word's row pitch 20.0995 /
+/// 20.2511 / 20.3532 / 20.5047 / 20.6058 / 20.7574 / 20.8521 = 20 + 0.10 / 0.25 /
+/// 0.35 / 0.50 / 0.60 / 0.75 / 0.85, not sz/8's 0.125 / 0.375 / 0.625 / 0.875.
+/// en/reference__00f0e7f3 (sz 1 calendar rows): Oxi drifted 0.5pt by row 28.
+pub fn table_border_twips(width_pt: f32) -> f32 {
+    if std::env::var_os("OXI_TABLE_BORDER_TWIPS_DISABLE").is_some() {
+        return width_pt;
+    }
+    (width_pt * 20.0 + 1e-3).floor() / 20.0
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BorderDef {
     /// Border style (e.g. "single", "double", "dashed", "dotted", "thick")
@@ -2185,6 +2236,10 @@ pub struct TableStyle {
     pub top_border: Option<BorderDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bottom_border: Option<BorderDef>,
+    /// OXI_C15_LEFT_HALF: the table's outer LEFT edge (`w:left` / `w:start`),
+    /// kept apart for the same reason as `top_border`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_border: Option<BorderDef>,
     /// Border color (hex), e.g. "000000"
     #[serde(default)]
     pub border_color: Option<String>,
@@ -2588,6 +2643,9 @@ pub struct FontInfo {
     /// Supported code pages, first 32 bits of the font signature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_page_range: Option<u32>,
+    /// First 32 Unicode-range bits of the font signature (w:sig usb0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unicode_range0: Option<u32>,
     /// Font family: "roman", "swiss", "modern", "decorative", "script", "auto"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub family: Option<String>,

@@ -77,7 +77,7 @@ pub struct KinsokuOffScope(u8);
 
 impl KinsokuOffScope {
     pub fn new(kinsoku: bool, modern_compat: bool) -> Self {
-        let off = if kinsoku || std::env::var_os("OXI_KINSOKU_OFF_DISABLE").is_some() {
+        let off = if kinsoku || crate::env_flag!("OXI_KINSOKU_OFF_DISABLE") {
             0
         } else if modern_compat {
             2
@@ -107,7 +107,7 @@ pub fn kinsoku_off_no_hang() -> bool {
 fn kinsoku_standard_on() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("OXI_KINSOKU_STANDARD_DISABLE").is_none())
+    *ON.get_or_init(|| !crate::env_flag!("OXI_KINSOKU_STANDARD_DISABLE"))
 }
 
 /// Check if a character is prohibited at the start of a line
@@ -143,7 +143,7 @@ const HANGABLE_HALFWIDTH: &[char] = &['\u{FF61}', '\u{FF64}'];
 pub(crate) fn halfwidth_hang_on() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("OXI_HALFWIDTH_HANG_DISABLE").is_none())
+    *ON.get_or_init(|| !crate::env_flag!("OXI_HALFWIDTH_HANG_DISABLE"))
 }
 
 /// Check if a character is allowed to hang past the right margin
@@ -299,7 +299,7 @@ pub fn cell_yaku_type_a(ch: char) -> bool {
 pub fn cell_yaku_capacity(ch: char) -> f32 {
     if is_s473_compressible(ch)
         || ch == '\u{3000}'
-        || (ch == '・' && std::env::var("OXI_MIDDOT_DISABLE").is_err())
+        || (ch == '・' && !crate::env_flag!("OXI_MIDDOT_DISABLE"))
     {
         0.5
     } else {
@@ -445,7 +445,7 @@ fn s475_max_compress_legacy(c: char, next: Option<char>, pair_pt: f32, solo_pt: 
 /// plateau — the measured step is at 0.9875 above it and the proportional marks
 /// are at 0.664 and 0.5 below it.
 pub fn s475_aki_cap(cap: f32, natural_pt: f32, em_pt: f32) -> f32 {
-    if std::env::var("OXI_S1167_DISABLE").is_ok() {
+    if crate::env_flag!("OXI_S1167_DISABLE") {
         return cap;
     }
     let tol: f32 = std::env::var("OXI_S1167_TOL")
@@ -483,7 +483,7 @@ pub fn s492_max_compress(c: char, fs: f32) -> f32 {
 /// Punctuation like （、。は does NOT trigger auto-space.
 pub fn is_cjk_ideograph_or_kana(ch: char) -> bool {
     // U+30FB is punctuation inside the Katakana block, not a kana letter.
-    if ch == '・' && std::env::var("OXI_MIDDOT_DISABLE").is_err() {
+    if ch == '・' && !crate::env_flag!("OXI_MIDDOT_DISABLE") {
         return false;
     }
     matches!(ch as u32,
@@ -516,7 +516,7 @@ pub fn is_autospace_east_asian(ch: char) -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
     is_cjk_ideograph_or_kana(ch)
-        || (*ON.get_or_init(|| std::env::var_os("OXI_HWKANA_AUTOSPACE_DISABLE").is_none())
+        || (*ON.get_or_init(|| !crate::env_flag!("OXI_HWKANA_AUTOSPACE_DISABLE"))
             && matches!(ch as u32, 0xFF66..=0xFF9F))
 }
 

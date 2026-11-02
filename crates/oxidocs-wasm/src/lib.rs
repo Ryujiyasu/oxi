@@ -1955,10 +1955,10 @@ fn resolve_wasm_font(base_font: &str, bold: bool, italic: bool, text: &str) -> S
     );
 
     if is_cjk_font {
-        if base_font.contains("明朝") || base_font.contains("Mincho") {
-            return "OxiCJK-Mincho".to_string();
-        }
-        return "OxiCJK-Gothic".to_string();
+        return match oxidocs_fonts::cjk_stand_in(base_font).0 {
+            "OxiMincho" => "OxiCJK-Mincho".to_string(),
+            _ => "OxiCJK-Gothic".to_string(),
+        };
     }
 
     // Check if text contains CJK characters (fallback)

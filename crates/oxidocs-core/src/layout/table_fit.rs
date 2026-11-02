@@ -58,7 +58,7 @@ impl<'a> TableFitLayouter<'a> {
         let flow_entry_page = pages.len();
         let _s1429_guard = TableLayoutGuard::new();
         self.s1612_fill_above(table, block_idx, page);
-        if std::env::var("OXI_DBG_TBLSTART").is_ok() {
+        if crate::env_flag!("OXI_DBG_TBLSTART") {
             let head: String = table.rows.first().and_then(|r| r.cells.first()).map(|c| c.blocks.iter().filter_map(|b| match b {
                 Block::Paragraph(p) => Some(p.runs.iter().flat_map(|r| r.text.chars()).take(12).collect::<String>()),
                 _ => None }).next().unwrap_or_default()).unwrap_or_default();
@@ -66,12 +66,12 @@ impl<'a> TableFitLayouter<'a> {
                 pages.len(), cursor.cursor_y, cursor.visual_y, flow_fit_offset, is_nested, head);
         }
         let page_geometry = page_geometry.filter(|_| {
-            std::env::var("OXI_TABLE_PAGE_GEOMETRY_DISABLE").is_err()
+            !crate::env_flag!("OXI_TABLE_PAGE_GEOMETRY_DISABLE")
                 // Repeated heading rows also depend on continuation sizing.
                 // Keep their current geometry until header replay and that
                 // sizing can be corrected together.
                 && (!table.rows.iter().any(|row| row.header)
-                    || std::env::var_os("OXI_HEADER_TABLE_GEOMETRY_DISABLE").is_none())
+                    || !crate::env_flag!("OXI_HEADER_TABLE_GEOMETRY_DISABLE"))
         });
         let mut elements = Vec::new();
         // S740 running state: reserve on the CURRENT page + page-offset tracking.
@@ -122,7 +122,7 @@ impl<'a> TableFitLayouter<'a> {
         // floating table among them), and tokyoshugyo -- scored against its own
         // Word PDF -- 0.8575 -> 0.8606 with p18 +0.1639, p19 +0.0559, p17 +0.0415
         // and nothing regressed. Its p18-19 +21pt departure is gone.
-        let s1158_float_absorb = std::env::var("OXI_S1158_DISABLE").is_err()
+        let s1158_float_absorb = !crate::env_flag!("OXI_S1158_DISABLE")
             && self.compat_mode <= 14
             && table.style.position.is_some();
         // The shift is the cell margin ALONE -- no border/2. Word's tblpX=567 arm
@@ -153,7 +153,7 @@ impl<'a> TableFitLayouter<'a> {
                 // anchor, 3400 twips, default margins): Word's cell text starts at
                 // 354.7, Oxi's at 359.3 on every row of both tables (+4.6); the
                 // lane beside the table was one character too wide in turn.
-                let right_pad = if std::env::var_os("OXI_FLOAT_RIGHT_PAD_DISABLE").is_none() {
+                let right_pad = if !crate::env_flag!("OXI_FLOAT_RIGHT_PAD_DISABLE") {
                     table.style.default_cell_margins.as_ref().and_then(|m| m.left).unwrap_or(5.4)
                 } else { 0.0 };
                 match h_align.as_str() {
@@ -223,7 +223,7 @@ impl<'a> TableFitLayouter<'a> {
                 // tblInd value double-shifts, because the non-zero case already
                 // absorbs through S496's per-cell `lead_absorb` below. The real
                 // defect is the WIDTH, see S1163 there.)
-                let indent_zero = if std::env::var("OXI_S1160_DISABLE").is_err() {
+                let indent_zero = if !crate::env_flag!("OXI_S1160_DISABLE") {
                     table.style.indent.is_some_and(|v| v.abs() < 0.01)
                 } else {
                     table.style.indent.map_or(true, |v| v.abs() < 0.01)
@@ -247,10 +247,10 @@ impl<'a> TableFitLayouter<'a> {
                 // case keeps its explicit ≤14 gate for now (extending it to
                 // undeclared docs needs its own corpus gate — probe arm ind0
                 // says Word absorbs there too; recorded as follow-up).
-                let s1239_negative = std::env::var("OXI_S1239_DISABLE").is_err()
+                let s1239_negative = !crate::env_flag!("OXI_S1239_DISABLE")
                     && table.style.indent.is_some_and(|v| v < -0.1)
                     && (self.compat_mode <= 14 || !self.compat_mode_explicit);
-                let absorb = if std::env::var("OXI_S621_DISABLE").is_err() {
+                let absorb = if !crate::env_flag!("OXI_S621_DISABLE") {
                     (indent_zero && !self.table_modern_compat()) || s1239_negative
                 } else {
                     matches!(table.style.indent, Some(v) if v.abs() < 0.01)
@@ -266,7 +266,7 @@ impl<'a> TableFitLayouter<'a> {
                     // 108.00). The extra half-stroke put plain_ind0 at 79.40
                     // against Word's 79.70 -- the only arm of the ten still
                     // outside the 0.05 stroke convention.
-                    if std::env::var("OXI_S1161_DISABLE").is_err() {
+                    if !crate::env_flag!("OXI_S1161_DISABLE") {
                         pad_l_default
                     } else {
                         pad_l_default + border_w / 2.0
@@ -275,12 +275,44 @@ impl<'a> TableFitLayouter<'a> {
                     0.0
                 }
             };
+            // OXI_TBL_RIGHT_LEGACY_MAR (2026-11-01, default ON, opt-out _DISABLE): in
+            // compat < 15 a right-aligned table stands out past the text edge by its
+            // right cell margin (the mirror of the legacy left shift). `_pb_tbljc_legacy_gen.py`
+            // (6000tw table, text edge 547.1): compat 14 right rule 552.58 with margin
+            // 108, 547.18 with 0; compat 15 546.94 either way; left / center never
+            // move. en/forms__031af703 (compat 14, jc right): Word 552.3, Oxi 547.1.
+            let right_legacy = if self.compat_mode < 15
+                && !crate::env_flag!("OXI_TBL_RIGHT_LEGACY_MAR_DISABLE")
+            {
+                table.style.default_cell_margins.as_ref().and_then(|m| m.right).unwrap_or(5.4)
+            } else { 0.0 };
             match table.style.alignment.as_deref() {
                 Some("center") => start_x + (content_width - table_width) / 2.0,
-                Some("right") => start_x + content_width - table_width,
+                Some("right") => start_x + content_width - table_width + right_legacy,
                 _ => start_x + table.style.indent.unwrap_or(0.0) - border_offset,
             }
         });
+
+        // OXI_C15_LEFT_HALF (2026-11-02, default ON, opt-out _DISABLE): in compat 15
+        // the table's left OUTER edge sits at the anchor; the column grid starts at
+        // the centre of the first row's first-cell left border, half its width in.
+        // `_pb_cell_border_inset_gen.py` (compat 15, tblInd 108, 3 rows): left
+        // border sz 4 / 12 / 24 on row 1 -> its rule from 77.42 (the edge), every
+        // other vertical rule and all cell text 0.24 / 0.72 / 1.5 right of Oxi's;
+        // compat 14 arms centre on the edge (no move). Real docs, Word rule centre
+        // minus Oxi: ja/forms__030ed901 (row-1 sz 12) +0.82, administrative__1c9d4bc0
+        // (sz 12) +0.85, forms__02dc500c (sz 4) +0.27, forms__02b9e225 +0.22;
+        // forms__02c99c04 (row-1 left nil) +0.06 -- the first cell decides.
+        // Left-anchored tables only: a centred / right table (jc, tblpXSpec) places
+        // its outer box (golden 459f05f1 tblpXSpec=center -0.0415, ohnoshugyo jc
+        // center, 1ec1 tblpXSpec=center lost with the shift).
+        let c15_left_anchored = !matches!(table.style.alignment.as_deref(), Some("center" | "right"))
+            && table.style.position.as_ref().map_or(true, |p| p.h_align.is_none());
+        let table_x = if self.table_modern_compat() && !is_nested && c15_left_anchored
+            && !crate::env_flag!("OXI_C15_LEFT_HALF_DISABLE")
+        {
+            table_x + self.c15_first_cell_left_width(table) * 0.5
+        } else { table_x };
 
         // Default cell padding from table style or OOXML default
         // COM-measured 2026-03-29: L/R=4.95pt (99tw), T/B=0pt
@@ -330,12 +362,12 @@ impl<'a> TableFitLayouter<'a> {
         // top edge on the cursor) and the next rules 226.70 / 262.22 / 311.69 against
         // Oxi without Bug A 226.69 / 262.19 / 311.64 -- the first row does NOT grow
         // there, unlike the Latin no-type table in reports__0013bcb8.
-        let s1620_cjk = std::env::var_os("OXI_S1620_DISABLE").is_none()
+        let s1620_cjk = !crate::env_flag!("OXI_S1620_DISABLE")
             && self.doc_body_has_real_cjk
             && (grid_pitch.is_none() || page.doc_grid_no_type);
-        let s1618_on = std::env::var_os("OXI_S1618_DISABLE").is_none()
+        let s1618_on = !crate::env_flag!("OXI_S1618_DISABLE")
             && ((grid_pitch.is_some() && !page.doc_grid_no_type) || s1620_cjk);
-        let bug_a_enabled = if std::env::var("OXI_BUG_A_REVERT").is_ok() || s1618_on {
+        let bug_a_enabled = if crate::env_flag!("OXI_BUG_A_REVERT") || s1618_on {
             false
         } else {
             // Default (S151): apply only for non-linesAndChars docs
@@ -352,7 +384,7 @@ impl<'a> TableFitLayouter<'a> {
             cursor.advance(top_bw);
         }
         let s1618_foot = if s1618_on
-            && std::env::var("OXI_BUG_A_REVERT").is_err()
+            && !crate::env_flag!("OXI_BUG_A_REVERT")
             && grid_char_pitch.is_none()
             && table.style.border
             && !separate_outer_edges
@@ -363,7 +395,7 @@ impl<'a> TableFitLayouter<'a> {
         };
 
         let num_rows = table.rows.len();
-        let dump_table = std::env::var("OXI_DUMP_TABLE").is_ok();
+        let dump_table = crate::env_flag!("OXI_DUMP_TABLE");
         // A rendered row must fit the page. Half-point slack can keep an
         // entire overflow line; retain only floating-point roundoff tolerance.
         // S1469 (2026-09-18, default ON, opt-out OXI_S1469_DISABLE): promotes the
@@ -385,10 +417,10 @@ impl<'a> TableFitLayouter<'a> {
         // S1469 off = 0.7087 pcd 0, S1469 on = 0.5340 pcd -1, with S1468 on in
         // both cases.
         let s1470_float_keeps_slack = table.style.position.is_some()
-            && std::env::var("OXI_S1470_DISABLE").is_err();
+            && !crate::env_flag!("OXI_S1470_DISABLE");
         let row_fit_epsilon = if !s1470_float_keeps_slack
-            && (std::env::var("OXI_TABLE_BOTTOM_FIT").is_ok()
-                || std::env::var("OXI_S1469_DISABLE").is_err())
+            && (crate::env_flag!("OXI_TABLE_BOTTOM_FIT")
+                || !crate::env_flag!("OXI_S1469_DISABLE"))
         {
             0.001
         } else {
@@ -429,7 +461,7 @@ impl<'a> TableFitLayouter<'a> {
         // cursor past them. Corpus-safe: fires only when a tblHeader table
         // SPANS pages — the only 2 corpus tblHeader docs (ailitguide, b35123)
         // have non-spanning tables (verified) → byte-identical.
-        let s728_on = std::env::var("OXI_S728_DISABLE").is_err();
+        let s728_on = !crate::env_flag!("OXI_S728_DISABLE");
         let mut s728_hdr_elems: Vec<LayoutElement> = Vec::new();
         let mut s728_hdr_h: f32 = 0.0;
         let mut s728_capture_done = false;
@@ -448,9 +480,9 @@ impl<'a> TableFitLayouter<'a> {
         // 705.75 -- and a keepNext heading before the table follows (heading
         // p2 y=59.25). policies__07543a6b 3.2.4 / 3.2.7 / 3.2.8.
         let cjk_header_chain = self.doc_body_has_real_cjk
-            && (std::env::var_os("OXI_S1428_DISABLE").is_none()
-                || std::env::var("OXI_CJK_HEADER_ROW_CHAIN").is_ok());
-        let s1083_on = std::env::var("OXI_S1083_DISABLE").is_err()
+            && (!crate::env_flag!("OXI_S1428_DISABLE")
+                || crate::env_flag!("OXI_CJK_HEADER_ROW_CHAIN"));
+        let s1083_on = !crate::env_flag!("OXI_S1083_DISABLE")
             && (!self.doc_body_has_real_cjk || cjk_header_chain);
         // S1579 (2026-09-26, default ON, opt-out OXI_S1579_DISABLE): the header
         // chain is not a CJK rule. reports__0079718f p181: a tblHeader row
@@ -467,7 +499,7 @@ impl<'a> TableFitLayouter<'a> {
         let header_chain = cjk_header_chain
             || (!self.doc_body_has_real_cjk
                 && self.compat_mode >= 15
-                && std::env::var_os("OXI_S1579_DISABLE").is_none());
+                && !crate::env_flag!("OXI_S1579_DISABLE"));
         // A row "keeps with the next row" when its LEFTMOST cell's FIRST
         // paragraph declares keepNext (the S1024 row-chain predicate).
         let s1083_kn = |ri: usize| -> bool {
@@ -497,7 +529,7 @@ impl<'a> TableFitLayouter<'a> {
         let mut vmerge_text_flows: Vec<MergedCellTextFlow> = Vec::new();
         // Outer rules can survive a direct override of only the side/inside rules.
         let inherited_outer_rules = !self.doc_body_has_real_cjk && !table.style.border
-            && std::env::var("OXI_TABLE_OUTER_RULES_DISABLE").is_err();
+            && !crate::env_flag!("OXI_TABLE_OUTER_RULES_DISABLE");
         let prepare_outer = |edge: &Option<BorderDef>| {
             if !inherited_outer_rules { return None; }
             edge.clone().map(|mut edge| {
@@ -601,7 +633,7 @@ impl<'a> TableFitLayouter<'a> {
             // ALREADY uses line_height_inner → center_extra=0. The real db9ca/tokumei
             // cell-Y errors are a DIFFERENT mechanism (NOT this col0-before-taller-cell
             // ordering). Opt-in so a future no-docGrid vAlign=center doc gets the fix.
-            let s503_enable = std::env::var("OXI_S503_ENABLE").is_ok();
+            let s503_enable = crate::env_flag!("OXI_S503_ENABLE");
             // S1423 (2026-09-16, default ON, opt-out OXI_S1423_DISABLE): a cantSplit
             // row's page fit is measured with its RENDER height in CJK documents
             // too. The Latin-only gate left the pagination estimate (25.75 for a
@@ -612,7 +644,7 @@ impl<'a> TableFitLayouter<'a> {
             // Word's rule = the row's LAST LINE box must end above the content
             // bottom; the bottom border and cell padding may hang past it.
             let measure_cant_split_fit = row.cant_split
-                && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_S1423_DISABLE").is_none())
+                && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_S1423_DISABLE"))
                 && row.height_rule.as_deref() != Some("exact");
             let mut center_row_h: f32 = 0.0;
             let mut kept_first_paragraph_height: f32 = 0.0;
@@ -636,7 +668,7 @@ impl<'a> TableFitLayouter<'a> {
             // +1.0pt cluster is NOT from line grid-snap. Most trHeight rows need
             // the snap (it's correct). Gate kept OFF; default unchanged.
             let row_line_pitch: Option<f32> = if row.height.is_some()
-                && std::env::var("OXI_S361_TRHEIGHT_NO_LINE_SNAP").is_ok()
+                && crate::env_flag!("OXI_S361_TRHEIGHT_NO_LINE_SNAP")
             {
                 None
             } else {
@@ -701,7 +733,7 @@ impl<'a> TableFitLayouter<'a> {
                 // 100/100; Word starts the content cell's first line on the label's
                 // baseline (PDF 256.13 both) and the 3-line row is 5 + 43.92 + 5,
                 // Oxi's content cell had no margin (43.9) and page 2 ran ~50pt short.
-                let (pad_t, pad_b) = if std::env::var_os("OXI_S1575_DISABLE").is_none() {
+                let (pad_t, pad_b) = if !crate::env_flag!("OXI_S1575_DISABLE") {
                     let mt = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.top).unwrap_or(row_default_pad_t)).fold(pad_t, f32::max);
                     let mb = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.bottom).unwrap_or(row_default_pad_b)).fold(pad_b, f32::max);
                     (mt, mb)
@@ -752,7 +784,7 @@ impl<'a> TableFitLayouter<'a> {
                         0.0
                     }
                 } else if table.style.has_inside_h {
-                    if std::env::var("OXI_S921_DISABLE").is_err() {
+                    if !crate::env_flag!("OXI_S921_DISABLE") {
                         table
                             .style
                             .inside_horizontal_border
@@ -793,7 +825,7 @@ impl<'a> TableFitLayouter<'a> {
                 // which parse_compat_mode reads as 15 -> not fired, byte-identical).
                 // Paired with the S421 oikomi arm below (same discriminator): the
                 // narrowed budget forces wraps Word resolves by oikomi/oidashi.
-                let s713_cellmar = std::env::var("OXI_S713_DISABLE").is_err()
+                let s713_cellmar = !crate::env_flag!("OXI_S713_DISABLE")
                     && row.cells.len() == 1
                     && table.style.has_explicit_cellmar
                     && self.compat_mode <= 14;
@@ -831,7 +863,7 @@ impl<'a> TableFitLayouter<'a> {
                 // under the Phase-1-first directive; JP is byte-identical by
                 // construction (doc-level real-CJK gate, 238-doc A/B +0.0000).
                 let s768_latin_wrap =
-                    std::env::var("OXI_S768_DISABLE").is_err() && !self.doc_body_has_real_cjk;
+                    !crate::env_flag!("OXI_S768_DISABLE") && !self.doc_body_has_real_cjk;
                 // S1173 estimate side: the derived law supersedes the whole
                 // allowlist (see `celllaw_inset`). Estimate and render must take
                 // the same base or pagination and drawing disagree.
@@ -873,7 +905,7 @@ impl<'a> TableFitLayouter<'a> {
                 });
                 let s1311_tail = self.s1311_hidemark_tail_pos(cell);
                 let s751_hide_empty = cell.hide_mark
-                    && std::env::var("OXI_S751_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S751_DISABLE")
                     && s1311_tail.is_none()
                     && cell.blocks.iter().all(|b| {
                         matches!(b, Block::Paragraph(p)
@@ -891,7 +923,7 @@ impl<'a> TableFitLayouter<'a> {
                 // para gap = 16.5pt = 12.0 + max, NOT 20.7 = 12.0 + sum). Mirrors the
                 // body path collapse (mod.rs:3965). prev_sa carries the previous
                 // paragraph's space_after; the credit min(prev_sa, cur_sb) is removed.
-                let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
+                let s427_collapse = !crate::env_flag!("OXI_S427_DISABLE");
                 let mut prev_sa: Option<f32> = None;
                 // S939: prev paragraph's (contextual_spacing, style_id) for the
                 // in-cell layered collapse.
@@ -919,7 +951,7 @@ impl<'a> TableFitLayouter<'a> {
                 // flow wraps into whatever row height the OTHER cells / trHeight
                 // produce. Contribution = ONE line (first paragraph only). Full
                 // derivation at s753_vert_cell_columns.
-                let s753_vert = vert_writing_active && std::env::var("OXI_S753_DISABLE").is_err();
+                let s753_vert = vert_writing_active && !crate::env_flag!("OXI_S753_DISABLE");
                 let mut s753_first_done = false;
                 // S716: the post-nested-table stub paragraph contributes no height.
                 let s716_stub = self.nested_table_stub_pos(cell);
@@ -1064,8 +1096,8 @@ impl<'a> TableFitLayouter<'a> {
                             // whole (policies__07543a6b p32 row 5: 6-line keepLines
                             // scenario cell, 69pt of room, Word moves the row whole).
                             if self.doc_body_has_real_cjk
-                                && (std::env::var("OXI_CJK_CELL_KEEP_LINES").is_ok()
-                                    || std::env::var_os("OXI_S1432_DISABLE").is_none())
+                                && (crate::env_flag!("OXI_CJK_CELL_KEEP_LINES")
+                                    || !crate::env_flag!("OXI_S1432_DISABLE"))
                                 && Some(block_pos) == first_para_pos
                                 && para.style.keep_lines
                             {
@@ -1074,7 +1106,7 @@ impl<'a> TableFitLayouter<'a> {
                             }
                             cell_content_h += para_h;
                             cell_content_h_visual += para_h_visual;
-                            if std::env::var("OXI_DBG_CELLPARA").is_ok() {
+                            if crate::env_flag!("OXI_DBG_CELLPARA") {
                                 let head: String = para.runs.iter().flat_map(|r| r.text.chars()).take(10).collect();
                                 eprintln!("[CELLPARA] para_h={:.3} visual={:.3} render={:.3} center_extra={:.3} cum={:.3} cum_visual={:.3} «{}»", para_h, para_h_visual, para_h_center, center_extra, cell_content_h, cell_content_h_visual, head);
                             }
@@ -1169,7 +1201,7 @@ impl<'a> TableFitLayouter<'a> {
                             // as the outer row's floor. Mirrors the outer walk's own
                             // grid_span / vMerge column arithmetic and the enclosing
                             // `inner_w` cell-margin convention.
-                            let s1068_cols = if std::env::var("OXI_S1068_DISABLE").is_err() {
+                            let s1068_cols = if !crate::env_flag!("OXI_S1068_DISABLE") {
                                 Some(self.resolve_table_col_widths_n(nested, nested_w, true))
                             } else {
                                 None
@@ -1256,7 +1288,7 @@ impl<'a> TableFitLayouter<'a> {
                             // the body at image_top + 289.5 exactly, 1 grid line
                             // early → the 変形 p35/36 −1s).
                             let img_line = self.s971_image_line_h(img, 1.0e6, row_line_pitch, false);
-                            let img_h_eff = if std::env::var("OXI_S715_DISABLE").is_err() {
+                            let img_h_eff = if !crate::env_flag!("OXI_S715_DISABLE") {
                                 match row_line_pitch {
                                     Some(p) if p > 0.0 => (img_line / p).ceil() * p,
                                     _ => img_line,
@@ -1289,8 +1321,8 @@ impl<'a> TableFitLayouter<'a> {
                             // of 63 oMath in cells) vanished: missing ink AND
                             // −67pt per solutions block → Problem 2 pulled up
                             // a page (EN-250 census pcd +1).
-                            if std::env::var("OXI_S1244_DISABLE").is_err() {
-                                let mfs: f32 = 10.5;
+                            if !crate::env_flag!("OXI_S1244_DISABLE") {
+                                let mfs: f32 = LayoutEngine::cell_math_font_size(math_block);
                                 let (me, mbb) = crate::layout::math::emit_math_block(
                                     math_block,
                                     0.0,
@@ -1339,7 +1371,7 @@ impl<'a> TableFitLayouter<'a> {
                 // but repro-specific (that repro had no insideH so this gate didn't
                 // even fire there) — NOT a corpus-wide pattern. Row overhead stays
                 // at 0 (current behavior is corpus-correct). Gate kept OFF.
-                if std::env::var("OXI_S375_HALF_INSIDEH").is_ok()
+                if crate::env_flag!("OXI_S375_HALF_INSIDEH")
                     && !is_last
                     && table.style.has_inside_h
                 {
@@ -1374,8 +1406,8 @@ impl<'a> TableFitLayouter<'a> {
                 // hhea + border only — _pb_cellline_gen 42-config sweep).
                 // Under the hhea estimate it double-counts (+0.188/row on
                 // gen2_054), so it applies only in the tombstone regime.
-                if std::env::var("OXI_S463_DISABLE").is_err()
-                    && std::env::var("OXI_S940T_DISABLE").is_ok()
+                if !crate::env_flag!("OXI_S463_DISABLE")
+                    && crate::env_flag!("OXI_S940T_DISABLE")
                     && table.style.has_inside_h
                     && table_is_latin
                     && !self.doc_body_has_cjk
@@ -1466,7 +1498,7 @@ impl<'a> TableFitLayouter<'a> {
                         // per-doc change; all 238 SSIM sentinel documents
                         // byte-identical (no corpus table pairs an exact
                         // trHeight with a non-zero bottom cell margin).
-                        let s1164 = std::env::var("OXI_S1164_DISABLE").is_err();
+                        let s1164 = !crate::env_flag!("OXI_S1164_DISABLE");
                         row_height = if s1164 {
                             h + table
                                 .style
@@ -1545,8 +1577,8 @@ impl<'a> TableFitLayouter<'a> {
                         // includes its own pad_t/pad_b.
                         // OXI_S1065_DISABLE is accepted as a synonym: S983's narrow rule was
                         // REPLACED by this one, so either name means "no vmar floor".
-                        let s1065_vmar = if std::env::var("OXI_S983_DISABLE").is_err()
-                            && std::env::var("OXI_S1065_DISABLE").is_err()
+                        let s1065_vmar = if !crate::env_flag!("OXI_S983_DISABLE")
+                            && !crate::env_flag!("OXI_S1065_DISABLE")
                         {
                             row_eff_vmar
                         } else {
@@ -1642,13 +1674,13 @@ impl<'a> TableFitLayouter<'a> {
             } else {
                 row_height
             };
-            let s1191_foot = if std::env::var("OXI_TABLE_FOOT_FIT_DISABLE").is_err() {
+            let s1191_foot = if !crate::env_flag!("OXI_TABLE_FOOT_FIT_DISABLE") {
                 if separate_outer_edges {
                     self.table_fragment_bottom_width(table, Some(row))
                 } else if row_idx + 1 == table.rows.len()
                     && self.s1191_on() && self.s1191_table_needs_foot(table) {
                     self.s1191_foot_bw(table)
-                } else if std::env::var_os("OXI_S1581_DISABLE").is_none()
+                } else if !crate::env_flag!("OXI_S1581_DISABLE")
                     && self.s1191_on() && self.s1191_table_needs_foot(table) {
                     // S1581 (2026-09-27, default ON, opt-out OXI_S1581_DISABLE): a row
                     // that ENDS a page fragment closes it with its own bottom rule,
@@ -1666,7 +1698,7 @@ impl<'a> TableFitLayouter<'a> {
             // A terminating merged cell contributes to the atomic row fit
             // before pagination, as well as to its final border height.
             let row_fit_height = if row.cant_split {
-                let bygrid = std::env::var_os("OXI_S1192G_DISABLE").is_none();
+                let bygrid = !crate::env_flag!("OXI_S1192G_DISABLE");
                 vmerge_absolute_ends.iter().fold(row_fit_height, |height, (key, end)| {
                     let is_cont = |c: &TableCell| {
                         matches!(c.v_merge.as_deref(), Some("continue") | Some(""))
@@ -1688,7 +1720,7 @@ impl<'a> TableFitLayouter<'a> {
             // the line holding reference 7 -- with note 7 -- to page 2; Oxi kept the
             // row whole and ran its bottom (562.9) under the separator (555.4).
             let row_own_notes = match row_footnotes {
-                Some(rf) if std::env::var_os("OXI_ROW_OWN_NOTES_DISABLE").is_none()
+                Some(rf) if !crate::env_flag!("OXI_ROW_OWN_NOTES_DISABLE")
                     && !rf[row_idx].0.is_empty() =>
                 {
                     rf[row_idx].1 + if s740_page_has_notes { 0.0 } else { fn_sep }
@@ -1706,7 +1738,7 @@ impl<'a> TableFitLayouter<'a> {
             // A natural-layout pass must not consult saved cell page breaks:
             // those hints cannot validate the page count used to trust them.
             let cell_lrpb_enabled = !self.lrpb_count_distrust.get()
-                || std::env::var_os("OXI_CELL_LRPB_TRUST_DISABLE").is_some();
+                || crate::env_flag!("OXI_CELL_LRPB_TRUST_DISABLE");
             let row_has_lrpb_at_cell_start = cell_lrpb_enabled && row.cells.iter().any(|cell| {
                 cell.blocks.first().map_or(false, |b| match b {
                     Block::Paragraph(p) => p
@@ -1726,7 +1758,7 @@ impl<'a> TableFitLayouter<'a> {
             // hints fired around mid-page.
             let lrpb_threshold = content_height * 0.85;
             let lrpb_row_should_break = row_has_lrpb_at_cell_start
-                && (self.doc_body_has_real_cjk || std::env::var("OXI_LATIN_ROW_CACHE_ENABLE").is_ok())
+                && (self.doc_body_has_real_cjk || crate::env_flag!("OXI_LATIN_ROW_CACHE_ENABLE"))
                 && has_content
                 && !row_overflows  // row would fit; LRPB hint says break anyway
                 && consumed_row > lrpb_threshold
@@ -1743,8 +1775,8 @@ impl<'a> TableFitLayouter<'a> {
                 // per the R7.47/R7.48 derivation).
                 && (self.doc_body_has_real_cjk
                     || page_bottom - (cursor.cursor_y + row_height) < 28.0
-                    || std::env::var("OXI_S904_DISABLE").is_ok());
-            if std::env::var("OXI_DUMP_ROW_LRPB").is_ok() && row_has_lrpb_at_cell_start {
+                    || crate::env_flag!("OXI_S904_DISABLE"));
+            if crate::env_flag!("OXI_DUMP_ROW_LRPB") && row_has_lrpb_at_cell_start {
                 let preview: String = row
                     .cells
                     .iter()
@@ -1794,7 +1826,7 @@ impl<'a> TableFitLayouter<'a> {
                 && table.style.layout.as_deref() == Some("fixed")
                 && row.cells.len() == 3
                 && row.height.is_none()
-                && std::env::var("OXI_S993_DISABLE").is_err();
+                && !crate::env_flag!("OXI_S993_DISABLE");
             // Scan row content for an LRPB that is NOT at the row-start position
             // (cell=0, first paragraph block in cell, run=0).
             let has_lrpb_mid_row = {
@@ -1848,7 +1880,7 @@ impl<'a> TableFitLayouter<'a> {
             // (~39.6pt) is its center, 9.7pt above 3a4f's 29.9 (canary 3a4f/model/
             // d4d126 byte-identical — their push-boxes all free <30 < 39.6). OXI_WIDOW_K
             // overrides for sweeping; OXI_S694_DISABLE restores the pre-S694 pitch*4.
-            let widow_k_default: f32 = if std::env::var("OXI_S694_DISABLE").is_ok() {
+            let widow_k_default: f32 = if crate::env_flag!("OXI_S694_DISABLE") {
                 4.0
             } else {
                 2.2
@@ -1867,7 +1899,7 @@ impl<'a> TableFitLayouter<'a> {
                     0.0
                 };
                 let fire = free_space > 0.0 && free_space < widow_threshold;
-                if std::env::var("OXI_DBG_WIDOW").is_ok() && row_overflows {
+                if crate::env_flag!("OXI_DBG_WIDOW") && row_overflows {
                     let prev: String = row
                         .cells
                         .get(0)
@@ -1932,7 +1964,7 @@ impl<'a> TableFitLayouter<'a> {
             // reference__0035761e / target); only the target's row actually
             // reaches ROWPUSH (row_overflows) — golden/real_en/JP are
             // byte-identical by construction.
-            let s998_interior_image = std::env::var("OXI_S998_DISABLE").is_err()
+            let s998_interior_image = !crate::env_flag!("OXI_S998_DISABLE")
                 && row.cells.iter().any(|cell| {
                     let first_image = cell
                         .blocks
@@ -1964,7 +1996,7 @@ impl<'a> TableFitLayouter<'a> {
                             // educational__002a301d p5 is this probe's shape and
                             // loses 2 pages to it.
                             let after = cell.blocks[last + 1..].iter().any(real_para);
-                            if std::env::var("OXI_S1129").is_ok() {
+                            if crate::env_flag!("OXI_S1129") {
                                 after
                             } else {
                                 cell.blocks[..first].iter().any(real_para) && after
@@ -2022,7 +2054,7 @@ impl<'a> TableFitLayouter<'a> {
             // a page is not the lowest thing on it. Use the PDF for page-bottom
             // questions -- the same trap as the Info6 caveat.)
             // So default-ON waits on that spacing bug, not on this rule.
-            let image_atomic_push = std::env::var("OXI_S1168_DISABLE").is_ok()
+            let image_atomic_push = crate::env_flag!("OXI_S1168_DISABLE")
                 && row_has_image_block
                 && row_height <= content_height
                 && !s998_interior_image;
@@ -2059,7 +2091,7 @@ impl<'a> TableFitLayouter<'a> {
             // and continues at the next page top (81.96); Oxi pushed the row
             // whole. The tokyoshugyo / 3a4f boxes behind the 2.2 keep their
             // widow control on.
-            let s754_single_widow_off = std::env::var_os("OXI_S754_WIDOWOFF_DISABLE").is_none()
+            let s754_single_widow_off = !crate::env_flag!("OXI_S754_WIDOWOFF_DISABLE")
                 && row.cells.len() == 1
                 // a one-row box keeps S754's prose-box keep (tokyoshugyo's （欠勤等の扱い）
                 // etc. are 1-row 1-cell tables Word pushes whole at 1.5 lines free);
@@ -2098,7 +2130,7 @@ impl<'a> TableFitLayouter<'a> {
                     // this was first derived (-1x3 on the same doc) is GONE —
                     // the p6/p7 under-reservation it needed was closed by the
                     // S1093-S1095 inline-object work.
-                    None if std::env::var("OXI_S999_DISABLE").is_err() => 14.0,
+                    None if !crate::env_flag!("OXI_S999_DISABLE") => 14.0,
                     None => 58.0,
                 }
             } else {
@@ -2117,8 +2149,8 @@ impl<'a> TableFitLayouter<'a> {
                 // legal__001410a8's foot-only overflow (S1482); with that fixed
                 // the one-line floor is Word's rule there too (`rowsplitmin.py`,
                 // TNR 8-14pt: Word splits with one line box + border of room).
-                if (self.doc_body_has_real_cjk || std::env::var_os("OXI_S1485_DISABLE").is_none())
-                    && std::env::var_os("OXI_S1424_DISABLE").is_none() {
+                if (self.doc_body_has_real_cjk || !crate::env_flag!("OXI_S1485_DISABLE"))
+                    && !crate::env_flag!("OXI_S1424_DISABLE") {
                     let one_line = row
                         .cells
                         .iter()
@@ -2162,7 +2194,7 @@ impl<'a> TableFitLayouter<'a> {
             // threshold is 15.7 / 21.7 / 27.7 -- +6 / +12, both margins. golden
             // probeqtblstyle (style margins 60tw, 18pt lines): 22.9 of room, Oxi split
             // the row (line + top = 21), Word moved it whole (24 needed).
-            let s754_min_fit = if std::env::var_os("OXI_ROWSPLIT_VPAD_DISABLE").is_none()
+            let s754_min_fit = if !crate::env_flag!("OXI_ROWSPLIT_VPAD_DISABLE")
                 && row.cells.len() > 1
             {
                 let vpad = row.cells.iter().map(|c| {
@@ -2196,7 +2228,7 @@ impl<'a> TableFitLayouter<'a> {
             // p36; the saved break is from different geometry) — the wp36/
             // 50/51 +1x16. The veto's necessity for the JP corpus is being
             // measured; if no JP doc relies on it, it is removed.
-            let s814_no_veto = std::env::var("OXI_S814").is_ok();
+            let s814_no_veto = crate::env_flag!("OXI_S814");
             // S814 v2: the veto holds only when the fresh geometry AGREES with
             // the whole-push (remaining space too small to place a meaningful
             // split anyway). When >= s814_k remains, the saved whole-push
@@ -2268,7 +2300,7 @@ impl<'a> TableFitLayouter<'a> {
                 && (row.cells.len() > 1
                     || (row.cells.len() == 1
                         && !is_single_cell_row
-                        && std::env::var("OXI_S1029_DISABLE").is_err()))
+                        && !crate::env_flag!("OXI_S1029_DISABLE")))
                 && row.height_rule.as_deref() != Some("exact")
                 && row.cells.iter().any(|cell| {
                     cell.blocks
@@ -2308,9 +2340,9 @@ impl<'a> TableFitLayouter<'a> {
             // Full golden scan (369 docs): ONLY uklocalspending changes; every
             // word_png doc is byte-identical (piece-1 not applied). This is A, on
             // top of the shipped B (S1024) — together A+B = the forms p63-65 fix.
-            let s941_nonbinding_trh = std::env::var("OXI_S941_DISABLE").is_err()
-                && (std::env::var("OXI_S940T_DISABLE").is_err()
-                    || std::env::var("OXI_S1025_DISABLE").is_err())
+            let s941_nonbinding_trh = !crate::env_flag!("OXI_S941_DISABLE")
+                && (!crate::env_flag!("OXI_S940T_DISABLE")
+                    || !crate::env_flag!("OXI_S1025_DISABLE"))
                 // A CJK row may also split when the first fragment can honor
                 // its declared minimum height. Exact heights remain atomic.
                 // S1427 (2026-09-16, default ON, opt-out OXI_S1427_DISABLE):
@@ -2324,13 +2356,13 @@ impl<'a> TableFitLayouter<'a> {
                 // model row 1 trH 67.2 with 67.9 of room and tokyoshugyo's
                 // （参考） box went PASS -> FAIL when the split reached them).
                 && (!self.doc_body_has_real_cjk
-                    || (row.cells.len() > 1 && std::env::var_os("OXI_S1427_DISABLE").is_none())
-                    || std::env::var("OXI_CJK_ROW_MINIMUM_SPLIT").is_ok())
+                    || (row.cells.len() > 1 && !crate::env_flag!("OXI_S1427_DISABLE"))
+                    || crate::env_flag!("OXI_CJK_ROW_MINIMUM_SPLIT"))
                 && row.height_rule.as_deref() != Some("exact")
                 && row.height.map_or(false, |trh| {
                     if table_grid_pitch.is_none()
                         || (row.cells.len() > 1
-                            && std::env::var("OXI_TYPED_ROW_SINGLE_FRAGMENT_DISABLE").is_err()) {
+                            && !crate::env_flag!("OXI_TYPED_ROW_SINGLE_FRAGMENT_DISABLE")) {
                         // A continuation may start here when its fragment can
                         // honor the declared minimum, even with only one line.
                         page_bottom - cursor.cursor_y + 0.5
@@ -2341,12 +2373,12 @@ impl<'a> TableFitLayouter<'a> {
                                 >= table_grid_pitch.map(|p| p * 2.2).unwrap_or(58.0)
                     }
                 });
-            let s754_split = (std::env::var("OXI_S754_DISABLE").is_err()
+            let s754_split = (!crate::env_flag!("OXI_S754_DISABLE")
                 && (row.height.is_none() || s941_nonbinding_trh)
                 && !s814_lrpb_veto
                 && (page_bottom - cursor.cursor_y) >= s754_min_fit)
                 || s864_empty_tail_split;
-            if std::env::var("OXI_DBG754").is_ok()
+            if crate::env_flag!("OXI_DBG754")
                 && s754_split
                 && row_overflows
                 && !row.cant_split
@@ -2388,7 +2420,7 @@ impl<'a> TableFitLayouter<'a> {
             // `has_lrpb_mid_row` stays exempt: a mid-row lastRenderedPageBreak is
             // Word's own record that it DID split this row, and a recording
             // outranks a derived rule (the same precedence S1246 gives LRPB).
-            let s1247_chain_row = std::env::var("OXI_S1247_DISABLE").is_err()
+            let s1247_chain_row = !crate::env_flag!("OXI_S1247_DISABLE")
                 && !has_lrpb_mid_row
                 && s1083_kn(row_idx);
             // Even a splittable row needs room for its minimum first fragment.
@@ -2407,7 +2439,7 @@ impl<'a> TableFitLayouter<'a> {
                 .and_then(|cell| cell.blocks.first())
                 .map_or(false, |block| matches!(block,
                     Block::Paragraph(para) if para.style.page_break_before));
-            if std::env::var("OXI_DBG754").is_ok() && row_overflows {
+            if crate::env_flag!("OXI_DBG754") && row_overflows {
                 eprintln!("[DBG754] gates row={} s754_split={} nonbind_trh={} cant={} content={} single={} lrpb_mid={} widow={} chain={} img={} minreq={} min={:?} explicit_pb={} hdr={} cur={:.2} pbot={:.2} rh={:.2} trH={:?}",
                     row_idx, s754_split, s941_nonbinding_trh, row.cant_split, has_content, is_single_cell_row,
                     has_lrpb_mid_row, widow_break_needed, s1247_chain_row, image_atomic_push,
@@ -2424,7 +2456,7 @@ impl<'a> TableFitLayouter<'a> {
             // A single text line cannot be split to make room for its closing
             // rule. Use the ordinary whole-row push so keepNext predecessors
             // move with it. Multi-line cells use the common fragment boundary.
-            let s1482_foot_only = std::env::var_os("OXI_S1482_DISABLE").is_none()
+            let s1482_foot_only = !crate::env_flag!("OXI_S1482_DISABLE")
                 && !separate_outer_edges && !row_has_multiple_text_lines
                 && row_overflows && s1191_foot > 0.0
                 && cursor.cursor_y + row_fit_height - s1191_foot <= page_bottom;
@@ -2432,7 +2464,7 @@ impl<'a> TableFitLayouter<'a> {
             let needs_row_split = !keep_float_whole && row_overflows
                 && !s1482_foot_only
                 && !kept_first_paragraph_requires_page
-                && !(row.header && std::env::var("OXI_HEADER_ROW_ATOMIC_DISABLE").is_err())
+                && !(row.header && !crate::env_flag!("OXI_HEADER_ROW_ATOMIC_DISABLE"))
                 && !explicit_row_page_break
                 && !row.cant_split
                 && has_content
@@ -2454,7 +2486,7 @@ impl<'a> TableFitLayouter<'a> {
             // room made technical__008ae1fa's row fit by 0.5pt, which turned off
             // the overflow-split path and let this stale whole-push through.
             let s1058_midrow_lrpb_no_push =
-                has_lrpb_mid_row && std::env::var("OXI_S1058_DISABLE").is_err();
+                has_lrpb_mid_row && !crate::env_flag!("OXI_S1058_DISABLE");
             if (explicit_row_page_break || row_overflows
                 || (lrpb_row_should_break && !s1058_midrow_lrpb_no_push)
                 || widow_break_needed)
@@ -2462,7 +2494,7 @@ impl<'a> TableFitLayouter<'a> {
                 && !needs_row_split
                 && !keep_float_whole
             {
-                if std::env::var("OXI_DBG_ROWPUSH").is_ok() {
+                if crate::env_flag!("OXI_DBG_ROWPUSH") {
                     let txt: String = row
                         .cells
                         .iter()
@@ -2580,7 +2612,7 @@ impl<'a> TableFitLayouter<'a> {
                 // the continuation page starts clean and S1527 subtracts only the
                 // notes whose referencing lines land on it (S740 v1 carried the
                 // entry page's reserve across every continuation page).
-                if row_footnotes.is_none() || std::env::var_os("OXI_S1527_DISABLE").is_none() {
+                if row_footnotes.is_none() || !crate::env_flag!("OXI_S1527_DISABLE") {
                     page_bottom += std::mem::take(&mut s740_reserve);
                 }
                 page_bottom += advance_table_page_geometry(
@@ -2594,15 +2626,15 @@ impl<'a> TableFitLayouter<'a> {
                     && !row.header
                     && !widow_break_needed
                     && (s1083_moved.is_empty()
-                        || (std::env::var("OXI_KEEP_REPEAT_HEADER_DISABLE").is_err()
+                        || (!crate::env_flag!("OXI_KEEP_REPEAT_HEADER_DISABLE")
                             && (!self.doc_body_has_real_cjk || cjk_header_chain)));
-                let table_restart_top = if std::env::var("OXI_TABLE_RESTART_TOP_DISABLE").is_err()
+                let table_restart_top = if !crate::env_flag!("OXI_TABLE_RESTART_TOP_DISABLE")
                     && row_idx > 0
                     && !self.doc_body_has_real_cjk
                     && bug_a_enabled && s1083_moved.is_empty()
-                    && (table.style.border || std::env::var("OXI_TABLE_RESTART_OUTER_EDGE_DISABLE").is_err())
+                    && (table.style.border || !crate::env_flag!("OXI_TABLE_RESTART_OUTER_EDGE_DISABLE"))
                 {
-                    let outer = if std::env::var("OXI_TABLE_RESTART_OUTER_EDGE_DISABLE").is_err() {
+                    let outer = if !crate::env_flag!("OXI_TABLE_RESTART_OUTER_EDGE_DISABLE") {
                         table.style.top_border.as_ref().map_or_else(
                             || if table.style.border { table.style.border_width.unwrap_or(0.4) } else { 0.0 },
                             |edge| self.s1188_drawn(&edge.style, edge.width),
@@ -2615,7 +2647,7 @@ impl<'a> TableFitLayouter<'a> {
                         let first_row = if replay_header_on_restart { 0 } else { row_idx };
                         self.table_fragment_top_width(table, &table.rows[first_row])
                             - self.s1188_edge_bw(table, first_row)
-                    } else if std::env::var_os("OXI_S1622_DISABLE").is_none() {
+                    } else if !crate::env_flag!("OXI_S1622_DISABLE") {
                         // S1622 (2026-10-01, default ON, opt-out OXI_S1622_DISABLE):
                         // the same replacement for a table without separate outer
                         // edges. Word charges ONE rule at the continuation top --
@@ -2642,7 +2674,7 @@ impl<'a> TableFitLayouter<'a> {
                 // Word rule 71.04 against Oxi's 71.60 (drawn at page_top + 0.5)
                 // and 71.10 at page_top; the cell text and the next rule (91.46 /
                 // 91.48) already agree with the content at page_top + 0.5.
-                if std::env::var_os("OXI_S1621_DISABLE").is_none() && !separate_outer_edges {
+                if !crate::env_flag!("OXI_S1621_DISABLE") && !separate_outer_edges {
                     s1621_lift = table_restart_top - page_top;
                 }
                 cursor.set(table_restart_top);
@@ -2653,7 +2685,7 @@ impl<'a> TableFitLayouter<'a> {
                 // (page_top − captured min y); TableBorder carries its own
                 // content-level y1/y2 (S648: renderers draw borders from
                 // those, elem.y is secondary) so shift both.
-                if std::env::var("OXI_DBG728").is_ok() {
+                if crate::env_flag!("OXI_DBG728") {
                     eprintln!("[S728] PUSH row_idx={} cap_done={} n_hdr={} hdr_h={:.1} row.header={} widow={}",
                         row_idx, s728_capture_done, s728_hdr_elems.len(), s728_hdr_h, row.header, widow_break_needed);
                 }
@@ -2696,7 +2728,7 @@ impl<'a> TableFitLayouter<'a> {
                 // Reflow spanning text at the actual row boundary, including
                 // paragraph spacing that cannot fit in the completed fragment.
                 for flow in &mut vmerge_text_flows {
-                    let bygrid = std::env::var_os("OXI_S1192G_DISABLE").is_none();
+                    let bygrid = !crate::env_flag!("OXI_S1192G_DISABLE");
                     let continues = LayoutEngine::s1192_cell_at(row, flow.key, bygrid).map_or(false,
                         |c| matches!(c.v_merge.as_deref(), Some("continue") | Some("")));
                     if flow.start_row >= row_idx || !continues { continue; }
@@ -2743,7 +2775,7 @@ impl<'a> TableFitLayouter<'a> {
                 }
                 // The current row now starts on this page. Retain its actual
                 // start so later keepNext checks see content above a heading.
-                if s1083_on && std::env::var("OXI_TABLE_ROW_HISTORY_DISABLE").is_err() {
+                if s1083_on && !crate::env_flag!("OXI_TABLE_ROW_HISTORY_DISABLE") {
                     s1083_row_start.push((row_idx, cursor.cursor_y));
                 }
             }
@@ -2776,7 +2808,7 @@ impl<'a> TableFitLayouter<'a> {
             // no measured gate benefit buys only blast radius, so it ships when
             // a doc actually needs it (it was implemented but never verified —
             // the "12 -> 11 pages" claim was never measured).
-            let s1067_row_at_page_top = std::env::var("OXI_S1067").is_ok()
+            let s1067_row_at_page_top = crate::env_flag!("OXI_S1067")
                 && !self.doc_body_has_real_cjk
                 && !pages.is_empty()
                 && (cursor.cursor_y - page_top).abs() < 0.5;
@@ -2805,7 +2837,7 @@ impl<'a> TableFitLayouter<'a> {
             // technical__b243782b73e69ad1 (row 10 lrpb_mid split) and
             // creative__32ceca2e1f3ae9a8 go to PASS. Gates under the env flag:
             // golden 183/187 (same fail set), ja 179 -> 181, en 291/298 (same).
-            let fragment_valign = std::env::var("OXI_CELL_FRAGMENT_VALIGN_DISABLE").is_err()
+            let fragment_valign = !crate::env_flag!("OXI_CELL_FRAGMENT_VALIGN_DISABLE")
                 && row.cells.iter().any(|c| c.v_merge.is_none() && c.cell_text_boxes.is_empty());
             // Element ranges exclude the outer cell borders. Keep the physical
             // content origin so alignment can use the final fragment boundary.
@@ -2857,7 +2889,7 @@ impl<'a> TableFitLayouter<'a> {
                 // 4.45pt right of Word's. Sliced out and measured against Word:
                 // with no indent at all the text sits 0.84pt inside the cell's
                 // own rule, not 5.4pt.
-                let s1215_row_mar = if std::env::var("OXI_S1215_DISABLE").is_err() {
+                let s1215_row_mar = if !crate::env_flag!("OXI_S1215_DISABLE") {
                     row.cell_margins_override.as_ref()
                 } else {
                     None
@@ -2890,7 +2922,7 @@ impl<'a> TableFitLayouter<'a> {
                 // 100/100; Word starts the content cell's first line on the label's
                 // baseline (PDF 256.13 both) and the 3-line row is 5 + 43.92 + 5,
                 // Oxi's content cell had no margin (43.9) and page 2 ran ~50pt short.
-                let (pad_t, pad_b) = if std::env::var_os("OXI_S1575_DISABLE").is_none() {
+                let (pad_t, pad_b) = if !crate::env_flag!("OXI_S1575_DISABLE") {
                     let mt = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.top).unwrap_or(row_default_pad_t)).fold(pad_t, f32::max);
                     let mb = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.bottom).unwrap_or(row_default_pad_b)).fold(pad_b, f32::max);
                     (mt, mb)
@@ -2927,7 +2959,7 @@ impl<'a> TableFitLayouter<'a> {
                 if cell_start_grid == 0
                     && !is_nested
                     && lead_absorb
-                    && std::env::var("OXI_S496_TBLIND_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S496_TBLIND_DISABLE")
                 {
                     cell_x -= pad_l;
                     // S766 = the S585c 本体 (root) fix (2026-07-08, default ON,
@@ -2984,18 +3016,18 @@ impl<'a> TableFitLayouter<'a> {
                     // clamp then approximately undoes the widen -- two errors that
                     // leave 0.66pt, which is exactly what makes its 「…手待時間」）
                     // line hold one character Word pushes out.
-                    let s1200_cap = if std::env::var("OXI_S1200").is_ok() {
+                    let s1200_cap = if crate::env_flag!("OXI_S1200") {
                         content_width - table.style.indent.unwrap_or(0.0) + pad_l + pad_r
                     } else {
                         content_width - pad_l
                     };
-                    let s1163_fits = std::env::var("OXI_S1163_DISABLE").is_err()
+                    let s1163_fits = !crate::env_flag!("OXI_S1163_DISABLE")
                         && table.style.width_type.as_deref() == Some("auto")
                         && cell_w + pad_l <= s1200_cap + pad_l;
                     let s766_shift_whole = row.cells.len() == 1
                         && (matches!(table.style.width_type.as_deref(), Some("dxa") | Some("pct"))
                             || s1163_fits)
-                        && std::env::var("OXI_S766_DISABLE").is_err();
+                        && !crate::env_flag!("OXI_S766_DISABLE");
                     // S1240 (2026-08-27, default ON, opt-out OXI_S1240_DISABLE): a
                     // MULTI-cell row does NOT widen its leading cell. The widen
                     // above rests on S766's stated assumption that "the leading
@@ -3035,7 +3067,7 @@ impl<'a> TableFitLayouter<'a> {
                     // (367 pages vs 368). The single-cell paths are untouched:
                     // S585c's over-wide clamp still depends on the widen, and it
                     // only ever reaches a 1-cell row.
-                    let s1240_no_widen = std::env::var("OXI_S1240_DISABLE").is_err()
+                    let s1240_no_widen = !crate::env_flag!("OXI_S1240_DISABLE")
                         && row.cells.len() > 1;
                     if !s766_shift_whole && !s1240_no_widen {
                         cell_w += pad_l;
@@ -3073,8 +3105,8 @@ impl<'a> TableFitLayouter<'a> {
                 // carried column 1's flow into column 2 (Word: the float in the right
                 // column, «題材の評価規準» on one line, column 1 untouched).
                 let positioned_float = table.style.position.is_some()
-                    && std::env::var_os("OXI_FLOAT_NO_PAGE_CLAMP_DISABLE").is_none();
-                let s585c_clamp_base = std::env::var("OXI_S585C_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_FLOAT_NO_PAGE_CLAMP_DISABLE");
+                let s585c_clamp_base = !crate::env_flag!("OXI_S585C_DISABLE")
                     && !positioned_float
                     && !is_nested
                     && row.cells.len() == 1
@@ -3099,7 +3131,7 @@ impl<'a> TableFitLayouter<'a> {
                 // the tblInd-overshoot case s585c missed. Border-overshoot amount gate
                 // (< 11 = the auto-fit envelope) mirrors the eff_cell_w clamp geometry.
                 let s585c_border_over = (cell_x + cell_w) - (content_right_edge + pad_r);
-                let s767b_tblind = std::env::var("OXI_S767_DISABLE").is_err()
+                let s767b_tblind = !crate::env_flag!("OXI_S767_DISABLE")
                     && !positioned_float
                     && !s585c_clamp_base
                     && !is_nested
@@ -3132,7 +3164,7 @@ impl<'a> TableFitLayouter<'a> {
                 // Phase-1: 0 real flips (only tokyoshugyo, unchanged score). See
                 // [[tokyoshugyo_wrap_not_cellheight]] / [[char_budget_wall]].
                 let s585c_narrow = s585c_clamp
-                    && std::env::var("OXI_S585C_WRAP_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S585C_WRAP_DISABLE")
                     && self.compat_mode < 15
                     && self.compress_punctuation;
 
@@ -3192,7 +3224,7 @@ impl<'a> TableFitLayouter<'a> {
                 // by block_pos; absolute para top = cell_block_tops[idx] + dy (the
                 // dy applied to cell_elements below). Declared at cell-loop scope so
                 // it survives past the `if !is_vmerge_continue` block to the text-box
-                // emit site. Only consumed under OXI_S487_ENABLE.
+                // emit site. Consumed unless OXI_S487_DISABLE.
                 let mut cell_block_tops: Vec<f32> = Vec::new();
                 let cell_float_flow = LayoutEngine::cell_float_enabled(cell) && !self.is_vert_writing_active(cell);
                 let mut float_tops = vec![0.0; cell.blocks.len()];
@@ -3212,7 +3244,7 @@ impl<'a> TableFitLayouter<'a> {
                 let mut s753_vert_cols: Option<(Vec<(usize, String, f32, f32, f32)>, f32)> = None;
                 // S427 (2026-05-29): track previous cell paragraph's space_after
                 // for adjacent-paragraph spacing collapse (see pre-pass comment).
-                let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
+                let s427_collapse = !crate::env_flag!("OXI_S427_DISABLE");
                 let mut prev_cell_sa: Option<f32> = None;
                 // S939: prev paragraph's (contextual_spacing, style_id).
                 let mut s939_prev_r: Option<(bool, Option<&str>)> = None;
@@ -3262,7 +3294,7 @@ impl<'a> TableFitLayouter<'a> {
                     });
                     let s1311_tail_render = self.s1311_hidemark_tail_pos(cell);
                     let s751_hide_render = cell.hide_mark
-                        && std::env::var("OXI_S751_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S751_DISABLE")
                         && s1311_tail_render.is_none()
                         && cell.blocks.iter().all(|b| {
                             matches!(b, Block::Paragraph(p)
@@ -3313,15 +3345,39 @@ impl<'a> TableFitLayouter<'a> {
                         }
                         match block {
                             Block::Math(math_block)
-                                if std::env::var("OXI_S1244_DISABLE").is_err() =>
+                                if !crate::env_flag!("OXI_S1244_DISABLE") =>
                             {
                                 // S1244: emit cell equations at the cell
                                 // content origin and advance by the S652
                                 // model — the estimate arm above mirrors this.
-                                let mfs: f32 = 10.5;
+                                let mfs: f32 = LayoutEngine::cell_math_font_size(math_block);
+                                // OXI_CELL_MATH_HOST: a cell's display equation sits in
+                                // its host paragraph like the body's (S524 / S1613):
+                                // indents, then jc (default centre) across the rest.
+                                let math_x = if !crate::env_flag!("OXI_CELL_MATH_HOST_DISABLE") {
+                                    let host = match math_block {
+                                        crate::ir::MathBlock::Display { host: Some(h), .. } => Some(h.as_ref()),
+                                        _ => None,
+                                    };
+                                    let left = host.map_or(0.0, |h| h.indent_left.unwrap_or(0.0)
+                                        + h.indent_first_line.unwrap_or(0.0));
+                                    let right = host.map_or(0.0, |h| h.indent_right.unwrap_or(0.0));
+                                    let avail = (cell_w - pad_l - pad_r - left - right).max(0.0);
+                                    let adv = crate::layout::math::layout_math_block(math_block, mfs).advance;
+                                    let jc = match math_block {
+                                        crate::ir::MathBlock::Display { jc, .. } => *jc,
+                                        _ => crate::ir::MathAlignment::Left,
+                                    };
+                                    cell_x + pad_l + left + match jc {
+                                        crate::ir::MathAlignment::Center
+                                        | crate::ir::MathAlignment::CenterGroup => ((avail - adv) * 0.5).max(0.0),
+                                        crate::ir::MathAlignment::Right => (avail - adv).max(0.0),
+                                        crate::ir::MathAlignment::Left => 0.0,
+                                    }
+                                } else { cell_x + pad_l };
                                 let (me, mbb) = crate::layout::math::emit_math_block(
                                     math_block,
-                                    cell_x + pad_l,
+                                    math_x,
                                     content_h,
                                     mfs,
                                 );
@@ -3366,7 +3422,7 @@ impl<'a> TableFitLayouter<'a> {
                                     false, // S740: nested notes counted at the outer row
                                     None,
                                 );
-                                if std::env::var("OXI_DBG_NEST").is_ok() {
+                                if crate::env_flag!("OXI_DBG_NEST") {
                                     let emax = nested_elements
                                         .iter()
                                         .map(|e| match &e.content {
@@ -3390,7 +3446,7 @@ impl<'a> TableFitLayouter<'a> {
                                 // following （続き） paragraph was placed 9.5pt INSIDE the
                                 // nested table's last row (row-split continuation showed
                                 // it overlapping at y=752.5 vs the row line at 748.5).
-                                content_h = if std::env::var("OXI_S756_DISABLE").is_err() {
+                                content_h = if !crate::env_flag!("OXI_S756_DISABLE") {
                                     nested_y.visual_y
                                 } else {
                                     nested_y.cursor_y
@@ -3415,7 +3471,7 @@ impl<'a> TableFitLayouter<'a> {
                                 // actual 90° CW rotation when emitting glyphs; this layout
                                 // step only ensures positional correctness for pagination.
                                 if self.is_vert_writing_active(cell)
-                                    && std::env::var("OXI_S753_DISABLE").is_err()
+                                    && !crate::env_flag!("OXI_S753_DISABLE")
                                 {
                                     // S753 (2026-07-05): multi-column wrapped vert-cell emit —
                                     // the text wraps into the FINAL row height (chars per
@@ -3633,7 +3689,7 @@ impl<'a> TableFitLayouter<'a> {
                                 // A table overrides document defaults only when it
                                 // declares line spacing, as in the height estimate.
                                 let preserve_cell_defaults =
-                                    std::env::var("OXI_CELL_DEFAULT_LINE_DISABLE").is_err();
+                                    !crate::env_flag!("OXI_CELL_DEFAULT_LINE_DISABLE");
                                 let effective_line_spacing =
                                     if para.style.line_spacing_from_doc_defaults {
                                         if preserve_cell_defaults {
@@ -3697,7 +3753,7 @@ impl<'a> TableFitLayouter<'a> {
                                 // OXI_S699_DISABLE.
                                 let para_style_explicit_ls = para.style.line_spacing.is_some()
                                     && !para.style.line_spacing_from_doc_defaults
-                                    && std::env::var("OXI_S699_DISABLE").is_err();
+                                    && !crate::env_flag!("OXI_S699_DISABLE");
                                 let (effective_line_spacing, effective_line_rule) = if tbl_has_ls
                                     && !para.style.has_direct_spacing
                                     && !para_style_explicit_ls
@@ -3807,7 +3863,7 @@ impl<'a> TableFitLayouter<'a> {
                                     fragment_paragraph_after.insert((cell_idx, cell_para_counter),
                                         effective_space_after.unwrap_or(0.0));
                                 }
-                                if std::env::var_os("OXI_CELL_EMPTY_LINES").is_some()
+                                if crate::env_flag!("OXI_CELL_EMPTY_LINES")
                                     && Some(block_pos) == last_para_pos
                                 {
                                     cell_terminal_spacing.insert(
@@ -3827,7 +3883,7 @@ impl<'a> TableFitLayouter<'a> {
                                 // Keep adjacency before updating the previous-style state.
                                 let carry_space_before = if !self.preserve_same_style_cell_spacing
                                     && !self.doc_body_has_real_cjk
-                                    && std::env::var("OXI_S939_DISABLE").is_err()
+                                    && !crate::env_flag!("OXI_S939_DISABLE")
                                     && prev_cell_sa.is_some()
                                     && para.style.contextual_spacing
                                     && s939_prev_r.is_some_and(|p| para.style.style_id.as_deref() == p.1)
@@ -3864,7 +3920,47 @@ impl<'a> TableFitLayouter<'a> {
                                     para.style.after_autospacing,
                                     para.style.num_id.as_deref(),
                                 ));
+                                // OXI_CELL_PBDR (2026-11-01, default ON, opt-out _DISABLE): a cell
+                                // paragraph's top / bottom border, as in the body (S1504): the
+                                // rule sits after the before (above the after) and the text
+                                // moves by space + the rule's width (double = 3 widths); a run
+                                // of paragraphs with the same borders is one group (the rule
+                                // above the first, below the last). en/reference__00f45b1b p2
+                                // (Quote style, top/bottom sz 4 space 14, before/after 24 in a
+                                // layout-table cell): Word's rules 240.2 / 367.0 around the
+                                // quote and «Anonymous Adam», first line top 254.7 = rule
+                                // + 0.5 + 14; Oxi drew neither rule and set the quote 14.5 high.
+                                let cell_pbdr_on = !crate::env_flag!("OXI_CELL_PBDR_DISABLE");
+                                let cell_pbdr_same = |b: Option<&Block>| matches!(b,
+                                    Some(Block::Paragraph(q)) if q.style.borders.is_some() && q.style.borders == para.style.borders);
+                                let cell_pbdr_edge = |pick: fn(&crate::ir::ParagraphBorders) -> Option<&crate::ir::BorderDef>| {
+                                    para.style.borders.as_ref().and_then(pick).cloned()
+                                        .filter(|d| !matches!(d.style.as_str(), "nil" | "none") && d.width > 0.0)
+                                };
+                                let cell_pbdr_rule = |d: &crate::ir::BorderDef, y: f32, cpi: usize, out: &mut Vec<LayoutElement>| {
+                                    let x0 = cell_x + pad_l + para.style.indent_left.unwrap_or(0.0).max(0.0);
+                                    let x1 = cell_x + cell_w - pad_r - para.style.indent_right.unwrap_or(0.0).max(0.0);
+                                    let color = d.color.as_deref().filter(|c| *c != "auto")
+                                        .map(|c| format!("#{}", c.trim_start_matches('#'))).unwrap_or_else(|| "#000000".to_string());
+                                    let lines: Vec<f32> = if d.style == "double" { vec![y, y + 2.0 * d.width] } else { vec![y] };
+                                    for ly in lines {
+                                        let mut e = LayoutElement::new(x0, ly, (x1 - x0).max(0.0), d.width,
+                                            LayoutContent::BoxRect { fill: Some(color.clone()), stroke_color: None, stroke_width: 0.0, corner_radius: 0.0 });
+                                        e.paragraph_index = block_idx;
+                                        e.cell_paragraph_index = Some(cpi);
+                                        e.cell_row_index = Some(row_idx);
+                                        e.cell_col_index = Some(cell_idx);
+                                        out.push(e);
+                                    }
+                                };
+                                let cell_pbdr_extent = |d: &crate::ir::BorderDef| if d.style == "double" { 3.0 * d.width } else { d.width };
                                 content_h += effective_space_before;
+                                if cell_pbdr_on && !(block_pos > 0 && cell_pbdr_same(cell.blocks.get(block_pos - 1))) {
+                                    if let Some(d) = cell_pbdr_edge(|b| b.top.as_ref()) {
+                                        cell_pbdr_rule(&d, content_h, cell_para_counter, &mut cell_elements);
+                                        content_h += cell_pbdr_extent(&d) + d.space.max(0.0);
+                                    }
+                                }
                                 s1431_cell_para_sb.insert((cell_idx, cell_para_counter), carry_space_before);
                                 if cell_float_flow {
                                     let floor = float_replay.and_then(|r| r.origins.get(&(row_idx, cell_idx, block_pos)))
@@ -4176,7 +4272,7 @@ impl<'a> TableFitLayouter<'a> {
                                     // the 0.9pt gap is within ⑦'s wrap slack so the rule still fires correctly).
                                     // Env OXI_S559_CELLMAR overrides the rule for A/B testing: all / tcwgt /
                                     // just (= default) / justl0.
-                                    let s559_disabled = std::env::var("OXI_S559_DISABLE").is_ok();
+                                    let s559_disabled = crate::env_flag!("OXI_S559_DISABLE");
                                     let s559_mode = std::env::var("OXI_S559_CELLMAR").ok();
                                     let s559_tcw_gt =
                                         cell.width.map_or(false, |tcw| tcw - cell_w >= 8.0);
@@ -4267,7 +4363,7 @@ impl<'a> TableFitLayouter<'a> {
                                     let s585_tblw_auto =
                                         table.style.width_type.as_deref() == Some("auto");
                                     let s585_over = cell_w - content_width;
-                                    let s585_cellmar = std::env::var("OXI_S585_DISABLE").is_err()
+                                    let s585_cellmar = !crate::env_flag!("OXI_S585_DISABLE")
                                         && row.cells.len() == 1
                                         && !table.style.has_explicit_cellmar
                                         && !matches!(
@@ -4350,7 +4446,7 @@ impl<'a> TableFitLayouter<'a> {
                                     // `else { cell_w }` text-into-margins case (S562) is left untouched.
                                     // This completes S585c's stated "one eff_cell_w → border AND wrap"
                                     // for the non-compress path. See [[tokumei_form_family_ssim]].
-                                    let wrap_cell_w = if std::env::var("OXI_S767_DISABLE").is_ok() {
+                                    let wrap_cell_w = if crate::env_flag!("OXI_S767_DISABLE") {
                                         cell_w
                                     } else {
                                         eff_cell_w
@@ -4397,7 +4493,7 @@ impl<'a> TableFitLayouter<'a> {
                                         || s585n_nested
                                         || self.cellpair_active()
                                         || s713_cellmar_render
-                                        || (std::env::var("OXI_S768_DISABLE").is_err()
+                                        || (!crate::env_flag!("OXI_S768_DISABLE")
                                             && !self.doc_body_has_real_cjk)
                                     {
                                         // S768 (opt-in): pure-Latin document → wrap at cell_w − cellMar
@@ -4435,9 +4531,20 @@ impl<'a> TableFitLayouter<'a> {
                                     };
                                     let mut wrap_w =
                                         (wrap_base - p_indent_left - p_indent_right).max(0.0);
+                                    // OXI_CELL_NEGFIRST (2026-11-01, default ON, opt-out _DISABLE): a
+                                    // first line that starts left of the cell's inner edge also WRAPS
+                                    // that much wider -- the start was already drawn there, only the
+                                    // budget stopped at the edge. `_pb_cell_negfirst_gen.py` (3000tw
+                                    // cell): firstLine=-200 and left=200 hanging=400 put 14 chars on
+                                    // line 1 at -10pt in Word against 13 with no indent; Oxi drew the
+                                    // -10 start and still broke after 13. ja/educational__244a3664's
+                                    // «(10分)» labels (leftChars=-47 hangingChars=47, w:w=66) sit on
+                                    // one line in Word from 3.6 left of the edge; Oxi broke after «(10».
+                                    let negfirst = !crate::env_flag!("OXI_CELL_NEGFIRST_DISABLE");
                                     let mut first_line_wrap_w = if p_first_line_indent < 0.0 {
+                                        let fl_start = p_indent_left + p_first_line_indent;
                                         (wrap_base
-                                            - (p_indent_left + p_first_line_indent).max(0.0)
+                                            - if negfirst { fl_start } else { fl_start.max(0.0) }
                                             - p_indent_right)
                                             .max(0.0)
                                     } else {
@@ -4485,7 +4592,7 @@ impl<'a> TableFitLayouter<'a> {
                                     // width + oikomi the line-end 約物 (no 約物 compression involved). Scoped to
                                     // proportional + jc=left + single-cell. See [[tokyoshugyo_wrap_not_cellheight]].
                                     let propcell_wrap_cap =
-                                        std::env::var("OXI_PROPCELL_DISABLE").is_err()
+                                        !crate::env_flag!("OXI_PROPCELL_DISABLE")
                                             && row.cells.len() == 1
                                             && !matches!(
                                                 para.alignment,
@@ -4551,7 +4658,7 @@ impl<'a> TableFitLayouter<'a> {
                                     // missing compression). The fix needs BOTH together — narrow the wrap
                                     // (PGCAP/S594) AND add Word's cell 約物 compression (the 6de22246 char-
                                     // budget cell-wrapper wall). See [[tokyoshugyo_wrap_not_cellheight]].
-                                    if std::env::var("OXI_DUMP_CELLX").is_ok() {
+                                    if crate::env_flag!("OXI_DUMP_CELLX") {
                                         let preview: String = para
                                             .runs
                                             .iter()
@@ -4595,7 +4702,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // (fits 「当」 where Word wraps). Use the render width (font_size) for
                                             // full-width marker chars. See [[tokyoshugyo_wrap_not_cellheight]].
                                             let marker_cjk =
-                                                std::env::var("OXI_MARKERCJK_DISABLE").is_err();
+                                                !crate::env_flag!("OXI_MARKERCJK_DISABLE");
                                             let marker_width: f32 = marker
                                                 .chars()
                                                 .map(|c| {
@@ -4737,7 +4844,7 @@ impl<'a> TableFitLayouter<'a> {
                                     // sentinel fragment (the S703c F8FF pattern; the 13-element cell
                                     // tuple carries no style fields, so the image ref cannot ride the
                                     // tuple). Default (s982_cell=false) never pushes — byte-identical.
-                                    let s982_cell = std::env::var("OXI_S982_DISABLE").is_err();
+                                    let s982_cell = !crate::env_flag!("OXI_S982_DISABLE");
                                     let mut cell_inline_objects: Vec<&Image> = Vec::new();
                                     // S1252: the same carrier for a STRUCTURED inline oMath, with
                                     // its own U+F8FD sentinel. `educational__002a301d` puts all six
@@ -4771,8 +4878,8 @@ impl<'a> TableFitLayouter<'a> {
                                             para.alignment,
                                             Alignment::Justify | Alignment::Distribute
                                         )
-                                        && std::env::var("OXI_S1082_DISABLE").is_err()
-                                        && std::env::var("OXI_S825_DISABLE").is_err();
+                                        && !crate::env_flag!("OXI_S1082_DISABLE")
+                                        && !crate::env_flag!("OXI_S825_DISABLE");
                                     // S1174 (opt-in): the derived legacy cell 約物
                                     // compression. Both settings must be declared --
                                     // compat 15 turns the mechanism off entirely.
@@ -4786,7 +4893,7 @@ impl<'a> TableFitLayouter<'a> {
                                     // cells, where Word squeezes 「．」 from 9.599 to 6.125 to
                                     // hold a line 1.02pt over its budget and Oxi wraps instead.
                                     let s1174_yakucomp =
-                                        std::env::var("OXI_YAKUCOMP_DISABLE").is_err()
+                                        !crate::env_flag!("OXI_YAKUCOMP_DISABLE")
                                             && self.compress_punctuation
                                             && (self.compat_mode <= 14
                                                 || matches!(
@@ -4813,6 +4920,7 @@ impl<'a> TableFitLayouter<'a> {
                                         crate::layout::jc_both_compress::CharContext,
                                     > = Vec::new();
                                     let mut is_first_line = true;
+                                    let mut forcefit_hang_pending = false;
                                     // S1169 (2026-08-19, default ON, opt-out
                                     // OXI_S1169_DISABLE): a paragraph that ENDS
                                     // with a hard break keeps the empty line that
@@ -4901,7 +5009,7 @@ impl<'a> TableFitLayouter<'a> {
                                     // tokyoshugyo 0.8077→0.9638, full Phase-1 gate 0 PASS→FAIL (only
                                     // tokyoshugyo changes). The baseline 90=90 was a COMPENSATING balance
                                     // (page-44 +1 ⊕ figures −1). See [[tokyoshugyo_wrap_not_cellheight]].
-                                    let s586_orphan = std::env::var("OXI_S586_DISABLE").is_err()
+                                    let s586_orphan = !crate::env_flag!("OXI_S586_DISABLE")
                                         && self.compat_mode < 15
                                         && self.compress_punctuation;
                                     let s586_cap: f32 = std::env::var("OXI_S586_CAP")
@@ -4927,7 +5035,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // en/legal__001e6d77 «Page 1 of 2» -- 22 documents of the gate).
                                         let cell_run_style = {
                                             let mut s = run.style.clone();
-                                            if std::env::var_os("OXI_CELL_FIELD_DISABLE").is_none() {
+                                            if !crate::env_flag!("OXI_CELL_FIELD_DISABLE") {
                                                 s.cell_field_type = run.field_type;
                                             }
                                             s
@@ -4948,7 +5056,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // Q's line, Oxi measured it at 10pt (37.7pt) and broke it
                                         // 'shoulde'/'r-', so the header row grew 2 -> 4 lines and
                                         // 25 paragraphs ran a page late.
-                                        let font_size = if std::env::var_os("OXI_S1518_DISABLE").is_none()
+                                        let font_size = if !crate::env_flag!("OXI_S1518_DISABLE")
                                             && run.style.font_size.is_some()
                                             && matches!(
                                                 run.style.vertical_align,
@@ -4981,7 +5089,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // as the stroked square at emit. en/forms__006c06b0's
                                         // «Copy of Project Plan attached» / «I declare…» boxes.
                                         if run.style.form_checkbox.is_some() {
-                                            if std::env::var_os("OXI_CELL_FORMCHECKBOX_DISABLE").is_some() {
+                                            if crate::env_flag!("OXI_CELL_FORMCHECKBOX_DISABLE") {
                                                 continue;
                                             }
                                             let ow = (1.15 * font_size - 2.28).max(1.0) + 2.0;
@@ -5077,7 +5185,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 }
                                                 let index = cell_inline_objects.len();
                                                 cell_inline_objects.push(img);
-                                                if std::env::var("OXI_DBG_CELLOLE").is_ok() {
+                                                if crate::env_flag!("OXI_DBG_CELLOLE") {
                                                     eprintln!("[CELL-OLE] phase=builder enabled=1 index={} w={} h={}",
                                             index, ow, img.height);
                                                 }
@@ -5112,7 +5220,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // combine → only kyotei's 1 run fires; other cells unchanged.
                                         if run.style.combine
                                             && !run.text.trim().is_empty()
-                                            && std::env::var("OXI_S703_DISABLE").is_err()
+                                            && !crate::env_flag!("OXI_S703_DISABLE")
                                         {
                                             let n = run.text.chars().count();
                                             let rows_chars = (n + 1) / 2;
@@ -5178,24 +5286,24 @@ impl<'a> TableFitLayouter<'a> {
                                             crate::layout::jc_both_compress::CharContext,
                                         > = Vec::new();
                                         // S1443: a page break inside a cell is inert (see the breaker note).
-                                        let s586_run_chars: Vec<char> = run.text.chars().filter(|&c| !(c == '\x0C' && std::env::var_os("OXI_S1443_DISABLE").is_none())).collect();
+                                        let s586_run_chars: Vec<char> = run.text.chars().filter(|&c| !(c == '\x0C' && !crate::env_flag!("OXI_S1443_DISABLE"))).collect();
                                         // Shaped cluster advances for complex-script text, the
                                         // same family choice as the body breaker (line_break.rs).
-                                        let cell_deva_adv: Option<Vec<f32>> = if std::env::var_os("OXI_INDIA_CELL_DEVA_DISABLE").is_none()
+                                        let cell_deva_adv: Option<Vec<f32>> = if !crate::env_flag!("OXI_INDIA_CELL_DEVA_DISABLE")
                                             && s586_run_chars.iter().any(|&c| crate::font::is_complex_script(c))
                                         {
                                             let shaped: String = s586_run_chars.iter().collect();
                                             let emit_fam = self
                                                 .resolve_font_family_for_text(&shaped, &run.style, &para.style)
                                                 .map(|s| s.to_string());
-                                            let emit_fam = if std::env::var_os("OXI_INDIA_CS_SHAPE_DISABLE").is_none() {
+                                            let emit_fam = if !crate::env_flag!("OXI_INDIA_CS_SHAPE_DISABLE") {
                                                 run.style.font_family_cs.clone()
                                                     .or_else(|| para.style.default_run_style.as_ref().and_then(|s| s.font_family_cs.clone()))
                                                     .or(emit_fam)
                                             } else { emit_fam };
                                             let shape_fam = match emit_fam {
                                                 Some(f) if crate::font::shape::family_covers(&f, '\u{0915}') => f,
-                                                Some(f) if std::env::var_os("OXI_INDIA_CS_SHAPE_DISABLE").is_none()
+                                                Some(f) if !crate::env_flag!("OXI_INDIA_CS_SHAPE_DISABLE")
                                                     && !self.registry.supports_family(&f)
                                                     && crate::font::runtime::resolve(&f, false, false).is_none()
                                                     && crate::font::shape::family_covers("Mangal", '\u{0915}') => "Mangal".to_string(),
@@ -5210,6 +5318,39 @@ impl<'a> TableFitLayouter<'a> {
                                         for (s586_ci, ch) in
                                             s586_run_chars.iter().copied().enumerate()
                                         {
+                                            if forcefit_hang_pending && !matches!(ch, ' ' | '\u{3000}') {
+                                                forcefit_hang_pending = false;
+                                                if !buf.is_empty() {
+                                                    current_line.push((
+                                                        buf.clone(),
+                                                        font_size,
+                                                        buf_w,
+                                                        bold,
+                                                        run.style.italic,
+                                                        run.style.underline,
+                                                        run.style.underline_style.clone(),
+                                                        run.style.strikethrough,
+                                                        font_family.clone(),
+                                                        run.style.color.clone(),
+                                                        run.style.highlight.clone().or_else(
+                                                            || run.style.shading.clone(),
+                                                        ),
+                                                        cs,
+                                                        run.style.text_scale.unwrap_or(100.0),
+                                                        std::mem::take(&mut s993_lrpb_pending),
+                                                        run.style.font_family_east_asia.clone(),
+                                                        run.ruby.is_some(),
+                                                        cell_run_style.clone(),
+                                                    ));
+                                                    buf.clear();
+                                                    buf_w = 0.0;
+                                                    current_line_chars.extend(buf_chars.drain(..));
+                                                }
+                                                lines.push(std::mem::take(&mut current_line));
+                                                line_x = 0.0;
+                                                current_line_chars.clear();
+                                                is_first_line = false;
+                                            }
                                             // Session 109 (2026-05-19): honour soft line breaks
                                             // (<w:br/>) and column/page break markers within table
                                             // cells. The OOXML parser converts <w:br/> to '\n' in
@@ -5228,7 +5369,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // a right stop at 514: Word right-aligns 50 at 333.2 on one
                                             // line; advancing the tab to the stop pushed 50 to line 2).
                                             let cell_tab_all = !self.doc_body_has_real_cjk
-                                                && std::env::var_os("OXI_CELL_TAB_ALL_DISABLE").is_none()
+                                                && !crate::env_flag!("OXI_CELL_TAB_ALL_DISABLE")
                                                 && (p_first_line_indent < 0.0 || (ch == '\t' && {
                                                     let indent_off = if is_first_line {
                                                         (p_indent_left + p_first_line_indent).max(0.0)
@@ -5243,7 +5384,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 && self.cell_tab_word_overflows(para, s586_run_offset + s586_ci,
                                                     line_x + buf_w + if is_first_line { (p_indent_left + p_first_line_indent).max(0.0) } else { p_indent_left },
                                                     wrap_w + p_indent_left, p_indent_left, p_first_line_indent);
-                                            if tab_break && std::env::var("OXI_CELL_TAB_CHAR_PACK_DISABLE").is_err() { cell_tab_char_pack = true; }
+                                            if tab_break && !crate::env_flag!("OXI_CELL_TAB_CHAR_PACK_DISABLE") { cell_tab_char_pack = true; }
                                             if ch == '\n' || ch == '\x0B' || ch == '\x0C' || tab_break {
                                                 if !buf.is_empty() {
                                                     current_line.push((
@@ -5274,7 +5415,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 }
                                                 if current_line.is_empty() && !tab_break
                                                     && !self.doc_body_has_real_cjk
-                                                    && std::env::var("OXI_CELL_BREAK_FONT_DISABLE").is_err()
+                                                    && !crate::env_flag!("OXI_CELL_BREAK_FONT_DISABLE")
                                                 {
                                                     current_line.push((String::new(), font_size, 0.0, bold,
                                                         run.style.italic, run.style.underline,
@@ -5320,7 +5461,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // en/forms__00619ac4's «☐ No» + 8 tabs + «If yes…» cell
                                             // lost its second line.
                                             if ch == '\t'
-                                                && std::env::var("OXI_S443_DISABLE").is_err()
+                                                && !crate::env_flag!("OXI_S443_DISABLE")
                                                 && (p_first_line_indent < 0.0 || cell_tab_all)
                                             {
                                                 let indent_off = if is_first_line {
@@ -5331,7 +5472,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 let abs_pos = line_x + buf_w + indent_off;
                                                 let (next_pos, _) = self.cell_next_tab_stop(
                                                     para, abs_pos, p_indent_left, p_first_line_indent);
-                                                if std::env::var("OXI_CELL_EDGE_TAB_DISABLE").is_err()
+                                                if !crate::env_flag!("OXI_CELL_EDGE_TAB_DISABLE")
                                                     && !self.doc_body_has_real_cjk
                                                     && (next_pos * 20.0).round() >= ((wrap_w + p_indent_left) * 20.0).round()
                                                 {
@@ -5417,7 +5558,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // table declares no tblCellMar, no tblInd, no tblStyle)
                                             // and the line origin (127.58 vs 127.60). Both flags are
                                             // kept only so the two models are not tried a third time.
-                                            let s1204_fs = if std::env::var("OXI_S1204").is_ok() {
+                                            let s1204_fs = if crate::env_flag!("OXI_S1204") {
                                                 (font_size * 600.0 / 72.0 + 0.5).floor() * 72.0 / 600.0
                                             } else {
                                                 font_size
@@ -5451,7 +5592,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // grid, not each advance: the running total then stays
                                             // within 0.06 of n x 10.5 and never drifts, so it cannot
                                             // be what pushes 37 glyphs over a 389.24 budget.
-                                            if std::env::var("OXI_S1203").is_ok() {
+                                            if crate::env_flag!("OXI_S1203") {
                                                 cw = (cw * 600.0 / 72.0 + 0.5).floor() * 72.0 / 600.0;
                                             }
                                             if let Some(adv) = cell_deva_adv.as_ref() {
@@ -5481,7 +5622,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // line box crosses), fixed there — the S869+S870+S871+S872
                                             // set ships together (forms 1.000 + policies 1.000).
                                             // Same rule, same scope as break_into_lines' LATINEM.
-                                            if std::env::var("OXI_S869_DISABLE").is_err() {
+                                            if !crate::env_flag!("OXI_S869_DISABLE") {
                                                 // OXI_CELL_DEFAULT_KERN (2026-10-21, default ON, opt-out
                                                 // _DISABLE): a cell run without w:kern takes the document
                                                 // default's (a styles part without rPrDefault inherits this
@@ -5489,7 +5630,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 // reports__001f1397: Tahoma 12 «non-consolidated for» --
                                                 // Word kerns «fo» -0.117 and fits 108.44 in 108.60.
                                                 let kern_active =
-                                                    std::env::var("OXI_KERNBREAK_DISABLE").is_err()
+                                                    !crate::env_flag!("OXI_KERNBREAK_DISABLE")
                                                         && run
                                                             .style
                                                             .kern
@@ -5499,12 +5640,12 @@ impl<'a> TableFitLayouter<'a> {
                                                                     .as_ref()
                                                                     .and_then(|rs| rs.kern)
                                                             })
-                                                            .or(if std::env::var_os("OXI_CELL_DEFAULT_KERN_DISABLE").is_none() { self.default_kern } else { None })
+                                                            .or(if !crate::env_flag!("OXI_CELL_DEFAULT_KERN_DISABLE") { self.default_kern } else { None })
                                                             .map_or(false, |k| {
                                                                 k > 0.0 && font_size >= k
                                                             });
                                                 if !kern_active
-                                                    && std::env::var("OXI_LATINEM_DISABLE").is_err()
+                                                    && !crate::env_flag!("OXI_LATINEM_DISABLE")
                                                     && latinem_in_scope(self.doc_body_has_real_cjk)
                                                     && !kinsoku::is_cjk(ch)
                                                     && cell_has_em_advance(cm, ch)
@@ -5526,13 +5667,13 @@ impl<'a> TableFitLayouter<'a> {
                                         // em 113.446 > wrap 112.70) wrapped 2
                                         // lines → +13.799pt → +1. The estimate
                                         // mirror (count_cell_lines) MUST match.
-                                        && std::env::var("OXI_S1017_DISABLE").is_err()
+                                        && !crate::env_flag!("OXI_S1017_DISABLE")
                                         // OXI_CJK_CELL_KERN (2026-10-30, default ON, opt-out
                                         // _DISABLE): a Japanese document's kern-active Latin
                                         // breaks at em + kern in cells too. ja/reports__1dde6f31
                                         // «WHOQOL-BREF» (Meiryo Italic 11, kern 2): Word kerns
                                         // L,hyphen -0.86 and keeps the word (82.5 in 83.06).
-                                        && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_CJK_CELL_KERN_DISABLE").is_none())
+                                        && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_CJK_CELL_KERN_DISABLE"))
                                         && !kinsoku::is_cjk(ch)
                                         && cell_has_em_advance(cm, ch)
                                                 {
@@ -5552,7 +5693,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 }
                                             }
                                             let mut deferred_fullwidth_grid = 0.0;
-                                            if std::env::var_os("OXI_CELL_BALANCED_SPACE").is_some()
+                                            if crate::env_flag!("OXI_CELL_BALANCED_SPACE")
                                                 && self.balance_single_byte_double_byte_width
                                                 && balanced_cjk_space(ch,
                                                     (s586_run_offset + s586_ci).checked_sub(1)
@@ -5562,7 +5703,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 cw = font_size * 0.5 + cm.synthetic_bold_advance * font_size;
                                             }
 
-                                            if std::env::var("OXI_DBG1244").is_ok()
+                                            if crate::env_flag!("OXI_DBG1244")
                                                 && para
                                                     .runs
                                                     .iter()
@@ -5652,7 +5793,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         // Re-tested vs the post-S660/661/664/666 baseline (the 2026-
                                                         // 05-31 revert predated those vertical fixes). Default OFF.
                                                         let s466cell =
-                                                            std::env::var("OXI_S466CELL").is_ok();
+                                                            crate::env_flag!("OXI_S466CELL");
                                                         // S1210 (2026-08-24, opt-in `OXI_S1210=1`):
                                                         // the cell mirror of the additive pitch
                                                         // derived in break_into_lines. a1d6e4ef's
@@ -5667,7 +5808,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         // = 72.00 overflows by only 0.47em, which the
                                                         // half-em credit DOES cover. That is why the
                                                         // ※2 note sits a page early in Oxi.
-                                                        let s1210 = std::env::var("OXI_S1210_DISABLE").is_err();
+                                                        let s1210 = !crate::env_flag!("OXI_S1210_DISABLE");
                                                         let h8_skip = char_space_pt > 0.0
                                                             && !s1210
                                                             && (!s466cell
@@ -5688,7 +5829,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         // to 8.0 (168.0) and wrapped
                                                         // forms__00830ac053a2c57a's cells.
                                                         let s1374_no_cell = char_space_pt.abs() < 0.01
-                                                            && std::env::var("OXI_S1374_DISABLE").is_err();
+                                                            && !crate::env_flag!("OXI_S1374_DISABLE");
                                                         if !(h6_skip
                                                             || h7_skip
                                                             || h8_skip
@@ -5702,10 +5843,11 @@ impl<'a> TableFitLayouter<'a> {
                                                                 grid_base * pitch / default_fs
                                                             } else {
                                                                 // S1210: additive for both signs.
-                                                                grid_base + cell_cjk_grid_increment(ch, cm, &self.registry, font_size, char_space_pt)
+                                                                grid_base + cell_cjk_grid_increment(ch, cm, &self.registry, font_size, char_space_pt,
+                                                                    self.balance_single_byte_double_byte_width)
                                                             };
-                                                            if (std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some()
-                                            || std::env::var_os("OXI_S1449_DISABLE").is_none()) {
+                                                            if (crate::env_flag!("OXI_CELL_GRID_SINGLE_BYTE")
+                                            || !crate::env_flag!("OXI_S1449_DISABLE")) {
                                                                 deferred_fullwidth_grid = cw - grid_base;
                                                                 cw = grid_base;
                                                             }
@@ -5741,8 +5883,8 @@ impl<'a> TableFitLayouter<'a> {
                         cw = base * run.style.text_scale.unwrap_or(100.0) / 100.0 + extra;
                     }
                 }
-                                            if (std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some()
-                                            || std::env::var_os("OXI_S1449_DISABLE").is_none()) && run.style.fit_text.is_none() {
+                                            if (crate::env_flag!("OXI_CELL_GRID_SINGLE_BYTE")
+                                            || !crate::env_flag!("OXI_S1449_DISABLE")) && run.style.fit_text.is_none() {
                                                 cw += cell_single_byte_grid_increment(ch, grid_char_pitch,
                                                     grid_char_cw_ratio, self.balance_single_byte_double_byte_width);
                                             }
@@ -5758,9 +5900,14 @@ impl<'a> TableFitLayouter<'a> {
                                             // 奨励金" wraps at "○○" because cw=10.5+21+21=52.5pt × 3 chars
                                             // = 157.5pt > first_line_wrap_w=170pt approximately. The
                                             // correct cs=21pt gives cw=31.5pt × 3 = 94.5pt which fits).
+                                            // OXI_BALANCE_PROP_ONCE: a proportional glyph (its face
+                                            // advance under the em) takes the spacing once, as in the
+                                            // body (`_pb_balance_propkana_gen.py`).
                                             let balance_extra_cs = if self
                                                 .balance_single_byte_double_byte_width
                                                 && crate::font::is_fullwidth(ch)
+                                                && (crate::env_flag!("OXI_BALANCE_PROP_ONCE_DISABLE")
+                                                    || cm.char_width_em(ch) >= 0.98)
                                                 && run.style.fit_text.is_none() && !run.style.ruby_spread
                                             {
                                                 cs
@@ -5794,13 +5941,13 @@ impl<'a> TableFitLayouter<'a> {
                                                 let dn_boundary = (prev_cjk_ideo && cur_digit)
                                                     || (prev_digit && cur_cjk_ideo);
                                                 // S1316: no auto-space against a ruby field.
-                                                let s1316_adj = std::env::var("OXI_S1316_DISABLE").is_err()
+                                                let s1316_adj = !crate::env_flag!("OXI_S1316_DISABLE")
                                                     && (prev_char_ruby || run.style.ruby_field);
                                                 if !s1316_adj
                                                     && ((de_boundary && (para.style.auto_space_de && self.doc_autospace()))
                                                         || (dn_boundary && (para.style.auto_space_dn && self.doc_autospace())))
                                                 {
-                                                    if let Some(gap) = prev_char_gap { gap } else if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err()
+                                                    if let Some(gap) = prev_char_gap { gap } else if !crate::env_flag!("OXI_AUTOSPACE2_DISABLE")
                                                     {
                                                         s1175_autospace(
                                                             font_size,
@@ -5825,7 +5972,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // space, or a CJK/Latin gap on the wrong side of a
                                             // joint. Set OXI_DUMP_GLYPHW_TEXT to a substring to
                                             // restrict the dump to the paragraph that contains it.
-                                            if std::env::var("OXI_DUMP_GLYPHW").is_ok() {
+                                            if crate::env_flag!("OXI_DUMP_GLYPHW") {
                                                 let want = std::env::var("OXI_DUMP_GLYPHW_TEXT")
                                                     .unwrap_or_default();
                                                 let ptext: String = para
@@ -5914,7 +6061,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // -0.03 SSIM regression on d1e8 p.1. S113 grid showed Word
                                             // actually compresses at cs∈{-5,-9,-15,-20}tw = {-0.25..-1.0pt};
                                             // cs=-1tw=-0.05pt is below Word's compression threshold.
-                                            if std::env::var_os("OXI_DEBUG_FIT_CELL").is_some()
+                                            if crate::env_flag!("OXI_DEBUG_FIT_CELL")
                                                 && run.style.fit_text.is_some() {
                                                 eprintln!("[FIT_CELL] id={:?} ch={:?} cs={:.9} cw={:.9} x={:.9} buf={:.9} cap={:.9} sum={:.9}",
                                                     run.style.fit_text_id, ch, cs, cw, line_x, buf_w, effective_wrap, line_x + buf_w + cw);
@@ -6033,7 +6180,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // (no overflow → never triggers); WITH grid-expansion it now fires.
                                             // jc-independent (the family cells are jc=left). Default OFF (no env).
                                             // Scoped to POSITIVE charSpace (ratio>1) = where grid-expansion fires.
-                                            let s466_oikomi = std::env::var("OXI_S466CELL").is_ok()
+                                            let s466_oikomi = crate::env_flag!("OXI_S466CELL")
                                                 && self.compress_punctuation
                                                 && grid_char_cw_ratio.map_or(false, |r| r > 1.0);
                                             // OXI_CELLBURA (tokyoshugyo #2c): cell line-end 約物 ぶら下げ
@@ -6087,7 +6234,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // OIDASHI'd (間」）to the next line), not hung; the old list let
                                             // cell_bura hang any closing bracket → the box lost a line.
                                             let is_cell_hangable =
-                                                if std::env::var("OXI_S720_DISABLE").is_err() {
+                                                if !crate::env_flag!("OXI_S720_DISABLE") {
                                                     matches!(ch, '。' | '、' | '，' | '．' | '・')
                                                 } else {
                                                     matches!(
@@ -6116,8 +6263,8 @@ impl<'a> TableFitLayouter<'a> {
                                             // half-em. policies__07543a6b p28 「服用した / 後、横紋筋」.
                                             let cell_natural_line_end = self.doc_body_has_real_cjk
                                                 && !self.compress_punctuation
-                                                && (std::env::var("OXI_CJK_CELL_NATURAL_LINE_END").is_ok()
-                                                    || std::env::var_os("OXI_S1429_DISABLE").is_none());
+                                                && (crate::env_flag!("OXI_CJK_CELL_NATURAL_LINE_END")
+                                                    || !crate::env_flag!("OXI_S1429_DISABLE"));
                                             let would_overflow = if cell_bura_active
                                                 && !cell_natural_line_end
                                                 && is_cell_hangable
@@ -6127,7 +6274,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 false
                                             } else if s586_overflow_fixed {
                                                 false
-                                            } else if (s1174_yakucomp || s1176_space || std::env::var_os("OXI_CELL_AKI").is_some())
+                                            } else if (s1174_yakucomp || s1176_space || crate::env_flag!("OXI_CELL_AKI"))
                                                 && would_overflow_natural
                                             {
                                                 // S1174: the pool is HALF AN EM FOR THE LINE, not
@@ -6146,7 +6293,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 // then wrapped. Unlike the 約物 pool these ARE
                                                 // additive: the probe's two joints both gave way
                                                 // together.
-                                                let joints = if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err()
+                                                let joints = if !crate::env_flag!("OXI_AUTOSPACE2_DISABLE")
                                                 {
                                                     let mut n = 0.0f32;
                                                     let mut prev: Option<char> = None;
@@ -6157,7 +6304,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         .chain(std::iter::once(ch))
                                                     {
                                                         if let Some(p) = prev {
-                                                            if if std::env::var_os("OXI_CELL_AKI").is_some() { cell_aki_joint(p, c, (para.style.auto_space_de && self.doc_autospace()), (para.style.auto_space_dn && self.doc_autospace())) } else { self.doc_autospace() && is_cjk_latin_joint(p, c) } {
+                                                            if if crate::env_flag!("OXI_CELL_AKI") { cell_aki_joint(p, c, (para.style.auto_space_de && self.doc_autospace()), (para.style.auto_space_dn && self.doc_autospace())) } else { self.doc_autospace() && is_cjk_latin_joint(p, c) } {
                                                                 n += 1.0;
                                                             }
                                                         }
@@ -6234,7 +6381,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 // its own defaults (compat 15) silently measures a
                                                 // different engine, so the arms are rebuilt here.
                                                 let s1198 =
-                                                    std::env::var("OXI_S1198_DISABLE").is_err();
+                                                    !crate::env_flag!("OXI_S1198_DISABLE");
                                                 // S1208 (2026-08-24, opt-out `OXI_S1208_DISABLE`;
                                                 // reachable only under the opt-in `OXI_YAKUCOMP`): the
                                                 // flat half em is the pool a line gets when the character
@@ -6267,9 +6414,9 @@ impl<'a> TableFitLayouter<'a> {
                                                 // (1.50em for two marks). No corpus line reaches it, so it
                                                 // is recorded here rather than coded.
                                                 let s1208 =
-                                                    std::env::var("OXI_S1208_DISABLE").is_err();
+                                                    !crate::env_flag!("OXI_S1208_DISABLE");
                                                 let s1209 =
-                                                    std::env::var("OXI_S1209_DISABLE").is_err();
+                                                    !crate::env_flag!("OXI_S1209_DISABLE");
                                                 let mut s1216_n_a = 0.0f32;
                                                 let mut s1216_sum_a = 0.0f32;
                                                 let punctuation_unit = self.cell_punctuation_unit(para, font_size, grid_char_pitch, grid_char_cw_ratio);
@@ -6287,7 +6434,32 @@ impl<'a> TableFitLayouter<'a> {
                                                         .enumerate()
                                                     {
                                                         last_ch = Some(c.ch);
-                                                        if s1208 && c.ch == '\u{3000}' {
+                                                        // OXI_CELL_SPACE_MARK (2026-11-01, default ON, opt-out
+                                                        // _DISABLE): S1208's "a fullwidth space is not a mark"
+                                                        // was read off tokyoshugyo, which carries
+                                                        // balanceSingleByteDoubleByteWidth. Without it the
+                                                        // space lends its half em like a comma.
+                                                        // `_pb_cell_middot_lend_gen.py` (19.66em jc=both cell,
+                                                        // «一　夢…»): 20 chars on line 1 in compat 14 and 15,
+                                                        // 19 with balance in both.
+                                                        if s1208 && c.ch == '\u{3000}'
+                                                            && (self.balance_single_byte_double_byte_width
+                                                                || crate::env_flag!("OXI_CELL_SPACE_MARK_DISABLE"))
+                                                        {
+                                                            continue;
+                                                        }
+                                                        // OXI_CELL_LEAD_MIDDOT (2026-11-01, default ON, opt-out
+                                                        // _DISABLE): under compat 15 a middle dot that opens the
+                                                        // paragraph lends nothing (a ・ cannot start any other
+                                                        // line). Same probe: «・夢と…» 19 in compat 15 (with or
+                                                        // without balance), 20 in compat 14; «夢と・…» 20 in all
+                                                        // four. ja/educational__244a3664 «・　夢として…» (compat
+                                                        // 15, balance): Word 19 chars, Oxi credited the dot and
+                                                        // kept 20 with «な» drawn 3.5pt past the cell edge.
+                                                        if c.ch == '・' && i == 0 && is_first_line
+                                                            && self.compat_mode >= 15
+                                                            && !crate::env_flag!("OXI_CELL_LEAD_MIDDOT_DISABLE")
+                                                        {
                                                             continue;
                                                         }
                                                         if kinsoku::cell_yaku_type_b(c.ch) {
@@ -6301,7 +6473,7 @@ impl<'a> TableFitLayouter<'a> {
                                                             // Held opt-in: S1198 subsumes the cases
                                                             // it was written for.
                                                             if i == 0
-                                                                && std::env::var("OXI_S1197").is_ok()
+                                                                && crate::env_flag!("OXI_S1197")
                                                             {
                                                                 continue;
                                                             }
@@ -6450,7 +6622,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 // The 576 arms all snap, which is why they read a
                                                 // flat zero and the corpus refused it.
                                                 let s1216_compressing_grid =
-                                                    std::env::var("OXI_S1216_DISABLE").is_err()
+                                                    !crate::env_flag!("OXI_S1216_DISABLE")
                                                         && para.style.snap_to_grid
                                                         && match (grid_char_pitch, grid_char_cw_ratio)
                                                         {
@@ -6480,7 +6652,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     (s1216_sum_a - s1216_n_a * 0.5 * font_size).max(0.0)
                                                 } else if s1207_proportional {
                                                     0.0
-                                                } else if std::env::var("OXI_S1206_DISABLE").is_ok()
+                                                } else if crate::env_flag!("OXI_S1206_DISABLE")
                                                 {
                                                     yaku + joints + spaces
                                                 } else {
@@ -6495,9 +6667,10 @@ impl<'a> TableFitLayouter<'a> {
                                                     para, &run.style,
                                                     current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.ch),
                                                     font_size, ch, grid_char_pitch,
+                                                    is_first_line && self.compat_mode >= 15,
                                                 ));
                                                 let pool = LayoutEngine::cell_english_pair_capacity(para, &run.style, current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.ch), font_size, pool);
-                                                if std::env::var("OXI_DUMP_GLYPHW").is_ok() {
+                                                if crate::env_flag!("OXI_DUMP_GLYPHW") {
                                                     let want = std::env::var("OXI_DUMP_GLYPHW_TEXT")
                                                         .unwrap_or_default();
                                                     let ptext: String = para
@@ -6549,7 +6722,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 // Word pushes 間」）to the next line as a group
                                                 // where Oxi fits 間 and hangs both marks.
                                                 let s1199_run_of_closers =
-                                                    std::env::var("OXI_S1199_DISABLE").is_err()
+                                                    !crate::env_flag!("OXI_S1199_DISABLE")
                                                         && s586_run_chars
                                                             .get(s586_ci + 1)
                                                             .map_or(false, |n| {
@@ -6579,7 +6752,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     .is_ok()
                                                     || ((line_x + buf_w + cw) - effective_wrap)
                                                         <= 0.5 * cw
-                                                            + if std::env::var_os("OXI_CJK_CELL_COMPRESSION_HANG").is_some() {
+                                                            + if crate::env_flag!("OXI_CJK_CELL_COMPRESSION_HANG") {
                                                                 // Interior punctuation compression and the
                                                                 // final mark's hanging allowance can coexist.
                                                                 // The pool excludes the candidate mark.
@@ -6704,7 +6877,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     s586_para_chars.len().saturating_sub(s721_gpos)
                                                         <= s721_k;
                                                 let s721_cap = if s721_tail
-                                                    && std::env::var("OXI_S721_DISABLE").is_err()
+                                                    && !crate::env_flag!("OXI_S721_DISABLE")
                                                 {
                                                     std::env::var("OXI_S721_CAP")
                                                         .ok()
@@ -6782,8 +6955,8 @@ impl<'a> TableFitLayouter<'a> {
                                             // tokyoshugyo 0.9906 -> 0.9962, its p20 box breaking
                                             // «…「手待時» / «間」）» exactly as Word does).
                                             let would_overflow = if would_overflow
-                                                || std::env::var("OXI_S1201_DISABLE").is_ok()
-                                                || (std::env::var_os("OXI_CJK_CELL_COMPRESSED_CLOSER_DISABLE").is_none() /* S1408 */
+                                                || crate::env_flag!("OXI_S1201_DISABLE")
+                                                || (!crate::env_flag!("OXI_CJK_CELL_COMPRESSED_CLOSER_DISABLE") /* S1408 */
                                                     && self.compress_punctuation
                                                     && matches!(para.alignment, Alignment::Justify | Alignment::Distribute))
                                                 || kinsoku::is_line_start_prohibited(ch)
@@ -6863,7 +7036,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         || f.contains("PGothic")
                                                 });
                                             let propcell_oikomi =
-                                                std::env::var("OXI_PROPCELL_DISABLE").is_err()
+                                                !crate::env_flag!("OXI_PROPCELL_DISABLE")
                                                     && !matches!(
                                                         para.alignment,
                                                         Alignment::Justify | Alignment::Distribute
@@ -6913,7 +7086,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 // Kinsoku: line-start-prohibited chars (）。、etc.) stay on current line
                                                 if kinsoku::is_line_start_prohibited(ch)
                         && !(ch.is_ascii() && !self.doc_body_has_real_cjk
-                            && std::env::var("OXI_ASCII_CELL_CLOSER_DISABLE").is_err())
+                            && !crate::env_flag!("OXI_ASCII_CELL_CLOSER_DISABLE"))
                     {
                                                     // S421 (2026-05-29): kinsoku OIKOMI (押し下げ).
                                                     // The old behavior force-fit the prohibited char
@@ -6946,12 +7119,12 @@ impl<'a> TableFitLayouter<'a> {
                                                     // す。); the old force-fit kept 。 on L2.
                                                     // CJK documents only (the probe's scope): reports__003862302b
                                                     // (Latin, compat 15) lost its fit when this fired on its cells.
-                                                    let s1583_left = std::env::var_os("OXI_S1583_DISABLE").is_none()
+                                                    let s1583_left = !crate::env_flag!("OXI_S1583_DISABLE")
                                                         && self.doc_body_has_real_cjk
                                                         && self.compat_mode >= 15
                                                         && self.compat_mode_explicit
                                                         && !matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
-                                                    if std::env::var("OXI_S421_DISABLE").is_err()
+                                                    if !crate::env_flag!("OXI_S421_DISABLE")
                                                         && (s412_cellmar_subtract
                                                             || (std::env::var("OXI_S443_DISABLE")
                                                                 .is_err()
@@ -6984,7 +7157,7 @@ impl<'a> TableFitLayouter<'a> {
                                                             // S443 already pops from there. ja/policies__262cde95 p43
                                                             // «（INR）»: «R» and «）» moved down, «IN» stayed behind.
                                                             let tail = buf.chars().last().or_else(|| {
-                                                                if std::env::var_os("OXI_CELL_CARRY_FLUSHED_TAIL_DISABLE").is_none() {
+                                                                if !crate::env_flag!("OXI_CELL_CARRY_FLUSHED_TAIL_DISABLE") {
                                                                     current_line.last().and_then(|f| f.0.chars().last())
                                                                 } else {
                                                                     None
@@ -7010,7 +7183,7 @@ impl<'a> TableFitLayouter<'a> {
                                                                 // one-character carry gave «(physical conditio» / «n)».
                                                                 || (head.is_ascii_alphanumeric()
                                                                     && tail.is_some_and(|t| t.is_ascii_graphic())
-                                                                    && std::env::var_os("OXI_CELL_LATIN_CARRY_DISABLE").is_none());
+                                                                    && !crate::env_flag!("OXI_CELL_LATIN_CARRY_DISABLE"));
                                                             let remaining_on_line = buf
                                                                 .chars()
                                                                 .count()
@@ -7151,6 +7324,16 @@ impl<'a> TableFitLayouter<'a> {
                                                         current_line_chars
                                                             .extend(buf_chars.drain(..));
                                                     }
+                                                    // OXI_CELL_FORCEFIT_SPACE_HANG (2026-11-01, default ON,
+                                                    // opt-out _DISABLE): spaces that follow the force-fitted
+                                                    // mark hang on its line (S1436 in the cell breaker); the
+                                                    // break waits for the next non-space character.
+                                                    // ja/educational__244a3664 «…話し合う。» + 12 U+3000: one
+                                                    // line in Word, Oxi gave the spaces a line of their own.
+                                                    if !crate::env_flag!("OXI_CELL_FORCEFIT_SPACE_HANG_DISABLE") {
+                                                        forcefit_hang_pending = true;
+                                                        continue;
+                                                    }
                                                     lines.push(std::mem::take(&mut current_line));
                                                     line_x = 0.0;
                                                     current_line_chars.clear();
@@ -7166,7 +7349,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 // Oxi kept the bracket at the line end, packed the cell into 4 lines and
                                                 // pulled the page up one line.
                                                 let cell_tail_opener = |c: char| kinsoku::is_line_end_prohibited(c) && !c.is_ascii();
-                                                if std::env::var_os("OXI_CELL_ENDKINSOKU_DISABLE").is_none()
+                                                if !crate::env_flag!("OXI_CELL_ENDKINSOKU_DISABLE")
                                                     && buf.chars().last()
                                                         .or_else(|| current_line.last().and_then(|f| f.0.chars().last()))
                                                         .is_some_and(cell_tail_opener)
@@ -7274,7 +7457,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 // non-whitespace overflow char (an URL overflowing at '/',
                                                 // a parenthesized token at '('), not just alphanumerics.
                                                 let s818_cell = !self.doc_body_has_real_cjk
-                                                    && std::env::var("OXI_S818_DISABLE").is_err();
+                                                    && !crate::env_flag!("OXI_S818_DISABLE");
                                                 let cellword_ok = std::env::var(
                                                     "OXI_CELLWORD_DISABLE",
                                                 )
@@ -7286,7 +7469,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     })
                                                     && (para.runs.iter().all(|r| {
                                                         !r.text.chars().any(kinsoku::is_cjk)
-                                                    }) || (std::env::var_os("OXI_CELLWORD_MIXED_DISABLE").is_none()
+                                                    }) || (!crate::env_flag!("OXI_CELLWORD_MIXED_DISABLE")
                                                         // OXI_CELLWORD_MIXED (2026-10-20, default ON, opt-out _DISABLE): an
                                                         // ENGLISH word (ASCII letters) in a CJK cell paragraph wraps whole.
                                                         // ja/policies__07543a6b p9: Word «(mental | illness)», «(mesenteric |
@@ -7352,9 +7535,9 @@ impl<'a> TableFitLayouter<'a> {
                                                             // recorded annual inflation rate %» -> «inflation» /
                                                             // «rate %».
                                                             let lead_joined = s818_cell
-                                                                && std::env::var_os("OXI_CELL_LEADPUNCT_DISABLE").is_none()
+                                                                && !crate::env_flag!("OXI_CELL_LEADPUNCT_DISABLE")
                                                                 // OXI_LEADPUNCT_EA_LANG: only under ja/zh/ko (see line_break.rs)
-                                                                && (std::env::var_os("OXI_LEADPUNCT_EA_LANG_DISABLE").is_some()
+                                                                && (crate::env_flag!("OXI_LEADPUNCT_EA_LANG_DISABLE")
                                                                     || run.style.east_asia_lang.as_deref()
                                                                         .or(self.default_east_asia_lang.as_deref())
                                                                         .map_or(true, |lang| {
@@ -7521,7 +7704,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // (the prohibited-char-starts-cell-line case is rare — only
                                             // 15076df in a 120-doc scan + the 12-doc tokumei/control sample,
                                             // 3a4f/ed025c tombstones unchanged). lib 142/0/6.
-                                            if std::env::var("OXI_S497_DISABLE").is_err()
+                                            if !crate::env_flag!("OXI_S497_DISABLE")
                                                 && buf.is_empty()
                                                 && current_line.is_empty()
                                                 && !lines.is_empty()
@@ -7566,7 +7749,7 @@ impl<'a> TableFitLayouter<'a> {
                                             let cw = if auto_space_extra > 0.0
                                                 && current_line.is_empty()
                                                 && buf.is_empty()
-                                                && std::env::var_os("OXI_CELL_LINESTART_AKI_DISABLE").is_none()
+                                                && !crate::env_flag!("OXI_CELL_LINESTART_AKI_DISABLE")
                                             {
                                                 cw - auto_space_extra
                                             } else {
@@ -7615,7 +7798,7 @@ impl<'a> TableFitLayouter<'a> {
                                     }
                                     if !current_line.is_empty()
                                         || (s1169_trailing_break
-                                            && std::env::var("OXI_S1169_DISABLE").is_err())
+                                            && !crate::env_flag!("OXI_S1169_DISABLE"))
                                     {
                                         lines.push(current_line);
                                     }
@@ -7658,7 +7841,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // vs Oxi to locate the drift source.
                                         let (pprrpr_fs, empty_lh) = self.cell_mark_line_height(
                                             para, effective_line_spacing, effective_line_rule, row_line_pitch);
-                                        if std::env::var("OXI_DBG_EMPTYLH").is_ok() {
+                                        if crate::env_flag!("OXI_DBG_EMPTYLH") {
                                             eprintln!("[EMPTYLH] row={} cell={} lh={:.2} pprrpr_fs={:?} default_fs={} ls={:?} rule={:?} snap={}",
                                     row_idx, cell_idx, empty_lh, pprrpr_fs, self.default_font_size,
                                     effective_line_spacing, effective_line_rule, para.style.snap_to_grid);
@@ -7680,13 +7863,13 @@ impl<'a> TableFitLayouter<'a> {
                                         // Empty paragraph marks need an 18pt usable lane beside
                                         // a cell float; use the same obstacle frame as estimation.
                                         let mut empty_x = cell_x + pad_l;
-                                        if std::env::var_os("OXI_CELL_EMPTY_FLOAT_DISABLE").is_none() {
+                                        if !crate::env_flag!("OXI_CELL_EMPTY_FLOAT_DISABLE") {
                                             if let Some(wrap) = cell_float_wrap.as_ref() {
                                                 let mut empty_wrap = wrap.clone();
                                                 empty_wrap.heights = vec![empty_lh];
                                                 // A zero-glyph mark uses the logical padded lane,
                                                 // not the visible text clip inset by half a border.
-                                                let logical_lane = std::env::var_os("OXI_CELL_EMPTY_LOGICAL_LANE_DISABLE").is_none();
+                                                let logical_lane = !crate::env_flag!("OXI_CELL_EMPTY_LOGICAL_LANE_DISABLE");
                                                 let empty_base = (cell_w - pad_l - pad_r).max(0.0);
                                                 let empty_width = (empty_base - p_indent_left - p_indent_right).max(0.0);
                                                 let empty_first_width = if p_first_line_indent < 0.0 {
@@ -7703,8 +7886,8 @@ impl<'a> TableFitLayouter<'a> {
                                         }
                                         let is_interior_empty = last_content_block_pos
                                             .map_or(false, |last| block_pos < last);
-                                        if (is_interior_empty || std::env::var_os("OXI_CELL_EMPTY_LINES").is_some())
-                                            && std::env::var("OXI_S428_DISABLE").is_err()
+                                        if (is_interior_empty || crate::env_flag!("OXI_CELL_EMPTY_LINES"))
+                                            && !crate::env_flag!("OXI_S428_DISABLE")
                                         {
                                             let mut empty_el = LayoutElement::new(
                                                 empty_x,
@@ -7753,7 +7936,7 @@ impl<'a> TableFitLayouter<'a> {
                                     // through untouched; non-justified paragraphs are skipped.
                                     if (para.alignment == Alignment::Justify
                                         || para.alignment == Alignment::Distribute)
-                                        && std::env::var("OXI_S1242_DISABLE").is_err()
+                                        && !crate::env_flag!("OXI_S1242_DISABLE")
                                     {
                                         let fm = self.registry.default_metrics();
                                         for line in lines.iter_mut() {
@@ -7863,7 +8046,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // CELLLINE instrument: reliable per-LINE cell text + char count.
                                         // OXI_DUMP_CELLLINE. Localizes cell wrap over-fit (Oxi chars/line
                                         // vs Word PDF) — the GDI dump is per-RUN for these cells.
-                                        if std::env::var("OXI_DUMP_CELLLINE").is_ok() {
+                                        if crate::env_flag!("OXI_DUMP_CELLLINE") {
                                             let lt: String =
                                                 line.iter().map(|t| t.0.as_str()).collect();
                                             if !lt.trim().is_empty() {
@@ -7925,7 +8108,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     // the body (cs face if installed, else Nirmala UI);
                                                     // the resolved family is the Latin slot when the cs
                                                     // face is missing (igrsup_md_v4: Word 16.2, TNR 13.8).
-                                                    let deva_cell = std::env::var_os("OXI_INDIA_CELL_DEVA_DISABLE").is_none()
+                                                    let deva_cell = !crate::env_flag!("OXI_INDIA_CELL_DEVA_DISABLE")
                                                         && _text.chars().any(crate::font::is_complex_script);
                                                     let metrics = &*if deva_cell {
                                                         self.metrics_for_text(_text, _source_style, &para.style)
@@ -8027,7 +8210,7 @@ impl<'a> TableFitLayouter<'a> {
                                             lh = self.cell_mark_line_height(para, effective_line_spacing,
                                                 effective_line_rule, row_line_pitch).1;
                                         }
-                                        if std::env::var("OXI_DBG_CELLLH").is_ok() {
+                                        if crate::env_flag!("OXI_DBG_CELLLH") {
                                             let fams: Vec<String> = line.iter().map(|f| format!("{}@{}", f.8.as_deref().unwrap_or("-"), f.1)).collect();
                                             let head: String = line.iter().flat_map(|f| f.0.chars()).take(10).collect();
                                             eprintln!("[CELLLH] lh={:.3} ls={:?} lr={:?} pitch={:?} snap={} n={} {:?} «{}»",
@@ -8058,7 +8241,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // policies__0028d1be's one 41.67pt auto-spacing boundary
                                         // from the sixteen 27.8pt ones: `Physical Demands` opens
                                         // with a <w:br/>.
-                                        if lh == 0.0 && std::env::var("OXI_S973_DISABLE").is_err() {
+                                        if lh == 0.0 && !crate::env_flag!("OXI_S973_DISABLE") {
                                             // Same resolution as the empty-PARAGRAPH branch
                                             // above (22794): the paragraph mark's own rPr when
                                             // it names a size, else the document default.
@@ -8092,9 +8275,9 @@ impl<'a> TableFitLayouter<'a> {
                                         // once-per-paragraph term, never the render) and the body
                                         // +4.18 once. Witness: correspondence__04a3e3e1's content
                                         // rows, two ruby lines short each (-8/row).
-                                        if std::env::var("OXI_S1312_DISABLE").is_err()
+                                        if !crate::env_flag!("OXI_S1312_DISABLE")
                                             && !(effective_line_rule == Some("exact")
-                                                && std::env::var("OXI_EXACT_CELL_RUBY").is_ok())
+                                                && crate::env_flag!("OXI_EXACT_CELL_RUBY"))
                                             && line.iter().any(|t| t.15)
                                         {
                                             let s1312_fs = self.resolve_font_size(&RunStyle::default(), &para.style);
@@ -8113,7 +8296,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // expansion (S1396): legal__03512306's «ふりがな／氏名»
                                             // cells are line=400 exact and stay 20pt in Word.
                                             match row_line_pitch.filter(|p| *p > 0.0 && para.style.snap_to_grid) {
-                                                Some(pitch) if std::env::var_os("OXI_S1624_DISABLE").is_none()
+                                                Some(pitch) if !crate::env_flag!("OXI_S1624_DISABLE")
                                                     && exp > 0.0
                                                     && effective_line_rule != Some("exact") => {
                                                     let nat = line.iter()
@@ -8148,7 +8331,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // (lowered inline OLE equations); objects stay out.
                                         // technical__01242a0a 'Density (kg/m3)': the 3 at
                                         // position 10 -> Word row 25.5, Oxi 19.5.
-                                        if std::env::var_os("OXI_S1517_DISABLE").is_none()
+                                        if !crate::env_flag!("OXI_S1517_DISABLE")
                                             && (!para.style.snap_to_grid || row_line_pitch.is_none())
                                             && line.iter().any(|t| t.16.position.is_some() && LayoutEngine::s1517_is_text(&t.0, &t.16))
                                         {
@@ -8215,7 +8398,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 .as_ref()
                                                 .map_or(false, |(m, _, _)| m.contains('\u{F0B7}'))
                                                 || self.s1614_aum_marker_asc(para).is_some())
-                                            && std::env::var("OXI_S1125_DISABLE").is_err()
+                                            && !crate::env_flag!("OXI_S1125_DISABLE")
                                         {
                                             let mut s1125_asc: f32 = 0.0;
                                             let mut s1125_desc: f32 = 0.0;
@@ -8324,7 +8507,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     0.0
                                                 };
                                                 let target = obj_h.max(lh) + extra;
-                                                if std::env::var("OXI_DBG_CELLOLE").is_ok() {
+                                                if crate::env_flag!("OXI_DBG_CELLOLE") {
                                                     eprintln!("[CELL-OLE] phase=height obj_h={:.2} extra={:.2} text_lh={:.2} chosen={:.2}",
                                             obj_h, extra, lh, target);
                                                 }
@@ -8397,11 +8580,11 @@ impl<'a> TableFitLayouter<'a> {
                                         // legacy `cell_w` base. Opt-out OXI_S1121_DISABLE
                                         // restores the double subtraction.
                                         let pad_adjust = if (s1121_pad_in_base
-                                            && std::env::var("OXI_S1121_DISABLE").is_err())
+                                            && !crate::env_flag!("OXI_S1121_DISABLE"))
                                             || cell_hang_inner
                                             || s301_layout_fixed
                                             || s412_cellmar_subtract
-                                            || std::env::var("OXI_S493J_DISABLE").is_ok()
+                                            || crate::env_flag!("OXI_S493J_DISABLE")
                                         {
                                             0.0
                                         } else {
@@ -8423,7 +8606,7 @@ impl<'a> TableFitLayouter<'a> {
                                         };
 
                                         // Justify: CJK punctuation compression + space/gap distribution
-                                        let aki_plan = if std::env::var_os("OXI_CELL_AKI").is_some() {
+                                        let aki_plan = if crate::env_flag!("OXI_CELL_AKI") {
                                             let fragments: Vec<(&str, f32)> = line.iter().map(|f| (
                                                 f.0.as_str(), s1175_autospace(f.1, f.11,
                                                     self.balance_single_byte_double_byte_width && !f.15),
@@ -8466,7 +8649,7 @@ impl<'a> TableFitLayouter<'a> {
                                             let mut slack = effective_wrap - line_total_w - frag_width_adj.iter().sum::<f32>();
 
                                             // Phase 1: CJK punctuation compression (only when overflowing)
-                                            let limit_cell_compression = std::env::var_os("OXI_CELL_PUNCT_COMPRESSION_LIMIT").is_some();
+                                            let limit_cell_compression = crate::env_flag!("OXI_CELL_PUNCT_COMPRESSION_LIMIT");
                                             if slack < 0.0 {
                                                 for (
                                                     fi,
@@ -8654,7 +8837,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // from the paragraph — through docDefaults' eastAsiaTheme
                                         // to the theme — for a run that names one outright.
                                         if let (Some(e), true) =
-                                            (ea, std::env::var("OXI_S1299_DISABLE").is_err())
+                                            (ea, !crate::env_flag!("OXI_S1299_DISABLE"))
                                         {
                                             rs.font_family_east_asia = Some(e.clone());
                                             rs.has_explicit_east_asia = true;
@@ -8737,7 +8920,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     // factor in Word; Oxi 10.26 / 11.26 / 13.26 / 16.26 and 11.94 /
                                                     // 12.94 / 15.44 / 18.94. Witness: the header-table +1.3 of
                                                     // `_pb_ftrtbltail_gen.py` hdr_* arms.
-                                                    let mult_top_cell = std::env::var_os("OXI_MULT_TEXT_TOP_DISABLE").is_none()
+                                                    let mult_top_cell = !crate::env_flag!("OXI_MULT_TEXT_TOP_DISABLE")
                                                         && matches!(effective_line_rule, None | Some("auto"))
                                                         && effective_line_spacing.map_or(false, |v| v > 1.01)
                                                         && !(row_line_pitch.map_or(false, |p| p > 0.0) && para.style.snap_to_grid)
@@ -8817,7 +9000,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // Render-only (text_y_off) → element.y / pagination / Phase-1 / IoU
                                         // preserved by construction (same as S453).
                                         let s660_extra =
-                                            if std::env::var("OXI_S660_DISABLE").is_ok() {
+                                            if crate::env_flag!("OXI_S660_DISABLE") {
                                                 0.0
                                             } else {
                                                 std::env::var("OXI_S660_EXTRA")
@@ -8856,7 +9039,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 }
                                                 // S1299: the run's own eastAsia face.
                                                 if let (Some(e), true) =
-                                                    (ea, std::env::var("OXI_S1299_DISABLE").is_err())
+                                                    (ea, !crate::env_flag!("OXI_S1299_DISABLE"))
                                                 {
                                                     rs.font_family_east_asia = Some(e.clone());
                                                     rs.has_explicit_east_asia = true;
@@ -8889,7 +9072,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // peak (b35123 + 191cb5). See [[tokumei_form_family_ssim]].
                                         let s664_dy: f32 =
                                             if page.grid_char_space_raw.map_or(false, |cs| cs < 0)
-                                                && std::env::var("OXI_S664_DISABLE").is_err()
+                                                && !crate::env_flag!("OXI_S664_DISABLE")
                                             {
                                                 std::env::var("OXI_S664_DY")
                                                     .ok()
@@ -8947,7 +9130,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 }
                                                 // S1299: the run's own eastAsia face.
                                                 if let (Some(e), true) =
-                                                    (ea, std::env::var("OXI_S1299_DISABLE").is_err())
+                                                    (ea, !crate::env_flag!("OXI_S1299_DISABLE"))
                                                 {
                                                     rs.font_family_east_asia = Some(e.clone());
                                                     rs.has_explicit_east_asia = true;
@@ -8987,7 +9170,7 @@ impl<'a> TableFitLayouter<'a> {
                                         let cell_text_y_off = match row_line_pitch
                                             .filter(|p| *p > 0.0 && para.style.snap_to_grid)
                                         {
-                                            Some(_) if std::env::var_os("OXI_S1625_DISABLE").is_none()
+                                            Some(_) if !crate::env_flag!("OXI_S1625_DISABLE")
                                                 && effective_line_rule != Some("exact")
                                                 && line.iter().any(|t| t.15) =>
                                             {
@@ -9040,11 +9223,11 @@ impl<'a> TableFitLayouter<'a> {
                                         // cells sat a uniform 1.0pt higher (blind-G forms__020115bc and
                                         // administrative__19bb32f7, 65 lines at -1.2).
                                         let mut cjk_dominant_baseline: Option<f32> = None;
-                                        let cell_text_y_off = if std::env::var_os("OXI_CJK_NATBOX_DISABLE").is_none()
+                                        let cell_text_y_off = if !crate::env_flag!("OXI_CJK_NATBOX_DISABLE")
                                             && matches!(effective_line_rule, None | Some("auto"))
                                             && effective_line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01)
                                             && para.style.list_marker.is_none()
-                                            && (std::env::var_os("OXI_CELL_NATBOX_GRID_DISABLE").is_none()
+                                            && (!crate::env_flag!("OXI_CELL_NATBOX_GRID_DISABLE")
                                                 || !(row_line_pitch.map_or(false, |p| p > 0.0) && para.style.snap_to_grid))
                                             && !line.iter().any(|t| t.15)
                                         {
@@ -9132,7 +9315,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 1.0 + ((lh - (asc + desc + chain)) / 2.0).max(0.0) + chain
                                             } else if any_cjk && cjk_asc > 0.0
                                                 && lat_c <= cjk_c + 0.01
-                                                && std::env::var_os("OXI_CELL_CJK_DOMINANT_DISABLE").is_none()
+                                                && !crate::env_flag!("OXI_CELL_CJK_DOMINANT_DISABLE")
                                             {
                                                 // OXI_CELL_CJK_DOMINANT (2026-10-23, default ON, opt-out _DISABLE):
                                                 // a line mixing a CJK face with Latin runs no taller than the CJK
@@ -9151,7 +9334,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 // opt-in (2026-10-14): on 02157cbe's «(フリガナ)» (Century 8pt
                                                 // parens + ＭＳ 明朝) it moved the line 0.7 the wrong way and the
                                                 // explicit shared baseline did not fire -- re-derive with a cell probe
-                                                && std::env::var_os("OXI_CELL_NATBOX_MIXED").is_some()
+                                                && crate::env_flag!("OXI_CELL_NATBOX_MIXED")
                                                 && f8_large > f8_small + 0.001
                                             {
                                                 // the shared-baseline block below paints every
@@ -9314,7 +9497,7 @@ impl<'a> TableFitLayouter<'a> {
                                             let natural_leading = frag_idx.checked_sub(1)
                                                 .and_then(|i| line.get(i))
                                                 .filter(|previous| {
-                                                    let ruby_adjacent = std::env::var("OXI_S1316_DISABLE").is_err()
+                                                    let ruby_adjacent = !crate::env_flag!("OXI_S1316_DISABLE")
                                                         && (previous.16.ruby_field || _source_style.ruby_field);
                                                     !ruby_adjacent && previous.0.chars().last()
                                                         .zip(text.chars().next())
@@ -9421,7 +9604,7 @@ impl<'a> TableFitLayouter<'a> {
                                                             Some(cell_para_counter);
                                                         e.cell_row_index = Some(row_idx);
                                                         e.cell_col_index = Some(cell_idx);
-                                                        if std::env::var("OXI_DBG_CELLOLE").is_ok()
+                                                        if crate::env_flag!("OXI_DBG_CELLOLE")
                                                         {
                                                             eprintln!("[CELL-OLE] phase=emit enabled=1 index={} w={} h={} y={}",
                                                     index, img.width, oh, obj_bottom - oh);
@@ -9715,8 +9898,8 @@ impl<'a> TableFitLayouter<'a> {
                                             // the element at DE/DN boundaries and redistribute the aki into
                                             // the gaps (total width unchanged → rx/wrap/pagination
                                             // unchanged; render-only). Matches the BODY fragment-widening.
-                                            let single_byte_grid = if (std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some()
-                                            || std::env::var_os("OXI_S1449_DISABLE").is_none()) {
+                                            let single_byte_grid = if (crate::env_flag!("OXI_CELL_GRID_SINGLE_BYTE")
+                                            || !crate::env_flag!("OXI_S1449_DISABLE")) {
                                                 match (grid_char_pitch, grid_char_cw_ratio) {
                                                     (Some(p), Some(r)) if p > 0.0 && r > 0.0 => Some(if _source_style.fit_text.is_some() {
                                                         (p / r, 1.0, self.balance_single_byte_double_byte_width, *ts / 100.0)
@@ -9731,17 +9914,17 @@ impl<'a> TableFitLayouter<'a> {
                                                 grid_run_chars.iter().copied().enumerate().map(|(i, ch)| self.metrics_for_char_in(ch, !self.s1052_cell_latin_quote(&grid_run_chars, i), _source_style, &para.style)).collect()
                                             } else { Vec::new() };
                                             let grid_metrics: Vec<&FontMetrics> = grid_metric_owners.iter().map(|metrics| &**metrics).collect();
-                                            let grid_kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
+                                            let grid_kern_active = !crate::env_flag!("OXI_KERNBREAK_DISABLE")
                                                 && _source_style.kern.or_else(|| para.style.default_run_style.as_ref().and_then(|rs| rs.kern))
                                                     .map_or(false, |k| k > 0.0 && *fs >= k);
-                                            let grid_latin_em = std::env::var("OXI_S869_DISABLE").is_err()
-                                                && !grid_kern_active && std::env::var("OXI_LATINEM_DISABLE").is_err()
+                                            let grid_latin_em = !crate::env_flag!("OXI_S869_DISABLE")
+                                                && !grid_kern_active && !crate::env_flag!("OXI_LATINEM_DISABLE")
                                                 && latinem_in_scope(self.doc_body_has_real_cjk);
-                                            let grid_kern = std::env::var("OXI_S869_DISABLE").is_err()
-                                                && grid_kern_active && std::env::var("OXI_S1017_DISABLE").is_err()
-                                                && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_CJK_CELL_KERN_DISABLE").is_none());
+                                            let grid_kern = !crate::env_flag!("OXI_S869_DISABLE")
+                                                && grid_kern_active && !crate::env_flag!("OXI_S1017_DISABLE")
+                                                && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_CJK_CELL_KERN_DISABLE"));
                                             let ascell_split: Option<Vec<(String, f32, f32)>> =
-                                                if std::env::var("OXI_ASCELL_DISABLE").is_err() {
+                                                if !crate::env_flag!("OXI_ASCELL_DISABLE") {
                                                     let fm = if single_byte_grid.is_some() {
                                                         self.registry.get_with_style(font_family.as_deref().unwrap_or(""), *bold, *italic)
                                                     } else {
@@ -9756,7 +9939,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         (para.style.auto_space_de && self.doc_autospace()),
                                                         (para.style.auto_space_dn && self.doc_autospace()),
                                                         None,
-                                                        std::env::var_os("OXI_CELL_BALANCED_SPACE").is_some()
+                                                        crate::env_flag!("OXI_CELL_BALANCED_SPACE")
                                                             && self.balance_single_byte_double_byte_width,
                                                         frag_idx.checked_sub(1).and_then(|i| line.get(i))
                                                             .and_then(|f| f.0.chars().last()),
@@ -9768,6 +9951,14 @@ impl<'a> TableFitLayouter<'a> {
                                                             _source_style,&para.style,*fs,*cs)
                                                             * aki_plan.get(frag_idx).map_or(1.0, |p| p.gap_scale))
                                                             .collect::<Vec<_>>(),
+                                                        if self.balance_single_byte_double_byte_width
+                                                            && _source_style.fit_text.is_none() && !_source_style.ruby_spread
+                                                            && !crate::env_flag!("OXI_CELL_GRID_BALANCE_CS_DISABLE")
+                                                        {
+                                                            *cs
+                                                        } else {
+                                                            0.0
+                                                        },
                                                     )
                                                 } else {
                                                     None
@@ -9819,7 +10010,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     // ja/legal__0f67d319 «Eメール» (游明朝 12, line 440 exact):
                                                     // 2.53pt above its pure-kana neighbours; Word keeps the rows'
                                                     // 22.5 pitch.
-                                                    if std::env::var_os("OXI_CELL_SPLIT_EXACT_BASE_DISABLE").is_none() {
+                                                    if !crate::env_flag!("OXI_CELL_SPLIT_EXACT_BASE_DISABLE") {
                                                         self.set_cell_exact_baseline(&mut se, effective_line_rule, effective_line_spacing.unwrap_or(lh));
                                                     }
                                                     se.paragraph_index = block_idx;
@@ -9843,7 +10034,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // baseline `raise` above the base baseline the renderer
                                             // draws (y + text_y_off - 1.0 + ascent).
                                             if *s1626_frag_ruby
-                                                && std::env::var_os("OXI_S1626_DISABLE").is_none()
+                                                && !crate::env_flag!("OXI_S1626_DISABLE")
                                                 && s1626_ri < s1626_rubies.len()
                                             {
                                                 let group = &s1626_rubies[s1626_ri];
@@ -9879,7 +10070,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         }).sum();
                                                         let (dx, ruby_cs) = ruby::ruby_position(base_w, ruby_w, ruby_n, ruby_ir.align);
                                                         let base_x = cell_x + pad_l + line_indent + align_offset + rx + aki_leading;
-                                                        let cell_ruby_base = std::env::var_os("OXI_CELL_RUBY_BASE_DISABLE").is_none();
+                                                        let cell_ruby_base = !crate::env_flag!("OXI_CELL_RUBY_BASE_DISABLE");
                                                         let base_baseline = s1626_base_baseline.filter(|_| cell_ruby_base)
                                                             .unwrap_or(content_h + cell_text_y_off - 1.0 + base_m.win_ascent * base_pt);
                                                         let ruby_baseline = base_baseline - raise_pt;
@@ -9933,6 +10124,13 @@ impl<'a> TableFitLayouter<'a> {
                                                 float_row_height = 0.0;
                                             }
                                         } else { content_h += lh; }
+                                    }
+                                    if cell_pbdr_on && !cell_pbdr_same(cell.blocks.get(block_pos + 1)) {
+                                        if let Some(d) = cell_pbdr_edge(|b| b.bottom.as_ref()) {
+                                            content_h += d.space.max(0.0);
+                                            cell_pbdr_rule(&d, content_h, cell_para_counter, &mut cell_elements);
+                                            content_h += cell_pbdr_extent(&d);
+                                        }
                                     }
                                     content_h += effective_space_after.unwrap_or(0.0);
                                     // S427: record this paragraph's space_after so the next
@@ -10032,7 +10230,7 @@ impl<'a> TableFitLayouter<'a> {
                                             // (注) gray box: Word = page-margin(85.05)+margin-left(50.2), NOT
                                             // cell_x+pad (measured Oxi was +11.52pt too far right).
                                             let escapes = shape.escapes_cell
-                                                && std::env::var("OXI_VMLRECT_DISABLE").is_err();
+                                                && !crate::env_flag!("OXI_VMLRECT_DISABLE");
                                             let sx = if escapes {
                                                 start_x + pos.x
                                             } else {
@@ -10129,7 +10327,7 @@ impl<'a> TableFitLayouter<'a> {
                                 // An image-only cell paragraph is dropped (S536); its
                                 // anchored shapes ride on the image's host copy and
                                 // paint over the image from the same paragraph top.
-                                if std::env::var_os("OXI_CELL_IMAGE_HOST_SHAPES_DISABLE").is_none() {
+                                if !crate::env_flag!("OXI_CELL_IMAGE_HOST_SHAPES_DISABLE") {
                                     for shape in img.host_paragraph.iter().flat_map(|h| h.shapes.iter()) {
                                         if let Some(ref pos) = shape.position {
                                             let content = shape_fill_boxrect(shape).unwrap_or_else(|| {
@@ -10144,7 +10342,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 }
                                             });
                                             let sx = if shape.escapes_cell
-                                                && std::env::var("OXI_VMLRECT_DISABLE").is_err()
+                                                && !crate::env_flag!("OXI_VMLRECT_DISABLE")
                                             {
                                                 start_x + pos.x
                                             } else {
@@ -10164,7 +10362,7 @@ impl<'a> TableFitLayouter<'a> {
                                 // (mirrors the pre-pass arm; see comment there).
                                 let img_line =
                                     self.s971_image_line_h(img, 1.0e6, row_line_pitch, false);
-                                let img_h_eff = if std::env::var("OXI_S715_DISABLE").is_err() {
+                                let img_h_eff = if !crate::env_flag!("OXI_S715_DISABLE") {
                                     match row_line_pitch {
                                         Some(p) if p > 0.0 => (img_line / p).ceil() * p,
                                         _ => img_line,
@@ -10172,7 +10370,7 @@ impl<'a> TableFitLayouter<'a> {
                                 } else {
                                     img_line
                                 };
-                                if img.position.is_none() || std::env::var("OXI_ROW_CONTINUATION_FLOW").is_ok() {
+                                if img.position.is_none() || crate::env_flag!("OXI_ROW_CONTINUATION_FLOW") {
                                     if let Some(element) = cell_elements.last_mut() {
                                         element.flow_line_offset = effect_top;
                                         // Fit the entire image line, but keep paragraph
@@ -10226,7 +10424,7 @@ impl<'a> TableFitLayouter<'a> {
                 // misplaced line then shifted the continuation and the table
                 // end by ~50pt). JA 189 -> 190, no PASS -> FAIL.
                 let vmerge_page_flow = (std::env::var("OXI_VMERGE_PAGE_FLOW").as_deref() == Ok("1")
-                        || std::env::var_os("OXI_S1433_DISABLE").is_none())
+                        || !crate::env_flag!("OXI_S1433_DISABLE"))
                     && cell.v_merge.as_deref() == Some("restart")
                     && !is_nested && row_footnotes.is_none()
                     && !matches!(cell.v_align.as_deref(), Some("center") | Some("bottom"))
@@ -10234,7 +10432,7 @@ impl<'a> TableFitLayouter<'a> {
                     && content_height > s728_hdr_h + pad_t + pad_b;
                 if vmerge_page_flow {
                     let origin = cursor.visual_y + pad_t;
-                    let key = if std::env::var_os("OXI_S1192G_DISABLE").is_none() { cell_start_grid } else { cell_idx };
+                    let key = if !crate::env_flag!("OXI_S1192G_DISABLE") { cell_start_grid } else { cell_idx };
                     let mut flow = MergedCellTextFlow {
                         identity: std::sync::Arc::new(()), key, start_row: row_idx,
                         source_page: pages.len(), origin, page_top, page_height: content_height,
@@ -10285,7 +10483,7 @@ impl<'a> TableFitLayouter<'a> {
                     vmerge_text_flows.push(flow);
                 }
 
-                if std::env::var("OXI_CELL_TEXT_CLIP_DISABLE").is_err() && !self.doc_body_has_real_cjk {
+                if !crate::env_flag!("OXI_CELL_TEXT_CLIP_DISABLE") && !self.doc_body_has_real_cjk {
                     for e in &mut cell_elements {
                         if matches!(e.content, LayoutContent::Text { .. }) {
                             let bounds = (cell_x - e.x, cell_x + cell_w - e.x);
@@ -10313,7 +10511,7 @@ impl<'a> TableFitLayouter<'a> {
                 // the blank enclave-column cells inflated every such row
                 // +1.1 (Oxi 14.2 vs Word 13.15). Latin scope: the JP form
                 // family's empty-cell heights are a calibrated stack.
-                let s946_inkless = std::env::var("OXI_S946_DISABLE").is_err()
+                let s946_inkless = !crate::env_flag!("OXI_S946_DISABLE")
                     && !self.doc_body_has_real_cjk
                     && cell.blocks.iter().all(|b| {
                         matches!(b,
@@ -10328,7 +10526,7 @@ impl<'a> TableFitLayouter<'a> {
                 // S1192b: remember what the merged cell needs. It deliberately
                 // does NOT grow its own row (the arm above excludes it, which is
                 // Word's behaviour); the span's last row pays instead.
-                if is_vmerge_restart && std::env::var("OXI_S1192_DISABLE").is_err() {
+                if is_vmerge_restart && !crate::env_flag!("OXI_S1192_DISABLE") {
                     let need = pad_t + content_h + pad_b;
                     // S1192c (default ON since S1609, opt-out `OXI_S1192G_DISABLE`): key the pending
                     // need on the GRID COLUMN, not the cell's position in its
@@ -10340,7 +10538,7 @@ impl<'a> TableFitLayouter<'a> {
                     // counts — but the grid key changed NOTHING on ed025, and it
                     // has never been through a corpus gate. Verify before making
                     // it the only path.
-                    let key = if std::env::var_os("OXI_S1192G_DISABLE").is_none() {
+                    let key = if !crate::env_flag!("OXI_S1192G_DISABLE") {
                         cell_start_grid
                     } else {
                         cell_idx
@@ -10348,7 +10546,7 @@ impl<'a> TableFitLayouter<'a> {
                     if !vmerge_page_flow { vmerge_absolute_ends.remove(&key); }
                     s1192_pending.retain(|(c, _)| *c != key);
                     s1192_pending.push((key, need));
-                    if std::env::var("OXI_DBG_S1192").is_ok() {
+                    if crate::env_flag!("OXI_DBG_S1192") {
                         eprintln!("[S1192] REC row={} cell_idx={} grid={} need={:.2}",
                             row_idx, cell_idx, cell_start_grid, need);
                     }
@@ -10373,7 +10571,7 @@ impl<'a> TableFitLayouter<'a> {
                 // too) and the merged cell at 110.8; Oxi set them 7.9 / 8.2 lower, centring
                 // in the 32pt content. With atLeast both agree (109.3 / 119.1). ja/forms__
                 // 02157d72 p1 row 2 (那覇市 / 生年月日 / 平熱 / 現住所): 18 census lines +8.07.
-                if is_exact_row && std::env::var_os("OXI_EXACT_ROW_VALIGN_BOX_DISABLE").is_none() {
+                if is_exact_row && !crate::env_flag!("OXI_EXACT_ROW_VALIGN_BOX_DISABLE") {
                     effective_row_h = row_height;
                 }
                 // S503 (2026-06-08): include the render-line-height centering floor so a
@@ -10463,7 +10661,7 @@ impl<'a> TableFitLayouter<'a> {
                             // enough that downstream layout cascades push a
                             // few paragraphs to earlier pages. Need a tighter
                             // discriminator before flipping default.
-                            let opt_in = std::env::var("OXI_S305_ENABLE").is_ok();
+                            let opt_in = crate::env_flag!("OXI_S305_ENABLE");
                             const OVERFLOW_GATE_PT: f32 = 20.0;
                             let mut should_relax = false;
                             // OXI_VMERGE_SPAN_NATURAL (2026-10-11, default ON, opt-out
@@ -10473,7 +10671,7 @@ impl<'a> TableFitLayouter<'a> {
                             // Institution» / «Receiving Organisation» labels (vMerge
                             // restart, vAlign center, rows with trHeight 213-237tw that
                             // their text outgrows) sat 3-5pt above Word.
-                            if std::env::var_os("OXI_VMERGE_SPAN_NATURAL_DISABLE").is_none() {
+                            if !crate::env_flag!("OXI_VMERGE_SPAN_NATURAL_DISABLE") {
                                 should_relax = true;
                             }
                             if opt_in {
@@ -10705,7 +10903,7 @@ impl<'a> TableFitLayouter<'a> {
                     // S921: a direct tblBorders frame can coexist with thinner
                     // insideH/insideV edges inherited from the table style.
                     let outer_width = table.style.border_width.unwrap_or(0.4);
-                    let s921_inner_widths = std::env::var("OXI_S921_DISABLE").is_err();
+                    let s921_inner_widths = !crate::env_flag!("OXI_S921_DISABLE");
                     let horizontal_width = if row_idx + 1 == num_rows || !s921_inner_widths {
                         outer_width
                     } else {
@@ -10797,7 +10995,20 @@ impl<'a> TableFitLayouter<'a> {
                         row_declared_top_edges.push(edge.clone());
                         let inherited_only = cell_borders.and_then(|b| b.top.as_ref()).is_none()
                             && inherited_top_rule.is_some();
-                        if (!use_collapsed || row_idx == 0)
+                        // OXI_NIL_ABOVE_EDGE (2026-11-01, default ON, opt-out _DISABLE): the
+                        // collapsed model paints a shared edge as the row above's bottom; when
+                        // that cell declares bottom nil, the edge is still this cell's top.
+                        // `_pb_nil_edge_gen.py` (compat 15, tblBorders single): upper bottom nil
+                        // -> Word draws the edge, lower top nil -> drawn, both nil -> gone.
+                        // ja/forms__031af703 p1: the «使用する麻酔薬…» box under the «記» row
+                        // (bottom nil) had no top rule in Oxi.
+                        let above_bottom_nil = row_idx > 0
+                            && std::env::var_os("OXI_NIL_ABOVE_EDGE_DISABLE").is_none()
+                            && LayoutEngine::s1192_cell_at(&table.rows[row_idx - 1], grid_idx, true)
+                                .and_then(|c| c.borders.as_ref())
+                                .and_then(|b| b.bottom.as_ref())
+                                .map_or(false, |b| matches!(b.style.as_str(), "nil" | "none"));
+                        if (!use_collapsed || row_idx == 0 || above_bottom_nil)
                             && (!inherited_only || row_idx == 0 || pages.len() > inherited_outer_page_before_row) {
                             elements.push(edge);
                         }
@@ -10882,8 +11093,16 @@ impl<'a> TableFitLayouter<'a> {
                 // is the cell-content absolute base computed above). S487's bug was
                 // using cell_x (border-left, not content-left) for X and
                 // cursor.visual_y (cell top, not the anchor paragraph) for Y.
-                // Opt-IN OXI_S487_ENABLE (default OFF until gate-validated).
-                if !cell.cell_text_boxes.is_empty() && std::env::var("OXI_S487_ENABLE").is_ok() {
+                // Default ON since 2026-11-01 (opt-out OXI_S487_DISABLE; OXI_S487_ENABLE
+                // still forces it): ssim_ab over the 369 golden documents moved 8,
+                // net +0.0254 for drawing the boxes (2ea81a +0.0140, roudoujoken
+                // +0.0101, tsuuchisho +0.0045, 664c +0.0011; tokumei_08_04 -0.0041).
+                // ja/educational__244a3664's «自分は将来どういうふうに働きたいのか» box
+                // (layoutInCell, column-relative -234.8pt) was missing: 0.8645 -> 0.8729.
+                if !cell.cell_text_boxes.is_empty()
+                    && (crate::env_flag!("OXI_S487_ENABLE")
+                        || !crate::env_flag!("OXI_S487_DISABLE"))
+                {
                     let cell_content_left = cell_x + pad_l;
                     for tb in &cell.cell_text_boxes {
                         let (px, py) = tb
@@ -10912,6 +11131,16 @@ impl<'a> TableFitLayouter<'a> {
                             }
                         };
                         let tb_elems = self.layout_text_box_at(tb, page, &[], &[], Some((abs_x, abs_y)));
+                        // The S1644 overflow clip reaches 2000pt below the box; inside a
+                        // table the row splitter reads it as content and spread
+                        // en/reference__00f45b1b's layout-table text box over four blank
+                        // pages. Keep the clip to the box.
+                        let mut tb_elems = tb_elems;
+                        for e in &mut tb_elems {
+                            if matches!(e.content, LayoutContent::ClipStart) {
+                                e.height = e.height.min(tb.height);
+                            }
+                        }
                         // Defer (not `elements.extend`) so the box paints on top of the
                         // whole table grid — see deferred_cell_textboxes declaration.
                         deferred_cell_textboxes.extend(tb_elems);
@@ -10934,11 +11163,11 @@ impl<'a> TableFitLayouter<'a> {
             // carries this row's already-emitted rules down with it — the
             // estimator hook alone changed nothing precisely because the emit
             // pass computes its own height here.
-            if std::env::var("OXI_S1192_DISABLE").is_err() {
+            if !crate::env_flag!("OXI_S1192_DISABLE") {
                 let is_cont = |c: &TableCell| {
                     matches!(c.v_merge.as_deref(), Some("continue") | Some(""))
                 };
-                let bygrid = std::env::var_os("OXI_S1192G_DISABLE").is_none();
+                let bygrid = !crate::env_flag!("OXI_S1192G_DISABLE");
                 for (ci, remaining) in s1192_pending.iter() {
                     let here_cont = LayoutEngine::s1192_cell_at(row, *ci, bygrid).map_or(false, is_cont);
                     let next_cont = table
@@ -10946,7 +11175,7 @@ impl<'a> TableFitLayouter<'a> {
                         .get(row_idx + 1)
                         .and_then(|r| LayoutEngine::s1192_cell_at(r, *ci, bygrid))
                         .map_or(false, is_cont);
-                    if std::env::var("OXI_DBG_S1192").is_ok() {
+                    if crate::env_flag!("OXI_DBG_S1192") {
                         eprintln!("[S1192] FOLD row={} key={} rem={:.2} here={} next={}",
                             row_idx, ci, remaining, here_cont, next_cont);
                     }
@@ -10959,7 +11188,7 @@ impl<'a> TableFitLayouter<'a> {
                     // Oxi stretched it to 27.15 and set the 16 lines below 4.5 low (blind-G
                     // line census). `_pb_exact_row_valign_gen.py` exact_vmerge_over arm.
                     if here_cont && !next_cont
-                        && !(is_exact_row && std::env::var_os("OXI_EXACT_ROW_NO_VMERGE_GROW_DISABLE").is_none())
+                        && !(is_exact_row && !crate::env_flag!("OXI_EXACT_ROW_NO_VMERGE_GROW_DISABLE"))
                     {
                         let remaining = vmerge_absolute_ends.get(ci).map(|end| {
                             end - (pages.len() as f32 * vmerge_coordinate_stride + cursor.visual_y)
@@ -11023,7 +11252,7 @@ impl<'a> TableFitLayouter<'a> {
             // 784.4 + 1.125 > 785.2. Oxi cut at 784.79 and kept all seven, which
             // S1559's correct empty-line height then exposed (the 2pt-too-tall
             // empty above had been pushing the line off by itself).
-            let s1565_cell_bottom = std::env::var_os("OXI_S1565_DISABLE").is_none()
+            let s1565_cell_bottom = !crate::env_flag!("OXI_S1565_DISABLE")
                 && !separate_outer_edges
                 && !self.doc_body_has_real_cjk
                 && self.s1188_on()
@@ -11032,7 +11261,7 @@ impl<'a> TableFitLayouter<'a> {
                     .map_or(false, |d| d.style != "nil" && d.style != "none"));
             let fragment_bottom_width = if separate_outer_edges {
                 self.table_fragment_bottom_width(table, Some(row))
-            } else if s1191_foot > 0.0 && std::env::var_os("OXI_S1482_DISABLE").is_none() {
+            } else if s1191_foot > 0.0 && !crate::env_flag!("OXI_S1482_DISABLE") {
                 s1191_foot
             } else if s1565_cell_bottom {
                 self.table_fragment_bottom_width(table, Some(row)) * 0.5
@@ -11057,7 +11286,7 @@ impl<'a> TableFitLayouter<'a> {
                 // Remove alignment against the unbroken row before testing
                 // line fit and widow limits. Preserve unsplit rows as emitted.
                 let split_valign = fragment_valign || (!self.doc_body_has_real_cjk
-                    && std::env::var("OXI_SPLIT_CELL_VALIGN_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_SPLIT_CELL_VALIGN_DISABLE")
                     && row.cells.iter().any(|c| c.v_merge.is_none() && c.cell_text_boxes.is_empty()));
                 if split_valign {
                     for &(index, offset) in &split_valign_offsets {
@@ -11083,7 +11312,7 @@ impl<'a> TableFitLayouter<'a> {
                 // line stands for the ref's line (every corpus ref sits in its
                 // paragraph's first line). Applied at the first split here and
                 // at every continuation page in the loop below.
-                let s1527_on = std::env::var_os("OXI_S1527_DISABLE").is_none();
+                let s1527_on = !crate::env_flag!("OXI_S1527_DISABLE");
                 let (s1527_refs, s1527_heights): (Vec<(usize, usize, String, u32)>, Vec<(u32, f32)>) = match row_footnotes {
                     Some(rf) if s1527_on && !rf[row_idx].0.is_empty() => {
                         let (ids_all, _h_all, hs_all) = &rf[row_idx];
@@ -11158,7 +11387,7 @@ impl<'a> TableFitLayouter<'a> {
                         // misses the 555.43 left above note 7, so the line moves; Oxi
                         // kept the note on page 1 while the line went to page 2.
                         let last_bot = para_els.iter().map(|e| e.y + e.height).fold(f32::NEG_INFINITY, f32::max);
-                        let after = if std::env::var_os("OXI_S1527_AFTER_DISABLE").is_none()
+                        let after = if !crate::env_flag!("OXI_S1527_AFTER_DISABLE")
                             && (bot - last_bot).abs() < 0.5
                         {
                             row.cells.get(ci).and_then(|c| c.blocks.iter().filter_map(|b| match b {
@@ -11178,7 +11407,7 @@ impl<'a> TableFitLayouter<'a> {
                         }
                         let sep = if kept.is_empty() && !has_notes { fn_sep } else { 0.0 };
                         let fits = bot <= bottom - nh - sep + 0.5;
-                        if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                        if crate::env_flag!("OXI_DBG_SPLIT") {
                             eprintln!("[SPLIT-S1527-REF] id={} line {:.2}..{:.2} nh={:.2} sep={:.2} bottom={:.2} fits={}", id, top, bot, nh, sep, bottom, fits);
                         }
                         if fits {
@@ -11193,7 +11422,7 @@ impl<'a> TableFitLayouter<'a> {
                             // frame (pad_b + rule) reserved, so the cut leaves that
                             // room too; at +0.4 alone it fails and S1607 moves the
                             // whole row (probeqfncell 第7項, Word keeps its first line).
-                            let frame = if std::env::var_os("OXI_S1527_AFTER_DISABLE").is_none() {
+                            let frame = if !crate::env_flag!("OXI_S1527_AFTER_DISABLE") {
                                 row_default_pad_b + if table.style.border {
                                     table.style.border_width.unwrap_or(0.4).max(0.0)
                                 } else { 0.0 }
@@ -11207,7 +11436,7 @@ impl<'a> TableFitLayouter<'a> {
                 let fragment_content_bottom = if !s1527_refs.is_empty() {
                     let (bottom, kept) = s1527_reserve(fragment_content_bottom, s740_page_has_notes, &row_elements, &s1527_early);
                     if !kept.is_empty() {
-                        if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                        if crate::env_flag!("OXI_DBG_SPLIT") {
                             eprintln!("[SPLIT-S1527] row={} kept_notes={:?} bottom {:.2} -> {:.2}", row_idx, kept, fragment_content_bottom, bottom);
                         }
                         s740_page_has_notes = true;
@@ -11277,11 +11506,11 @@ impl<'a> TableFitLayouter<'a> {
                 // site). S1130b tried pulling the line back WITHOUT the row-top
                 // case and scored 0.3524 -- "cut higher up" is not the rule,
                 // "if no line can be drawn, move the row" is.
-                let s1168 = std::env::var("OXI_S1168_DISABLE").is_err();
+                let s1168 = !crate::env_flag!("OXI_S1168_DISABLE");
                 let row_top = cursor.cursor_y;
                 let split_y = if s1168 {
                     let mut cand = split_y;
-                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                    if crate::env_flag!("OXI_DBG_SPLIT") {
                         for e in row_elements.iter().filter(|e| matches!(e.content, LayoutContent::Image { .. })) {
                             eprintln!("[SPLIT-S1168-IMG] y={:.2} h={:.2} off={:.2} fit={:?} top={:.2} row_top={:.2} cand={:.2} margin={}",
                                 e.y, e.height, e.flow_line_offset, e.content_fit_height, e.y - e.flow_line_offset, row_top, cand, e.margin_float);
@@ -11291,7 +11520,7 @@ impl<'a> TableFitLayouter<'a> {
                         let crossed = row_elements
                             .iter()
                             .filter(|e| matches!(e.content, LayoutContent::Image { .. })
-                                || (std::env::var_os("OXI_EMPTY_CELL_LINE_SPLIT").is_some()
+                                || (crate::env_flag!("OXI_EMPTY_CELL_LINE_SPLIT")
                                     && matches!(&e.content, LayoutContent::Text { text, .. } if text.is_empty())))
                             // S1555 (2026-09-25, default ON, opt-out OXI_S1555_DISABLE): a
                             // MARGIN-relative cell float (cell_float_flow gives it origin 0,
@@ -11315,7 +11544,7 @@ impl<'a> TableFitLayouter<'a> {
                             // is anchored to a paragraph that begins below the split, so
                             // Word splits the row by its text and the photo follows its
                             // paragraph. Oxi moved the split to the row top (+1 page).
-                            .filter(|e| std::env::var_os("OXI_S1555_DISABLE").is_some()
+                            .filter(|e| crate::env_flag!("OXI_S1555_DISABLE")
                                 || !e.margin_float
                                 || e.cell_paragraph_index.map_or(true, |ap| {
                                     row_elements.iter()
@@ -11374,7 +11603,7 @@ impl<'a> TableFitLayouter<'a> {
                 // subtracting q again double-counts and drops one more line
                 // (uklocal p21 row 1: saved split 708.8, line-1 bottom 707 —
                 // Word keeps 1 line, the doubled q pushed the row whole).
-                let empty_line_boundary = std::env::var_os("OXI_EMPTY_CELL_LINE_SPLIT").is_some()
+                let empty_line_boundary = crate::env_flag!("OXI_EMPTY_CELL_LINE_SPLIT")
                     && split_y < page_bottom
                     && row_elements.iter().any(|e| {
                         matches!(&e.content, LayoutContent::Text { text, .. } if text.is_empty())
@@ -11391,10 +11620,10 @@ impl<'a> TableFitLayouter<'a> {
                 // 2.5pt longer.
                 // Default ON with S1618 (Bug A's width moved under the table); opt-out
                 // OXI_S1606_DISABLE.
-                let s1606 = std::env::var_os("OXI_S1606_DISABLE").is_none();
+                let s1606 = !crate::env_flag!("OXI_S1606_DISABLE");
                 let s819_q = if (!self.doc_body_has_real_cjk || s1606)
                     && s819_natural_split
-                    && std::env::var("OXI_S819_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S819_DISABLE")
                 {
                     let pad_b = row
                         .cells
@@ -11425,7 +11654,7 @@ impl<'a> TableFitLayouter<'a> {
                 // a 2pt edge moves the paragraph. Charging the edge twice
                 // incorrectly moves it with the 1pt edge as well.
                 let s819_fit_q = if separate_outer_edges
-                    || std::env::var_os("OXI_CELL_FRAME_RESERVE_DISABLE").is_none()
+                    || !crate::env_flag!("OXI_CELL_FRAME_RESERVE_DISABLE")
                 {
                     (s819_q - fragment_bottom_width).max(0.0)
                 } else { s819_q };
@@ -11453,9 +11682,9 @@ impl<'a> TableFitLayouter<'a> {
                 // all four (762.8 <= 771.0 without the after) and closed an empty
                 // continuation on page 4.
                 let s1092 = (!self.doc_body_has_real_cjk
-                    || std::env::var_os("OXI_S1092_CJK_DISABLE").is_none())
+                    || !crate::env_flag!("OXI_S1092_CJK_DISABLE"))
                     && s819_natural_split
-                    && std::env::var("OXI_S1092_DISABLE").is_err();
+                    && !crate::env_flag!("OXI_S1092_DISABLE");
                 let mut s1092_after: std::collections::HashMap<(usize, usize), f32> =
                     Default::default();
                 let mut s1092_last: std::collections::HashMap<(usize, usize), f32> =
@@ -11504,7 +11733,7 @@ impl<'a> TableFitLayouter<'a> {
                                         && current.style.style_id == next.style.style_id)
                             });
                             let sa = if !self.preserve_same_style_cell_spacing
-                                && std::env::var("OXI_S939_DISABLE").is_err()
+                                && !crate::env_flag!("OXI_S939_DISABLE")
                                 && para.style.contextual_spacing && same_style_next
                             { 0.0 } else { sa };
                             // The trailing after and the cell's bottom frame
@@ -11590,7 +11819,7 @@ impl<'a> TableFitLayouter<'a> {
                 let s1246_limit: std::collections::HashMap<CellFlowKey, f32> =
                     if s819_natural_split
                         && self.compat_mode >= 15 && self.compat_mode_explicit
-                        && std::env::var("OXI_S1246_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S1246_DISABLE")
                     {
                         // Lines of each cell paragraph, as (top, bottom) per distinct
                         // baseline -- a line can be several elements (one run each, and
@@ -11612,7 +11841,7 @@ impl<'a> TableFitLayouter<'a> {
                         }
                         // A nested row whose FIRST paragraph would leave one of two
                         // lines behind moves whole, as a top-level row does.
-                        let nested_orphan_on = std::env::var_os("OXI_NESTED_ORPHAN_ROW_DISABLE").is_none();
+                        let nested_orphan_on = !crate::env_flag!("OXI_NESTED_ORPHAN_ROW_DISABLE");
                         let mut nested_row_top: std::collections::HashMap<(Vec<(usize, usize, usize)>, usize), f32> =
                             Default::default();
                         if nested_orphan_on {
@@ -11682,7 +11911,7 @@ impl<'a> TableFitLayouter<'a> {
                             // A three-line first paragraph cannot leave either
                             // one or two lines here while keeping two on each page.
                             if ((n == 3 && k == 2) || (n >= 2 && k == 1
-                                && std::env::var("OXI_CELL_FIRST_ORPHAN_DISABLE").is_err()))
+                                && !crate::env_flag!("OXI_CELL_FIRST_ORPHAN_DISABLE")))
                                 && key.3 == 0 && key.0.is_empty()
                                 && self.compat_mode >= 15 && self.compat_mode_explicit
                                 && row_height <= page_bottom - page_top
@@ -11699,7 +11928,7 @@ impl<'a> TableFitLayouter<'a> {
                                 // Legacy and settings-less documents allow a
                                 // lone first line in a split table paragraph.
                                 && self.compat_mode >= 15 && self.compat_mode_explicit
-                                && std::env::var("OXI_CELL_ORPHAN_DISABLE").is_err()
+                                && !crate::env_flag!("OXI_CELL_ORPHAN_DISABLE")
                                 // Nested cells reuse local paragraph indices;
                                 // their lines must not be joined to this paragraph.
                                 && source_cell.map_or(false, |cell|
@@ -11721,6 +11950,60 @@ impl<'a> TableFitLayouter<'a> {
                     } else {
                         Default::default()
                     };
+                // OXI_ZERO_CELL_MOVES_ROW (2026-11-02, default ON, opt-out _DISABLE): a
+                // split may not leave a cell with NOTHING on the first page. When a
+                // cell's first line -- with its paragraph's own after when the paragraph
+                // ends on that line, and the cell's bottom frame -- does not fit while
+                // another cell's first line does, Word moves the row whole (the
+                // per-cell widow probe's 0-line arms; golden uklocalspending p36 row 2
+                // with today's Word: «2.» and «Optional» are one-line paragraphs with
+                // after 6, 439.4 + 0.75 + 5.25 + 6 + 11.5 + 6 + 5.25 + 0.75 = 474.9 >
+                // the 473.2 body bottom, so the row goes to p37 although «A unique code
+                // to», whose paragraph continues, would fit). Checked against the page
+                // bottom, so an LRPB-pulled cut is held to it too.
+                if !short_widow_moves_row && !crate::env_flag!("OXI_ZERO_CELL_MOVES_ROW_DISABLE") {
+                    let q_full = {
+                        let pad_b = row.cells.first()
+                            .and_then(|c| c.margins.as_ref().and_then(|m| m.bottom))
+                            .unwrap_or(row_default_pad_b);
+                        let bw = row.cells.first()
+                            .and_then(|c| c.borders.as_ref())
+                            .and_then(|b| b.bottom.as_ref())
+                            .map(|bd| bd.width)
+                            .unwrap_or_else(|| if table.style.border { table.style.border_width.unwrap_or(0.4) } else { 0.0 });
+                        pad_b + bw
+                    };
+                    let tps = table.style.para_style.as_ref();
+                    // (cell, paragraph) -> last line bottom; cell -> first line (top, bottom, para)
+                    let mut para_last: std::collections::HashMap<(usize, usize), f32> = Default::default();
+                    let mut cell_first: std::collections::HashMap<usize, (f32, f32, usize)> = Default::default();
+                    for e in row_elements.iter() {
+                        if !matches!(e.content, LayoutContent::Text { .. }) { continue; }
+                        let Some(key) = e.cell_flow_key() else { continue; };
+                        if !key.0.is_empty() { continue; }
+                        let (ci, pi) = (key.2, key.3);
+                        let b = e.y + e.height;
+                        let last = para_last.entry((ci, pi)).or_insert(b);
+                        if b > *last { *last = b; }
+                        let f = cell_first.entry(ci).or_insert((e.y, b, pi));
+                        if e.y < f.0 - 0.1 { *f = (e.y, b, pi); }
+                        else if (e.y - f.0).abs() <= 0.1 && b > f.1 { f.1 = b; }
+                    }
+                    let mut any_fit = false;
+                    let mut any_miss = false;
+                    for (ci, (_, bottom, pi)) in cell_first.iter() {
+                        let ends_here = para_last.get(&(*ci, *pi)).map_or(false, |l| (l - bottom).abs() < 0.01);
+                        let after = if ends_here {
+                            row.cells.get(*ci)
+                                .and_then(|c| c.blocks.iter().filter_map(|b| match b { Block::Paragraph(p) => Some(p), _ => None }).nth(*pi))
+                                .map_or(0.0, |para| self.cell_para_spacing(para, tps, table_grid_pitch).1)
+                        } else { 0.0 };
+                        if bottom + after + q_full <= page_bottom + row_fit_epsilon { any_fit = true; } else { any_miss = true; }
+                    }
+                    if any_fit && any_miss {
+                        short_widow_moves_row = true;
+                    }
+                }
                 let split_y = if short_widow_moves_row { row_top } else { split_y };
                 // Use exactly the same fit decision for the fragment's natural
                 // content extent and its final element partition. Retain only
@@ -11754,13 +12037,13 @@ impl<'a> TableFitLayouter<'a> {
                 // lowest element, which for a vMerge-restart row includes the merged
                 // cells' text centred over the rows below (row 15 at 132.55, Word
                 // 101.25; `_pb_vmerge_colbottom_gen.py`, blind-G policies__1e87d3e6).
-                let split_y = if std::env::var_os("OXI_S1607_DISABLE").is_none()
+                let split_y = if !crate::env_flag!("OXI_S1607_DISABLE")
                     && split_y > row_top + 0.1
                     && row_elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { .. } | LayoutContent::Image { .. }))
                     && !row_elements.iter().any(|e| matches!(&e.content, LayoutContent::Text { .. } | LayoutContent::Image { .. })
                         && fits_at(e, split_y))
                 {
-                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                    if crate::env_flag!("OXI_DBG_SPLIT") {
                         eprintln!("[SPLIT-S1607] row={} no text line fits above {:.2} -> whole-row move", row_idx, split_y);
                     }
                     row_top
@@ -11769,7 +12052,7 @@ impl<'a> TableFitLayouter<'a> {
                 // that were laid out past the old page bottom; after a whole-row
                 // move they sit on the next page already, and the post-paginate
                 // sweep would move them a second page (row 14's "１回" at y -601.6).
-                if std::env::var_os("OXI_S1607_DISABLE").is_none() && split_y <= row_top + 0.1 {
+                if !crate::env_flag!("OXI_S1607_DISABLE") && split_y <= row_top + 0.1 {
                     let shift = split_y - page_top;
                     for e in row_elements.iter_mut() {
                         if e.vmerge_restart_overflow_to_next_page && e.y - shift <= page_bottom + 0.5 {
@@ -11997,7 +12280,7 @@ impl<'a> TableFitLayouter<'a> {
                 // is content at y=51.9, Oxi had an empty text line at y=48 + content at
                 // 64.5 = a +16.5pt offset). Anchor to the first NON-EMPTY text and drop
                 // the leading empty-text lines above it. Opt-out OXI_S570_DISABLE.
-                let s570 = std::env::var("OXI_S570_DISABLE").is_err();
+                let s570 = !crate::env_flag!("OXI_S570_DISABLE");
                 // S719 (2026-07-02, default ON, opt-out OXI_S719_DISABLE): the S570
                 // leading-line collapse applies to TRULY EMPTY paragraphs (no runs,
                 // element text == "") ONLY — a WHITESPACE-run line is CONTENT Word
@@ -12007,7 +12290,7 @@ impl<'a> TableFitLayouter<'a> {
                 // p51 continuation's first line (the 日給 numerator box at 111.55 =
                 // 99.55 + 12), while the trim()-empty test dropped it. harassbun's
                 // S570 case (a TRUE no-run empty, text == "") still collapses.
-                let s719_true_empty = std::env::var("OXI_S719_DISABLE").is_err();
+                let s719_true_empty = !crate::env_flag!("OXI_S719_DISABLE");
                 let s719_collapsible = |text: &str| -> bool {
                     if s719_true_empty {
                         text.is_empty()
@@ -12050,7 +12333,7 @@ impl<'a> TableFitLayouter<'a> {
                 // S1431: when the first overflow line is the FIRST line of its
                 // paragraph (no line of that paragraph stayed on this page), the
                 // paragraph's space_before rides along above it.
-                let s1431_sb = if std::env::var_os("OXI_S1431_DISABLE").is_none()
+                let s1431_sb = if !crate::env_flag!("OXI_S1431_DISABLE")
                     && min_overflow_text_y.is_finite()
                 {
                     next_page_elems
@@ -12095,7 +12378,7 @@ impl<'a> TableFitLayouter<'a> {
                 // minimum -- both are byte-identical by construction.  Latin
                 // scope, matching S817/S819/S1092 in this same region.
                 let s1093 = !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_S1093_DISABLE").is_err();
+                    && !crate::env_flag!("OXI_S1093_DISABLE");
                 let mut s1093_col_min: std::collections::HashMap<usize, f32> = Default::default();
                 if s1093 {
                     for e in next_page_elems.iter().filter(|e| anchors(e)) {
@@ -12125,7 +12408,7 @@ impl<'a> TableFitLayouter<'a> {
                 // S719b tokyoshugyo) anchors at page_top. Opt-out
                 // OXI_S817_DISABLE.
                 let s817_cont_pad =
-                    if !self.doc_body_has_real_cjk && std::env::var("OXI_S817_DISABLE").is_err() {
+                    if !self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S817_DISABLE") {
                         row.cells
                             .first()
                             .and_then(|c| c.margins.as_ref().and_then(|m| m.top))
@@ -12141,7 +12424,7 @@ impl<'a> TableFitLayouter<'a> {
                 // re-close AND the post-split cursor branches below. 0.0 for
                 // CJK docs = byte-identical.
                 let s817_tail =
-                    if std::env::var_os("OXI_CELL_EMPTY_LINES").is_some() {
+                    if crate::env_flag!("OXI_CELL_EMPTY_LINES") {
                         0.0
                     } else if (!self.doc_body_has_real_cjk
                         // OXI_S817_CJK (2026-10-21, default ON, opt-out _DISABLE): CJK
@@ -12149,8 +12432,8 @@ impl<'a> TableFitLayouter<'a> {
                         // too. golden probeqfncell (MS Mincho, Normal.dotm after 8): the
                         // page-2 fragment of 第7項 is line + 8 + rule (70.92 -> 95.18);
                         // Oxi closed it at the bare line and every later row sat 5.5 high.
-                        || std::env::var_os("OXI_S817_CJK_DISABLE").is_none())
-                        && std::env::var("OXI_S817_DISABLE").is_err() {
+                        || !crate::env_flag!("OXI_S817_CJK_DISABLE"))
+                        && !crate::env_flag!("OXI_S817_DISABLE") {
                         let pad_b = row
                             .cells
                             .first()
@@ -12198,9 +12481,9 @@ impl<'a> TableFitLayouter<'a> {
                                 None => None,
                             })
                             .collect();
-                        let after_last = if std::env::var_os("OXI_CONT_TAIL_LIVE_DISABLE").is_none()
+                        let after_last = if !crate::env_flag!("OXI_CONT_TAIL_LIVE_DISABLE")
                             && !live_cells.is_empty()
-                            && std::env::var_os("OXI_S1528_DISABLE").is_none()
+                            && !crate::env_flag!("OXI_S1528_DISABLE")
                         {
                             let eng: &LayoutEngine = self;
                             row.cells
@@ -12216,7 +12499,7 @@ impl<'a> TableFitLayouter<'a> {
                             .filter_map(|c| {
                                 c.blocks.iter().rev().find_map(|b| match b {
                                     Block::Paragraph(p) => Some(
-                                        if std::env::var_os("OXI_S1528_DISABLE").is_none() {
+                                        if !crate::env_flag!("OXI_S1528_DISABLE") {
                                             self.cell_para_spacing(p, table.style.para_style.as_ref(), table_grid_pitch).1
                                         } else {
                                             p.style.space_after.unwrap_or(0.0)
@@ -12233,14 +12516,14 @@ impl<'a> TableFitLayouter<'a> {
                     };
                 // S1607: a whole-row move keeps the row's own geometry (top cell
                 // margin included); only a genuine continuation re-anchors.
-                let s1607_whole = std::env::var_os("OXI_S1607_DISABLE").is_none()
+                let s1607_whole = !crate::env_flag!("OXI_S1607_DISABLE")
                     && split_y <= row_top + 0.1;
                 if min_overflow_text_y.is_finite() && !s1607_whole {
                     let original_shift = split_y - page_top;
                     let correct_shift =
                         (min_overflow_text_y + original_shift) - (page_top + s817_cont_pad);
                     let adjust = correct_shift - original_shift;
-                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                    if crate::env_flag!("OXI_DBG_SPLIT") {
                         let first_after = min_overflow_text_y - adjust;
                         eprintln!("[REANCHOR] page_top={:.2} split_y={:.2} min_overflow_text_y={:.2} orig_shift={:.2} correct_shift={:.2} adjust={:.2} -> first_overflow_line_y={:.2}",
                             page_top, split_y, min_overflow_text_y, original_shift, correct_shift, adjust, first_after);
@@ -12302,7 +12585,7 @@ impl<'a> TableFitLayouter<'a> {
                     // every later row on the page sat 2.6pt high until one line too many
                     // fitted before the next split.
                     if adjust < 0.0 && !s1093_ok
-                        && std::env::var_os("OXI_CONT_BORDER_FOLLOW_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_CONT_BORDER_FOLLOW_DISABLE")
                     {
                         // only the edges at the fragment's bottom (a replayed header's
                         // own rules stay where they are)
@@ -12360,15 +12643,15 @@ impl<'a> TableFitLayouter<'a> {
                     };
                     // S942: the continuation band honors the atLeast trHeight
                     // (band = max(content, trH + bw); see the cursor branch).
-                    let s817_close = if std::env::var("OXI_S942_DISABLE").is_err()
-                        && (std::env::var("OXI_S940T_DISABLE").is_err()
-                            || std::env::var("OXI_S1025_DISABLE").is_err())
+                    let s817_close = if !crate::env_flag!("OXI_S942_DISABLE")
+                        && (!crate::env_flag!("OXI_S940T_DISABLE")
+                            || !crate::env_flag!("OXI_S1025_DISABLE"))
                         // S1430 (2026-09-16, default ON, opt-out OXI_S1430_DISABLE): CJK
                         // bodies too -- `_pb_trhsplit_gen.py` n7/n9: the continuation
                         // band runs page_top 56.7 -> row 2 at 130.5 = trH 72 + bw.
                         && (!self.doc_body_has_real_cjk
-                            || std::env::var_os("OXI_CELL_EMPTY_LINES").is_some()
-                            || std::env::var_os("OXI_S1430_DISABLE").is_none())
+                            || crate::env_flag!("OXI_CELL_EMPTY_LINES")
+                            || !crate::env_flag!("OXI_S1430_DISABLE"))
                         && row.height_rule.as_deref() != Some("exact")
                     {
                         match row.height {
@@ -12486,7 +12769,7 @@ impl<'a> TableFitLayouter<'a> {
                         // fragment too: Word closes under it (reference__006cec p4, the
                         // list image ends 707.1, rule 707.8; Oxi closed on the empty
                         // line above it at 579.2).
-                        let image_bottom = if std::env::var_os("OXI_SPLIT_CLOSE_IMAGES_DISABLE").is_none() {
+                        let image_bottom = if !crate::env_flag!("OXI_SPLIT_CLOSE_IMAGES_DISABLE") {
                             current_page_elems.iter().filter_map(|e| match e.content {
                                 LayoutContent::Image { .. } if e.y + e.height <= split_y + 0.5 => Some(e.y + e.height),
                                 _ => None,
@@ -12559,7 +12842,7 @@ impl<'a> TableFitLayouter<'a> {
                 }
 
                 // Push current page elements
-                if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                if crate::env_flag!("OXI_DBG_SPLIT") {
                     let cur_txt = current_page_elems
                         .iter()
                         .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
@@ -12592,7 +12875,7 @@ impl<'a> TableFitLayouter<'a> {
                 // the continuation page starts clean and S1527 subtracts only the
                 // notes whose referencing lines land on it (S740 v1 carried the
                 // entry page's reserve across every continuation page).
-                if row_footnotes.is_none() || std::env::var_os("OXI_S1527_DISABLE").is_none() {
+                if row_footnotes.is_none() || !crate::env_flag!("OXI_S1527_DISABLE") {
                     page_bottom += std::mem::take(&mut s740_reserve);
                 }
                 page_bottom += advance_table_page_geometry(
@@ -12627,7 +12910,7 @@ impl<'a> TableFitLayouter<'a> {
                 // automatically. Applied after the first split and after each
                 // loop push (headers already placed stay above next_split so
                 // they never re-enter overflow).
-                let s754_hdr_replay = std::env::var("OXI_S754_DISABLE").is_err()
+                let s754_hdr_replay = !crate::env_flag!("OXI_S754_DISABLE")
                     && s728_on
                     && s728_capture_done
                     && !s728_hdr_elems.is_empty()
@@ -12671,7 +12954,7 @@ impl<'a> TableFitLayouter<'a> {
                     s754_apply_hdr(&mut remaining, &s728_hdr_elems, s728_hdr_h + self.repeated_header_border_delta(table, row_idx), page_top);
                 }
                 let continuation_pad_b = if separate_outer_edges
-                    && std::env::var("OXI_S819_DISABLE").is_err() {
+                    && !crate::env_flag!("OXI_S819_DISABLE") {
                     row.cells.first().and_then(|c| c.margins.as_ref().and_then(|m| m.bottom))
                         .unwrap_or(row_default_pad_b)
                 } else { 0.0 };
@@ -12738,14 +13021,14 @@ impl<'a> TableFitLayouter<'a> {
                     // lrpb_split_y 807.5 > page_bottom; the real stale LRPB is in
                     // THIS loop). Only honour the LRPB once the continuation page
                     // is at least half full. Opt-out OXI_S565_DISABLE.
-                    let s565_half_full = std::env::var("OXI_S565_DISABLE").is_ok()
+                    let s565_half_full = crate::env_flag!("OXI_S565_DISABLE")
                         || lrpb_next_split > page_top + content_height * 0.5;
                     // S1527: notes referenced by the lines landing on THIS
                     // continuation page shrink its bottom (see the first split).
                     let continuation_bottom = if !s1527_refs.is_empty() {
                         let (bottom, kept) = s1527_reserve(continuation_bottom, false, &remaining, &s1527_early);
                         if !kept.is_empty() {
-                            if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                            if crate::env_flag!("OXI_DBG_SPLIT") {
                                 eprintln!("[SPLIT-S1527] row={} loop kept_notes={:?} bottom {:.2} -> {:.2}", row_idx, kept, continuation_bottom, bottom);
                             }
                             let off = pages.len() - s740_entry_pages;
@@ -12956,7 +13239,7 @@ impl<'a> TableFitLayouter<'a> {
                     // it on p6 (PDF 93.1) while Oxi kept line 1 at 603.4. The
                     // first-split path has its own widow handling; this loop
                     // partitioned line by line with no look at the paragraph.
-                    if std::env::var_os("OXI_S1530_DISABLE").is_none() {
+                    if !crate::env_flag!("OXI_S1530_DISABLE") {
                         let line_key = |e: &LayoutElement| ((e.y - e.flow_line_offset) * 10.0).round() as i64;
                         let shift = next_split - page_top;
                         let is_txt = |e: &LayoutElement| matches!(e.content, LayoutContent::Text { .. });
@@ -13028,7 +13311,7 @@ impl<'a> TableFitLayouter<'a> {
                                     continue;
                                 }
                                 if move_all && page_min_key == stay.iter().min().copied() {
-                                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                                    if crate::env_flag!("OXI_DBG_SPLIT") {
                                         eprintln!("[SPLIT-S1530] row={} cell={} para={} starts at the page top: kept", row_idx, ci, pi);
                                     }
                                     continue;
@@ -13051,7 +13334,7 @@ impl<'a> TableFitLayouter<'a> {
                                         i += 1;
                                     }
                                 }
-                                if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                                if crate::env_flag!("OXI_DBG_SPLIT") {
                                     eprintln!("[SPLIT-S1530] row={} cell={} para={} stay={} go={} move_all={} move_last={}", row_idx, ci, pi, stay.len(), go.len(), move_all, move_last);
                                 }
                             }
@@ -13073,7 +13356,7 @@ impl<'a> TableFitLayouter<'a> {
                                         e.y += adjust;
                                     }
                                 }
-                                if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                                if crate::env_flag!("OXI_DBG_SPLIT") {
                                     eprintln!("[SPLIT-S1530] re-anchored overflow text +{:.2}", adjust);
                                 }
                             }
@@ -13115,7 +13398,7 @@ impl<'a> TableFitLayouter<'a> {
                                     e.y += adjust;
                                 }
                             }
-                            if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                            if crate::env_flag!("OXI_DBG_SPLIT") {
                                 eprintln!("[SPLIT-REANCHOR] min_ov_y={:.2} < page_top={:.2} -> shifted overflow text +{:.2}",
                                     min_ov_y, page_top, adjust);
                             }
@@ -13124,7 +13407,7 @@ impl<'a> TableFitLayouter<'a> {
                     // A fresh paragraph carries the same resolved before gap
                     // on every continuation, including the third and later pages.
                     // Nested tables have their own flow identities and carry map.
-                    if std::env::var_os("OXI_S1431_DISABLE").is_none() {
+                    if !crate::env_flag!("OXI_S1431_DISABLE") {
                         let first_top = overflow.iter().filter(|e| anchors(e))
                             .map(|e| e.y - e.flow_line_offset)
                             .fold(f32::INFINITY, f32::min);
@@ -13154,7 +13437,7 @@ impl<'a> TableFitLayouter<'a> {
                             }
                         }
                     }
-                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                    if crate::env_flag!("OXI_DBG_SPLIT") {
                         let tp_txt = this_page
                             .iter()
                             .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
@@ -13176,7 +13459,7 @@ impl<'a> TableFitLayouter<'a> {
                 // the continuation page starts clean and S1527 subtracts only the
                 // notes whose referencing lines land on it (S740 v1 carried the
                 // entry page's reserve across every continuation page).
-                if row_footnotes.is_none() || std::env::var_os("OXI_S1527_DISABLE").is_none() {
+                if row_footnotes.is_none() || !crate::env_flag!("OXI_S1527_DISABLE") {
                     page_bottom += std::mem::take(&mut s740_reserve);
                 }
                 page_bottom += advance_table_page_geometry(
@@ -13190,7 +13473,7 @@ impl<'a> TableFitLayouter<'a> {
                     }
                 }
 
-                if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                if crate::env_flag!("OXI_DBG_SPLIT") {
                     let rem_txt = remaining
                         .iter()
                         .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
@@ -13216,7 +13499,7 @@ impl<'a> TableFitLayouter<'a> {
                 // A spanning cell's continuation flow follows modern document
                 // compatibility, the same boundary that gates its widow
                 // protection below. Legacy modes keep the row-height model.
-                let row_continuation_flow = std::env::var_os("OXI_ROW_CONTINUATION_FLOW_DISABLE").is_none()
+                let row_continuation_flow = !crate::env_flag!("OXI_ROW_CONTINUATION_FLOW_DISABLE")
                     && self.compat_mode_explicit && self.compat_mode >= 15
                     && !is_nested && row_footnotes.is_none();
                 let mut independent_continuation_end = f32::NEG_INFINITY;
@@ -13235,8 +13518,8 @@ impl<'a> TableFitLayouter<'a> {
                         // (a vMerge column beside 4-line cells, Normal.dotm after 8): Word's
                         // one-line continuation closes 13.3 under its baseline as every row
                         // does, Oxi 5.3, and page 2 ran 7.5pt high into one extra line.
-                        let tail_after = if std::env::var_os("OXI_VMCONT_TAIL_AFTER_DISABLE").is_none()
-                            && std::env::var_os("OXI_CELL_EMPTY_LINES").is_none()
+                        let tail_after = if !crate::env_flag!("OXI_VMCONT_TAIL_AFTER_DISABLE")
+                            && !crate::env_flag!("OXI_CELL_EMPTY_LINES")
                         {
                             cell.blocks.iter().rev().find_map(|b| match b {
                                 Block::Paragraph(p) => Some(self.cell_para_spacing(
@@ -13265,7 +13548,7 @@ impl<'a> TableFitLayouter<'a> {
                     independent_continuation_end
                 } else { f32::NEG_INFINITY };
                 // Empty paragraphs in one column do not erase a sibling's text.
-                let other_cell_empty_continues = std::env::var_os("OXI_EMPTY_TAIL_CELL_SCOPE").is_some()
+                let other_cell_empty_continues = crate::env_flag!("OXI_EMPTY_TAIL_CELL_SCOPE")
                     && elements.iter().any(|e| {
                         e.cell_row_index == Some(row_idx)
                             && matches!(&e.content, LayoutContent::Text { text, .. } if text.trim().is_empty())
@@ -13278,7 +13561,7 @@ impl<'a> TableFitLayouter<'a> {
                 // A sibling's trailing blank paragraphs cannot collapse actual
                 // content on this continuation. This is independent of the
                 // compatibility rule for vertically merged cell extents.
-                let continuation_has_ink = std::env::var_os("OXI_CELL_CONTINUATION_INK_DISABLE").is_none()
+                let continuation_has_ink = !crate::env_flag!("OXI_CELL_CONTINUATION_INK_DISABLE")
                     && elements.iter().any(|e| {
                         if e.cell_row_index != Some(row_idx) { return false; }
                         let Some(cell) = e.cell_col_index.and_then(|ci| row.cells.get(ci)) else { return false; };
@@ -13321,8 +13604,8 @@ impl<'a> TableFitLayouter<'a> {
                 //   (b) no-border layout tables (d4d126 31x4 border=false) where the row's
                 //       bottom is similarly determined by the longest cell's content
                 let allow_fix = row.cells.len() == 1 || !table.style.border;
-                let fix_disabled = std::env::var("OXI_PATTERN_A_DISABLE").is_ok()
-                    || (std::env::var("OXI_TYPED_GRID_CONTINUATION_DISABLE").is_err()
+                let fix_disabled = crate::env_flag!("OXI_PATTERN_A_DISABLE")
+                    || (!crate::env_flag!("OXI_TYPED_GRID_CONTINUATION_DISABLE")
                         && !self.doc_body_has_real_cjk
                         && table_grid_pitch.is_some()
                         && !page.doc_grid_no_type);
@@ -13371,7 +13654,7 @@ impl<'a> TableFitLayouter<'a> {
                     // continuation); a sibling's post-text empties do not.
                     // The d77a/e3c545 derivation was 1×1 tables where all
                     // variants coincide.
-                    let trailing_empty_count = if std::env::var("OXI_S908_DISABLE").is_err() {
+                    let trailing_empty_count = if !crate::env_flag!("OXI_S908_DISABLE") {
                         let mut cols: Vec<usize> = elements
                             .iter()
                             .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
@@ -13387,7 +13670,7 @@ impl<'a> TableFitLayouter<'a> {
                         };
                         // S1440: an all-empty cell's empty lines were placed from the
                         // row top; the continuation only owes the ones past the split.
-                        let s1440_placed: usize = if std::env::var_os("OXI_S1440_DISABLE").is_none() {
+                        let s1440_placed: usize = if !crate::env_flag!("OXI_S1440_DISABLE") {
                             let lh = table_grid_pitch.unwrap_or_else(|| {
                                 elements
                                     .iter()
@@ -13423,7 +13706,7 @@ impl<'a> TableFitLayouter<'a> {
                     // With explicit non-painting line boxes, the last continuation
                     // line already includes each cell's empty paragraphs. Cells run
                     // in parallel: do not append a sibling's blank lines again.
-                    let trailing_empty_count = if std::env::var_os("OXI_CELL_EMPTY_LINES").is_some() {
+                    let trailing_empty_count = if crate::env_flag!("OXI_CELL_EMPTY_LINES") {
                         0
                     } else { trailing_empty_count };
                     // OXI_S817_CJK: a cell line that does not take the grid pitch
@@ -13435,7 +13718,7 @@ impl<'a> TableFitLayouter<'a> {
                         .map(|e| e.height)
                         .fold(0.0_f32, f32::max);
                     let table_grid_pitch_a = match table_grid_pitch {
-                        Some(lh) if std::env::var_os("OXI_S817_CJK_DISABLE").is_none()
+                        Some(lh) if !crate::env_flag!("OXI_S817_CJK_DISABLE")
                             && own_line_h > 0.5 && own_line_h < lh - 0.5 => Some(own_line_h),
                         other => other,
                     };
@@ -13497,7 +13780,7 @@ impl<'a> TableFitLayouter<'a> {
                             page_top + overflow_on_next - (pages_used as f32 * content_height),
                         );
                     }
-                    if std::env::var_os("OXI_CELL_EMPTY_LINES").is_some() {
+                    if crate::env_flag!("OXI_CELL_EMPTY_LINES") {
                         let content_end = elements.iter()
                             .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
                             .map(|e| e.y + table_grid_pitch.unwrap_or(e.height) + terminal_spacing(e))
@@ -13511,7 +13794,7 @@ impl<'a> TableFitLayouter<'a> {
                     }
                     // A continuation may end with an inline image below its last
                     // text line. Keep subsequent rows below that image.
-                    if std::env::var("OXI_S1250_DISABLE").is_err() {
+                    if !crate::env_flag!("OXI_S1250_DISABLE") {
                         let cont_image_bottom = elements
                             .iter()
                             .filter(|e| matches!(&e.content, LayoutContent::Image { .. }))
@@ -13566,12 +13849,12 @@ impl<'a> TableFitLayouter<'a> {
                     // "atLeast = trH + bw" rule applied per FRAGMENT). Oxi's
                     // content-anchored band (27.2) started the next row 37pt
                     // early and cascaded the whole template (+the S941 flip).
-                    let s942_floor = if std::env::var("OXI_S942_DISABLE").is_err()
-                        && (std::env::var("OXI_S940T_DISABLE").is_err()
-                            || std::env::var("OXI_S1025_DISABLE").is_err())
+                    let s942_floor = if !crate::env_flag!("OXI_S942_DISABLE")
+                        && (!crate::env_flag!("OXI_S940T_DISABLE")
+                            || !crate::env_flag!("OXI_S1025_DISABLE"))
                         && (!self.doc_body_has_real_cjk
-                            || std::env::var_os("OXI_CELL_EMPTY_LINES").is_some()
-                            || std::env::var_os("OXI_S1430_DISABLE").is_none()) /* S1430 */
+                            || crate::env_flag!("OXI_CELL_EMPTY_LINES")
+                            || !crate::env_flag!("OXI_S1430_DISABLE")) /* S1430 */
                         && row.height_rule.as_deref() != Some("exact")
                     {
                         row.height
@@ -13589,7 +13872,7 @@ impl<'a> TableFitLayouter<'a> {
                             LayoutContent::TableBorder { y2, .. } => Some(*y2),
                             _ => None,
                         }).fold(f32::NEG_INFINITY, f32::max);
-                        if std::env::var_os("OXI_S942_BOX_DISABLE").is_none()
+                        if !crate::env_flag!("OXI_S942_BOX_DISABLE")
                             && drawn.is_finite() && fl > drawn + 0.5
                         {
                             for e in elements.iter_mut() {
@@ -13613,7 +13896,7 @@ impl<'a> TableFitLayouter<'a> {
                     } else {
                         cont_max_y
                     };
-                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                    if crate::env_flag!("OXI_DBG_SPLIT") {
                         eprintln!("[SPLIT-CURSOR] branch=s754 cont_max_y={:.2}", cont_max_y);
                         let mut tops: Vec<(f32, f32, String)> = elements
                             .iter()
@@ -13661,7 +13944,7 @@ impl<'a> TableFitLayouter<'a> {
                         // while its text drew at 111.4. The titlePg case this
                         // recomputation exists for has no page_override, so it
                         // is untouched.
-                        let next_page_top = if std::env::var("OXI_S1477_DISABLE").is_err()
+                        let next_page_top = if !crate::env_flag!("OXI_S1477_DISABLE")
                             && page_geometry
                                 .and_then(|g| g.page_override)
                                 .is_some_and(|(p, _, _)| p == pages.len() + 1)
@@ -13696,7 +13979,7 @@ impl<'a> TableFitLayouter<'a> {
                     // rest of the table and the three −1 paragraphs downstream.
                     // Floor the cursor at the measured continuation text bottom
                     // when the continuation stays on this one page.
-                    if std::env::var_os("OXI_S1526_DISABLE").is_none() && pages_used == 0 {
+                    if !crate::env_flag!("OXI_S1526_DISABLE") && pages_used == 0 {
                         let cont_text_bottom = elements
                             .iter()
                             .filter(|e| matches!(&e.content, LayoutContent::Text { text, .. } if !text.trim().is_empty()))
@@ -13704,18 +13987,18 @@ impl<'a> TableFitLayouter<'a> {
                             .fold(f32::NEG_INFINITY, f32::max);
                         // A continuation owns its resolved bottom padding and spacing.
                         // Its successor must start after that tail, not inside it.
-                        let cont_row_bottom = cont_text_bottom + if std::env::var_os("OXI_CELL_TAIL_FLOOR_DISABLE").is_none() { s817_tail } else { 0.0 };
+                        let cont_row_bottom = cont_text_bottom + if !crate::env_flag!("OXI_CELL_TAIL_FLOOR_DISABLE") { s817_tail } else { 0.0 };
                         if cont_text_bottom.is_finite()
                             && cont_row_bottom <= page_top + content_height + 0.5
                             && cursor.cursor_y < cont_row_bottom
                         {
-                            if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                            if crate::env_flag!("OXI_DBG_SPLIT") {
                                 eprintln!("[SPLIT-CURSOR] s1526 floor {:.2} -> {:.2}", cursor.cursor_y, cont_row_bottom);
                             }
                             cursor.set(cont_row_bottom);
                         }
                     }
-                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                    if crate::env_flag!("OXI_DBG_SPLIT") {
                         eprintln!("[SPLIT-CURSOR] branch=geom cursor={:.2} (row_bottom={:.2} split_y={:.2})",
                             cursor.cursor_y, row_bottom, split_y);
                     }
@@ -13735,17 +14018,17 @@ impl<'a> TableFitLayouter<'a> {
                 // outer cell: a 20-row nested table + 「（続き）」, 1165pt): Word goes on
                 // under 「（続き）」 at 558 on page 3; Oxi set the cursor to page top +
                 // 1165 and threw 第1条 onto page 4.
-                let s1168_tall = std::env::var_os("OXI_WHOLEPUSH_TALL_DISABLE").is_none()
+                let s1168_tall = !crate::env_flag!("OXI_WHOLEPUSH_TALL_DISABLE")
                     && row_height > content_height + 0.5;
                 if s1168 && split_y <= row_top + 0.1 && !s1168_tall {
                     // A replayed header already shifted the pushed row's content.
                     // Advance past the same header when positioning its successor.
                     let header_height = if s754_hdr_replay
-                        && std::env::var_os("OXI_CELL_HEADER_PUSH_DISABLE").is_none() {
+                        && !crate::env_flag!("OXI_CELL_HEADER_PUSH_DISABLE") {
                         s728_hdr_h + self.repeated_header_border_delta(table, row_idx)
                     } else { 0.0 };
                     cursor.set(page_top + header_height + row_height);
-                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                    if crate::env_flag!("OXI_DBG_SPLIT") {
                         eprintln!(
                             "[SPLIT-CURSOR] branch=s1168-wholepush cursor={:.2}",
                             cursor.cursor_y
@@ -13757,12 +14040,12 @@ impl<'a> TableFitLayouter<'a> {
                 // row 0 overran page 1 by its padding and split into an empty
                 // continuation; the geometric remainder set row 1 92.75pt down
                 // page 2 (Word: at the top) and its last lines spilled to page 3.
-                if std::env::var_os("OXI_EMPTY_CONT_DISABLE").is_none()
+                if !crate::env_flag!("OXI_EMPTY_CONT_DISABLE")
                     && elements.is_empty()
                     && row.height.is_none()
                     && !(s1168 && split_y <= row_top + 0.1)
                 {
-                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                    if crate::env_flag!("OXI_DBG_SPLIT") {
                         eprintln!("[SPLIT-CURSOR] empty continuation {:.2} -> {:.2}", cursor.cursor_y, page_top);
                     }
                     cursor.set(page_top);
@@ -13770,7 +14053,7 @@ impl<'a> TableFitLayouter<'a> {
                 // Preserve the terminal spacing in branches that use geometric
                 // extents instead of the last text line. Whole-row pushes and
                 // collapsed empty tails retain their separate cursor rules.
-                if std::env::var_os("OXI_CELL_EMPTY_LINES").is_some()
+                if crate::env_flag!("OXI_CELL_EMPTY_LINES")
                     && !s864_empty_tail_split
                     && !(s1168 && split_y <= row_top + 0.1)
                 {
@@ -13795,12 +14078,12 @@ impl<'a> TableFitLayouter<'a> {
                 // Word collapses a continuation that carries only the
                 // non-painting empty tail to the page top (administrative__
                 // 0001ce58 — clamping it to trH broke its PASS).
-                if std::env::var("OXI_S942_DISABLE").is_err()
-                    && (std::env::var("OXI_S940T_DISABLE").is_err()
-                        || std::env::var("OXI_S1025_DISABLE").is_err())
+                if !crate::env_flag!("OXI_S942_DISABLE")
+                    && (!crate::env_flag!("OXI_S940T_DISABLE")
+                        || !crate::env_flag!("OXI_S1025_DISABLE"))
                     && (!self.doc_body_has_real_cjk
-                        || std::env::var_os("OXI_CELL_EMPTY_LINES").is_some()
-                        || std::env::var_os("OXI_S1430_DISABLE").is_none()) /* S1430 */
+                        || crate::env_flag!("OXI_CELL_EMPTY_LINES")
+                        || !crate::env_flag!("OXI_S1430_DISABLE")) /* S1430 */
                     && !s864_empty_tail_split
                     && row.height_rule.as_deref() != Some("exact")
                 {
@@ -13814,7 +14097,7 @@ impl<'a> TableFitLayouter<'a> {
                         let fl = continuation_top + (trh + self.rowbox2_trh_bw(table, row))
                             .min((content_height - continuation_header_h).max(0.0));
                         if cursor.cursor_y < fl {
-                            if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                            if crate::env_flag!("OXI_DBG_SPLIT") {
                                 eprintln!(
                                     "[SPLIT-CURSOR] s942 clamp {:.2} -> {:.2}",
                                     cursor.cursor_y, fl
@@ -13893,8 +14176,8 @@ impl<'a> TableFitLayouter<'a> {
                 // (45.0, TBL_DUMP) — the S661 sparse +0.5 was firing on the
                 // VISUAL track for exact rows too (painted pitch 45.5).
                 let s760_exact = row.height_rule.as_deref() == Some("exact")
-                    && std::env::var("OXI_S760_DISABLE").is_err();
-                let s661_sparse_trheight = std::env::var("OXI_S661_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S760_DISABLE");
+                let s661_sparse_trheight = !crate::env_flag!("OXI_S661_DISABLE")
                     && !s760_exact
                     && (!self.cellpair_active() || row.height.is_some())
                     && table_grid_pitch
@@ -13918,11 +14201,11 @@ impl<'a> TableFitLayouter<'a> {
                 // or overflow (vrh > rh) and do NOT drift +0.5 in Word — firing on them
                 // over-corrects (−0.047). The 08_01 family's drifting rows (small AND large,
                 // 22-125pt) are all content-bound (vrh ≈ rh), so this keeps them.
-                let s666_cellborder = std::env::var("OXI_S666_DISABLE").is_err()
+                let s666_cellborder = !crate::env_flag!("OXI_S666_DISABLE")
                     && row_cell_hborder
                     && table_grid_pitch.is_some()
                     && (row_height - visual_row_h).abs() < 0.5;
-                if std::env::var("OXI_DBG_S661").is_ok() && s661_sparse_trheight {
+                if crate::env_flag!("OXI_DBG_S661") && s661_sparse_trheight {
                     eprintln!("[S661] rule={:?} rh={:.2} vrh={:.2} gap={:.2} pitch={:?} hborder={} cy={:.1}",
                         row.height_rule.as_deref().unwrap_or("none"), row_height, visual_row_h,
                         row_height - visual_row_h, table_grid_pitch, row_cell_hborder, cursor.cursor_y);
@@ -13953,7 +14236,7 @@ impl<'a> TableFitLayouter<'a> {
                 // −0.0429 (a BOTTOM-N FLOOR doc whose large cell-border rows render ~at
                 // trHeight in Word — the per-doc wall, no signal vs de6e32). Net −0.0163,
                 // lowers the floor → NOT shippable. Kept table-level insideH only.
-                let bbox_large = std::env::var("OXI_BBOX_DISABLE").is_err()
+                let bbox_large = !crate::env_flag!("OXI_BBOX_DISABLE")
                     && table.style.has_inside_h
                     && table_grid_pitch
                         .map(|p| {
@@ -13964,11 +14247,11 @@ impl<'a> TableFitLayouter<'a> {
                         .unwrap_or(false);
                 // S1192b: this row is now final — draw it down from every span
                 // it passes through, and forget spans that ended here.
-                if std::env::var("OXI_S1192_DISABLE").is_err() && !s1192_pending.is_empty() {
+                if !crate::env_flag!("OXI_S1192_DISABLE") && !s1192_pending.is_empty() {
                     let is_cont = |c: &TableCell| {
                         matches!(c.v_merge.as_deref(), Some("continue") | Some(""))
                     };
-                    let bygrid = std::env::var_os("OXI_S1192G_DISABLE").is_none();
+                    let bygrid = !crate::env_flag!("OXI_S1192G_DISABLE");
                     for (ci, remaining) in s1192_pending.iter_mut() {
                         if LayoutEngine::s1192_cell_at(row, *ci, bygrid).is_some() {
                             *remaining -= row_height;
@@ -13980,14 +14263,14 @@ impl<'a> TableFitLayouter<'a> {
                             .get(row_idx + 1)
                             .and_then(|r| LayoutEngine::s1192_cell_at(r, *ci, bygrid))
                             .map_or(false, is_cont);
-                        if std::env::var("OXI_DBG_S1192").is_ok() {
+                        if crate::env_flag!("OXI_DBG_S1192") {
                             eprintln!("[S1192] DRAW row={} key={} rh={:.2} rem_after={:.2} keep={}",
                                 row_idx, ci, row_height, remaining, next_cont && *remaining > 0.01);
                         }
                         next_cont && *remaining > 0.01
                     });
                 }
-                if std::env::var("OXI_DBG_ROWADV").is_ok() {
+                if crate::env_flag!("OXI_DBG_ROWADV") {
                     eprintln!("[ROWADV] r={} rh={:.3} vrh={:.3} trH={:?} cy={:.2}",
                         row_idx, row_height, visual_row_h, row.height, cursor.cursor_y);
                 }
@@ -13999,7 +14282,7 @@ impl<'a> TableFitLayouter<'a> {
                 } else if apply_plus_half || s661_sparse_trheight || s666_cellborder {
                     cursor.advance_split(row_height, row_height + 0.5);
                 } else if bbox_large {
-                    if std::env::var("OXI_DBG_BBOX").is_ok() {
+                    if crate::env_flag!("OXI_DBG_BBOX") {
                         eprintln!(
                             "[BBOX] trH={:.1} rh={:.2} vrh={:.2} content={:.2} bw={:.2} cy={:.1}",
                             row.height.unwrap_or(0.0),
@@ -14036,7 +14319,7 @@ impl<'a> TableFitLayouter<'a> {
             // flushed `elements` (slice would be stale — skip capture then;
             // such a straddling header row is not replayed).
             if s728_on && !s728_capture_done {
-                if std::env::var("OXI_DBG728").is_ok() {
+                if crate::env_flag!("OXI_DBG728") {
                     eprintln!(
                         "[S728] row_idx={} header={} seen={} elems_range={}..{} rh={:.1}",
                         row_idx,
@@ -14057,7 +14340,7 @@ impl<'a> TableFitLayouter<'a> {
                         // row 2's small y and drew rows 0-1 185pt down, under the
                         // body (Word repeats all three at the top) and 57GD went to
                         // p157.
-                        let s1587_page_moved = std::env::var_os("OXI_S1587_DISABLE").is_none()
+                        let s1587_page_moved = !crate::env_flag!("OXI_S1587_DISABLE")
                             && !s728_hdr_elems.is_empty()
                             && s728_capture_page.map_or(false, |p0| p0 != pages.len());
                         if s1587_page_moved {
@@ -14099,7 +14382,7 @@ impl<'a> TableFitLayouter<'a> {
         // Word starts the following block under it (see s1191_foot_bw).
         if (separate_outer_edges || (self.s1191_on() && self.s1191_table_needs_foot(table))) {
             let foot = self.s1191_foot_bw(table);
-            if std::env::var_os("OXI_DBG_TBLFOOT").is_some() {
+            if crate::env_flag!("OXI_DBG_TBLFOOT") {
                 eprintln!("[TBLFOOT] cy={:.2} vy={:.2} foot={:.2} sep_outer={}", cursor.cursor_y, cursor.visual_y, foot, separate_outer_edges);
             }
             if foot > 0.0 {

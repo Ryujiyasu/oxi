@@ -42,17 +42,17 @@ impl<'a> PageLayouter<'a> {
         // 0.2822 and the gate reads WORSE. The missing blank and the early
         // table break were compensating, and only one of them is fixed. Turn
         // this on together with the page-15 fix.
-        let s1294_on = std::env::var("OXI_S1294_DISABLE").is_err();
+        let s1294_on = !crate::env_flag!("OXI_S1294_DISABLE");
         let first_logical = section_page_number_start(page).unwrap_or(*logical + 1);
         let mut logical_base: i64 = first_logical as i64;
         // Vertical writing (tategaki) section: route to the dedicated path.
-        if page.vertical_section && std::env::var("OXI_VERTICAL_DISABLE").is_err() {
+        if page.vertical_section && !crate::env_flag!("OXI_VERTICAL_DISABLE") {
             let mut out = self.layout_page_vertical(page);
             // OXI_SNAP_CHARS_CENTER, vertical: a tbRl column under snapToChars centres
             // each glyph in its cell DOWN the column. ja/creative__3d2bf04c (原稿用紙
             // 20x20, cells 22.57 high): Word's «望» sits 5.9 below its cell top =
             // (22.57 - 10.56) / 2; Oxi drew it at the cell top.
-            if page.doc_grid_snap_to_chars && std::env::var_os("OXI_SNAP_CHARS_CENTER_DISABLE").is_none() {
+            if page.doc_grid_snap_to_chars && !crate::env_flag!("OXI_SNAP_CHARS_CENTER_DISABLE") {
                 let wide = |c: char| ('\u{2E80}'..='\u{9FFF}').contains(&c)
                     || ('\u{F900}'..='\u{FAFF}').contains(&c)
                     || ('\u{FF01}'..='\u{FF60}').contains(&c);
@@ -72,7 +72,7 @@ impl<'a> PageLayouter<'a> {
             // anchored boxes, behind the body, with the part variant the horizontal
             // path picks. ja/creative__3d2bf04c / 285f61cb (tbRl 原稿用紙): the grid is
             // a header VML group and «20 × 20» a footer text box -- Oxi drew neither.
-            if std::env::var_os("OXI_VERTICAL_HF_BOXES_DISABLE").is_none() && !page.hf_text_boxes.is_empty() {
+            if !crate::env_flag!("OXI_VERTICAL_HF_BOXES_DISABLE") && !page.hf_text_boxes.is_empty() {
                 for (page_idx, lp) in out.iter_mut().enumerate() {
                     let variant = |base: u8| -> u8 {
                         if page.title_pg && page_idx == 0 {
@@ -120,7 +120,7 @@ impl<'a> PageLayouter<'a> {
         // S755: page 1 of a titlePg section uses the FIRST-type header
         // (absent first reference = blank per ECMA-376 §17.10.2); the
         // default header drives pages 2+ via s755_geom below.
-        let s755_on = std::env::var("OXI_S755_DISABLE").is_err();
+        let s755_on = !crate::env_flag!("OXI_S755_DISABLE");
         let s755_first_hdr: &[Block] = if s755_on && page.title_pg {
             &page.header_first
         } else if s755_on && page.even_odd_hf && first_logical % 2 == 0 {
@@ -258,7 +258,7 @@ impl<'a> PageLayouter<'a> {
 
         let footer_tight = footer_reserved > page.margin.bottom + 0.05
             && footer_has_text
-            && std::env::var("OXI_S726_DISABLE").is_err();
+            && !crate::env_flag!("OXI_S726_DISABLE");
         let mut content_height = page.size.height - start_y - footer_reserved;
         // S755: per-page geometry variants. Some ONLY when first/even/odd
         // actually differ (>0.05pt) — the whole corpus is None (titlePg docs
@@ -305,7 +305,7 @@ impl<'a> PageLayouter<'a> {
         // run; the block loop switches the active tuple without moving the
         // boundary page's current cursor.
         let s863_vertical_geoms: Vec<S755Geom> =
-            if std::env::var("OXI_S863_DISABLE").is_err() && page.vertical_runs.len() > 1 {
+            if !crate::env_flag!("OXI_S863_DISABLE") && page.vertical_runs.len() > 1 {
                 page.vertical_runs
                     .iter()
                     .enumerate()
@@ -319,7 +319,7 @@ impl<'a> PageLayouter<'a> {
                         // a merged continuous section's pages take the header/
                         // footer set that section carries, not the first
                         // section's (see Page::header_runs).
-                        if std::env::var_os("OXI_S1553_DISABLE").is_none() {
+                        if !crate::env_flag!("OXI_S1553_DISABLE") {
                             if let Some(hr) = page.header_runs.get(ri) {
                                 rp.header = hr.header.clone();
                                 rp.footer = hr.footer.clone();
@@ -412,7 +412,7 @@ impl<'a> PageLayouter<'a> {
         // the run of the block that pushed the page. Opt-out OXI_S1227_DISABLE.
         let mut s863_page_begin_idx: usize = 0;
         let mut s863_last_pages_len: usize = 0;
-        let s1227_on = std::env::var("OXI_S1227_DISABLE").is_err();
+        let s1227_on = !crate::env_flag!("OXI_S1227_DISABLE");
         // Round 29 (2026-04-08): per-page dynamic footnote reservation.
         // Footnotes are reserved at the bottom of the page where their reference
         // appears. The amount reserved varies per page based on which footnotes
@@ -433,12 +433,12 @@ impl<'a> PageLayouter<'a> {
         // footnote-text style sets snapToGrid=0 (b837 style a8) → natural,
         // byte-identical; style-less footnote paras (snap default true) snap.
         // No-type grids don't snap (S609/S571 family) → keep None.
-        let fn_est_gp = if std::env::var("OXI_S727_DISABLE").is_err() && !page.doc_grid_no_type {
+        let fn_est_gp = if !crate::env_flag!("OXI_S727_DISABLE") && !page.doc_grid_no_type {
             page.grid_line_pitch
         } else {
             None
         };
-        if std::env::var("OXI_FN_PROBE").is_ok() {
+        if crate::env_flag!("OXI_FN_PROBE") {
             eprintln!(
                 "[FN_EST] fn_est_gp={:?} pitch={:?} no_type={}",
                 fn_est_gp, page.grid_line_pitch, page.doc_grid_no_type
@@ -455,7 +455,7 @@ impl<'a> PageLayouter<'a> {
             .collect();
         let estimate_footnote_h = |id: u32| -> f32 {
             let height = footnote_plans.get(&id).map(|plan| plan.1).unwrap_or(0.0);
-            if std::env::var("OXI_FN_PROBE").is_ok() {
+            if crate::env_flag!("OXI_FN_PROBE") {
                 eprintln!("[FN_SHARED] id={} height={:.3}", id, height);
             }
             height
@@ -520,7 +520,7 @@ impl<'a> PageLayouter<'a> {
                         Block::Paragraph(p) => Some(p),
                         _ => None,
                     });
-                    if std::env::var_os("OXI_SPECIAL_FN_ALL_PARAS_DISABLE").is_some() {
+                    if crate::env_flag!("OXI_SPECIAL_FN_ALL_PARAS_DISABLE") {
                         return paras.next().map_or(0.0, special_para_height);
                     }
                     paras.map(special_para_height).sum()
@@ -530,10 +530,10 @@ impl<'a> PageLayouter<'a> {
             // continuation-notice reserve (default ON, opt-out OXI_NOTICE_UNDECLARED_COMPAT_DISABLE).
             let legacy = self.compat_mode < 15
                 || (!self.compat_mode_explicit
-                    && std::env::var_os("OXI_NOTICE_UNDECLARED_COMPAT_DISABLE").is_none());
+                    && !crate::env_flag!("OXI_NOTICE_UNDECLARED_COMPAT_DISABLE"));
             if legacy && self.fn_special_declared
                 && !self.doc_body_has_real_cjk
-                && std::env::var("OXI_S833_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S833_DISABLE")
                 && special_footnote_height(u32::MAX) > 0.0 {
                 special_footnote_height(u32::MAX - 1)
             } else { 0.0 }
@@ -575,18 +575,18 @@ impl<'a> PageLayouter<'a> {
             // area top for 7 notes is 551.05, so it pushes). `_pb_fnarea_mult_
             // gen.py`: the rule sits 19.5 above the first note baseline = one
             // 18pt separator line above the note stack in every arm.
-            let fn_sep_para = std::env::var_os("OXI_FN_SEP_PARA_DISABLE").is_none()
+            let fn_sep_para = !crate::env_flag!("OXI_FN_SEP_PARA_DISABLE")
                 && !self.fn_special_declared
                 && (!page.doc_grid_no_type && page.grid_line_pitch.is_some_and(|p| p > 0.0));
             if (self.fn_special_declared || fn_sep_para)
-                && std::env::var("OXI_S833_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S833_DISABLE")
             {
                 // The separator paragraph counts at its natural height even on a
                 // typed grid (`_pb_fnarea_mult_gen.py` bottom_1: Word keeps the body
                 // line whose box ends at 726.75 under an area top of 728.7 =
                 // notes 742.3 - 13.6; a snapped 18 would push it).
                 let sep_h = special_footnote_height(u32::MAX);
-                if std::env::var("OXI_FN_PROBE").is_ok() {
+                if crate::env_flag!("OXI_FN_PROBE") {
                     eprintln!("[FN_SEP] branch=s833 declared={} sep_h={:.3} notice={:.3}",
                         self.fn_special_declared, sep_h, special_footnote_height(u32::MAX - 1));
                 }
@@ -617,7 +617,7 @@ impl<'a> PageLayouter<'a> {
                 && page.doc_grid_no_type
                 && !self.doc_body_has_real_cjk;
             if (page.grid_line_pitch.is_none() || s1247_no_type)
-                && std::env::var("OXI_S596B_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S596B_DISABLE")
             {
                 if let Some(note) = page.footnotes.iter().find(|n| n.number == first_id) {
                     if let Some(Block::Paragraph(p)) = note.blocks.first() {
@@ -643,7 +643,7 @@ impl<'a> PageLayouter<'a> {
                         // -> first note before; probe: 12 + sep line + 12). Use
                         // 2 x the first note's style before as the two collapsed
                         // gaps (uniform-Normal docs; 0 when the style has none).
-                        let s804_sep = if std::env::var("OXI_S804_DISABLE").is_err()
+                        let s804_sep = if !crate::env_flag!("OXI_S804_DISABLE")
                             && !p.style.has_direct_spacing
                         {
                             2.0 * p.style.space_before.unwrap_or(0.0)
@@ -651,7 +651,7 @@ impl<'a> PageLayouter<'a> {
                             0.0
                         };
                         let v = metrics.word_line_height_no_grid(fs).max(base) + s804_sep;
-                        if std::env::var("OXI_FN_PROBE").is_ok() {
+                        if crate::env_flag!("OXI_FN_PROBE") {
                             eprintln!("[FN_SEP] branch=s596b first_note_fs={:.2} line={:.3} base={:.3} s804={:.3} -> {:.3}",
                                 fs, metrics.word_line_height_no_grid(fs), base, s804_sep, v);
                         }
@@ -661,7 +661,7 @@ impl<'a> PageLayouter<'a> {
             }
             // S804: same spacing addition for the grid-doc path (JP footnote
             // styles carry no spacing -> +0, byte-identical).
-            let s804_sep = if std::env::var("OXI_S804_DISABLE").is_err() {
+            let s804_sep = if !crate::env_flag!("OXI_S804_DISABLE") {
                 page.footnotes
                     .iter()
                     .find(|n| n.number == first_id)
@@ -676,7 +676,7 @@ impl<'a> PageLayouter<'a> {
             } else {
                 0.0
             };
-            if std::env::var("OXI_FN_PROBE").is_ok() {
+            if crate::env_flag!("OXI_FN_PROBE") {
                 eprintln!("[FN_SEP] branch=base base={:.3} s804={:.3} -> {:.3}",
                     base, s804_sep, base + s804_sep);
             }
@@ -734,7 +734,7 @@ impl<'a> PageLayouter<'a> {
             // while mapping fill-order 0 -> rightmost physical column.
             // Word-confirmed (minimal repro + albalunaTaidan). Opt-out via
             // OXI_BIDICOL_DISABLE.
-            if page.bidi_columns && xs.len() > 1 && std::env::var("OXI_BIDICOL_DISABLE").is_err() {
+            if page.bidi_columns && xs.len() > 1 && !crate::env_flag!("OXI_BIDICOL_DISABLE") {
                 xs.reverse();
                 ws.reverse();
             }
@@ -781,7 +781,7 @@ impl<'a> PageLayouter<'a> {
             // continuous section with different left/right margins must lay
             // out at its own text width — probexmargins). Uniform-margin
             // corpora keep col_het semantics byte-identically.
-            let mar_het = std::env::var("OXI_S729_DISABLE").is_err() && {
+            let mar_het = !crate::env_flag!("OXI_S729_DISABLE") && {
                 let mut it = page.margin_runs.iter().map(|(_, l, r)| (*l, *r));
                 match it.next() {
                     Some((l0, r0)) => {
@@ -803,7 +803,7 @@ impl<'a> PageLayouter<'a> {
         }
         let mut active_run_idx: usize = 0;
         let mut allocation_start = col_runs.first().map_or(0, |r| r.0);
-        if std::env::var("OXI_DBG_COL").is_ok() {
+        if crate::env_flag!("OXI_DBG_COL") {
             let runs: Vec<(usize, usize)> = col_runs.iter().map(|r| (r.0, r.1)).collect();
             eprintln!(
                 "[COL] heterogeneous={} col_runs(start,ncol)={:?} blocks={}",
@@ -844,7 +844,7 @@ impl<'a> PageLayouter<'a> {
         // page. Only active when the runs actually DIFFER (grid_het) — the
         // uniform-pitch corpus is byte-identical. parttime (403/415) is the one
         // corpus doc with real pitch diversity. Opt-out OXI_S735_DISABLE.
-        let s735_grid_het = std::env::var("OXI_S735_DISABLE").is_err() && {
+        let s735_grid_het = !crate::env_flag!("OXI_S735_DISABLE") && {
             let mut it = page.grid_runs.iter().map(|(_, p)| *p);
             match it.next() {
                 Some(first) => it.any(|p| match (p, first) {
@@ -938,7 +938,7 @@ impl<'a> PageLayouter<'a> {
         // subtract it when recording block_y_positions (used ONLY for anchor
         // resolution); the flow cursor / pagination are untouched (Phase-1
         // safe). Reset per page. Default ON, opt-out OXI_S469_DISABLE.
-        let s469_enabled = std::env::var("OXI_S469_DISABLE").is_err();
+        let s469_enabled = !crate::env_flag!("OXI_S469_DISABLE");
         let mut anchor_flow_offset: f32 = 0.0;
         // OXI_TB_BAND_FLOW: the band a host paragraph left (page, top, bottom) for
         // the block right after it, when that block is a table.
@@ -997,7 +997,7 @@ impl<'a> PageLayouter<'a> {
         let mut previous_flow_paragraph_end: Option<f32> = None;
         let mut floating_tables_per_page: Vec<Vec<(f32, f32)>> = vec![Vec::new()];
 
-        if std::env::var("OXI_DBG_BLOCKS").is_ok() {
+        if crate::env_flag!("OXI_DBG_BLOCKS") {
             for (bi, block) in page.blocks.iter().enumerate() {
                 let (kind, txt) = match block {
                     Block::Paragraph(p) => (
@@ -1049,7 +1049,7 @@ impl<'a> PageLayouter<'a> {
         // (the measured case); corpus has ZERO wrapTopAndBottom docs → the
         // band map is empty → byte-identical. Opt-out OXI_S734_DISABLE.
         let s734_bands: std::collections::HashMap<usize, f32> =
-            if std::env::var("OXI_S734_DISABLE").is_err() {
+            if !crate::env_flag!("OXI_S734_DISABLE") {
                 page.floating_images
                     .iter()
                     .filter(|img| {
@@ -1068,7 +1068,7 @@ impl<'a> PageLayouter<'a> {
                         // a 769.9 text bottom in Oxi and 770.9 in Word, which pushed
                         // the host to the next page (tb_after_probe2.py: the host
                         // moves the moment the band bottom exceeds the text bottom).
-                        let s1513_b = if std::env::var_os("OXI_S1513_DISABLE").is_none() { img.effect_extent_b.max(0.0) } else { 0.0 };
+                        let s1513_b = if !crate::env_flag!("OXI_S1513_DISABLE") { img.effect_extent_b.max(0.0) } else { 0.0 };
                         (
                             img.anchor_block_index,
                             img.height + s1513_b + img.position.as_ref().map_or(0.0, |p| p.y.max(0.0) + p.dist_b.unwrap_or(0.0).max(0.0)),
@@ -1105,7 +1105,7 @@ impl<'a> PageLayouter<'a> {
         // 0 / 10 push the whole paragraph -- the S734 case, which is the same
         // rule with the first line cut. technical__c5bb0090235dfedb p1: the
         // 「下図は…」 line stays at 287.25 above its picture (off 20.35).
-        let s1497_on = std::env::var_os("OXI_S1497_DISABLE").is_none();
+        let s1497_on = !crate::env_flag!("OXI_S1497_DISABLE");
         // S1497b: a wrapTopAndBottom float pushes only the lines of the
         // COLUMN(S) its rectangle crosses horizontally. educational__13ef8d6ec218af24
         // (two columns): a 175pt picture anchored in a column-1 paragraph but
@@ -1135,7 +1135,7 @@ impl<'a> PageLayouter<'a> {
         // page's top (72.0), the box at 87.5..450.2 and the next paragraph at
         // 451.5; Oxi kept the host on the previous page and drew the box off
         // the bottom.
-        let s1552_lane_min = if std::env::var("OXI_S1031_DISABLE").is_err()
+        let s1552_lane_min = if !crate::env_flag!("OXI_S1031_DISABLE")
             && !self.doc_body_has_real_cjk
         {
             41.5
@@ -1143,7 +1143,7 @@ impl<'a> PageLayouter<'a> {
             100.0
         };
         let s1552_no_lane = |tb: &crate::ir::TextBox| -> bool {
-            std::env::var_os("OXI_S1552_DISABLE").is_none()
+            !crate::env_flag!("OXI_S1552_DISABLE")
                 && tb.wrap_type == Some(crate::ir::WrapType::Square)
                 && tb.position.as_ref().map_or(false, |tp| {
                     let col_l = page.margin.left;
@@ -1184,7 +1184,7 @@ impl<'a> PageLayouter<'a> {
         // a 0pt rule 20.2pt below an empty paragraph; Word sets «Key Words» at
         // the rule (479.6), Oxi ran on at 470.2 and kept one paragraph too many.
         let s_tb_para_shapes: Vec<(usize, f32, f32)> =
-            if std::env::var_os("OXI_TB_PARA_SHAPE_DISABLE").is_none() {
+            if !crate::env_flag!("OXI_TB_PARA_SHAPE_DISABLE") {
                 page.shapes
                     .iter()
                     .map(|sh| (sh.anchor_block_index, sh))
@@ -1222,7 +1222,7 @@ impl<'a> PageLayouter<'a> {
                 .iter()
                 .filter(|img| img.wrap_type == Some(crate::ir::WrapType::TopAndBottom))
                 .filter_map(|img| img.position.as_ref().filter(|p| p.v_relative.as_deref() == Some("paragraph")).map(|p| (img.anchor_block_index, p.y - p.dist_t.unwrap_or(0.0).max(0.0),
-                    img.height + p.dist_t.unwrap_or(0.0).max(0.0) + p.dist_b.unwrap_or(0.0).max(0.0) + if std::env::var_os("OXI_S1513_DISABLE").is_none() { img.effect_extent_b.max(0.0) } else { 0.0 })))
+                    img.height + p.dist_t.unwrap_or(0.0).max(0.0) + p.dist_b.unwrap_or(0.0).max(0.0) + if !crate::env_flag!("OXI_S1513_DISABLE") { img.effect_extent_b.max(0.0) } else { 0.0 })))
                 .chain(
                     page.text_boxes
                         .iter()
@@ -1260,7 +1260,7 @@ impl<'a> PageLayouter<'a> {
         // never advanced, so page 1 swallowed eleven extra paragraphs and the
         // document came out 6 pages against Word's 7.
         let s1459_page_boxes: std::collections::HashMap<usize, f32> =
-            if std::env::var("OXI_S1459_DISABLE").is_err() {
+            if !crate::env_flag!("OXI_S1459_DISABLE") {
                 let mut m: std::collections::HashMap<usize, f32> = Default::default();
                 for tb in &page.text_boxes {
                     if tb.wrap_type != Some(crate::ir::WrapType::TopAndBottom) {
@@ -1287,7 +1287,7 @@ impl<'a> PageLayouter<'a> {
         // swallowed eleven extra paragraphs and the document came out 6 pages
         // against Word's 7. The written wrap kind lives in `anchor_wrap`.
         let s1461_tb_shapes: std::collections::HashMap<usize, f32> =
-            if std::env::var("OXI_S1461_DISABLE").is_err() {
+            if !crate::env_flag!("OXI_S1461_DISABLE") {
                 let mut m: std::collections::HashMap<usize, f32> = Default::default();
                 for (bi, b) in page.blocks.iter().enumerate() {
                     let Block::Paragraph(p) = b else { continue };
@@ -1310,7 +1310,7 @@ impl<'a> PageLayouter<'a> {
                 Default::default()
             };
         let s1089_tb_bands: std::collections::HashMap<usize, f32> =
-            if std::env::var("OXI_S1089_DISABLE").is_err() {
+            if !crate::env_flag!("OXI_S1089_DISABLE") {
                 let mut m: std::collections::HashMap<usize, f32> = Default::default();
                 for tb in &page.text_boxes {
                     if tb.wrap_type != Some(crate::ir::WrapType::TopAndBottom) {
@@ -1366,11 +1366,21 @@ impl<'a> PageLayouter<'a> {
         // byte-identical by construction; only probeximgfloat activates).
         // distL/distR are not parsed yet — Word's default 114300EMU = 9.0pt
         // (matches the measured 8.7pt gap).
-        let s758_on = std::env::var("OXI_S758_DISABLE").is_err();
+        let s758_on = !crate::env_flag!("OXI_S758_DISABLE");
         let s758_squares: std::collections::HashMap<usize, Vec<usize>> = if s758_on {
             let mut m: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+            // OXI_TIGHT_IMAGE_BAND (2026-11-01, default ON, opt-out _DISABLE): a
+            // paragraph-relative wrapTight picture keeps the text off like a square
+            // one (S1635 already counts Tight for margin/page-relative pictures).
+            // `_pb_tab_float_cross_gen.py` c15_t10_tight / _tight_behind (a full-box
+            // polygon, behindDoc 0 and 1): Word's tabs are identical to the
+            // wrapSquare arm -- 237, then 434.2 past the picture, two lines; Oxi
+            // registered no band and ran the tabs over it on one line.
+            // en/educational__0071453c p1's logo (wrapTight, behindDoc 1).
+            let tight_band = !crate::env_flag!("OXI_TIGHT_IMAGE_BAND_DISABLE");
             for (ii, img) in page.floating_images.iter().enumerate() {
-                if img.wrap_type == Some(crate::ir::WrapType::Square)
+                if (img.wrap_type == Some(crate::ir::WrapType::Square)
+                    || (tight_band && img.wrap_type == Some(crate::ir::WrapType::Tight)))
                     && img
                         .position
                         .as_ref()
@@ -1393,7 +1403,7 @@ impl<'a> PageLayouter<'a> {
         // the title below then sat 8.8pt high. The corpus carries 66 such
         // anchors in 21 documents.
         let s1635_abs_squares: std::collections::HashMap<usize, Vec<usize>> = if s758_on
-            && std::env::var_os("OXI_S1635_DISABLE").is_none()
+            && !crate::env_flag!("OXI_S1635_DISABLE")
         {
             let mut m: std::collections::HashMap<usize, Vec<usize>> = Default::default();
             for (ii, img) in page.floating_images.iter().enumerate() {
@@ -1446,7 +1456,7 @@ impl<'a> PageLayouter<'a> {
         // `wrap_type` is only filled behind the OXI_DRAWING_SHAPE_WRAP opt-in.
         type S1455Band = (f32, f32, f32, Option<String>, f32, f32, f32, bool);
         let s1455_shps: std::collections::HashMap<usize, Vec<S1455Band>> =
-            if s758_on && std::env::var("OXI_S1455_DISABLE").is_err() {
+            if s758_on && !crate::env_flag!("OXI_S1455_DISABLE") {
                 let mut m: std::collections::HashMap<usize, Vec<S1455Band>> = Default::default();
                 let page_level = page.shapes.iter().map(|s| (s.anchor_block_index, s));
                 let para_level = page.blocks.iter().enumerate().flat_map(|(i, b)| match b {
@@ -1469,14 +1479,14 @@ impl<'a> PageLayouter<'a> {
                             && (tp.x - sp.x).abs() < 0.01 && (tp.y - sp.y).abs() < 0.01)) {
                         continue;
                     }
-                    if std::env::var("OXI_DBG_S1455").is_ok() {
+                    if crate::env_flag!("OXI_DBG_S1455") {
                         eprintln!(
                             "[S1455] blk={} w={:.1} h={:.1} x={:.1} y={:.1} hrel={:?} halign={:?}",
                             blk, sh.width, sh.height, sp.x, sp.y, sp.h_relative, sp.h_align
                         );
                     }
                     // S1639: the keep-out box grows by effectExtent and distT / distB
-                    let (gt, gb, gl, gr) = if std::env::var_os("OXI_S1639_DISABLE").is_none() {
+                    let (gt, gb, gl, gr) = if !crate::env_flag!("OXI_S1639_DISABLE") {
                         (0.0, sp.dist_b.unwrap_or(0.0) + sp.eff_b, sp.eff_l, sp.eff_r)
                     } else { (0.0, 0.0, 0.0, 0.0) };
                     m.entry(blk).or_default().push((
@@ -1495,7 +1505,7 @@ impl<'a> PageLayouter<'a> {
                 Default::default()
             };
         let s758_tbs: std::collections::HashMap<usize, Vec<usize>> =
-            if s758_on && std::env::var("OXI_S758_TB_DISABLE").is_err() {
+            if s758_on && !crate::env_flag!("OXI_S758_TB_DISABLE") {
                 let mut m: std::collections::HashMap<usize, Vec<usize>> = Default::default();
                 for (ti, tb) in page.text_boxes.iter().enumerate() {
                     // S981 (2026-07-22, default ON, opt-out OXI_S981_DISABLE):
@@ -1512,7 +1522,7 @@ impl<'a> PageLayouter<'a> {
                     // off/on): 2/200 EN docs change (policies + reports, both
                     // Word-correct); 0 golden / 0 real_en (ukframework PASS 1.0 both
                     // ways) / 0 JP / ssim_ab 0 changed.
-                    let s981 = std::env::var("OXI_S981_DISABLE").is_err()
+                    let s981 = !crate::env_flag!("OXI_S981_DISABLE")
                         && tb.wrap_type == Some(crate::ir::WrapType::Tight);
                     // OXI_S758_TB_ABOVE_ANCHOR (2026-10-30, default ON, opt-out _DISABLE):
                     // a box that starts above its anchor still keeps the text out
@@ -1520,7 +1530,7 @@ impl<'a> PageLayouter<'a> {
                     // en/correspondence__00e272ee p2: the Microsoft Family Safety box
                     // (wrapSquare, paragraph -70.7, 194 x 407) heads the right column;
                     // Word sets the Minecraft text left of it, Oxi ran it underneath.
-                    let above_anchor = std::env::var_os("OXI_S758_TB_ABOVE_ANCHOR_DISABLE").is_none();
+                    let above_anchor = !crate::env_flag!("OXI_S758_TB_ABOVE_ANCHOR_DISABLE");
                     if (tb.wrap_type == Some(crate::ir::WrapType::Square) || s981)
                         && tb.position.as_ref().map_or(false, |tp| {
                             tp.v_relative.as_deref() == Some("paragraph") && (tp.y >= 0.0 || above_anchor)
@@ -1542,10 +1552,10 @@ impl<'a> PageLayouter<'a> {
         // h 333) in a 451pt column -- Word starts the next paragraph at
         // 441.75, below the box; Oxi laid it at 108 through the box.
         let s1387_tbs: std::collections::HashMap<usize, Vec<usize>> =
-            if s758_on && std::env::var("OXI_S1387_DISABLE").is_err() {
+            if s758_on && !crate::env_flag!("OXI_S1387_DISABLE") {
                 let mut m: std::collections::HashMap<usize, Vec<usize>> = Default::default();
                 for (ti, tb) in page.text_boxes.iter().enumerate() {
-                    if std::env::var("OXI_DBG1387").is_ok() {
+                    if crate::env_flag!("OXI_DBG1387") {
                         eprintln!("[S1387] tb#{} wrap={:?} pos={:?} anchor={} w={:.1} h={:.1}", ti, tb.wrap_type,
                             tb.position.as_ref().map(|p| (p.v_relative.clone(), p.y, p.h_relative.clone(), p.x)), tb.anchor_block_index, tb.width, tb.height);
                     }
@@ -1606,7 +1616,7 @@ impl<'a> PageLayouter<'a> {
         // PHYSICAL page bottom (not the content bottom): corpus stamps/seals
         // legitimately hang into the bottom MARGIN and Word keeps them.
         let anchorpush: std::collections::HashMap<usize, f32> =
-            if std::env::var("OXI_ANCHORPUSH").is_ok() {
+            if crate::env_flag!("OXI_ANCHORPUSH") {
                 let mut m: std::collections::HashMap<usize, f32> = Default::default();
                 for tb in &page.text_boxes {
                     if let Some(p) = &tb.position {
@@ -1688,7 +1698,7 @@ impl<'a> PageLayouter<'a> {
                 }
             }
             if !s863_vertical_geoms.is_empty() {
-                if std::env::var_os("OXI_MARGIN_TRACE").is_some() {
+                if crate::env_flag!("OXI_MARGIN_TRACE") {
                     eprintln!("[MARGIN] blk={} page={} elements={} cursor={} start={} run={} begin={} runs={:?}", block_idx, pages.len()+1, elements.len(), cursor.cursor_y, start_y, s863_vertical_run_idx, s863_page_begin_idx, page.vertical_runs);
                 }
                 // S1227: a page begun by an earlier block is governed by the
@@ -1770,7 +1780,7 @@ impl<'a> PageLayouter<'a> {
                             .as_ref()
                             .map(|g| g.first)
                             .unwrap_or((start_y, content_height));
-                        if std::env::var("OXI_DBG1174").is_ok() {
+                        if crate::env_flag!("OXI_DBG1174") {
                             eprintln!(
                                 "[S1174] hook pno={} blk={} sy_odd={:.2} sy_even={:.2} map={} part={}",
                                 pno,
@@ -1836,7 +1846,7 @@ impl<'a> PageLayouter<'a> {
                 // room from there (tb_after_probe2.py: the host moves to the next
                 // page exactly when band bottom > text bottom; 004c4a3d's host
                 // carries before=120 and its band ended 0.5pt short in Oxi).
-                let s1513_before = if std::env::var_os("OXI_S1513_DISABLE").is_none() {
+                let s1513_before = if !crate::env_flag!("OXI_S1513_DISABLE") {
                     if let Block::Paragraph(para) = block {
                         self.paragraph_spacing_before(
                             para, page, grid_pitch, prev_para_style_id.as_deref(),
@@ -1851,7 +1861,7 @@ impl<'a> PageLayouter<'a> {
                 // margin. The whole picture fits the physical page; lines
                 // intersecting its band still obey the ordinary body boundary.
                 // This is independent of the front/back painting order.
-                let first_line_before_band = if std::env::var_os("OXI_FLOAT_BAND_PHYSICAL_DISABLE").is_none()
+                let first_line_before_band = if !crate::env_flag!("OXI_FLOAT_BAND_PHYSICAL_DISABLE")
                     // Modern typed grids keep the entire float in the body.
                     && (self.compat_mode < 15 || page.doc_grid_no_type || page.grid_line_pitch.is_none())
                 {
@@ -1960,7 +1970,7 @@ impl<'a> PageLayouter<'a> {
                         if let Some(position) = image.position.as_ref().filter(|position|
                             position.v_relative.as_deref() == Some("paragraph")) {
                             let top = s1500_fy + s1513_before + position.y;
-                            let effect_bottom = if std::env::var_os("OXI_S1513_DISABLE").is_none() {
+                            let effect_bottom = if !crate::env_flag!("OXI_S1513_DISABLE") {
                                 image.effect_extent_b.max(0.0)
                             } else { 0.0 };
                             s758_bands.push((current_page_idx, top - position.dist_t.unwrap_or(0.0).max(0.0),
@@ -2086,7 +2096,7 @@ impl<'a> PageLayouter<'a> {
             // anchored to p2's first empty para): Word starts that para at
             // band bottom 21.75, not the 15.75 top margin — without this the
             // whole p2 ran ~6pt high.
-            if std::env::var("OXI_S842_DISABLE").is_err() {
+            if !crate::env_flag!("OXI_S842_DISABLE") {
                 for tb in &page.text_boxes {
                     if tb.anchor_block_index == block_idx
                         && matches!(tb.wrap_type, Some(crate::ir::WrapType::TopAndBottom))
@@ -2171,7 +2181,7 @@ impl<'a> PageLayouter<'a> {
                             }
                         }
                         let mut left = start_x + pos.x;
-                        if std::env::var("OXI_DRAWING_SHAPE_WRAP").is_ok() {
+                        if crate::env_flag!("OXI_DRAWING_SHAPE_WRAP") {
                             let (rx, rw) = match pos.h_relative.as_deref() {
                                 Some("page") => (0.0, page.size.width),
                                 Some("margin") => (page.margin.left, total_content_width),
@@ -2218,7 +2228,7 @@ impl<'a> PageLayouter<'a> {
             // en/policies__0026b7f7's left sidebar (a wrapTight text box, posV page
             // 133.2, 1.2-192.4) pushes «New devices» to 200.7 (Word 201); without the
             // band the body ran under the sidebar from 54.
-            if std::env::var_os("OXI_PAGE_SHAPE_WRAP_DISABLE").is_none() {
+            if !crate::env_flag!("OXI_PAGE_SHAPE_WRAP_DISABLE") {
                 for tb in &page.text_boxes {
                     if tb.anchor_block_index != block_idx
                         || !matches!(tb.wrap_type, Some(crate::ir::WrapType::Square) | Some(crate::ir::WrapType::Tight))
@@ -2275,7 +2285,7 @@ impl<'a> PageLayouter<'a> {
             // (Oxi 140.25) -- which decides whether the heading's tab stop at 140.85
             // is still ahead -- and the text box's distB 3.6 puts the pushed heading's
             // line top at 272.1 (Oxi 268.5).
-            let s1639 = std::env::var_os("OXI_S1639_DISABLE").is_none();
+            let s1639 = !crate::env_flag!("OXI_S1639_DISABLE");
             let s758_srcs: Vec<(f32, f32, f32, Option<String>, f32, f32, f32, bool, bool, bool)> = {
                 // unified (pos_y, width, height, h_align, x, dist_l, dist_r, physical)
                 // over image + textbox wrapSquare sources anchored to this block
@@ -2291,7 +2301,7 @@ impl<'a> PageLayouter<'a> {
                             } else { (0.0, 0.0, 0.0, 0.0) };
                             // OXI_PAGE_REL_BAND: see the text-box arm below
                             let (ialign, ix) = if ip.h_relative.as_deref() == Some("page")
-                                && std::env::var_os("OXI_PAGE_REL_BAND_DISABLE").is_none()
+                                && !crate::env_flag!("OXI_PAGE_REL_BAND_DISABLE")
                             {
                                 let origin = match ip.h_align.as_deref() {
                                     Some("right") => page.size.width - img.width,
@@ -2311,7 +2321,15 @@ impl<'a> PageLayouter<'a> {
                                 ix - gl,
                                 ip.dist_l.unwrap_or(9.0),
                                 ip.dist_r.unwrap_or(9.0),
-                                false,
+                                // a behindDoc Tight picture is physical (may reach into
+                                // the bottom margin) like the S981 text box
+                                !crate::env_flag!("OXI_S981_DISABLE")
+                                    && img.behind_doc
+                                    && img.wrap_type == Some(crate::ir::WrapType::Tight),
+                                // the picture's band steps like a square one: Word sets
+                                // the first line under it at bottom + before
+                                // (ja/technical__a018fed7, wrapThrough full-width
+                                // figure: 568.5; the line-step rule gave 604.3)
                                 false,
                                 ip.h_relative.as_deref() == Some("column"),
                             ));
@@ -2327,7 +2345,7 @@ impl<'a> PageLayouter<'a> {
                     for &ti in tis {
                         let tb = &page.text_boxes[ti];
                         if let Some(tp) = tb.position.as_ref() {
-                            let s981_physical = std::env::var("OXI_S981_DISABLE").is_err()
+                            let s981_physical = !crate::env_flag!("OXI_S981_DISABLE")
                                 && tb.behind_doc
                                 && tb.wrap_type == Some(crate::ir::WrapType::Tight);
                             let (gt, gb, gl, gr) = if s1639 {
@@ -2358,7 +2376,7 @@ impl<'a> PageLayouter<'a> {
                             // ja/correspondence__14012ac2's «Ⅳ» box (page 73.0). Hand the
                             // consumer a margin-relative x and no alignment.
                             let (align, x) = if tp.h_relative.as_deref() == Some("page")
-                                && std::env::var_os("OXI_PAGE_REL_BAND_DISABLE").is_none()
+                                && !crate::env_flag!("OXI_PAGE_REL_BAND_DISABLE")
                             {
                                 let origin = match align.as_deref() {
                                     Some("right") => page.size.width - tb.width + bounds.0*tb.width,
@@ -2415,7 +2433,7 @@ impl<'a> PageLayouter<'a> {
                             let nb = (current_page_idx, tp.y + bounds.1*tb.height, tp.y + bounds.3*tb.height,
                                       x0 + bounds.0*tb.width - dl, x0 + bounds.2*tb.width + dr,
                                       tb.wrap_type == Some(crate::ir::WrapType::Tight), BodyWrapPolicy::OBJECT);
-                            if std::env::var("OXI_DBG1387").is_ok() {
+                            if crate::env_flag!("OXI_DBG1387") {
                                 eprintln!("[S1387] blk={} band={:?}", block_idx, nb);
                             }
                             s758_bands.push(nb);
@@ -2425,7 +2443,7 @@ impl<'a> PageLayouter<'a> {
             if !s758_srcs.is_empty() {
                 // Co-anchored floats share the origin from before a
                 // top-and-bottom float reserved space in the text flow.
-                let shared_origin = if std::env::var("OXI_SHARED_FLOAT_ANCHOR_DISABLE").is_err() {
+                let shared_origin = if !crate::env_flag!("OXI_SHARED_FLOAT_ANCHOR_DISABLE") {
                     [s734_flow_pos.get(&block_idx), s1089_flow_pos.get(&block_idx)]
                         .into_iter().flatten()
                         .filter(|(pg, _)| *pg == current_page_idx)
@@ -2548,7 +2566,7 @@ impl<'a> PageLayouter<'a> {
                 // 15 puts the marker at 74 (the column), 12 / 14 / undeclared at 233.
                 // ja/policies__1411889624 (compat 15) stacks wrapSquare boxes at the
                 // column edge beside each other's bands (Word 84.8, all seven).
-                let wrapped_left = if std::env::var_os("OXI_COLUMN_WRAPPED_LEFT_DISABLE").is_none()
+                let wrapped_left = if !crate::env_flag!("OXI_COLUMN_WRAPPED_LEFT_DISABLE")
                     && (self.compat_mode < 15 || !self.compat_mode_explicit)
                     && crate::layout::s1467_float_column_flow()
                     && s758_srcs.iter().any(|src| src.9 && src.3.is_none())
@@ -2637,13 +2655,13 @@ impl<'a> PageLayouter<'a> {
                             Some("left") => content_left,
                             _ => content_left + ip.x,
                         };
-                        let (gt, gb, gl, gr) = if std::env::var_os("OXI_S1639_DISABLE").is_none() {
+                        let (gt, gb, gl, gr) = if !crate::env_flag!("OXI_S1639_DISABLE") {
                             (ip.dist_t.unwrap_or(0.0).max(0.0), ip.dist_b.unwrap_or(0.0) + ip.eff_b, ip.eff_l, ip.eff_r)
                         } else { (0.0, 0.0, 0.0, 0.0) };
                         let nb = (current_page_idx, top - gt, top + img.height + gb,
                                   x0 - gl - ip.dist_l.unwrap_or(9.0), x0 + img.width + gr + ip.dist_r.unwrap_or(9.0),
                                   img.wrap_type == Some(crate::ir::WrapType::Tight), BodyWrapPolicy::OBJECT_ABS);
-                        if std::env::var_os("OXI_DBG_BANDS").is_some() {
+                        if crate::env_flag!("OXI_DBG_BANDS") {
                             eprintln!("[S1635] blk={} band={:?} eff_r={} eff_b={} dist_t={:?} dist_b={:?}", block_idx, nb, ip.eff_r, ip.eff_b, ip.dist_t, ip.dist_b);
                         }
                         s758_abs_bands.insert(s758_bands.len());
@@ -2730,13 +2748,13 @@ impl<'a> PageLayouter<'a> {
                             Some("left") => content_left,
                             _ => content_left + ip.x,
                         };
-                        let (gt, gb, gl, gr) = if std::env::var_os("OXI_S1639_DISABLE").is_none() {
+                        let (gt, gb, gl, gr) = if !crate::env_flag!("OXI_S1639_DISABLE") {
                             (ip.dist_t.unwrap_or(0.0).max(0.0), ip.dist_b.unwrap_or(0.0) + ip.eff_b, ip.eff_l, ip.eff_r)
                         } else { (0.0, 0.0, 0.0, 0.0) };
                         let nb = (current_page_idx, top - gt, top + img.height + gb,
                                   x0 - gl - ip.dist_l.unwrap_or(9.0), x0 + img.width + gr + ip.dist_r.unwrap_or(9.0),
                                   img.wrap_type == Some(crate::ir::WrapType::Tight), BodyWrapPolicy::OBJECT_ABS);
-                        if std::env::var_os("OXI_DBG_BANDS").is_some() {
+                        if crate::env_flag!("OXI_DBG_BANDS") {
                             eprintln!("[S1635] blk={} band={:?} eff_r={} eff_b={} dist_t={:?} dist_b={:?}", block_idx, nb, ip.eff_r, ip.eff_b, ip.dist_t, ip.dist_b);
                         }
                         s758_abs_bands.insert(s758_bands.len());
@@ -2757,7 +2775,7 @@ impl<'a> PageLayouter<'a> {
                 let flow_before_float = cursor.cursor_y;
                 // S1509: an EMPTY paragraph flows in a side lane of at least 18.5pt
                 // (the S1195 floor) instead of being bumped below the float.
-                let s1509_keep = std::env::var_os("OXI_S1509_DISABLE").is_none()
+                let s1509_keep = !crate::env_flag!("OXI_S1509_DISABLE")
                     && ft_lane >= 18.5
                     && matches!(block, Block::Paragraph(p) if p.runs.iter().all(|r| r.text.is_empty()));
                 // S1241: the float bump applies only when the CURRENT lane
@@ -2767,7 +2785,7 @@ impl<'a> PageLayouter<'a> {
                 // Note: the region is NOT cleared for a non-overlapping lane —
                 // a later return to an overlapping lane (next page reset) still
                 // sees it.
-                let s1241_lane_overlaps = std::env::var("OXI_S1241_DISABLE").is_ok()
+                let s1241_lane_overlaps = crate::env_flag!("OXI_S1241_DISABLE")
                     || (ft_x0 < start_x + content_width - 1.0 && ft_x1 > start_x + 1.0);
                 if current_page_idx == ft_page && s1241_lane_overlaps {
                     // S872 (2026-07-16, default ON, opt-out OXI_S872_DISABLE): an
@@ -2803,8 +2821,8 @@ impl<'a> PageLayouter<'a> {
                     // 273.5..284.5 against the band top 281.2 and Word puts it below
                     // the table (「２ 年次…」 starts at 398.05 = table bottom 387.05 +
                     // 11); Oxi kept it above, -9.3pt for the rest of the page.
-                    let s872_empty_cross = std::env::var("OXI_S872_DISABLE").is_err()
-                        && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_S1489_DISABLE").is_none())
+                    let s872_empty_cross = !crate::env_flag!("OXI_S872_DISABLE")
+                        && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_S1489_DISABLE"))
                         && cursor.cursor_y < ft_top - 0.1
                         && matches!(block, Block::Paragraph(p)
                             if p.runs.iter().all(|r| r.text.is_empty())
@@ -2845,12 +2863,12 @@ impl<'a> PageLayouter<'a> {
                     // full-width table, independently of the paragraph's script.
                     // Word-controlled Latin prefixes retain the short h20 caption
                     // above the table but move the intersecting h40 caption below.
-                    let s1230_text_cross = std::env::var("OXI_S1230_DISABLE").is_err()
+                    let s1230_text_cross = !crate::env_flag!("OXI_S1230_DISABLE")
                         && cursor.cursor_y < ft_top - 0.1
                         && matches!(block, Block::Paragraph(p)
                             if p.runs.iter().any(|r| !r.text.is_empty())
                                 && {
-                                    let first_line_only = std::env::var_os("OXI_TEXT_FLOAT_FIRST_LINE_DISABLE").is_none(); // S1410
+                                    let first_line_only = !crate::env_flag!("OXI_TEXT_FLOAT_FIRST_LINE_DISABLE"); // S1410
                                     let mut measure = cell_float::Measurement::default();
                                     let est = self.estimate_para_height_inner(
                                         p, self.s1211c_floor_body_width(p, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
@@ -2866,7 +2884,7 @@ impl<'a> PageLayouter<'a> {
                                         Some(gp) if gp > 0.0 && p.style.snap_to_grid => line_box.min(gp),
                                         _ => line_box,
                                     };
-                                    if std::env::var("OXI_DEBUG_TEXT_FLOAT_LINE").is_ok() {
+                                    if crate::env_flag!("OXI_DEBUG_TEXT_FLOAT_LINE") {
                                         eprintln!("[TEXT_FLOAT_LINE] cursor={} before={} estimate={} first={} top={} bottom={} text={:?}",
                                             cursor.cursor_y, prev_space_after.max(p.style.space_before.unwrap_or(0.0)),
                                             est, l1, ft_top, ft_bot,
@@ -2974,7 +2992,7 @@ impl<'a> PageLayouter<'a> {
                 // (_pb_colbal_samecount_gen.py: 12/12 for same geometry, other
                 // margin, other spacing; educational__004f33a0 p5).
                 let closes_multicol = num_columns > 1
-                    && std::env::var_os("OXI_COLBAL_SAMECOUNT_DISABLE").is_none();
+                    && !crate::env_flag!("OXI_COLBAL_SAMECOUNT_DISABLE");
                 if run_cols != num_columns || run_geom_differs || closes_multicol {
                     section_geometry_changed = true;
                     // S750 (2026-07-05, default ON, opt-out OXI_S750_DISABLE):
@@ -2989,17 +3007,17 @@ impl<'a> PageLayouter<'a> {
                     // balanced band. v1 scope: 2 columns.
                     if num_columns == 2
                         && (run_cols != num_columns || closes_multicol)
-                        && std::env::var("OXI_S750_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S750_DISABLE")
                     {
                         let allocated_bottom = column_search.observe(
                             ir_index, allocation_start, col_runs[active_run_idx].0,
                             page, current_page_idx, col_band_top, start_y + content_height,
                             &col_widths, &elements, pending_section_gap);
                         if let Some(bottom) = if allocated_bottom.is_some() { allocated_bottom }
-                        else if std::env::var("OXI_TEXT_BALANCE_DISABLE").is_err() {
-                            LayoutEngine::rebalance_text_columns(&mut elements, col_band_top, &col_x_positions, &page.blocks, if std::env::var("OXI_COLUMN_COMPAT_BALANCE_DISABLE").is_err() { pending_section_gap } else { 0.0 }, self.compat_mode, if page.doc_grid_no_type { None } else { page.grid_line_pitch })
+                        else if !crate::env_flag!("OXI_TEXT_BALANCE_DISABLE") {
+                            LayoutEngine::rebalance_text_columns(&mut elements, col_band_top, &col_x_positions, &page.blocks, if !crate::env_flag!("OXI_COLUMN_COMPAT_BALANCE_DISABLE") { pending_section_gap } else { 0.0 }, self.compat_mode, if page.doc_grid_no_type { None } else { page.grid_line_pitch })
                         } else { None } {
-                            if std::env::var("OXI_COLUMN_COMPAT_BALANCE_DISABLE").is_err() { pending_section_gap = 0.0; }
+                            if !crate::env_flag!("OXI_COLUMN_COMPAT_BALANCE_DISABLE") { pending_section_gap = 0.0; }
                             cursor.set(bottom);
                             section_max_y = bottom;
                         } else {
@@ -3039,7 +3057,7 @@ impl<'a> PageLayouter<'a> {
                         // 785.2; S750 counted rows, moved 8 into col 2 over its own
                         // text and started the next 1-column section at 666.8 (Word:
                         // next page).
-                        let s1608_col2_full = std::env::var_os("OXI_S1608_DISABLE").is_none() && {
+                        let s1608_col2_full = !crate::env_flag!("OXI_S1608_DISABLE") && {
                             let body_bottom = start_y + content_height;
                             let col2_bottom = elements.iter()
                                 .filter(|e| e.y >= col_band_top - 0.1 && e.x >= split_x
@@ -3053,7 +3071,7 @@ impl<'a> PageLayouter<'a> {
                             };
                             col2_bottom > body_bottom - pitch1
                         };
-                        if std::env::var("OXI_DBG_COL").is_ok() && s1608_col2_full {
+                        if crate::env_flag!("OXI_DBG_COL") && s1608_col2_full {
                             eprintln!("[COL] S1608 col2 full -> no S750 balance (n1={} n2={})", n1, n2);
                         }
                         if n1 >= 2 && n1 > n2 + 1 && !s1608_col2_full {
@@ -3085,7 +3103,7 @@ impl<'a> PageLayouter<'a> {
                                 // against the row count's k=15). Row height is not line
                                 // count where rows are table cells; weight only rows that
                                 // are text lines before defaulting this.
-                                let k = if std::env::var("OXI_S1338_DISABLE").is_err() {
+                                let k = if !crate::env_flag!("OXI_S1338_DISABLE") {
                                     // a row's height runs from the previous row's y (the
                                     // band top for the first row of a column, so a
                                     // heading's space-before counts) to its own y
@@ -3165,7 +3183,7 @@ impl<'a> PageLayouter<'a> {
                                     }
                                     let new_len = ((n1 - k).max(n2 + k)) as f32 * pitch;
                                     let balanced_bottom = col_band_top + new_len;
-                                    if std::env::var("OXI_DBG_COL").is_ok() {
+                                    if crate::env_flag!("OXI_DBG_COL") {
                                         eprintln!("[COL] S750 balance n1={} n2={} k={} pitch={:.1} bottom={:.1}", n1, n2, k, pitch, balanced_bottom);
                                     }
                                     cursor.set(balanced_bottom);
@@ -3190,7 +3208,7 @@ impl<'a> PageLayouter<'a> {
                     section_max_y = cursor.cursor_y;
                     // S749: the multi-col band starts HERE; column advances on
                     // this page return to this y, not the page top.
-                    col_band_top = if num_columns > 1 && std::env::var("OXI_S749_DISABLE").is_err()
+                    col_band_top = if num_columns > 1 && !crate::env_flag!("OXI_S749_DISABLE")
                     {
                         // The ending section's paragraph-after spacing sets
                         // the origin shared by every new column. The first
@@ -3200,7 +3218,7 @@ impl<'a> PageLayouter<'a> {
                     } else {
                         start_y
                     };
-                    if std::env::var("OXI_DBG_COL").is_ok() {
+                    if crate::env_flag!("OXI_DBG_COL") {
                         eprintln!("[COL] SWITCH block_idx={} -> ncol={} at page={} cursor_y={:.1} band_top={:.1}", block_idx, num_columns, current_page_idx, cursor.cursor_y, col_band_top);
                     }
                 }
@@ -3236,10 +3254,10 @@ impl<'a> PageLayouter<'a> {
                         // table below it (reports__28abf02c p3: the p2 answer-bracket
                         // boxes at 467..586 shoved the (16) table 119pt down, one
                         // page over for 10 paragraphs).
-                        if std::env::var("OXI_TABLE_WRAP_PAGE_SCOPE").is_ok()
-                            || std::env::var_os("OXI_S1437_DISABLE").is_none() {
+                        if crate::env_flag!("OXI_TABLE_WRAP_PAGE_SCOPE")
+                            || !crate::env_flag!("OXI_S1437_DISABLE") {
                             // A wrap obstacle belongs to the page on which it is drawn.
-                            let anchor_pages = if std::env::var("OXI_S1123_DISABLE").is_err() {
+                            let anchor_pages = if !crate::env_flag!("OXI_S1123_DISABLE") {
                                 &block_start_page_indices
                             } else {
                                 &block_page_indices
@@ -3337,7 +3355,7 @@ impl<'a> PageLayouter<'a> {
             // table sits at the table top + 20, one in the third at that paragraph's
             // own top + 20 (188.6, under the table); Oxi left both at the pre-wrap y.
             if matches!(block, Block::Paragraph(_)) && anchor_flow_offset != 0.0
-                && std::env::var_os("OXI_S469_NEXT_ONLY_DISABLE").is_none()
+                && !crate::env_flag!("OXI_S469_NEXT_ONLY_DISABLE")
             {
                 anchor_flow_offset = 0.0;
             }
@@ -3347,7 +3365,7 @@ impl<'a> PageLayouter<'a> {
             // What a float ANCHORED to this block will resolve against. A
             // floating box lands where these two say, so when a box appears on
             // the wrong page this is the pair to read first.
-            if std::env::var("OXI_DBG_ANCHOR").is_ok() {
+            if crate::env_flag!("OXI_DBG_ANCHOR") {
                 let (preview, nruns, pbb, pba) = match block {
                     Block::Paragraph(p) => (
                         p.runs
@@ -3386,12 +3404,12 @@ impl<'a> PageLayouter<'a> {
                     // that carrier becomes block 0 of its page run (the following
                     // continuous section merges behind it and S730 marks it
                     // continuous) -- Word gives that mark a line at the page top.
-                    let s1501_keep = std::env::var_os("OXI_S1501_DISABLE").is_none()
+                    let s1501_keep = !crate::env_flag!("OXI_S1501_DISABLE")
                         && para.style.page_section_break
                         && para.runs.iter().all(|r| r.text.is_empty())
                         && block_idx == 0
                         && cursor.cursor_y <= start_y + 0.01;
-                    if std::env::var_os("OXI_DBG1501").is_some() && para.style.page_section_break {
+                    if crate::env_flag!("OXI_DBG1501") && para.style.page_section_break {
                         eprintln!("[S1501] block={} keep={} cursor={:.2} start_y={:.2} cont={} empty={}", block_idx, s1501_keep, cursor.cursor_y, start_y, para.style.continuous_section_break, para.runs.iter().all(|r| r.text.is_empty()));
                     }
                     // S1576 (2026-09-26, default ON, opt-out OXI_S1576_DISABLE): the
@@ -3400,7 +3418,7 @@ impl<'a> PageLayouter<'a> {
                     // between two tables; Word truth puts it at 242.2 and the next table
                     // at 256.5, Oxi dropped it and the page ran 16pt short). S945 was
                     // derived on a nextPage carrier.
-                    let s1576_keep = std::env::var_os("OXI_S1576_DISABLE").is_none()
+                    let s1576_keep = !crate::env_flag!("OXI_S1576_DISABLE")
                         && para.style.continuous_section_break
                         && (matches!(page.blocks.get(block_idx + 1), Some(Block::Table(_)))
                             // A continuous carrier after a table is also a
@@ -3425,13 +3443,13 @@ impl<'a> PageLayouter<'a> {
                             continue;
                         }
                     }
-                    if std::env::var("OXI_S945_DISABLE").is_err()
+                    if !crate::env_flag!("OXI_S945_DISABLE")
                         && !s1501_keep
                         && !s1576_keep
                         && !(para.style.page_break_after
-                            && (std::env::var("OXI_SECTION_EXPLICIT_BREAKS").is_ok()
+                            && (crate::env_flag!("OXI_SECTION_EXPLICIT_BREAKS")
                                 || (para.style.continuous_section_break
-                                    && std::env::var("OXI_S1454_DISABLE").is_err())))
+                                    && !crate::env_flag!("OXI_S1454_DISABLE"))))
                         && para.style.page_section_break
                         && para.runs.iter().all(|r| r.text.is_empty())
                     {
@@ -3455,7 +3473,7 @@ impl<'a> PageLayouter<'a> {
                     // a normal full-height block (the +61pt over-reservation the
                     // perturbation harness flagged). Gate-safe: 0 corpus docs use dropCap,
                     // so non-dropCap paras never enter this branch (byte-identical).
-                    if std::env::var("OXI_S676_DISABLE").is_err()
+                    if !crate::env_flag!("OXI_S676_DISABLE")
                         && pending_dropcap.is_none()
                         && para
                             .style
@@ -3574,7 +3592,7 @@ impl<'a> PageLayouter<'a> {
                             .get(block_idx + 1)
                             .map_or(false, |b| s863_matches(b, fp))
                     });
-                    if std::env::var("OXI_S863_DISABLE").is_err() && s863_in_run {
+                    if !crate::env_flag!("OXI_S863_DISABLE") && s863_in_run {
                         let fp = s863_fp.unwrap();
                         let (fx, fy, frame_bottom, anchor_y) = match s863_frame {
                             Some((_, _, first_x, running_bottom, exact_bottom, anchor)) => {
@@ -3639,7 +3657,7 @@ impl<'a> PageLayouter<'a> {
                             .blocks
                             .get(block_idx + 1)
                             .map_or(false, |b| s863_matches(b, fp));
-                        if std::env::var("OXI_DBG863").is_ok() {
+                        if crate::env_flag!("OXI_DBG863") {
                             eprintln!(
                                 "[S863] blk={} anchor={:.2} y={:.2} bottom={:.2} next={}",
                                 block_idx, anchor_y, fy, fcy.cursor_y, has_next
@@ -3664,7 +3682,7 @@ impl<'a> PageLayouter<'a> {
                     // on; Oxi's in-flow path reserved ~98pt (the whole +65 p1
                     // drift the missing style-autospacing was compensating).
                     // Exact-height "around" runs are consumed by S863 above.
-                    if std::env::var("OXI_S898_DISABLE").is_err()
+                    if !crate::env_flag!("OXI_S898_DISABLE")
                         && para.style.frame_pr.as_ref().map_or(false, |fp| {
                             fp.drop_cap.is_none()
                                 && fp.v_anchor.as_deref() == Some("text")
@@ -3724,7 +3742,7 @@ impl<'a> PageLayouter<'a> {
                             None,
                         );
                         elements.extend(frame_els);
-                        if std::env::var("OXI_DBG898").is_ok() {
+                        if crate::env_flag!("OXI_DBG898") {
                             eprintln!(
                                 "[S898a] blk={} anchor={:.2} fy={:.2} bottom={:.2}",
                                 block_idx, cursor.cursor_y, fy, fcy.cursor_y
@@ -3760,7 +3778,7 @@ impl<'a> PageLayouter<'a> {
                     // address column in the right margin (Word 612..792 @448.5);
                     // Oxi laid it in the body flow and every body line sat 189pt low.
                     let s1379_fp = |fp: &crate::ir::FrameProperties| -> bool {
-                        std::env::var("OXI_S1379_DISABLE").is_err()
+                        !crate::env_flag!("OXI_S1379_DISABLE")
                             && fp.drop_cap.is_none()
                             && fp.wrap.as_deref() != Some("none")
                             && matches!(fp.y_align.as_deref(), Some("top") | Some("bottom"))
@@ -3774,11 +3792,11 @@ impl<'a> PageLayouter<'a> {
                             && (fp.v_anchor.as_deref() == Some("margin")
                                 || (fp.v_anchor.as_deref() == Some("text") && (fp.y >= 0.0 || grouped_text_frame)))
                     });
-                    if std::env::var("OXI_S758_DISABLE").is_err()
+                    if !crate::env_flag!("OXI_S758_DISABLE")
                         && (positioned_frame || s1379 || para.style.frame_pr.as_ref().map_or(false, |fp| {
                             fp.drop_cap.is_none()
                                 && (fp.v_anchor.as_deref() == Some("page")
-                                    || (std::env::var_os("OXI_FRAME_BOTTOM_MARGIN").is_some()
+                                    || (crate::env_flag!("OXI_FRAME_BOTTOM_MARGIN")
                                         && matches!(fp.v_anchor.as_deref(), None | Some("margin"))
                                         && fp.y_align.as_deref() == Some("bottom")))
                                 && fp.wrap.as_deref() != Some("none")
@@ -3808,7 +3826,7 @@ impl<'a> PageLayouter<'a> {
                         let mut frame_anchor_lead = 0.0f32;
                         if positioned_frame && !s1379 && !grouped_text_frame && s847_frame.is_none()
                             && fp.v_anchor.as_deref() == Some("text") && fp.y >= 0.0
-                            && std::env::var_os("OXI_TEXT_FRAME_ANCHOR_LINE_DISABLE").is_none()
+                            && !crate::env_flag!("OXI_TEXT_FRAME_ANCHOR_LINE_DISABLE")
                         {
                             if let Some(Block::Paragraph(anchor)) = page.blocks.get(block_idx + 1) {
                                 if anchor.style.frame_pr.is_none() {
@@ -3936,7 +3954,7 @@ impl<'a> PageLayouter<'a> {
                                     } else {
                                         (ref_bottom - h_total).max(ref_top)
                                     };
-                                    if std::env::var("OXI_DBG1379").is_ok() {
+                                    if crate::env_flag!("OXI_DBG1379") {
                                         eprintln!("[S1379] blk={}..{} yalign={} ref=({:.1},{:.1}) h={:.2} top={:.2}",
                                             block_idx, j, ya, ref_top, ref_bottom, h_total, t);
                                     }
@@ -3949,7 +3967,7 @@ impl<'a> PageLayouter<'a> {
                         } else {
                             fp.y
                         };
-                        let aligned_bottom = !s1379 && std::env::var_os("OXI_FRAME_BOTTOM_MARGIN").is_some()
+                        let aligned_bottom = !s1379 && crate::env_flag!("OXI_FRAME_BOTTOM_MARGIN")
                             && fp.y_align.as_deref() == Some("bottom")
                             && matches!(fp.v_anchor.as_deref(), None | Some("margin") | Some("page"));
                         // S847 (opt-in OXI_S847=1, default OFF = byte-identical):
@@ -3967,9 +3985,9 @@ impl<'a> PageLayouter<'a> {
                         // S898b: notBeside frames MUST stack (the flow-push needs
                         // the true group bottom), so grouping is default-ON for
                         // them; other page frames keep the S847 opt-in hold.
-                        let s847_on = grouped_text_frame || aligned_bottom || std::env::var("OXI_S847").is_ok()
+                        let s847_on = grouped_text_frame || aligned_bottom || crate::env_flag!("OXI_S847")
                             || s1379
-                            || (std::env::var("OXI_S898_DISABLE").is_err()
+                            || (!crate::env_flag!("OXI_S898_DISABLE")
                                 && fp.wrap.as_deref() == Some("notBeside"));
                         let (fx, fy) = match s847_frame {
                             Some((px, py, first_fx, run_bottom))
@@ -4070,7 +4088,7 @@ impl<'a> PageLayouter<'a> {
                         // (`_pb_frame_border_height_gen.py` auto arms: h 71.3 and 20.0 give
                         // the same box and the same next baseline).
                         let hrule_auto = fp.height_rule.as_deref() == Some("auto")
-                            && std::env::var_os("OXI_FRAME_HRULE_AUTO_DISABLE").is_none();
+                            && !crate::env_flag!("OXI_FRAME_HRULE_AUTO_DISABLE");
                         let fh = if positioned_frame && fp.height_rule.as_deref() == Some("exact") {
                             fp.height.unwrap_or(content_h_frame)
                         } else if hrule_auto {
@@ -4083,7 +4101,7 @@ impl<'a> PageLayouter<'a> {
                         // border sz 6 space 1 and sz 24 space 8 alike; an h below the text
                         // leaves the box round the text. ja/reports__60bc67b6's reply box
                         // (h 1426tw): Word 71.28, Oxi 18.5.
-                        if !hrule_auto && std::env::var_os("OXI_FRAME_BORDER_H_DISABLE").is_none() {
+                        if !hrule_auto && !crate::env_flag!("OXI_FRAME_BORDER_H_DISABLE") {
                             if let Some(h) = fp.height.filter(|_| positioned_frame) {
                                 let bdr: Vec<usize> = (frame_el_start..elements.len())
                                     .filter(|&i| elements[i].paragraph_index.is_none()
@@ -4139,7 +4157,7 @@ impl<'a> PageLayouter<'a> {
                             // the anchor while they end above the frame, and moves only a
                             // crossing line below it (60bc67 Word 56/57/58: frame y=+329tw,
                             // 57 at the anchor 54.75, 58 at the frame bottom 142.5).
-                            let rows_above = std::env::var_os("OXI_TEXT_FRAME_ROWS_ABOVE_DISABLE").is_none()
+                            let rows_above = !crate::env_flag!("OXI_TEXT_FRAME_ROWS_ABOVE_DISABLE")
                                 && text_frame && !text_not_beside && shifted == 0.0
                                 && group_top > cursor.cursor_y + 0.01
                                 && matches!(page.blocks.get(block_idx + 1), Some(Block::Paragraph(p)) if p.style.frame_pr.is_none());
@@ -4149,7 +4167,7 @@ impl<'a> PageLayouter<'a> {
                                 cursor.set((cursor.cursor_y + shifted).max(group_bottom));
                             }
                         }
-                        if std::env::var("OXI_DBG847").is_ok() {
+                        if crate::env_flag!("OXI_DBG847") {
                             let txt: String = para
                                 .runs
                                 .iter()
@@ -4164,7 +4182,7 @@ impl<'a> PageLayouter<'a> {
                         // inherits fx and stacks below it.
                         s847_frame = Some((fp.x, fy_decl, fx, fcy.cursor_y));
                         // S898b: record the notBeside group's running bottom.
-                        if !positioned_frame && std::env::var("OXI_S898_DISABLE").is_err()
+                        if !positioned_frame && !crate::env_flag!("OXI_S898_DISABLE")
                             && fp.wrap.as_deref() == Some("notBeside")
                         {
                             let b = fcy.cursor_y;
@@ -4178,7 +4196,7 @@ impl<'a> PageLayouter<'a> {
                         // there. probeqframepg (page-anchored frame between 第2条 and
                         // 第3条, after=160 line=278 defaults): Word's 第3条 at 226.34 =
                         // 197.30 + 20.85 + 8.2; Oxi's at 218.20 (the 8pt after lost).
-                        if std::env::var_os("OXI_FRAME_KEEP_AFTER_DISABLE").is_some() {
+                        if crate::env_flag!("OXI_FRAME_KEEP_AFTER_DISABLE") {
                             prev_space_after = 0.0;
                         }
                         continue;
@@ -4190,7 +4208,7 @@ impl<'a> PageLayouter<'a> {
                     // group resumes BELOW the stacked frame bottom.
                     if let Some(b) = s898_notbeside_bottom.take() {
                         if b > cursor.cursor_y && b - cursor.cursor_y < content_height {
-                            if std::env::var("OXI_DBG898").is_ok() {
+                            if crate::env_flag!("OXI_DBG898") {
                                 eprintln!(
                                     "[S898b] blk={} push {:.2} -> {:.2}",
                                     block_idx, cursor.cursor_y, b
@@ -4305,7 +4323,7 @@ impl<'a> PageLayouter<'a> {
                                         // vertical space in actual rendering vs estimate
                                         let h = estimate_footnote_h(id);
                                         *reserve += h;
-                                        if std::env::var("OXI_FN_PROBE").is_ok() {
+                                        if crate::env_flag!("OXI_FN_PROBE") {
                                             eprintln!("[FN_COMMIT] page_idx={} block_idx={} id={} h={:.1} reserve_now={:.1}",
                                             page_i, blk_i, id, h, *reserve);
                                         }
@@ -4359,12 +4377,12 @@ impl<'a> PageLayouter<'a> {
                     // respects off, while the saved marks alone cost JA 3 docs
                     // (legal__0493f12e / policies__0820fb07 / correspondence__0b652248,
                     // each a mark one line stale against fresh Word).
-                    let lrpb_knob_off = std::env::var("OXI_LRPB_DISABLE").is_ok()
-                        || std::env::var_os("OXI_S1491_LEGACY_LRPB").is_none()
+                    let lrpb_knob_off = crate::env_flag!("OXI_LRPB_DISABLE")
+                        || !crate::env_flag!("OXI_S1491_LEGACY_LRPB")
                         || self.doc_lrpb_distrust
                         || self.lrpb_count_distrust.get()
                         || (!self.doc_body_has_real_cjk
-                            && std::env::var("OXI_S836_DISABLE").is_err());
+                            && !crate::env_flag!("OXI_S836_DISABLE"));
                     let has_lrpb_at_start = para
                         .runs
                         .first()
@@ -4404,7 +4422,7 @@ impl<'a> PageLayouter<'a> {
                             // little. Dump both populations before proposing a
                             // discriminator -- S822 picked K=28 against a corpus
                             // that has since changed.
-                            if std::env::var("OXI_DBG_LRPB").is_ok() {
+                            if crate::env_flag!("OXI_DBG_LRPB") {
                                 let preview: String = para
                                     .runs
                                     .iter()
@@ -4609,7 +4627,7 @@ impl<'a> PageLayouter<'a> {
                         // one-line EXACT-spaced stand-in and the paragraph arm decides.
                         let s1420_synth: Option<Paragraph> = match page.blocks.get(block_idx + 1) {
                             Some(Block::Table(tbl))
-                                if std::env::var_os("OXI_S1420_DISABLE").is_none()
+                                if !crate::env_flag!("OXI_S1420_DISABLE")
                                     // CJK-body scope: Latin documents keep their
                                     // calibrated table-follower path (the
                                     // `next_block_is_table` arm of layout_paragraph
@@ -4639,7 +4657,7 @@ impl<'a> PageLayouter<'a> {
                                 // else one line of it).
                                 let n_hdr = tbl.rows.iter().take_while(|r| r.header).count();
                                 let row_h = if n_hdr > 0 && n_hdr < tbl.rows.len()
-                                    && std::env::var_os("OXI_S1428_DISABLE").is_none()
+                                    && !crate::env_flag!("OXI_S1428_DISABLE")
                                 {
                                     let hdr_h: f32 = tbl.rows[..n_hdr].iter().map(|r| {
                                         let nat = self.estimate_table_row_natural_h(
@@ -4690,13 +4708,13 @@ impl<'a> PageLayouter<'a> {
                             // A follower cannot be the first-block mark kept by
                             // S1501. Continuous marks retain their table handling.
                             Some(Block::Paragraph(p))
-                                if std::env::var_os("OXI_KEEP_EMPTY_SECTION_MARK_DISABLE").is_none()
-                                    && std::env::var("OXI_S945_DISABLE").is_err()
+                                if !crate::env_flag!("OXI_KEEP_EMPTY_SECTION_MARK_DISABLE")
+                                    && !crate::env_flag!("OXI_S945_DISABLE")
                                     && p.style.page_section_break
                                     && !p.style.continuous_section_break
                                     && p.runs.iter().all(|r| r.text.is_empty())
                                     && !(p.style.page_break_after
-                                        && std::env::var("OXI_SECTION_EXPLICIT_BREAKS").is_ok()) => None,
+                                        && crate::env_flag!("OXI_SECTION_EXPLICIT_BREAKS")) => None,
                             Some(Block::Paragraph(p)) => Some(p),
                             Some(Block::Table(_)) => s1420_synth.as_ref(),
                             _ => None,
@@ -4729,7 +4747,7 @@ impl<'a> PageLayouter<'a> {
                             // ySubsection + yIndenta at the wp196 bottom).  Add only
                             // the gap the estimate dropped; direct/atLeast/exact
                             // spacing remains accounted for by the estimate itself.
-                            let next_h_with_gap = if std::env::var("OXI_S925_DISABLE").is_err()
+                            let next_h_with_gap = if !crate::env_flag!("OXI_S925_DISABLE")
                                 && !next_para.style.has_direct_spacing
                                 && next_para.style.line_spacing_rule.as_deref() != Some("exact")
                                 && next_para.style.line_spacing_rule.as_deref() != Some("atLeast")
@@ -4759,7 +4777,7 @@ impl<'a> PageLayouter<'a> {
                             // i.e. it does NOT include prev space_after) when the estimate
                             // dropped it. Scoped to the keepNext lookahead only (the shared
                             // estimate is left untouched — high blast radius on Phase-1).
-                            let s709 = std::env::var("OXI_S709_DISABLE").is_err();
+                            let s709 = !crate::env_flag!("OXI_S709_DISABLE");
                             let this_h = if s709 {
                                 // S1087 (2026-08-07, opt-out OXI_S1087_DISABLE): the estimate's
                                 // ACTUAL reset key is `has_direct_before` — S855 moved
@@ -4774,7 +4792,7 @@ impl<'a> PageLayouter<'a> {
                                 // (23.2 vs 33.2), the follower's 2 lines "fit" the 52.0pt
                                 // remainder by 1.8pt and the heading stayed at the page bottom
                                 // where Word pushes the pair. Mirror reset_before exactly.
-                                let s1087 = std::env::var("OXI_S1087_DISABLE").is_err();
+                                let s1087 = !crate::env_flag!("OXI_S1087_DISABLE");
                                 let reset_key = if s1087 {
                                     !para.style.has_direct_before
                                 } else {
@@ -4828,7 +4846,7 @@ impl<'a> PageLayouter<'a> {
                             // heading + 2 follower lines no longer fit, Word moves the
                             // heading to p4 with its paragraph, Oxi left it alone at the
                             // page bottom.
-                            let remaining = if std::env::var_os("OXI_S1545_DISABLE").is_none() {
+                            let remaining = if !crate::env_flag!("OXI_S1545_DISABLE") {
                                 let (_, _, kn_wrap_advance) = self.body_paragraph_wrap_bands(
                                     para, page, &s758_bands, current_page_idx,
                                     cursor.cursor_y, start_x, content_width,
@@ -4849,7 +4867,7 @@ impl<'a> PageLayouter<'a> {
                             // (consistent with estimate_para_height; word_line_height_no_grid
                             // gives a different, smaller value → over-counts).
                             let mut single_line_probe;
-                            let one_line_para = if std::env::var("OXI_KEEP_HARD_BREAK_METRICS_DISABLE").is_err()
+                            let one_line_para = if !crate::env_flag!("OXI_KEEP_HARD_BREAK_METRICS_DISABLE")
                                 && next_para.runs.iter().any(|r| r.text.contains('\n'))
                             {
                                 single_line_probe = next_para.clone();
@@ -4892,7 +4910,7 @@ impl<'a> PageLayouter<'a> {
                             // `follower_sb` mirrors estimate_para_height's own
                             // in_cell=false / table_para_style=None sb (the S855
                             // cell_spacing_reset_sides body path).
-                            let follower_sb = if std::env::var("OXI_S915_DISABLE").is_ok() {
+                            let follower_sb = if crate::env_flag!("OXI_S915_DISABLE") {
                                 0.0
                             } else {
                                 let raw_lr = next_para.style.line_spacing_rule.as_deref();
@@ -4922,7 +4940,7 @@ impl<'a> PageLayouter<'a> {
                             // (real 15.0), follower_orphans tripped by 1.6pt, the
                             // heading whole-moved, and 70 pages of the price guide
                             // cascaded +1 ({+1:2813}). Mirror the sb gate for sa.
-                            let follower_sa = if std::env::var("OXI_S1124_DISABLE").is_ok() {
+                            let follower_sa = if crate::env_flag!("OXI_S1124_DISABLE") {
                                 0.0
                             } else {
                                 let raw_lr = next_para.style.line_spacing_rule.as_deref();
@@ -4943,7 +4961,7 @@ impl<'a> PageLayouter<'a> {
                             // on a side. With widowControl OFF (0e7af/digitalcontract docDefaults
                             // val=0) Word splits even a 3-line follower (1+2), so the heading
                             // STAYS — exactly the old gate. Discriminator = next_para widow_control.
-                            let s635 = std::env::var("OXI_S635_DISABLE").is_err();
+                            let s635 = !crate::env_flag!("OXI_S635_DISABLE");
                             // S914 (2026-07-17, opt-out OXI_S914_DISABLE): S635's own
                             // derivation above ("a ≤3-line para can't split without
                             // leaving <2 lines on a side") has TWO halves; only the
@@ -4970,7 +4988,7 @@ impl<'a> PageLayouter<'a> {
                             // k=0 (not a single follower line fits) = unambiguous
                             // keepNext violations today. Unscoped: no JP doc reacts, so
                             // no language gate is needed (rule 10 clean).
-                            let s914 = std::env::var("OXI_S914_DISABLE").is_err();
+                            let s914 = !crate::env_flag!("OXI_S914_DISABLE");
                             let line_h_next = if next_lines > 1 {
                                 (next_h - one_line_h) / (next_lines - 1) as f32
                             } else {
@@ -4991,7 +5009,7 @@ impl<'a> PageLayouter<'a> {
                             // whole push = Word (render truth: p26 ends at [33],
                             // heading+follower on p27; the in-doc 'C.' heading gap
                             // measures 49.6 = line 13.8 + after 36 exactly).
-                            let s934_gap = if std::env::var("OXI_S934_DISABLE").is_err() {
+                            let s934_gap = if !crate::env_flag!("OXI_S934_DISABLE") {
                                 (next_h_with_gap - next_h).max(0.0)
                             } else {
                                 0.0
@@ -5032,13 +5050,13 @@ impl<'a> PageLayouter<'a> {
                                 1.0
                             };
                             let last_line_h = if s1170_mult > 1.0
-                                && std::env::var("OXI_S1170_DISABLE").is_err()
+                                && !crate::env_flag!("OXI_S1170_DISABLE")
                             {
                                 line_h_next / s1170_mult
                             } else {
                                 line_h_next
                             };
-                            let orphan_spacing_credit = if std::env::var("OXI_KEEP_FRAGMENT_SPACING_DISABLE").is_err() {
+                            let orphan_spacing_credit = if !crate::env_flag!("OXI_KEEP_FRAGMENT_SPACING_DISABLE") {
                                 let head_includes_spacing = para.style.has_direct_spacing
                                     || matches!(para.style.line_spacing_rule.as_deref(), Some("exact") | Some("atLeast"));
                                 let head_after = para.style.space_after.unwrap_or(0.0);
@@ -5074,9 +5092,9 @@ impl<'a> PageLayouter<'a> {
                             let follower_moves_wholly = (next_para.style.widow_control
                                 && (next_lines <= 3 || follower_orphans))
                                 || (next_lines <= 1
-                                    && std::env::var("OXI_S1090_DISABLE").is_err())
+                                    && !crate::env_flag!("OXI_S1090_DISABLE"))
                                 || (next_para.style.keep_lines
-                                    && std::env::var("OXI_S1039_DISABLE").is_err());
+                                    && !crate::env_flag!("OXI_S1039_DISABLE"));
                             // S802 (2026-07-12, opt-out OXI_S802_DISABLE): keepNext CHAIN —
                             // when the follower is ITSELF keepNext (H1→H2), the keep unit
                             // extends transitively to H2's follower (Word keeps the whole
@@ -5108,7 +5126,7 @@ impl<'a> PageLayouter<'a> {
                             // S750-rebalance / S728-replay pattern), a dedicated
                             // session. The wp38 strand case itself IS real: Word
                             // starts p38 with the whole H1→H2→body chain.
-                            let s802 = std::env::var("OXI_S802").is_ok();
+                            let s802 = crate::env_flag!("OXI_S802");
                             let (unit_next_h, follower_moves_wholly) = if s802
                                 && next_para.style.keep_next
                             {
@@ -5167,7 +5185,7 @@ impl<'a> PageLayouter<'a> {
                             // +9 = after_head 4 + sb_next 5 uncollapsed (gap is 5) +
                             // trailing after 5. Correction applies only to what the
                             // estimates actually included.
-                            let s948_corr = if std::env::var("OXI_S948_DISABLE").is_err() {
+                            let s948_corr = if !crate::env_flag!("OXI_S948_DISABLE") {
                                 let inc = |st: &ParagraphStyle| {
                                     st.has_direct_spacing
                                         || matches!(
@@ -5189,7 +5207,7 @@ impl<'a> PageLayouter<'a> {
                                 // S948 subtracted 14 for spacing the estimate never held, read the
                                 // pair as 49.6 in a 50.3 gap, and stranded the heading; Word moves
                                 // it (p21: heading baseline 83, question 109 = 18 + max(8, 6)).
-                                let s948_direct = std::env::var_os("OXI_S948_DIRECT_DISABLE").is_none();
+                                let s948_direct = !crate::env_flag!("OXI_S948_DIRECT_DISABLE");
                                 let explicit = |st: &ParagraphStyle| matches!(
                                     st.line_spacing_rule.as_deref(), Some("exact") | Some("atLeast"));
                                 let ha_i = if if s948_direct { para.style.has_direct_after || explicit(&para.style) } else { head_inc } { ha_e } else { 0.0 };
@@ -5247,11 +5265,11 @@ impl<'a> PageLayouter<'a> {
                             let s978 = do_push
                                 && s635
                                 && this_h > remaining
-                                && std::env::var("OXI_S978_DISABLE").is_err();
+                                && !crate::env_flag!("OXI_S978_DISABLE");
                             if do_push
                                 && s635
                                 && (this_h <= remaining || s978)
-                                && std::env::var("OXI_S916_DISABLE").is_err()
+                                && !crate::env_flag!("OXI_S916_DISABLE")
                             {
                                 let para_one_line = self.estimate_para_height(
                                     para, 1.0e6, grid_pitch, None, false, None, None,
@@ -5308,7 +5326,7 @@ impl<'a> PageLayouter<'a> {
                                 // The S916 canary (legal__0001482d Indenti paras) is
                                 // keepLines=false → still splits (orthogonal).
                                 let s1023_kl = para.style.keep_lines
-                                    && std::env::var("OXI_S1023_DISABLE").is_err();
+                                    && !crate::env_flag!("OXI_S1023_DISABLE");
                                 if eff_lines >= 4 && !s1023_kl {
                                     // S978: in case A the page-bottom break already
                                     // splits the paragraph — no forced split point.
@@ -5316,7 +5334,7 @@ impl<'a> PageLayouter<'a> {
                                     do_push = false;
                                 }
                             }
-                            if std::env::var("OXI_DBG_KN635").is_ok() {
+                            if crate::env_flag!("OXI_DBG_KN635") {
                                 let t: String = para
                                     .runs
                                     .iter()
@@ -5358,8 +5376,8 @@ impl<'a> PageLayouter<'a> {
                                 // (keepNext) then body -- Word starts p32 with both headings,
                                 // Oxi pushed only the second and stranded the first.
                                 let s802b = (!self.doc_body_has_real_cjk
-                                    || std::env::var_os("OXI_S1570_DISABLE").is_none())
-                                    && std::env::var("OXI_S802B_DISABLE").is_err();
+                                    || !crate::env_flag!("OXI_S1570_DISABLE"))
+                                    && !crate::env_flag!("OXI_S802B_DISABLE");
                                 let mut pull_from = block_idx;
                                 if s802b && !(num_columns > 1 && current_column + 1 < num_columns) {
                                     while pull_from > 0 {
@@ -5381,8 +5399,8 @@ impl<'a> PageLayouter<'a> {
                                     let y0 = block_y_positions[pull_from] - 0.1;
                                     let (keep, moved): (Vec<LayoutElement>, Vec<LayoutElement>) =
                                         elements.drain(..).partition(|e| {
-                                            if (std::env::var("OXI_KEEP_CHAIN_SOURCE").is_ok()
-                || std::env::var("OXI_S1474_DISABLE").is_err()) {
+                                            if (crate::env_flag!("OXI_KEEP_CHAIN_SOURCE")
+                || !crate::env_flag!("OXI_S1474_DISABLE")) {
                                                 if let Some(index) = e.paragraph_index {
                                                     return index < pull_from || index >= block_idx;
                                                 }
@@ -5435,7 +5453,7 @@ impl<'a> PageLayouter<'a> {
                                 if !pulled.is_empty() {
                                     let min_y = pulled.iter().map(|e| e.y).fold(f32::MAX, f32::min);
                                     let dy = cursor.cursor_y - min_y;
-                                    if std::env::var("OXI_DBG_KN635").is_ok() {
+                                    if crate::env_flag!("OXI_DBG_KN635") {
                                         eprintln!("[S802B] pull {} blocks ({} els) dy={:.1} chain_end_old={:.1}",
                                             block_idx - pull_from, pulled.len(), dy, chain_end_old);
                                     }
@@ -5481,7 +5499,7 @@ impl<'a> PageLayouter<'a> {
                             // text on p54 and pushed only the image. An image cannot
                             // split, so the follower always "moves wholly" — push this
                             // paragraph when the pair does not fit the remaining space.
-                            if std::env::var("OXI_S959_DISABLE").is_err() {
+                            if !crate::env_flag!("OXI_S959_DISABLE") {
                                 let this_h = self.estimate_para_height(
                                     para,
                                     self.s1211c_floor_body_width(para, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
@@ -5525,7 +5543,7 @@ impl<'a> PageLayouter<'a> {
                                         && cursor.cursor_y - chain_top + this_h + next_h <= fresh_height);
                                 if this_h + next_h > remaining && this_h <= remaining
                                     && image_chain_can_move {
-                                    if std::env::var("OXI_DBG_KN635").is_ok() {
+                                    if crate::env_flag!("OXI_DBG_KN635") {
                                         let t: String = para
                                             .runs
                                             .iter()
@@ -5545,8 +5563,8 @@ impl<'a> PageLayouter<'a> {
                                     // «(7) Subrule (6) applies» (keepNext) → image;
                                     // S959 pushed the (7)+image pair and stranded (6).
                                     let s963b = !self.doc_body_has_real_cjk
-                                        && std::env::var("OXI_S802B_DISABLE").is_err()
-                                        && std::env::var("OXI_S963_DISABLE").is_err();
+                                        && !crate::env_flag!("OXI_S802B_DISABLE")
+                                        && !crate::env_flag!("OXI_S963_DISABLE");
                                     let mut pull_from = if has_image_link { image_chain_start } else { block_idx };
                                     if s963b
                                         && !(num_columns > 1 && current_column + 1 < num_columns)
@@ -5572,8 +5590,8 @@ impl<'a> PageLayouter<'a> {
                                             Vec<LayoutElement>,
                                             Vec<LayoutElement>,
                                         ) = elements.drain(..).partition(|e| {
-                                            if (std::env::var("OXI_KEEP_CHAIN_SOURCE").is_ok()
-                || std::env::var("OXI_S1474_DISABLE").is_err()) {
+                                            if (crate::env_flag!("OXI_KEEP_CHAIN_SOURCE")
+                || !crate::env_flag!("OXI_S1474_DISABLE")) {
                                                 if let Some(index) = e.paragraph_index {
                                                     return index < pull_from || index >= block_idx;
                                                 }
@@ -5615,7 +5633,7 @@ impl<'a> PageLayouter<'a> {
                                         // page index (footnote attribution, float
                                         // anchors, block_page_indices) was therefore
                                         // one page stale for the rest of the section.
-                                        if std::env::var("OXI_S963_DISABLE").is_err() {
+                                        if !crate::env_flag!("OXI_S963_DISABLE") {
                                             current_column = 0;
                                             start_x = col_x_positions[0];
                                             content_width = col_widths[0];
@@ -5641,7 +5659,7 @@ impl<'a> PageLayouter<'a> {
                                                     .map(|e| e.y)
                                                     .fold(f32::MAX, f32::min);
                                                 let dy = cursor.cursor_y - min_y;
-                                                if std::env::var("OXI_DBG_KN635").is_ok() {
+                                                if crate::env_flag!("OXI_DBG_KN635") {
                                                     eprintln!(
                                                         "[S963B] pull {} blocks ({} els) dy={:.1}",
                                                         block_idx - pull_from,
@@ -5711,7 +5729,7 @@ impl<'a> PageLayouter<'a> {
                             // the change set is {target, technical__002c1ffa}, both
                             // verified (target 0.9463→0.9563 +15/0-new; the other
                             // byte-safe). Default ON, opt-out OXI_S1024_DISABLE.
-                            let s1024 = std::env::var("OXI_S1024_DISABLE").is_err()
+                            let s1024 = !crate::env_flag!("OXI_S1024_DISABLE")
                                 && (!self.doc_body_has_real_cjk
                                 || std::env::var("OXI_CJK_TABLE_KEEP_NEXT").ok().as_deref() == Some("1"))
                                 && !para.style.page_break_before
@@ -5842,7 +5860,7 @@ impl<'a> PageLayouter<'a> {
                                 // The chain is the leading run of keepNext rows PLUS
                                 // the row it keeps with; with no leading keepNext row
                                 // this is 1 row = S1038 unchanged.
-                                let s1248_chain_rows = if std::env::var("OXI_S1248_DISABLE").is_ok()
+                                let s1248_chain_rows = if crate::env_flag!("OXI_S1248_DISABLE")
                                 {
                                     1
                                 } else {
@@ -5868,7 +5886,7 @@ impl<'a> PageLayouter<'a> {
                                 // S1522 (2026-09-24): the pair is (whole chain height,
                                 // height up to the first text line of the chain's LAST
                                 // row). See `s1038_need_h` below for which one Word asks.
-                                let (first_row_h, s1522_first_line_h) = if std::env::var("OXI_S1038_DISABLE").is_ok()
+                                let (first_row_h, s1522_first_line_h) = if crate::env_flag!("OXI_S1038_DISABLE")
                                     || (self.doc_body_has_real_cjk
                                         && std::env::var("OXI_CJK_TABLE_KEEP_NEXT").ok().as_deref() != Some("1"))
                                     || next_table.rows.is_empty()
@@ -5949,7 +5967,7 @@ impl<'a> PageLayouter<'a> {
                 // Oxi compares 33.0 ≤ 34.6 and keeps the heading with the table
                 // starting on p26 = an orphaned keepNext heading. Same reset key
                 // as S1087 (has_direct_before), same exact/atLeast exclusion.
-                let s1127_sb = if std::env::var("OXI_S1127_DISABLE").is_err()
+                let s1127_sb = if !crate::env_flag!("OXI_S1127_DISABLE")
                     && !para.style.has_direct_before
                     && para.style.line_spacing_rule.as_deref() != Some("exact")
                     && para.style.line_spacing_rule.as_deref() != Some("atLeast")
@@ -5994,14 +6012,14 @@ impl<'a> PageLayouter<'a> {
                 // keepNext row of the chain whole, then the row they keep with -- whole
                 // when it is cantSplit / tblHeader, else its first text line only.
                 let s1038_last = next_table.rows.get(s1248_chain_rows.max(1) - 1);
-                let s1038_locked_row = std::env::var_os("OXI_S1038_SPLIT_DISABLE").is_some()
+                let s1038_locked_row = crate::env_flag!("OXI_S1038_SPLIT_DISABLE")
                     || s1038_last.map_or(true, |r| r.cant_split || r.header);
                 let s1038_need_h = if s1038_locked_row { first_row_h } else { s1522_first_line_h };
-                let s1038_row_orphan = std::env::var("OXI_S1038_DISABLE").is_err()
+                let s1038_row_orphan = !crate::env_flag!("OXI_S1038_DISABLE")
                     && (!self.doc_body_has_real_cjk
                                 || std::env::var("OXI_CJK_TABLE_KEEP_NEXT").ok().as_deref() == Some("1"))
                                     && (!fresh_one_page
-                                        || std::env::var("OXI_S1127_DISABLE").is_err())
+                                        || !crate::env_flag!("OXI_S1127_DISABLE"))
                                     // The heading's estimate includes space that
                                     // can fall below the last rendered line. Its
                                     // own estimated overflow does not guarantee a break.
@@ -6017,7 +6035,7 @@ impl<'a> PageLayouter<'a> {
                                 // whose first row does not fit the 42pt left -- Word starts p110
                                 // with both; Oxi left the heading at the p109 bottom.
                                 let s1577 = !self.doc_body_has_real_cjk
-                                    && std::env::var_os("OXI_S1577_DISABLE").is_none();
+                                    && !crate::env_flag!("OXI_S1577_DISABLE");
                                 // The overflow precheck above precedes the heading's
                                 // inherited before-spacing adjustment. Include that
                                 // adjustment and the existing follower lead before
@@ -6040,7 +6058,7 @@ impl<'a> PageLayouter<'a> {
                                             + para.style.space_after.unwrap_or(0.0)
                                     } else { 0.0 };
                                 let table_follower_moves = if (s1577
-                                    || (std::env::var_os("OXI_CJK_TABLE_FOLLOWER_PLACEMENT").is_some()
+                                    || (crate::env_flag!("OXI_CJK_TABLE_FOLLOWER_PLACEMENT")
                                         && self.doc_body_has_real_cjk))
                                     && (current_splits || cursor.cursor_y + this_h + s1577_lead + e
                                         > start_y + content_height + 0.5)
@@ -6055,7 +6073,7 @@ impl<'a> PageLayouter<'a> {
                                         elements.last().cloned().into_iter().collect()
                                     } else { Vec::new() };
                                     let mut pc = LayoutCursor::new(cursor.cursor_y + this_h + s1577_lead);
-                                    if std::env::var_os("OXI_DBG_KN635").is_some() {
+                                    if crate::env_flag!("OXI_DBG_KN635") {
                                         eprintln!("[S1577] cy={:.2} this_h={:.2} lead={:.2} prev_sa={:.2} sb={:?} sa={:?}",
                                             cursor.cursor_y, this_h, s1577_lead, prev_space_after, para.style.space_before, para.style.space_after);
                                     }
@@ -6079,7 +6097,7 @@ impl<'a> PageLayouter<'a> {
                                         })
                                     })
                                 } else { false };
-                                if std::env::var("OXI_DBG_KN635").is_ok() {
+                                if crate::env_flag!("OXI_DBG_KN635") {
                                     let t: String = para
                                         .runs
                                         .iter()
@@ -6106,8 +6124,8 @@ impl<'a> PageLayouter<'a> {
                                     // Same S963b transitive back-pull + push as the image
                                     // arm (the push is follower-agnostic).
                                     let s963b = !self.doc_body_has_real_cjk
-                                        && std::env::var("OXI_S802B_DISABLE").is_err()
-                                        && std::env::var("OXI_S963_DISABLE").is_err();
+                                        && !crate::env_flag!("OXI_S802B_DISABLE")
+                                        && !crate::env_flag!("OXI_S963_DISABLE");
                                     let mut pull_from = block_idx;
                                     if s963b
                                         && !(num_columns > 1 && current_column + 1 < num_columns)
@@ -6133,8 +6151,8 @@ impl<'a> PageLayouter<'a> {
                                             Vec<LayoutElement>,
                                             Vec<LayoutElement>,
                                         ) = elements.drain(..).partition(|e| {
-                                            if (std::env::var("OXI_KEEP_CHAIN_SOURCE").is_ok()
-                || std::env::var("OXI_S1474_DISABLE").is_err()) {
+                                            if (crate::env_flag!("OXI_KEEP_CHAIN_SOURCE")
+                || !crate::env_flag!("OXI_S1474_DISABLE")) {
                                                 if let Some(index) = e.paragraph_index {
                                                     return index < pull_from || index >= block_idx;
                                                 }
@@ -6164,7 +6182,7 @@ impl<'a> PageLayouter<'a> {
                                             content_height = g.ch(pages.len() + 1);
                                         }
                                         cursor.set(start_y);
-                                        if std::env::var("OXI_S963_DISABLE").is_err() {
+                                        if !crate::env_flag!("OXI_S963_DISABLE") {
                                             current_column = 0;
                                             start_x = col_x_positions[0];
                                             content_width = col_widths[0];
@@ -6190,7 +6208,7 @@ impl<'a> PageLayouter<'a> {
                                                     .map(|e| e.y)
                                                     .fold(f32::MAX, f32::min);
                                                 let dy = cursor.cursor_y - min_y;
-                                                if std::env::var("OXI_DBG_KN635").is_ok() {
+                                                if crate::env_flag!("OXI_DBG_KN635") {
                                                     eprintln!("[S963B-TBL] pull {} blocks ({} els) dy={:.1}",
                                                         block_idx - pull_from, pulled.len(), dy);
                                                 }
@@ -6243,7 +6261,7 @@ impl<'a> PageLayouter<'a> {
                     // +21). Retained behind OXI_S723_DISABLE for A/B. Only kyotei /
                     // albaluna have num_columns>1; the single-column corpus is
                     // byte-identical (num_columns==1 → block never runs).
-                    if num_columns > 1 && std::env::var("OXI_S723_DISABLE").is_ok() {
+                    if num_columns > 1 && crate::env_flag!("OXI_S723_DISABLE") {
                         let est_h = self.estimate_para_height(
                             para,
                             self.s1211c_floor_body_width(para, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
@@ -6255,7 +6273,7 @@ impl<'a> PageLayouter<'a> {
                         );
                         let remaining = (start_y + effective_content_h) - cursor.cursor_y;
                         if est_h > remaining && est_h <= effective_content_h {
-                            if std::env::var("OXI_DBG_COL").is_ok() {
+                            if crate::env_flag!("OXI_DBG_COL") {
                                 eprintln!("[COL] precheck block_idx={} col {}->{} (est_h={:.1} rem={:.1}) page={}", block_idx, current_column, if current_column+1<num_columns {current_column+1} else {0}, est_h, remaining, current_page_idx);
                             }
                             if current_column + 1 < num_columns {
@@ -6319,10 +6337,10 @@ impl<'a> PageLayouter<'a> {
                     // absorbed by that move. technical__01242a0a p1: 'List of
                     // figure' (after=8) hosts a 104.75pt wrapSquare group at +29.9;
                     // Word sets 'Fig. 1' at 207.0 = band bottom 206.9, Oxi 214.6.
-                    if wrap_advance > 0.0 && std::env::var_os("OXI_S1515_DISABLE").is_none() {
+                    if wrap_advance > 0.0 && !crate::env_flag!("OXI_S1515_DISABLE") {
                         prev_space_after = (prev_space_after - wrap_advance).max(0.0);
                     }
-                    if std::env::var("OXI_DBG773").is_ok() {
+                    if crate::env_flag!("OXI_DBG773") {
                         for s in &para.shapes {
                             eprintln!(
                                 "[S773probe] blk={} shape {} w={:.1} h={:.1} pos={:?}",
@@ -6341,7 +6359,7 @@ impl<'a> PageLayouter<'a> {
                             }
                         }
                     }
-                    if std::env::var("OXI_DBG758").is_ok() {
+                    if crate::env_flag!("OXI_DBG758") {
                         if let Some((bot, red, sh)) = s758_para_band {
                             let txt: String = para
                                 .runs
@@ -6378,8 +6396,25 @@ impl<'a> PageLayouter<'a> {
                     // paragraph. Used by the post-layout reserve-correction (Step 1).
                     let mut para_fn_refs_per_page: Vec<Vec<u32>> = Vec::new();
                     let mut s900_para_deferred: Vec<u32> = Vec::new();
+                    // OXI_BDR_SKIP_CARRIER (2026-10-31, default ON, opt-out _DISABLE): an
+                    // empty section-break carrier that S945 drops takes no part in a
+                    // border group either -- the paragraph before it closes the group.
+                    // en/reference__00f99483: two empty paragraphs with the same bottom
+                    // rule, the second carrying a continuous sectPr; Word rules the first
+                    // (165.1) and gives the carrier no line; Oxi took the carrier as the
+                    // group's next member, drew no rule and lost its 3.5pt.
+                    let s903_next_idx = match page.blocks.get(block_idx + 1) {
+                        Some(Block::Paragraph(np))
+                            if !crate::env_flag!("OXI_BDR_SKIP_CARRIER_DISABLE")
+                                && np.style.page_section_break
+                                && np.runs.iter().all(|r| r.text.is_empty())
+                                && !np.style.page_break_after
+                                && !matches!(page.blocks.get(block_idx + 2), Some(Block::Table(_)))
+                                && !matches!(page.blocks.get(block_idx), Some(Block::Table(_))) => block_idx + 2,
+                        _ => block_idx + 1,
+                    };
                     let s903_next_borders_body: Option<&ParagraphBorders> =
-                        page.blocks.get(block_idx + 1).and_then(|b| match b {
+                        page.blocks.get(s903_next_idx).and_then(|b| match b {
                             Block::Paragraph(p) => p.style.borders.as_ref(),
                             _ => None,
                         });
@@ -6400,7 +6435,7 @@ impl<'a> PageLayouter<'a> {
                     // 160 / 272pt): Word sets 第5条 in the wide column at 25 characters a
                     // line; Oxi broke it at the narrow column's 14 and carried those lines
                     // over, one line short per page.
-                    if std::env::var_os("OXI_UNEQUAL_COL_PREADVANCE_DISABLE").is_none()
+                    if !crate::env_flag!("OXI_UNEQUAL_COL_PREADVANCE_DISABLE")
                         && num_columns > 1
                         && current_column + 1 < num_columns
                         && col_widths.iter().any(|w| (*w - content_width).abs() > 0.1)
@@ -6417,7 +6452,7 @@ impl<'a> PageLayouter<'a> {
                             cursor.set(col_band_top);
                         }
                     }
-                    if std::env::var("OXI_DBG_COL").is_ok() && num_columns > 1 {
+                    if crate::env_flag!("OXI_DBG_COL") && num_columns > 1 {
                         eprintln!("[COL] enter block_idx={} col={} cursor_y={:.1} band_top={:.1} pages={}",
                             block_idx, current_column, cursor.cursor_y, col_band_top, pages.len());
                     }
@@ -6494,12 +6529,12 @@ impl<'a> PageLayouter<'a> {
                             let band_top = fy + off;
                             if fp == current_page_idx && bottom > cursor.cursor_y && bottom < start_y + content_height
                                 && band_top > cursor.cursor_y + 0.01
-                                && std::env::var_os("OXI_TB_BAND_FLOW_DISABLE").is_none()
+                                && !crate::env_flag!("OXI_TB_BAND_FLOW_DISABLE")
                             {
                                 s758_bands.push((current_page_idx, band_top, bottom, 0.0, page.size.width, false, BodyWrapPolicy::OBJECT));
                                 tb_band_next = Some((block_idx + 1, current_page_idx, band_top, bottom));
                             } else if fp == current_page_idx && bottom > cursor.cursor_y && bottom < start_y + content_height {
-                                if std::env::var_os("OXI_S1500_DISABLE").is_none() {
+                                if !crate::env_flag!("OXI_S1500_DISABLE") {
                                     s1500_unpushed = Some((block_idx + 1, current_page_idx, cursor.cursor_y));
                                 }
                                 cursor.set(bottom);
@@ -6544,7 +6579,7 @@ impl<'a> PageLayouter<'a> {
                             cursor.set(bot);
                         }
                     }
-                    if std::env::var("OXI_DBG_PARA").is_ok() {
+                    if crate::env_flag!("OXI_DBG_PARA") {
                         let txt: String = para
                             .runs
                             .iter()
@@ -6584,7 +6619,7 @@ impl<'a> PageLayouter<'a> {
                         && pages.len() == pages_before
                         && final_col == s1324_col_before + 1
                         && !para.style.page_break_before
-                        && std::env::var("OXI_S1324_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S1324_DISABLE")
                     {
                         let new_x = col_x_positions[final_col];
                         let old_x = col_x_positions[s1324_col_before];
@@ -6664,7 +6699,7 @@ impl<'a> PageLayouter<'a> {
                                         *y += dy;
                                     }
                                 }
-                                if std::env::var("OXI_DBG_COL").is_ok() {
+                                if crate::env_flag!("OXI_DBG_COL") {
                                     eprintln!(
                                         "[COL] S1324 pull {} block(s) into col {} dy={:.1} advance={:.1}",
                                         block_idx - pull_from, final_col, dy, chain_advance
@@ -6779,7 +6814,7 @@ impl<'a> PageLayouter<'a> {
                                 if let Some(y) = block_y_positions.get_mut(tbl_blk) {
                                     *y += dy;
                                 }
-                                if std::env::var("OXI_DBG_KN635").is_ok() {
+                                if crate::env_flag!("OXI_DBG_KN635") {
                                     eprintln!(
                                         "[S970] pull table blk={} els={}..{} \
 tbl_top={:.1} advance={:.1} new_top={:.1}",
@@ -6789,13 +6824,13 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                             }
                         }
                     }
-                    if std::env::var("OXI_S960_DISABLE").is_err()
+                    if !crate::env_flag!("OXI_S960_DISABLE")
                         && !self.doc_body_has_real_cjk
                         && (num_columns == 1
                             || (s1324_col_before + 1 == num_columns && final_col == 0))
                         && s960_added == 1
                         && !para.style.page_break_before
-                        && std::env::var("OXI_S802").is_err()
+                        && !crate::env_flag!("OXI_S802")
                     {
                         let old_idx = pages.len() - 1;
                         // A whole-move is the only shape this may touch: an S916
@@ -6842,7 +6877,7 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                             // p13 bottom while Word starts p14 with it.
                             let chain_len = block_idx - pull_from;
                             let s1176_single =
-                                chain_len == 1 && std::env::var("OXI_S1176_DISABLE").is_err();
+                                chain_len == 1 && !crate::env_flag!("OXI_S1176_DISABLE");
                             // OXI_KEEPNEXT_TAIL_SPLIT (2026-10-19, default ON, opt-out _DISABLE):
                             // a keepNext predecessor with >= 4 lines on the old page (not
                             // keepLines) is SPLIT, not dragged: only its last two lines join the
@@ -6853,7 +6888,7 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                             // Oxi dragged three run-in glossary entries across
                             // (`_pb_keepnext_slice_gen.py`; `_pb_specvanish_keep_gen.py`
                             // PB_ARM=direct4: a 4-line keepNext paragraph at the page end splits).
-                            let tail_split_y: Option<f32> = if std::env::var_os("OXI_KEEPNEXT_TAIL_SPLIT_DISABLE").is_none()
+                            let tail_split_y: Option<f32> = if !crate::env_flag!("OXI_KEEPNEXT_TAIL_SPLIT_DISABLE")
                                 && chain_len >= 1
                             {
                                 match page.blocks.get(block_idx - 1) {
@@ -6925,7 +6960,7 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                             // again and the gap has to come back. legal__000ad039: the
                             // "Authors Cited" heading carries w:after=720 (36pt) and Oxi
                             // shifted its follower by the heading's 13.8pt line alone.
-                            let s1249_gap = if std::env::var("OXI_S1249_DISABLE").is_err() {
+                            let s1249_gap = if !crate::env_flag!("OXI_S1249_DISABLE") {
                                 s1249_prev_sa.max(para.style.space_before.unwrap_or(0.0))
                             } else {
                                 0.0
@@ -6970,7 +7005,7 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                                         *y += chain_dy;
                                     }
                                 }
-                                if std::env::var("OXI_DBG_KN635").is_ok() {
+                                if crate::env_flag!("OXI_DBG_KN635") {
                                     eprintln!(
                                         "[KCHAIN-ACTUAL] pull_from={} block_idx={} \
 old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.1}",
@@ -6987,7 +7022,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                     }
                     elements.extend(para_elements);
-                    if std::env::var("OXI_FN_PROBE").is_ok() && !para_fn_refs_per_page.is_empty() {
+                    if crate::env_flag!("OXI_FN_PROBE") && !para_fn_refs_per_page.is_empty() {
                         let any_ref = para_fn_refs_per_page.iter().any(|v| !v.is_empty());
                         if any_ref {
                             eprintln!(
@@ -6999,7 +7034,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
 
                     // Track page/column breaks that happened inside layout_paragraph
                     let pages_added = pages.len() - pages_before;
-                    if std::env::var("OXI_DBG_COL").is_ok() && num_columns > 1 {
+                    if crate::env_flag!("OXI_DBG_COL") && num_columns > 1 {
                         let txt: String = para
                             .runs
                             .iter()
@@ -7023,7 +7058,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // last bucket is always the final page; line-loop pushes
                     // open buckets 1:1, so end-alignment maps every bucket to
                     // the page its lines actually rendered on.
-                    let start_page_for_para = if std::env::var("OXI_S793_DISABLE").is_ok() {
+                    let start_page_for_para = if crate::env_flag!("OXI_S793_DISABLE") {
                         current_page_idx
                     } else {
                         (current_page_idx + pages_added)
@@ -7065,7 +7100,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // p1, does not fit and moves to p2; Word draws all four boxes at
                         // the top of p2, Oxi drew them over p1's footer and let p2's text
                         // run under the Family Safety box.
-                        if std::env::var_os("OXI_MOVED_PARA_START_DISABLE").is_none()
+                        if !crate::env_flag!("OXI_MOVED_PARA_START_DISABLE")
                             && pages.get(pages_before).is_some_and(|old| old.elements.len() == elements_before)
                         {
                             let moved_to = old_page_idx + 1;
@@ -7073,7 +7108,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let new_y = s755_geom.as_ref().map_or(start_y, |g| g.top(moved_to + 1));
                             *block_start_page_indices.last_mut().unwrap() = moved_to;
                             *block_y_positions.last_mut().unwrap() = new_y;
-                            if std::env::var_os("OXI_DBG_MOVED").is_some() { eprintln!("[MOVED] blk={} old_pg={} y {}->{} bands {}..{} {:?}", block_idx, old_page_idx, old_y, new_y, block_bands_start, s758_bands.len(), &s758_bands[block_bands_start..]); }
+                            if crate::env_flag!("OXI_DBG_MOVED") { eprintln!("[MOVED] blk={} old_pg={} y {}->{} bands {}..{} {:?}", block_idx, old_page_idx, old_y, new_y, block_bands_start, s758_bands.len(), &s758_bands[block_bands_start..]); }
                             for i in block_bands_start..s758_bands.len() {
                                 let b = &mut s758_bands[i];
                                 if b.0 != old_page_idx { continue; }
@@ -7088,7 +7123,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 }
                             }
                         }
-                        if std::env::var("OXI_FN_PROBE").is_ok() {
+                        if crate::env_flag!("OXI_FN_PROBE") {
                             eprintln!("[FN_MID_BREAK] block_idx={} pages_added={} now_page={} reserve_before_clear={:.1} ids={:?}",
                                 block_idx, pages_added, current_page_idx,
                                 footnote_reserve_current, footnote_ids_current_page);
@@ -7120,7 +7155,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // fn area (Word widow-pushes the following paragraph).
                         // For the normal shape (buckets == pages_added+1) the
                         // last bucket maps to the final page — byte-identical.
-                        let s829 = std::env::var("OXI_S829_DISABLE").is_err();
+                        let s829 = !crate::env_flag!("OXI_S829_DISABLE");
                         let s829_start = current_page_idx
                             .saturating_sub(para_fn_refs_per_page.len().saturating_sub(1));
                         let final_refs: Vec<u32> = if s829 {
@@ -7172,7 +7207,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // page-transition fold (the target page's body must keep
                     // room for them; 81e80 Word p3 opens its area with the
                     // deferred 16/17/18 ahead of p3's own refs).
-                    if !s900_para_deferred.is_empty() && std::env::var("OXI_S900_DISABLE").is_err()
+                    if !s900_para_deferred.is_empty() && !crate::env_flag!("OXI_S900_DISABLE")
                     {
                         let target = current_page_idx + 1;
                         while page_fn_refs.len() <= target {
@@ -7188,7 +7223,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }
                             s900_pending_deferred.push((target, *id, h));
                         }
-                        if std::env::var("OXI_DBG900").is_ok() {
+                        if crate::env_flag!("OXI_DBG900") {
                             eprintln!(
                                 "[S900] blk={} deferred {:?} -> page {}",
                                 block_idx, s900_para_deferred, target
@@ -7217,7 +7252,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // margin-top 107.05 -- Word draws it at the PAGE's
                             // 107.05, the hardcoded form put it at
                             // 34.85 + 107.05 = 141.9.
-                            let (sx, sy) = if std::env::var("OXI_S1460_DISABLE").is_err() {
+                            let (sx, sy) = if !crate::env_flag!("OXI_S1460_DISABLE") {
                                 LayoutEngine::vertical_shape_origin(page, shape, para_anchor_y)
                             } else {
                                 (page.margin.left + pos.x, para_anchor_y + pos.y)
@@ -7268,8 +7303,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // Word's PDF whether it is a paragraph or a table; Oxi added
                         // the 10pt (8pt for 160) before a TABLE only (143.6 / 141.6) —
                         // the paragraph path already drops it at the page top.
-                        if std::env::var("OXI_PAGE_BREAK_SPACING").is_ok()
-                            || std::env::var("OXI_S1550_DISABLE").is_err()
+                        if crate::env_flag!("OXI_PAGE_BREAK_SPACING")
+                            || !crate::env_flag!("OXI_S1550_DISABLE")
                         {
                             prev_space_after = 0.0;
                         }
@@ -7315,7 +7350,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // S1516 (2026-09-21): the previous LIST id is tracked for every
                     // list item, tagged with whether its after-spacing was auto
                     // ("|auto") or explicit ("|plain"); see paragraph_spacing_before.
-                    prev_autospacing_numid = if std::env::var_os("OXI_S1516_DISABLE").is_none() {
+                    prev_autospacing_numid = if !crate::env_flag!("OXI_S1516_DISABLE") {
                         para.style.num_id.clone().map(|n| format!("{}|{}", n, if para.style.after_autospacing { "auto" } else { "plain" }))
                     } else if para.style.after_autospacing {
                         para.style.num_id.clone()
@@ -7334,7 +7369,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         .filter(|b| b.0 == block_idx && b.1 == current_page_idx)
                         .map(|b| (b.2, b.3));
                     // COM-confirmed: prev paragraph's space_after is always added before table
-                    if std::env::var("OXI_DBG_TBLSTART").is_ok() {
+                    if crate::env_flag!("OXI_DBG_TBLSTART") {
                         eprintln!("[TBLARM] blk={} cur={:.2} prev_space_after={:.2}", block_idx, cursor.cursor_y, prev_space_after);
                     }
                     // OXI_TBL_AFTER_SPILL (2026-10-13, default ON, opt-out _DISABLE):
@@ -7349,7 +7384,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // the document start all render at Word's y (scratch
                     // tbltop/v_*); a following PARAGRAPH already starts at the
                     // page top in both (v_paranext: 85.22 / 85.1).
-                    let after_advance = if std::env::var_os("OXI_TBL_AFTER_SPILL_DISABLE").is_none() {
+                    let after_advance = if !crate::env_flag!("OXI_TBL_AFTER_SPILL_DISABLE") {
                         prev_space_after.min((start_y + content_height - cursor.cursor_y).max(0.0))
                     } else {
                         prev_space_after
@@ -7385,15 +7420,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // Word's 9 (46 paragraphs at -1). With the flag the document
                     // goes 0.5340 -> 0.7087 and all four EN benchmark failures
                     // match Word's page count.
-                    let float_reflow_enabled = std::env::var_os("OXI_FLOAT_TABLE_REFLOW").is_some()
-                        || std::env::var_os("OXI_S1468_DISABLE").is_none();
-                    if !is_floating && (std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() || float_reflow_enabled) {
+                    let float_reflow_enabled = crate::env_flag!("OXI_FLOAT_TABLE_REFLOW")
+                        || !crate::env_flag!("OXI_S1468_DISABLE");
+                    if !is_floating && (crate::env_flag!("OXI_DEBUG_FLOAT_FLOW") || float_reflow_enabled) {
                         previous_flow_probe = Some((block_idx, cursor.cursor_y, pages.len(), start_y, content_height, s755_geom));
                         previous_flow_probe_elements = elements.clone();
                         previous_flow_paragraph_end = None;
                     }
 
-                    if is_floating && (std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() || float_reflow_enabled) {
+                    if is_floating && (crate::env_flag!("OXI_DEBUG_FLOAT_FLOW") || float_reflow_enabled) {
                         let nominal_top = page.margin.top;
                         let nominal_anchor = saved_cursor_y - (start_y - nominal_top).max(0.0);
                         let mut probe_table = table.clone();
@@ -7449,7 +7484,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // Float 1 keeps its 244.2pt prefix against a 68.9pt
                         // first row and stays put, so the test is per-ROW, not
                         // "does the whole float fit".
-                        let row0_height = if std::env::var("OXI_S1478_DISABLE").is_err()
+                        let row0_height = if !crate::env_flag!("OXI_S1478_DISABLE")
                             && !probe_table.rows.is_empty()
                             && !actual_pages.is_empty()
                         {
@@ -7483,7 +7518,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 move_float_to_next_page = true;
                             }
                         }
-                        if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                        if crate::env_flag!("OXI_DEBUG_FLOAT_FLOW") {
                             eprintln!("[FLOAT-ROW0] block={} actual_prefix={:.3} row0_height={:?} move={}",
                                 block_idx, actual_prefix, row0_height, move_float_to_next_page);
                         }
@@ -7497,7 +7532,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // rules. The old branch reserved the float's FULL height
                         // (311.59), pushing that tail to 433.1 and freeing the
                         // 190..430 band, so rows 1..3 packed onto page 4 too.
-                        let s1476 = std::env::var("OXI_S1476_DISABLE").is_err();
+                        let s1476 = !crate::env_flag!("OXI_S1476_DISABLE");
                         let placement_prefix = if probe_pages.is_empty()
                             && !(s1476 && !actual_pages.is_empty())
                         {
@@ -7505,7 +7540,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         } else {
                             actual_prefix
                         };
-                        if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                        if crate::env_flag!("OXI_DEBUG_FLOAT_FLOW") {
                             eprintln!("[FLOAT-ACTUAL] block={} first_bottom={:.3} prefix_height={:.3} breaks={} placement_prefix={:.3}",
                                 block_idx, actual_bottom, actual_prefix, actual_pages.len(), placement_prefix);
                         }
@@ -7558,7 +7593,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                         }
                                         _ => unreachable!(),
                                     }
-                                    if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                                    if crate::env_flag!("OXI_DEBUG_FLOAT_FLOW") {
                                         eprintln!("[FLOAT-CONTEXT] previous={} entry_page={} entry_y={:.3} entry_top={:.3} entry_height={:.3} target_page={} baseline_end_page={} baseline_cursor={:.3} geometry={:?}",
                                             prev_idx, entry_page + 1, entry_y, entry_top, entry_height,
                                             current_page_idx + 1, baseline_pages.len() + 1, baseline_cursor.cursor_y, geometry);
@@ -7638,12 +7673,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                             }
                                             None
                                         })).collect::<Vec<_>>();
-                                        if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                                        if crate::env_flag!("OXI_DEBUG_FLOAT_FLOW") {
                                             eprintln!("[FLOAT-POSITION] block={} anchor={:.3} end_page={} end_cursor={:.3} text={:?}",
                                                 block_idx, flow_anchor, positioned_pages.len() + 1, positioned_cursor.cursor_y, entries);
                                         }
                                     }
-                                    if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                                    if crate::env_flag!("OXI_DEBUG_FLOAT_FLOW") {
                                         eprintln!("[FLOAT-REFLOW] block={} previous={} exclusion_bottom={:.3} end_page={} end_cursor={:.3} tail_elements={}",
                                             block_idx, prev_idx, exclusion_bottom, replay_pages.len() + 1, replay_cursor.cursor_y, replay_tail.len());
                                     }
@@ -7707,7 +7742,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 }
                             }
                         }
-                        if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                        if crate::env_flag!("OXI_DEBUG_FLOAT_FLOW") {
                             eprintln!("[FLOAT-FLOW] block={} page={} actual_anchor={:.3} nominal_anchor={:.3} first_bottom={:.3} prefix_height={:.3} breaks={} final_cursor={:.3}",
                                 block_idx, current_page_idx + 1, saved_cursor_y, nominal_anchor,
                                 first_bottom, first_bottom - nominal_anchor, probe_pages.len(), probe_cursor.cursor_y);
@@ -7723,7 +7758,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // not fit -- Word starts p28 with 「例示」 and the table; Oxi left
                         // the heading alone at the p27 bottom.
                         let mut pull_from = block_idx;
-                        if std::env::var_os("OXI_S1569_DISABLE").is_none() && num_columns == 1 {
+                        if !crate::env_flag!("OXI_S1569_DISABLE") && num_columns == 1 {
                             while pull_from > 0 {
                                 match page.blocks.get(pull_from - 1) {
                                     Some(Block::Paragraph(pp))
@@ -7829,11 +7864,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     _ => 0.0,
                                 };
                                 cursor.cursor_y + pos.y
-                                    - if std::env::var_os("OXI_YSPEC_TEXT_SHIFT_DISABLE").is_none()
+                                    - if !crate::env_flag!("OXI_YSPEC_TEXT_SHIFT_DISABLE")
                                     { sentinel } else { 0.0 }
                             } // offset from anchor para bottom
-                            Some("margin") if std::env::var_os("OXI_S1651_DISABLE").is_some() => start_y + pos.y,
-                            None if std::env::var_os("OXI_S1651_DISABLE").is_some() => cursor.cursor_y + pos.y,
+                            Some("margin") if crate::env_flag!("OXI_S1651_DISABLE") => start_y + pos.y,
+                            None if crate::env_flag!("OXI_S1651_DISABLE") => cursor.cursor_y + pos.y,
                             _ => page.margin.top + pos.y,
                         };
                         if floating_auto_flow {
@@ -7859,7 +7894,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // 'Climatic shell' onto p10 where Word has it on p11.
                         if pos.y_spec.as_deref() == Some("bottom")
                             && !matches!(pos.v_anchor.as_deref(), Some("text") | Some("page"))
-                            && std::env::var("OXI_S991_DISABLE").is_err()
+                            && !crate::env_flag!("OXI_S991_DISABLE")
                         {
                             // S1651 leaves this derivation alone: the S991 budget
                             // was measured from the anchor PARAGRAPH (anchor@325 ->
@@ -7929,7 +7964,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 || (p.v_anchor.as_deref() != Some("page")
                                     && (self.keep_floating_tables_together || p.y < -0.5))
                         })
-                        && std::env::var("OXI_S878_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S878_DISABLE")
                     {
                         let cb = start_y + content_height;
                         let cw_est = self.resolve_table_col_widths_n(table, content_width, false);
@@ -8039,8 +8074,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     Some("page") => pos.y,
                                     Some("text") => cursor.cursor_y + pos.y,
                                     // S1651: absent = margin = the page's top margin.
-                                    Some("margin") if std::env::var_os("OXI_S1651_DISABLE").is_some() => start_y + pos.y,
-                                    None if std::env::var_os("OXI_S1651_DISABLE").is_some() => cursor.cursor_y + pos.y,
+                                    Some("margin") if crate::env_flag!("OXI_S1651_DISABLE") => start_y + pos.y,
+                                    None if crate::env_flag!("OXI_S1651_DISABLE") => cursor.cursor_y + pos.y,
                                     _ => page.margin.top + pos.y,
                                 };
                             }
@@ -8067,7 +8102,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         && committed_float_fit.is_none()
                         && table.style.position.as_ref().map_or(false, |p|
                             p.v_anchor.as_deref() == Some("page"))
-                        && !(std::env::var("OXI_S1547_DISABLE").is_err() && {
+                        && !(!crate::env_flag!("OXI_S1547_DISABLE") && {
                             let tw: f32 = table.grid_columns.iter().sum();
                             let tp = table.style.position.as_ref();
                             let band_x0 = match tp {
@@ -8099,7 +8134,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // floating_table_keep fixture (flag0_page_lines6/12,
                             // Word-measured) leaves a 32.9pt right lane and Word
                             // still splits the float at the anchor page's capacity.
-                            let s1547_lane_min = if std::env::var("OXI_S1031_DISABLE").is_err()
+                            let s1547_lane_min = if !crate::env_flag!("OXI_S1031_DISABLE")
                                 && !self.doc_body_has_real_cjk
                             {
                                 41.5
@@ -8107,7 +8142,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 100.0
                             };
                             let lane = left_lane.max(right_lane) >= s1547_lane_min;
-                            if std::env::var("OXI_DEBUG_FLOAT_FLOW").is_ok() {
+                            if crate::env_flag!("OXI_DEBUG_FLOAT_FLOW") {
                                 eprintln!("[FLOAT-S1547] block={} band_x0={:.2} tw={:.2} left_lane={:.2} right_lane={:.2} lane_min={:.1} lane={}",
                                     block_idx, band_x0, tw, left_lane, right_lane, s1547_lane_min, lane);
                             }
@@ -8145,8 +8180,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // floating table («Year | Performance measures») to p151.
                     // Oxi reserved nothing and started that table at 674.5.
                     if !page.footnotes.is_empty()
-                        && std::env::var("OXI_S740_DISABLE").is_err()
-                        && (!is_floating || std::env::var_os("OXI_S1578_DISABLE").is_none())
+                        && !crate::env_flag!("OXI_S740_DISABLE")
+                        && (!is_floating || !crate::env_flag!("OXI_S1578_DISABLE"))
                     {
                         fn cell_fn_ids(blocks: &[Block], out: &mut Vec<u32>) {
                             for b in blocks {
@@ -8197,7 +8232,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // its note plus that line no longer fit.
                     let s740_sep = if s740_any
                         && (!(page.grid_line_pitch.is_some() && !page.doc_grid_no_type)
-                            || std::env::var_os("OXI_S740_SEP_GRID_DISABLE").is_none())
+                            || !crate::env_flag!("OXI_S740_SEP_GRID_DISABLE"))
                     {
                         let first = s740_row_fn
                             .iter()
@@ -8209,7 +8244,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     };
                     let mut s740_fn_pages: Vec<Vec<u32>> = Vec::new();
                     let s970_pages_before_tbl = pages.len();
-                    if std::env::var("OXI_DBG_TBLSTART").is_ok() {
+                    if crate::env_flag!("OXI_DBG_TBLSTART") {
                         eprintln!("[TBLARM2] blk={} cur={:.2} before layout_table_with_fit", block_idx, cursor.cursor_y);
                     }
                     let mut table_elements = self.layout_table_with_fit(
@@ -8260,7 +8295,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let mut s1593_applied = false;
                     if num_columns > 1
                         && pages.len() > s970_pages_before_tbl
-                        && std::env::var_os("OXI_S1593_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_S1593_DISABLE")
                         && !s740_any
                         && col_widths.iter().all(|w| (*w - content_width).abs() < 0.1)
                         && col_x_positions.len() == num_columns
@@ -8345,7 +8380,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 col_band_top = start_y;
                             }
                             s1593_applied = true;
-                            if std::env::var_os("OXI_DBG_COL").is_some() {
+                            if crate::env_flag!("OXI_DBG_COL") {
                                 eprintln!("[COL] S1593 table blk={} from col {} over {} segment(s) -> col {} page+{}",
                                     block_idx, c0, n_seg, tail_col, tail_poff);
                             }
@@ -8353,7 +8388,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                     if !s1593_applied && num_columns > 1 && current_column > 0
                         && pages.len() > s970_pages_before_tbl
-                        && std::env::var("OXI_TABLE_CONTINUATION_ORIGIN_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_TABLE_CONTINUATION_ORIGIN_DISABLE")
                         && col_widths.iter().all(|w| (*w - content_width).abs() < 0.1)
                     {
                         let dx = col_x_positions[0] - start_x;
@@ -8423,7 +8458,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // row bottom sz12): Word's next block starts at the rule + 1.44
                     // (PDF 383.21 -> 384.65 -> empty 11.51 -> 396.16), Oxi at the rule +
                     // 3.0, and every later line on the page sat 1.45 low.
-                    let s1580_foot_done = std::env::var_os("OXI_S1580_DISABLE").is_none()
+                    let s1580_foot_done = !crate::env_flag!("OXI_S1580_DISABLE")
                         && self.s1191_on()
                         && self.s1191_table_needs_foot(table);
                     // OXI_FLOAT_BOTTOM_RULE (2026-10-25, default ON, opt-out _DISABLE): a
@@ -8439,9 +8474,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // shift already stands in for floats too (91.05 vs 91.10). So the one
                     // gate that differed was `!is_floating`. ja/forms__02157d72 p1: three
                     // tcBorders floats, -0.5 below each.
-                    if (!is_floating || std::env::var_os("OXI_FLOAT_BOTTOM_RULE_DISABLE").is_none())
+                    if (!is_floating || !crate::env_flag!("OXI_FLOAT_BOTTOM_RULE_DISABLE"))
                         && !s1580_foot_done
-                        && std::env::var_os("OXI_S1452_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_S1452_DISABLE")
                         && !matches!(page.blocks.get(block_idx + 1), Some(Block::Table(_)))
                     {
                         // Scope: only a CELL-bordered table. A table-level `tblBorders`
@@ -8482,8 +8517,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // the +0.5 pushed each following paragraph onto the next grid line,
                             // 16pt by p4, where Word keeps it). Opt-out OXI_S1536_DISABLE;
                             // OXI_S1536 still forces it on everywhere.
-                            let s1536_on = std::env::var_os("OXI_S1536").is_some()
-                                || (std::env::var_os("OXI_S1536_DISABLE").is_none()
+                            let s1536_on = crate::env_flag!("OXI_S1536")
+                                || (!crate::env_flag!("OXI_S1536_DISABLE")
                                     && self.compat_mode >= 15
                                     && self.compat_mode_explicit);
                             if page.grid_char_pitch.is_some() && s1536_on {
@@ -8595,7 +8630,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // empty note behaves as the one-line one. `_pb_ftbl_ybottom_gen.py`
                     // (blind-G JA forms__02157d72): the ※ note 447.75 below the 緊急連絡先
                     // table, next paragraph +12.75 against the inline arm.
-                    if std::env::var_os("OXI_S1615_DISABLE").is_none()
+                    if !crate::env_flag!("OXI_S1615_DISABLE")
                         && pages.len() == s970_pages_before_tbl
                         && block_idx > 0
                         && matches!(page.blocks.get(block_idx - 1), Some(Block::Paragraph(_)))
@@ -8625,7 +8660,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                         e.y += dy;
                                     }
                                 }
-                                if std::env::var_os("OXI_DBG_S1615").is_some() {
+                                if crate::env_flag!("OXI_DBG_S1615") {
                                     eprintln!("[S1615] para {} last line {:.2} -> {:.2} (+{:.2})",
                                         prev, last_top, last_top + dy, line_h);
                                 }
@@ -8638,7 +8673,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // one-page predicate — a table that spanned pages pushed at
                     // least one, and Word does not whole-move a splitting table.
                     s970_pending = None;
-                    if std::env::var("OXI_S970_DISABLE").is_err()
+                    if !crate::env_flag!("OXI_S970_DISABLE")
                         && !self.doc_body_has_real_cjk
                         && num_columns == 1
                         && !is_floating
@@ -8736,7 +8771,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // shifted -1 page (the gate's −1 cascade origin). ed025c's
                         // OFF-column floats (horzAnchor absent → None, or "page", tblpX
                         // 32-100pt, overflow the column) keep h_anchor!=margin → unaffected.
-                        let h_anchor_margin = std::env::var("OXI_S686_DISABLE").is_err()
+                        let h_anchor_margin = !crate::env_flag!("OXI_S686_DISABLE")
                             && table
                                 .style
                                 .position
@@ -8756,7 +8791,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // doc has a centered float that fits-but-narrow (the centered
                         // canaries are overflow [1ec1/kyotei/459f05] or tiny [ukhmrc])
                         // → byte-identical by construction.
-                        let centered_narrow = std::env::var("OXI_S856_DISABLE").is_err()
+                        let centered_narrow = !crate::env_flag!("OXI_S856_DISABLE")
                             && v_anchor_text
                             && table.style.position.as_ref().map_or(false, |p| {
                                 p.h_align.as_deref() == Some("center")
@@ -8779,7 +8814,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // paragraphs shift, no pixels) → Word flows 459f05's body below
                         // its floats too. policies__0009e9db: 0.987 FAIL → 1.000 PASS.
                         // A table whose top is above the body can still overlap its text.
-                        let page_float_wide = std::env::var("OXI_S857_DISABLE").is_err()
+                        let page_float_wide = !crate::env_flag!("OXI_S857_DISABLE")
                             && table.style.position.as_ref().map_or(false, |p| {
                                 p.v_anchor.as_deref() == Some("page")
                                     || (!floating_auto_flow && p.y_spec.is_none()
@@ -8802,7 +8837,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // below the float and paid a page.
                         let page_float_wide = page_float_wide
                             && !(num_columns > 1
-                                && std::env::var("OXI_S1549_DISABLE").is_err()
+                                && !crate::env_flag!("OXI_S1549_DISABLE")
                                 && {
                                     let tp = table.style.position.as_ref();
                                     let fx0 = match tp {
@@ -8828,7 +8863,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     let (dl, dr) = tp.map_or((0.0, 0.0), |tp| (tp.left_from_text, tp.right_from_text));
                                     let (fl, fr) = (fx0 - dl, fx0 + table_w_pt + dr);
                                     let no_overlap = fr <= start_x + 0.5 || fl >= start_x + content_width - 0.5;
-                                    if std::env::var("OXI_DBG_FLOAT").is_ok() {
+                                    if crate::env_flag!("OXI_DBG_FLOAT") {
                                         eprintln!("[FLOAT-S1549] blk={} col=[{:.2}..{:.2}] float=[{:.2}..{:.2}] no_overlap={}",
                                             block_idx, start_x, start_x + content_width, fl, fr, no_overlap);
                                     }
@@ -8855,7 +8890,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         //   narrowing for this float class, so ≥44 falls to the
                         //   "floats don't advance text flow" branch — the same
                         //   approximation Word's lane produces for empty content.
-                        let lane_min = if std::env::var("OXI_S1031_DISABLE").is_err()
+                        let lane_min = if !crate::env_flag!("OXI_S1031_DISABLE")
                             && !self.doc_body_has_real_cjk
                         {
                             41.5
@@ -8876,7 +8911,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             || centered_narrow
                             || page_float_wide
                             || edge_narrow;
-                        if std::env::var("OXI_DBG_FLOAT").is_ok() {
+                        if crate::env_flag!("OXI_DBG_FLOAT") {
                             eprintln!("[FLOAT] blk={} pg={} saved_y={:.1} cand_y=[{:.1}..{:.1}] w={:.1} x={:?} h_align={:?} h_anchor={:?} pages_added={} wide={} wrap_below={}",
                                 block_idx, current_page_idx, saved_cursor_y, candidate_y_top, candidate_y_bottom,
                                 table_w_pt, table.style.position.as_ref().map(|p| p.x),
@@ -8922,7 +8957,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let needs_wrap_below = needs_wrap_below
                             || ((self.keep_floating_tables_together
                                 || (v_anchor_text && wide_table
-                                    && std::env::var_os("OXI_WIDE_FLOAT_COVERS_DISABLE").is_none()))
+                                    && !crate::env_flag!("OXI_WIDE_FLOAT_COVERS_DISABLE")))
                                 && covers_body);
                         if self.keep_floating_tables_together && !covers_body {
                             if let Some((left, right)) = table_side_bounds {
@@ -8936,7 +8971,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             cursor.set(float_text_bottom);
                             *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                         } else if needs_wrap_below
-                            && std::env::var("OXI_S638_DISABLE").is_err()
+                            && !crate::env_flag!("OXI_S638_DISABLE")
                             && (candidate_y_top - saved_cursor_y) > 6.0
                             && ((candidate_y_bottom - candidate_y_top) > 250.0
                                 // ★S638 height>250 gate DROPPED by default
@@ -8952,7 +8987,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // SSIM +0.0149 under gap-flow. The gap>6 gate
                                 // above stays (excludes kyotei/3a4f/ed025c
                                 // anchor-adjacent floats).
-                                || std::env::var("OXI_S638_HGATE").is_err())
+                                || !crate::env_flag!("OXI_S638_HGATE"))
                         {
                             // S638 (kyotei): the float leaves a GAP above it
                             // (>250pt height = a FULL-PAGE form float, the kyotei
@@ -9039,7 +9074,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // 17.9 and 18.9pt for leftFromText 142/284tw, and
                             // between 19 and 20 for 0 — so 18.5 sits in every
                             // bracket. ed025cbecffb's page-6 float leaves 27.97pt.
-                            let s1195_lane = std::env::var("OXI_S1195_DISABLE").is_err() && {
+                            let s1195_lane = !crate::env_flag!("OXI_S1195_DISABLE") && {
                                 let tpos = table.style.position.as_ref();
                                 // Same placement the S758 band uses below: an
                                 // ALIGN-positioned float (tblpXSpec) resolves
@@ -9087,7 +9122,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // against the band top 281.2 -- Word starts
                                 // 「２ 年次…」 at table bottom 387.05 + 11.
                                 let mut s1489_extra = 0.0f32;
-                                if std::env::var_os("OXI_S1489_DISABLE").is_none()
+                                if !crate::env_flag!("OXI_S1489_DISABLE")
                                     && block_idx > 0
                                     && matches!(page.blocks.get(block_idx - 1),
                                         Some(Block::Paragraph(p)) if p.runs.iter().all(|r| r.text.is_empty())
@@ -9122,7 +9157,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // docs — every pages_added>0 case is wrap_below=true;
                             // 459f05's is vertAnchor=page) → byte-identical by
                             // construction.
-                            let s772_pushed = std::env::var("OXI_S772_DISABLE").is_err()
+                            let s772_pushed = !crate::env_flag!("OXI_S772_DISABLE")
                                 && v_anchor_text
                                 && pages_added > 0;
                             // S758b: a NARROW vertAnchor="text" float leaves room
@@ -9137,7 +9172,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // h_align None) floats join per the probeqtbloffset
                             // Word truth (an in-column offset float IS wrapped
                             // beside) — see the offset arm below.
-                            if std::env::var("OXI_S758_DISABLE").is_err()
+                            if !crate::env_flag!("OXI_S758_DISABLE")
                                 && v_anchor_text
                                 && !wide_table
                                 && table_w_pt > 6.0
@@ -9149,7 +9184,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                             _ => (start_x, content_width),
                                         };
                                         // OXI_FLOAT_RIGHT_PAD: the band follows the drawn box
-                                        let right_pad = if std::env::var_os("OXI_FLOAT_RIGHT_PAD_DISABLE").is_none() {
+                                        let right_pad = if !crate::env_flag!("OXI_FLOAT_RIGHT_PAD_DISABLE") {
                                             table.style.default_cell_margins.as_ref().and_then(|m| m.left).unwrap_or(5.4)
                                         } else { 0.0 };
                                         match ha.as_str() {
@@ -9195,7 +9230,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     // leftFromText / rightFromText (142 twips = 7.1pt in
                                     // the probes: Word's lane ends 7.1 before the box);
                                     // 9pt is Word's default when none is declared.
-                                    if std::env::var_os("OXI_FLOAT_RIGHT_PAD_DISABLE").is_none() {
+                                    if !crate::env_flag!("OXI_FLOAT_RIGHT_PAD_DISABLE") {
                                         // measured from the CELL TEXT edge: Word's lane ends at
                                         // 347.0 beside a box at 348.9 with 5.4 margins and 7.1
                                         // leftFromText (348.9 + 5.4 - 7.1 = 347.2)
@@ -9232,13 +9267,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // ed025c and hmrc are untouched by it: their floats
                                 // run to (or past) one column edge, so the narrow
                                 // side is ~0 and the pair never forms.
-                                let two_seg_ok = std::env::var("OXI_TWOSEG_DISABLE").is_err()
+                                let two_seg_ok = !crate::env_flag!("OXI_TWOSEG_DISABLE")
                                     && left_gap.min(right_gap) >= 30.0;
-                                let offset_ok = std::env::var("OXI_S772_DISABLE").is_err()
+                                let offset_ok = !crate::env_flag!("OXI_S772_DISABLE")
                                     && ((left_gap.min(right_gap) <= 24.0
                                         && left_gap.max(right_gap) >= 100.0)
                                         || two_seg_ok);
-                                if std::env::var("OXI_DBG_TWOSEG").is_ok() {
+                                if crate::env_flag!("OXI_DBG_TWOSEG") {
                                     eprintln!(
                                         "[TWOSEG] band_x0={:.1} w={:.1} left_gap={:.1} right_gap={:.1} two_seg_ok={} is_align={}",
                                         band_x0, table_w_pt, left_gap, right_gap, two_seg_ok, is_align
@@ -9255,7 +9290,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     } else {
                                         (current_page_idx, candidate_y_top)
                                     };
-                                    if std::env::var_os("OXI_DBG_WF").is_some() {
+                                    if crate::env_flag!("OXI_DBG_WF") {
                                         eprintln!("[TBL-BAND] blk={} pg={} top={:.1} bottom={:.1} x={:.1}..{:.1} pushed={}", block_idx, band_pg, band_top, candidate_y_bottom, band_x0 - dl, band_x0 + table_w_pt + dr, s772_pushed);
                                     }
                                     s758_bands.push((
@@ -9270,7 +9305,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }
                             if s772_pushed {
                                 current_page_idx += pages_added;
-                                s772_counted = std::env::var_os("OXI_S772_ONCE_DISABLE").is_none();
+                                s772_counted = !crate::env_flag!("OXI_S772_ONCE_DISABLE");
                                 *block_page_indices.last_mut().unwrap() = current_page_idx;
                                 if let Some(g) = s755_geom.as_ref() {
                                     start_y = g.top(pages.len() + 1);
@@ -9326,7 +9361,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // the paragraph `pageBreakBefore` handler's page transition.
                     if img.page_break_before
                         && !elements.is_empty()
-                        && std::env::var("OXI_S1056_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S1056_DISABLE")
                     {
                         dbg_page_push(pages.len(), 0);
                         pages.push(LayoutPage {
@@ -9356,7 +9391,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                         // S1293b: see the overflow path below -- the START index
                         // drives float anchors and has to move with the block.
-                        if std::env::var("OXI_S1293_DISABLE").is_err() {
+                        if !crate::env_flag!("OXI_S1293_DISABLE") {
                             *block_start_page_indices.last_mut().unwrap() = current_page_idx;
                         }
                     }
@@ -9398,12 +9433,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // gives ceil(h / 18) cells, the logo centred; Oxi's line box
                             // added the paragraph mark's descent and took 2 cells.
                             && (h.style.line_spacing.map_or(false, |f| f > 1.001)
-                                || (std::env::var_os("OXI_GRID_OBJ_SINGLE_DISABLE").is_none()
+                                || (!crate::env_flag!("OXI_GRID_OBJ_SINGLE_DISABLE")
                                     && h.style.line_spacing.map_or(true, |f| f > 0.999))))
-                        && std::env::var_os("OXI_GRID_OBJ_NOLEAD_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_GRID_OBJ_NOLEAD_DISABLE")
                     {
                         let ext = img.height + if !self.doc_body_has_real_cjk
-                            && std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() {
+                            && !crate::env_flag!("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE") {
                             img.effect_extent_b.max(0.0) + img.effect_extent_t.max(0.0)
                         } else { 0.0 };
                         img_line.min(ext)
@@ -9429,8 +9464,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // agrees too (Word gap ~4.28, skip 3.00, round 16.25).
                     let s1101_no_type_exact = page.doc_grid_no_type
                         && (!self.doc_body_has_real_cjk
-                            || std::env::var_os("OXI_CJK_INLINE_NATURAL").is_some())
-                        && std::env::var("OXI_S1101_DISABLE").is_err();
+                            || crate::env_flag!("OXI_CJK_INLINE_NATURAL"))
+                        && !crate::env_flag!("OXI_S1101_DISABLE");
                     // OXI_EXACT_OBJ_NO_GRID (default ON, opt-out _DISABLE): an object in an
                     // EXACT-spaced host line takes that exact height, never whole grid
                     // cells -- an exact line does not snap to the document grid.
@@ -9440,13 +9475,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // own ascent = 225.9 (PDF 225.98) after every head, Oxi rounded the
                     // 22.5 up to 40 and lost one index line per column.
                     let s_exact_obj = img.host_exact_line.is_some_and(|v| v > 0.0)
-                        && std::env::var_os("OXI_EXACT_OBJ_NO_GRID_DISABLE").is_none();
+                        && !crate::env_flag!("OXI_EXACT_OBJ_NO_GRID_DISABLE");
                     let img_adv = match page.grid_line_pitch {
                         Some(p)
                             if p > 0.1
                                 && !s1101_no_type_exact
                                 && !s_exact_obj
-                                && std::env::var("OXI_S549_DISABLE").is_err() =>
+                                && !crate::env_flag!("OXI_S549_DISABLE") =>
                         {
                             (img_line / p).ceil() * p
                         }
@@ -9466,7 +9501,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // legal p2 measures 14.95pt MORE space around the figure in
                     // Word than Oxi placed. Suppressed at a fresh region top, where
                     // a body paragraph's space_before drops too.
-                    let s965 = std::env::var("OXI_S965_DISABLE").is_err();
+                    let s965 = !crate::env_flag!("OXI_S965_DISABLE");
                     // S1183 (2026-08-21, opt-out OXI_S1183_DISABLE): HTML
                     // autospacing on an IMAGE host resolves to the derived flat
                     // amounts — 6.75 for a LIST host, 14.0 (S901) for a plain
@@ -9482,7 +9517,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // Latin; JP byte-identical by construction).
                     let s1183 = s965
                         && !self.doc_body_has_real_cjk
-                        && std::env::var("OXI_S1183_DISABLE").is_err();
+                        && !crate::env_flag!("OXI_S1183_DISABLE");
                     let s1183_host = img.host_paragraph.as_deref().map(|h| &h.style);
                     let s1183_sb = match (s1183, s1183_host) {
                         (true, Some(st)) if st.before_autospacing => {
@@ -9531,7 +9566,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // (Normal before=60tw) draws at 60.6 = margin 57.6 + 3 in Word;
                     // Oxi put it at the margin and the whole page sat 3.08pt high.
                     // Word with that before set to 0 (COM edit) draws at 57.6.
-                    let img_page1_top = std::env::var_os("OXI_IMAGE_PAGE1_BEFORE_DISABLE").is_none()
+                    let img_page1_top = !crate::env_flag!("OXI_IMAGE_PAGE1_BEFORE_DISABLE")
                         && pages.is_empty()
                         && elements.is_empty()
                         && !super::S816_PAST_FIRST_SECTION.with(|c| c.get());
@@ -9558,7 +9593,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // (234.0 + 218.56) / 2 = 226.28 reproduces that. Judging by
                     // the bare ink (218) instead is 8pt too generous and let
                     // tokyoshugyo pull three paragraphs onto page 74.
-                    let img_fit = if std::env::var_os("OXI_IMAGE_INK_FIT_DISABLE").is_none() {
+                    let img_fit = if !crate::env_flag!("OXI_IMAGE_INK_FIT_DISABLE") {
                         img_adv - (img_adv - img_line).max(0.0) * 0.5
                     } else {
                         img_adv
@@ -9572,7 +9607,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // (keepNext) -> «Location of brake lights on a vehicle»: Word starts p66
                     // with all four; Oxi kept the text and figure on p65 and moved only the
                     // heading. Latin scope (the JP corpus keeps its calibrated keepNext).
-                    if std::env::var_os("OXI_IMG_KEEPNEXT_DISABLE").is_none()
+                    if !crate::env_flag!("OXI_IMG_KEEPNEXT_DISABLE")
                         && !self.doc_body_has_real_cjk
                         && img.position.is_none()
                         && !(num_columns > 1 && current_column + 1 < num_columns)
@@ -9687,7 +9722,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 }
                                 *block_page_indices.last_mut().unwrap() = current_page_idx;
                                 *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
-                                if std::env::var("OXI_S1293_DISABLE").is_err() {
+                                if !crate::env_flag!("OXI_S1293_DISABLE") {
                                     *block_start_page_indices.last_mut().unwrap() = current_page_idx;
                                 }
                             }
@@ -9733,7 +9768,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // 4: an image-ONLY page 8 and 10, which the gate counts
                         // as blank sheets). An image that did not fit genuinely
                         // starts on the page it was moved to.
-                        if std::env::var("OXI_S1293_DISABLE").is_err() {
+                        if !crate::env_flag!("OXI_S1293_DISABLE") {
                             *block_start_page_indices.last_mut().unwrap() = current_page_idx;
                         }
                     }
@@ -9748,7 +9783,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // exact cursor above. Re-sync after the advance.
                     let s1181_img_unsnap = if page.doc_grid_no_type
                         && !self.doc_body_has_real_cjk
-                        && std::env::var("OXI_S1181").is_ok()
+                        && crate::env_flag!("OXI_S1181")
                     {
                         let exact = cursor.visual_y;
                         let snapped = (exact / 0.75).round() * 0.75;
@@ -9771,7 +9806,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // +11.9). The text box that shares the block follows the
                     // shifted top through `block_y_positions`.
                     let s1321_top = match img.host_exact_line {
-                        Some(exact) if exact > 0.0 && std::env::var("OXI_S1321_DISABLE").is_err() => {
+                        Some(exact) if exact > 0.0 && !crate::env_flag!("OXI_S1321_DISABLE") => {
                             let (fs, m) = match img.host_paragraph.as_deref() {
                                 Some(host) => {
                                     let rpr_ref = host.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
@@ -9798,10 +9833,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // top; S1418b's policies__1db396de figure (7.44 in 234) agrees.
                     let grid_center = if s1321_top.is_none() && !page.doc_grid_no_type
                         && page.grid_line_pitch.map_or(false, |p| p > 0.1)
-                        && std::env::var_os("OXI_GRID_OBJ_CENTER_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_GRID_OBJ_CENTER_DISABLE")
                     {
                         let ext = img.height + if !self.doc_body_has_real_cjk
-                            && std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() {
+                            && !crate::env_flag!("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE") {
                             img.effect_extent_b.max(0.0) + img.effect_extent_t.max(0.0)
                         } else { 0.0 };
                         ((img_adv - ext) * 0.5).max(0.0)
@@ -9813,7 +9848,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                     }
                     let img_x = if !self.doc_body_has_real_cjk
-                        && std::env::var("OXI_BODY_IMAGE_ALIGNMENT_DISABLE").is_err() {
+                        && !crate::env_flag!("OXI_BODY_IMAGE_ALIGNMENT_DISABLE") {
                         img.host_paragraph.as_deref().map_or(start_x, |host| {
                             let left = host.style.indent_left.unwrap_or(0.0)
                                 + host.style.indent_first_line.unwrap_or(0.0);
@@ -9840,7 +9875,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 .map(|c| (c.top, c.right, c.bottom, c.left)),
                         },
                     ));
-                    if std::env::var_os("OXI_DBG_IMGADV").is_some() {
+                    if crate::env_flag!("OXI_DBG_IMGADV") {
                         eprintln!("[IMGADV] cy={:.2} img_h={:.2} img_w={:.2} adv={:.2} before={:.2} after={:.2} host_exact={:?}",
                             cursor.cursor_y, img.height, img.width, img_adv, img.paragraph_space_before, img.paragraph_space_after, img.host_exact_line);
                     }
@@ -9858,7 +9893,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // prev_ctx=true took the (true,false) arm and dropped the 10pt
                     // after (Word Info(6) 570.0, Oxi 560.17), so the page ran 10pt
                     // high and a double-spaced bullet line Word pushes to p4 stayed.
-                    if std::env::var_os("OXI_S1566_DISABLE").is_none() {
+                    if !crate::env_flag!("OXI_S1566_DISABLE") {
                         prev_contextual_spacing = img
                             .host_paragraph
                             .as_ref()
@@ -9884,7 +9919,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                             // paragraph's space_before/space_after onto ir::Image and
                                             // collapses at both ends; until then neither approximation
                                             // may ship.
-                    if std::env::var("OXI_S961").is_ok() {
+                    if crate::env_flag!("OXI_S961") {
                         prev_space_after = 0.0;
                     } else if s965 {
                         // S965: the image paragraph's OWN after is what the next
@@ -9901,7 +9936,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // `page_break_after` handler above.
                     if img.page_break_after
                         && !elements.is_empty()
-                        && std::env::var("OXI_S1293_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S1293_DISABLE")
                     {
                         dbg_page_push(pages.len(), 0);
                         pages.push(LayoutPage {
@@ -9996,13 +10031,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // font-defined leading. Glyph contours alone omit the
                         // radical extra ascender, while a fixed point leading
                         // cannot scale with the equation's nominal font size.
-                        let advance = if std::env::var("OXI_S652_DISABLE").is_ok() {
+                        let advance = if crate::env_flag!("OXI_S652_DISABLE") {
                             bbox.height().max(math_font_size * 1.2) + math_font_size * 0.3
                         } else {
                             let (top,bottom)=crate::layout::math::reserved_line_extents(&math_elems);
                             let table=crate::font::MathTable::cambria_math();
                             let leading=table.du_to_pt(table.constants.MathLeading,math_font_size);
-                            let floor=if std::env::var("OXI_S1260_DISABLE").is_err() {
+                            let floor=if !crate::env_flag!("OXI_S1260_DISABLE") {
                                 self.registry.get("Cambria Math").natural_line_height_hhea(math_font_size)
                             } else { math_font_size * 1.14 };
                             if bottom > top { (bottom-top+leading).max(floor) }
@@ -10032,7 +10067,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let advance = match grid_pitch {
                             Some(cell)
                                 if cell > 0.0
-                                    && std::env::var("OXI_S1259_DISABLE").is_err() =>
+                                    && !crate::env_flag!("OXI_S1259_DISABLE") =>
                             {
                                 (advance / cell).ceil() * cell
                             }
@@ -10057,7 +10092,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // actually starts on (a paragraph may begin on the preceding
                 // page). reference__13e1b7fca0030560: 0.0131 (pcd +2) -> 0.977
                 // (pcd 0). Env gates: ja 188 same, golden 185 same, en 291 same.
-                let section_origin = std::env::var_os("OXI_CONTINUOUS_SECTION_ORIGIN_DISABLE").is_none();
+                let section_origin = !crate::env_flag!("OXI_CONTINUOUS_SECTION_ORIGIN_DISABLE");
                 // A paragraph may start on the preceding page and continue onto
                 // another. Numbering belongs to its first occupied flow page.
                 let origin = if section_origin {
@@ -10119,10 +10154,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         if num_columns == 2
             && active_run_idx + 1 < col_runs.len()
             && (col_runs[active_run_idx + 1].1 != num_columns
-                || std::env::var_os("OXI_COLBAL_SAMECOUNT_DISABLE").is_none())
-            && std::env::var("OXI_S750_DISABLE").is_err()
-            && std::env::var("OXI_TEXT_BALANCE_DISABLE").is_err()
-            && std::env::var("OXI_COL_TRAILING_BALANCE_DISABLE").is_err()
+                || !crate::env_flag!("OXI_COLBAL_SAMECOUNT_DISABLE"))
+            && !crate::env_flag!("OXI_S750_DISABLE")
+            && !crate::env_flag!("OXI_TEXT_BALANCE_DISABLE")
+            && !crate::env_flag!("OXI_COL_TRAILING_BALANCE_DISABLE")
         {
             let allocated_bottom = column_search.observe(
                 ir_index, allocation_start, page.blocks.len(), page, current_page_idx,
@@ -10132,7 +10167,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 col_band_top,
                 &col_x_positions,
                 &page.blocks,
-                if std::env::var("OXI_COLUMN_COMPAT_BALANCE_DISABLE").is_err() { pending_section_gap } else { 0.0 },
+                if !crate::env_flag!("OXI_COLUMN_COMPAT_BALANCE_DISABLE") { pending_section_gap } else { 0.0 },
                 self.compat_mode,
                 if page.doc_grid_no_type { None } else { page.grid_line_pitch },
             )) {
@@ -10150,7 +10185,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // empty endnoteRef first run (the footnote-marker pattern). Separator =
         // Word's default 144pt line (S479) after a one-line gap. 0 corpus docs
         // reference endnotes (scanned) → byte-identical by construction.
-        if !page.endnotes.is_empty() && std::env::var("OXI_S743_DISABLE").is_err() {
+        if !page.endnotes.is_empty() && !crate::env_flag!("OXI_S743_DISABLE") {
             fn to_lower_roman(mut n: u32) -> String {
                 if n == 0 {
                     return "0".into();
@@ -10203,7 +10238,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // `<w:endnote w:type="continuationSeparator" w:id="0">`, which the
             // parser used to discard outright. Reserving it moves the page
             // boundaries onto Word's (Oxi fitted one note too many per page).
-            let en_contsep_h: f32 = if std::env::var("OXI_S1257_DISABLE").is_err() {
+            let en_contsep_h: f32 = if !crate::env_flag!("OXI_S1257_DISABLE") {
                 page.endnotes
                     .iter()
                     .find(|n| n.number == u32::MAX - 2)
@@ -10262,7 +10297,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             } else {
                 0.0
             };
-            if std::env::var("OXI_DBG_CONTSEP").is_ok() {
+            if crate::env_flag!("OXI_DBG_CONTSEP") {
                 eprintln!("[CONTSEP] h={:.2} n_endnotes={} numbers={:?}",
                     en_contsep_h, page.endnotes.len(),
                     page.endnotes.iter().map(|n| n.number).rev().take(3).collect::<Vec<_>>());
@@ -10277,7 +10312,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // 166.45; Oxi ended the heading at 130.30 and started the notes at
             // 144.30 = 130.30 + the 14pt separator gap alone. Adding the 22
             // gives 166.30 -- 0.15pt from Word.
-            if std::env::var("OXI_S1256_DISABLE").is_err() {
+            if !crate::env_flag!("OXI_S1256_DISABLE") {
                 if let Some(Block::Paragraph(last)) = page.blocks.last() {
                     let sa = last.style.space_after.unwrap_or(0.0);
                     if sa > 0.0 {
@@ -10291,7 +10326,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // `probexendnote_endnotes` declares `<w:separator/>` and keeps its
             // rule. The GAP is spent either way -- the paragraph is laid out in
             // both documents.
-            if self.endnote_sep_line || std::env::var("OXI_S1257_DISABLE").is_ok() {
+            if self.endnote_sep_line || crate::env_flag!("OXI_S1257_DISABLE") {
                 elements.push(LayoutElement::new(
                     start_x,
                     cursor.cursor_y + sep_gap * 0.5,
@@ -10317,7 +10352,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // 0/12 -> +12, 12/0 -> +12 on a 13.4 line; the first note keeps
             // its whole before (+6 / +12 / +3 / +0 / +12 below the separator).
             // Oxi summed them (+12 at 6/6): four notes too many on p4, W4/O5.
-            let s1603 = std::env::var_os("OXI_S1603_DISABLE").is_none();
+            let s1603 = !crate::env_flag!("OXI_S1603_DISABLE");
             let mut en_pending_after: Option<f32> = None;
             for (en_seq, note) in page
                 .endnotes
@@ -10349,7 +10384,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let n = en_seq as u32 + 1;
                             let prefix = match page.endnote_number_format.as_deref() {
                                 Some(f)
-                                    if std::env::var("OXI_S1254_DISABLE").is_err()
+                                    if !crate::env_flag!("OXI_S1254_DISABLE")
                                         && !f.eq_ignore_ascii_case("lowerRoman") =>
                                 {
                                     crate::parser::numbering::format_number(n, f)
@@ -10435,7 +10470,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // 13.50 -- the missing 5.94 is the style's 120tw = 6pt.
                         // Over 61 notes that is ~362pt = the page Word has and
                         // Oxi does not (Word 19 pages, Oxi 18).
-                        if std::env::var("OXI_S1255_DISABLE").is_err() {
+                        if !crate::env_flag!("OXI_S1255_DISABLE") {
                             let sa = para_to_render.style.space_after.unwrap_or(0.0);
                             if sa > 0.0 {
                                 // ★`advance`, not `cursor_y += `: the Cursor
@@ -10527,7 +10562,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         //       DrawingML, which always carries a relativeHeight). A future
         //       standalone VML text box would parse relHeight=0 and be forced to
         //       the bottom of every overlap; give it a doc-order-derived key then.
-        let s478_zorder = std::env::var("OXI_S478_DISABLE").is_err();
+        let s478_zorder = !crate::env_flag!("OXI_S478_DISABLE");
         // S765 (2026-07-08, default ON, opt-out OXI_S765_DISABLE): draw
         // floating IMAGES and TEXTBOXES in ONE z-order pass keyed by
         // (behind_doc first, then relativeHeight ascending) — Word draws all
@@ -10539,7 +10574,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // 251660800/251661824) — Oxi drew the pictures last → they buried the
         // title + subtitle + date text (the whole cover text vanished).
         // Verified language-independent (framework's giant crest = same).
-        let s765 = s478_zorder && std::env::var("OXI_S765_DISABLE").is_err();
+        let s765 = s478_zorder && !crate::env_flag!("OXI_S765_DISABLE");
         // Build a unified float list: (behind_doc, relative_height, kind, idx).
         enum FloatKind {
             Tb,
@@ -10571,7 +10606,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // were already emitted, so appending still painted an opaque behindDoc
         // image over body text. Insert behindDoc elements before the existing
         // body layer while preserving their stable relativeHeight order.
-        let s918_behind_body = s765 && std::env::var("OXI_S918_DISABLE").is_err();
+        let s918_behind_body = s765 && !crate::env_flag!("OXI_S918_DISABLE");
         let mut behind_insert_counts = vec![0usize; pages.len()];
         for (_, _, kind, fi) in &floats {
             let behind_doc = match kind {
@@ -10583,7 +10618,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let tbi = *fi;
                     let text_box = &page.text_boxes[tbi];
                     // S1123: anchors resolve on the block's START page.
-                    let s1123 = std::env::var("OXI_S1123_DISABLE").is_err();
+                    let s1123 = !crate::env_flag!("OXI_S1123_DISABLE");
                     let target_page = if s1123 {
                         block_start_page_indices
                             .get(text_box.anchor_block_index)
@@ -10607,7 +10642,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // the line — then the cursor advances past the box before the
                     // break fires and everything follows. See the ship note.
                     let _ = text_box.host_break_after;
-                    if std::env::var("OXI_DEBUG_TB").is_ok() {
+                    if crate::env_flag!("OXI_DEBUG_TB") {
                         let (rx, ry) =
                             self.resolve_textbox_position(text_box, page, &block_y_positions, &block_col_x);
                         let anchor_in_range = text_box.anchor_block_index < block_y_positions.len();
@@ -10651,7 +10686,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let own_band_left = matches!(text_box.wrap_type, Some(crate::ir::WrapType::Square) | Some(crate::ir::WrapType::Tight))
                         .then(|| s758_wrapped_left.get(&text_box.anchor_block_index).copied())
                         .flatten();
-                    let wrapped_col_x: Option<Vec<f32>> = (std::env::var_os("OXI_COLUMN_WRAPPED_LEFT_DISABLE").is_none()
+                    let wrapped_col_x: Option<Vec<f32>> = (!crate::env_flag!("OXI_COLUMN_WRAPPED_LEFT_DISABLE")
                         && (self.compat_mode < 15 || !self.compat_mode_explicit)
                         && text_box.position.as_ref().is_some_and(|p| p.h_relative.as_deref() == Some("column") && p.h_align.is_none())
                         && (own_band_left.is_some() || matches!(text_box.wrap_type, None | Some(crate::ir::WrapType::None))))
@@ -10737,7 +10772,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             page.margin.top,
                         );
                         // S1123: see the textbox arm.
-                        let mut target_page = if std::env::var("OXI_S1123_DISABLE").is_err() {
+                        let mut target_page = if !crate::env_flag!("OXI_S1123_DISABLE") {
                             block_start_page_indices
                                 .get(img.anchor_block_index)
                                 .copied()
@@ -10868,7 +10903,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // of the page right margin (x≈315). Headers always use the full text width.
         // For SINGLE-column docs col_widths[0] == total_content_width, so byte-identical.
         // Opt-out OXI_S690_DISABLE.
-        let hdr_width = if std::env::var("OXI_S690_DISABLE").is_err() {
+        let hdr_width = if !crate::env_flag!("OXI_S690_DISABLE") {
             total_content_width
         } else {
             content_width
@@ -10912,7 +10947,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // notFirstPage choose the section's pages. Parsed since long ago,
             // never drawn: 15 corpus docs.
             if let Some(pb) = page.page_borders.as_ref()
-                .filter(|_| std::env::var_os("OXI_PAGE_BORDERS_DISABLE").is_none())
+                .filter(|_| !crate::env_flag!("OXI_PAGE_BORDERS_DISABLE"))
             {
                 let show = match pb.display.as_deref() {
                     Some("firstPage") => page_idx == 0,
@@ -10970,7 +11005,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let s755_pno = page_idx + 1;
             // S1553: the header/footer set of the merged continuous section in
             // which this physical page BEGINS (its lowest block index).
-            let s1553_run = if std::env::var_os("OXI_S1553_DISABLE").is_none()
+            let s1553_run = if !crate::env_flag!("OXI_S1553_DISABLE")
                 && page.header_runs.len() > 1
             {
                 lp.elements.iter().filter_map(|e| e.paragraph_index).min()
@@ -11001,6 +11036,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // Header/footer text boxes: the part's variant chosen as above, drawn
             // behind the body like the rest of the header layer, each anchored to
             // the header/footer block it was parsed in (tops recorded below).
+            super::HF_PAGE_EVEN.with(|c| c.set((first_logical as usize + page_idx) % 2 == 0));
             let hf_draw = s1553_run.is_none() && !page.hf_text_boxes.is_empty();
             let hf_variant = |base: u8| -> u8 {
                 if s755_on && hs_title_pg && s755_pno == 1 {
@@ -11012,7 +11048,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 }
             };
             let (hf_hv, hf_fv) = (hf_variant(0), hf_variant(3));
-            let hf_paint = |this: &Self, code: u8, tops: &[f32], fallback_y: f32| -> Vec<LayoutElement> {
+            let hf_paint = |this: &Self, code: u8, tops: &[f32], fallback_y: f32, blocks: &[Block]| -> Vec<LayoutElement> {
                 let tops: Vec<f32> = if tops.is_empty() { vec![fallback_y] } else { tops.to_vec() };
                 let col_x = vec![page.margin.left; tops.len()];
                 let mut out = Vec::new();
@@ -11020,7 +11056,32 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 for (_, tb) in page.hf_text_boxes.iter().filter(|(c, _)| *c == code) {
                     let mut tb = tb.clone();
                     tb.anchor_block_index = tb.anchor_block_index.min(tops.len() - 1);
-                    out.extend(this.layout_text_box(&tb, page, &tops, &col_x));
+                    // OXI_HDR_IMG_JC: an INLINE header text box sits where its
+                    // paragraph's jc puts it, like the inline picture. en/
+                    // administrative__0074fa45 (jc center, 447.6pt banner box on a
+                    // 540pt column): Word's banner 82.2..529.8, Oxi from the margin.
+                    let mut tb_col_x = col_x.clone();
+                    if tb.inline && !crate::env_flag!("OXI_HDR_IMG_JC_DISABLE") {
+                        // A drawing-only paragraph is parsed as its Image block,
+                        // which keeps the paragraph as host_paragraph.
+                        let host = match blocks.get(tb.anchor_block_index) {
+                            Some(Block::Paragraph(p)) => Some(p),
+                            Some(Block::Image(img)) => img.host_paragraph.as_deref(),
+                            _ => None,
+                        };
+                        if let Some(host) = host {
+                            let column = page.size.width - page.margin.left - page.margin.right
+                                - host.style.indent_left.unwrap_or(0.0) - host.style.indent_right.unwrap_or(0.0);
+                            let spare = (column - tb.width).max(0.0);
+                            let shift = host.style.indent_left.unwrap_or(0.0) + match host.alignment {
+                                Alignment::Center => spare * 0.5,
+                                Alignment::Right => spare,
+                                _ => 0.0,
+                            };
+                            if let Some(x) = tb_col_x.get_mut(tb.anchor_block_index) { *x += shift; }
+                        }
+                    }
+                    out.extend(this.layout_text_box(&tb, page, &tops, &tb_col_x));
                 }
                 super::IN_HF_TEXT_BOX.with(|c| c.set(false));
                 out
@@ -11061,7 +11122,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let mut prev_block_top = header_y;
                 let mut header_float_indices: Vec<(u32, usize)> = Vec::new();
                 let header_text_flow = !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_HEADER_TEXT_FLOW").is_ok();
+                    && crate::env_flag!("OXI_HEADER_TEXT_FLOW");
                 let mut previous_header_para: Option<&Paragraph> = None;
                 // OXI_HF_TBL_AFTER (2026-10-12, default ON, opt-out _DISABLE): a header /
                 // footer paragraph's space-after separates it from a TABLE that follows,
@@ -11071,7 +11132,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // higher (the reservation counted the after -- S813 / S868 flush -- the
                 // paint never advanced by it). blind-G reference__00c9a41e: Header
                 // after=80 then the column-heading table, row text -3.76.
-                let hf_tbl_after = std::env::var_os("OXI_HF_TBL_AFTER_DISABLE").is_none();
+                let hf_tbl_after = !crate::env_flag!("OXI_HF_TBL_AFTER_DISABLE");
                 let mut hf_prev_after = 0.0f32;
                 // OXI_HF_PARA_AFTER / OXI_HF_NO_GRID (2026-10-13, default ON, opt-out
                 // _DISABLE): a header paragraph's space-after separates it from the
@@ -11084,8 +11145,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // Oxi painted 56.75 / 77.6 in both arms: 20.85 = grid x 1.158,
                 // centred, no after. The body top (s755_header_bottom) already
                 // adds the after; its CJK multiple is OXI_HF_CJK_MULTIPLE.
-                let hf_para_after = std::env::var_os("OXI_HF_PARA_AFTER_DISABLE").is_none();
-                let hf_no_grid = std::env::var_os("OXI_HF_NO_GRID_DISABLE").is_none();
+                let hf_para_after = !crate::env_flag!("OXI_HF_PARA_AFTER_DISABLE");
+                let hf_no_grid = !crate::env_flag!("OXI_HF_NO_GRID_DISABLE");
                 let mut hf_tops: Vec<f32> = Vec::new();
                 for block in hdr_blocks {
                     hf_tops.push(cy.cursor_y);
@@ -11111,7 +11172,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // en/policies__009ad56e's first-page header sat 1.92 high.
                         // (the reservation, s755_header_bottom, already kept it)
                         Block::Image(img) if img.position.is_some()
-                            && std::env::var_os("OXI_HDR_ANCHOR_CHAIN_DISABLE").is_none() => previous_header_para,
+                            && !crate::env_flag!("OXI_HDR_ANCHOR_CHAIN_DISABLE") => previous_header_para,
                         _ => None,
                     };
                     let this_block_top = cy.cursor_y;
@@ -11172,7 +11233,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // behavior (s755_header_bottom). Opt-out OXI_HDRFLOAT_DISABLE.
                         if img.position.is_none()
                             && !s1105_prev_text
-                            && std::env::var("OXI_S1105_DISABLE").is_err()
+                            && !crate::env_flag!("OXI_S1105_DISABLE")
                         {
                             // S1105 (2026-08-08, opt-out OXI_S1105_DISABLE): an
                             // INLINE header image is PAINTED, not just measured.
@@ -11185,7 +11246,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // paragraph are skipped — S1HDR already folded them
                             // into that paragraph's line height, so drawing them
                             // here would double-count the advance.
-                            let image_x = if std::env::var("OXI_HEADER_IMAGE_LEADING").ok().as_deref() == Some("1") {
+                            // OXI_HDR_IMG_JC (2026-11-02, default ON, opt-out _DISABLE): the
+                            // inline header picture sits where its paragraph's jc puts it
+                            // (formerly only under the OXI_HEADER_IMAGE_LEADING experiment).
+                            // en/administrative__0074fa45 (jc center header, 379pt picture
+                            // on a 540pt column): Word's picture left 116.6, Oxi 36 (the
+                            // margin); the page 0.9281 -> 0.9630.
+                            let image_x = if std::env::var("OXI_HEADER_IMAGE_LEADING").ok().as_deref() == Some("1")
+                                || !crate::env_flag!("OXI_HDR_IMG_JC_DISABLE")
+                            {
                                 img.host_paragraph.as_ref().map_or(hdr_x, |host| {
                                     let left = host.style.indent_left.unwrap_or(0.0)
                                         + host.style.indent_first_line.unwrap_or(0.0);
@@ -11213,9 +11282,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 },
                             ));
                             cy.advance(img.height + self.header_inline_image_leading(img)
-                                + if std::env::var_os("OXI_HF_IMG_LINE_DISABLE").is_none() { img.paragraph_space_after.max(0.0) } else { 0.0 });
+                                + if !crate::env_flag!("OXI_HF_IMG_LINE_DISABLE") { img.paragraph_space_after.max(0.0) } else { 0.0 });
                         } else if img.position.is_some()
-                            && std::env::var("OXI_HDRFLOAT_DISABLE").is_err()
+                            && !crate::env_flag!("OXI_HDRFLOAT_DISABLE")
                         {
                             // S1268b (2026-09-01, default ON, opt-out
                             // OXI_S1268B_DISABLE): a header float anchored
@@ -11233,13 +11302,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // The page-edge clamp S1268 removes used to slide
                             // these back to y=0, which LOOKED right for a
                             // full-page background and hid the real error.
-                            let hdr_anchor_y = if std::env::var("OXI_S1268B_DISABLE").is_err() {
+                            let hdr_anchor_y = if !crate::env_flag!("OXI_S1268B_DISABLE") {
                                 prev_block_top
                             } else {
                                 page.margin.top
                             };
-                            let (ax, ay) =
+                            let (ax, mut ay) =
                                 self.resolve_floating_image_position(img, page, &[], hdr_anchor_y);
+                            // OXI_HDR_MARGIN_REANCHOR: margin-relative drawings count
+                            // from the body top once the header has outgrown the margin.
+                            if img.position.as_ref().and_then(|p| p.v_relative.as_deref()) == Some("margin") {
+                                ay += self.hdr_margin_reanchor_shift(hdr_blocks, page);
+                            }
                             let (mut paint_x, mut paint_y, mut paint_w, mut paint_h) =
                                 (ax, ay, img.width, img.height);
                             let mut paint_crop = img.crop;
@@ -11257,7 +11331,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     crop.top = crop.top.max(0.0); crop.bottom = crop.bottom.max(0.0);
                                 }
                             }
-                            if (std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || std::env::var_os("OXI_HEADER_FLOAT_BANDS_DISABLE").is_none()) {
+                            if (std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || !crate::env_flag!("OXI_HEADER_FLOAT_BANDS_DISABLE")) {
                                 header_float_indices.push((img.relative_height, lp.elements.len()));
                             }
                             lp.elements.push(LayoutElement::new(
@@ -11285,7 +11359,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // x=402 with the title still on the first line at x=70.9).
                         // Painting one through the inline path would push every
                         // following header paragraph down by the table's height.
-                        if std::env::var("OXI_S1104_DISABLE").is_err() && tbl.style.position.is_none() {
+                        if !crate::env_flag!("OXI_S1104_DISABLE") && tbl.style.position.is_none() {
                             let mut dummy_pages = Vec::new();
                             let mut dummy_elems = Vec::new();
                             if hf_tbl_after {
@@ -11319,14 +11393,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             lp.elements.extend(tbl_elements);
                         }
                     }
-                    if !(std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || std::env::var_os("OXI_HEADER_FLOAT_BANDS_DISABLE").is_none())
+                    if !(std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || !crate::env_flag!("OXI_HEADER_FLOAT_BANDS_DISABLE"))
                         || !matches!(block, Block::Image(image) if image.position.is_some())
                     {
                         prev_block_top = this_block_top;
                     }
                 }
                 if hf_draw {
-                    let hf_elems = hf_paint(self, hf_hv, &hf_tops, header_y);
+                    let hf_elems = hf_paint(self, hf_hv, &hf_tops, header_y, hdr_blocks);
                     if !hf_elems.is_empty() {
                         let at = usize::from(page.watermark.is_some()).min(lp.elements.len());
                         lp.elements.splice(at..at, hf_elems);
@@ -11361,7 +11435,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // lines spilled below the footer line. `_pb_ftrafter_exact_gen.py`
                 // ftr_auto: Word A 793.18 / B 804.84 / C 812.16; lastafter (C after=80):
                 // A 789.22 -- a trailing after lifts the stack too.
-                let ftr_paint_spacing = std::env::var_os("OXI_FTR_PAINT_SPACING_DISABLE").is_none();
+                let ftr_paint_spacing = !crate::env_flag!("OXI_FTR_PAINT_SPACING_DISABLE");
                 let mut ftr_prev_sa: Option<f32> = None;
                 for block in ftr_blocks {
                     if let Block::Paragraph(para) = block {
@@ -11389,7 +11463,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         let ftr_empty = para.runs.iter().all(|r| r.text.trim().is_empty() && r.style.inline_object_image.is_none());
                         let est = if ftr_empty
                             && grid_pitch.is_none()
-                            && std::env::var_os("OXI_FTR_EMPTY_ASCII_DISABLE").is_none()
+                            && !crate::env_flag!("OXI_FTR_EMPTY_ASCII_DISABLE")
                         {
                             let mark = para.style.ppr_rpr.clone().unwrap_or_default();
                             let size = self.resolve_font_size(&mark, &para.style);
@@ -11421,7 +11495,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // the top from that reservation instead of re-deriving it here.
                 // Scoped to footers that actually contain a table: a paragraph-only
                 // footer keeps the historical expression byte-for-byte.
-                let s1104_has_tbl = std::env::var("OXI_S1104_DISABLE").is_err()
+                let s1104_has_tbl = !crate::env_flag!("OXI_S1104_DISABLE")
                     && ftr_blocks
                     .iter()
                     .any(|b| matches!(b, Block::Table(t) if t.style.position.is_none()));
@@ -11436,7 +11510,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // administrative__0067cba8: bottom 72 > 35.4 + 25.8 -> its footer
                     // row sat 11.2pt above Word's.
                     if stack < page.margin.bottom - 0.01
-                        && std::env::var_os("OXI_FTR_TBL_PAINT_DIST_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_FTR_TBL_PAINT_DIST_DISABLE")
                     {
                         page.size.height - stack
                     } else {
@@ -11449,7 +11523,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let mut previous_para: Option<&Paragraph> = None;
                 let mut previous_after = 0.0;
                 // OXI_HF_TBL_AFTER: see the header loop.
-                let hf_tbl_after = std::env::var_os("OXI_HF_TBL_AFTER_DISABLE").is_none();
+                let hf_tbl_after = !crate::env_flag!("OXI_HF_TBL_AFTER_DISABLE");
                 let mut hf_prev_after = 0.0f32;
                 let mut hf_ftr_tops: Vec<f32> = Vec::new();
                 for block in ftr_blocks {
@@ -11462,7 +11536,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // vAnchor=text) drew at x=85 (Word 302.7) and 2.3pt high.
                     if let Block::Paragraph(para) = block {
                         if LayoutEngine::is_floating_header_frame(para)
-                            && std::env::var_os("OXI_FTR_FRAME_PAINT_DISABLE").is_none()
+                            && !crate::env_flag!("OXI_FTR_FRAME_PAINT_DISABLE")
                         {
                             let (elements, _, _) = self.layout_header_frame(para, page, cy.cursor_y);
                             lp.elements.extend(elements);
@@ -11484,7 +11558,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // OXI_HF_NO_GRID: footer lines are off the document grid too
                             // (`_pb_hdrafter_gen.py` ftr_text2: Word 755.38 / 779.14, pitch
                             // 23.76 = 13.617 x 1.158 + 8; Oxi painted 28.85 = grid x 1.158 + 8).
-                            if std::env::var_os("OXI_HF_NO_GRID_DISABLE").is_none() { None } else { grid_pitch },
+                            if !crate::env_flag!("OXI_HF_NO_GRID_DISABLE") { None } else { grid_pitch },
                             previous_para.and_then(|p| p.style.style_id.as_deref()),
                             previous_para.is_some_and(|p| p.style.contextual_spacing),
                             previous_para.filter(|p| p.style.after_autospacing).and_then(|p| p.style.num_id.as_deref()),
@@ -11529,7 +11603,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // 11.66 in the footer = the body's 11.52 / 11.64 / 11.64; Oxi footer
                         // 7.48 / 7.59 / 7.59 (body right). blind-H technical__0186a34e: the
                         // first-page footer's first line 3.8pt low.
-                        else if std::env::var_os("OXI_FTR_PARA_AFTER_DISABLE").is_none() {
+                        else if !crate::env_flag!("OXI_FTR_PARA_AFTER_DISABLE") {
                             previous_para = Some(para);
                             previous_after = para.style.space_after.unwrap_or(0.0);
                         }
@@ -11549,7 +11623,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // Render-only: the height is already reserved by S868, so
                         // cursor_y / pagination are untouched. A huge content_height
                         // keeps the table from trying to split inside the footer.
-                        if std::env::var("OXI_S1104_DISABLE").is_err() && tbl.style.position.is_none()
+                        if !crate::env_flag!("OXI_S1104_DISABLE") && tbl.style.position.is_none()
                         {
                             let mut dummy_pages = Vec::new();
                             let mut dummy_elems = Vec::new();
@@ -11582,7 +11656,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                 }
                 if hf_draw {
-                    let hf_elems = hf_paint(self, hf_fv, &hf_ftr_tops, footer_top);
+                    let hf_elems = hf_paint(self, hf_fv, &hf_ftr_tops, footer_top, ftr_blocks);
                     if !hf_elems.is_empty() {
                         let at = usize::from(page.watermark.is_some()).min(lp.elements.len());
                         lp.elements.splice(at..at, hf_elems);
@@ -11675,7 +11749,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // 14×9.24 = 720.6; margin 1440tw). Latin scope with S894.
                         let s896_blank_footer = !page.footer.is_empty()
                             && !self.doc_body_has_real_cjk
-                            && std::env::var("OXI_S896_DISABLE").is_err()
+                            && !crate::env_flag!("OXI_S896_DISABLE")
                             && !page.footer.iter().any(|b| match b {
                                 Block::Paragraph(p) => {
                                     p.runs.iter().any(|r| !r.text.trim().is_empty())
@@ -11687,7 +11761,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // Footnotes share the body's usable bottom. A footer below
                         // the bottom margin does not move the footnote stack down;
                         // a footer intruding into the body reserves its full flow.
-                        let footnote_bottom = if std::env::var_os("OXI_FOOTNOTE_BODY_BOTTOM_DISABLE").is_none() {
+                        let footnote_bottom = if !crate::env_flag!("OXI_FOOTNOTE_BODY_BOTTOM_DISABLE") {
                             page.size.height - self.s755_footer_geom(ftr_blocks, page).0
                         } else if footer_image_flow {
                             page.size.height - self.s755_footer_geom(ftr_blocks, page).0
@@ -11723,7 +11797,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // docs (b837/kojin) were unaffected (their footer is not in
                         // lp.elements here / body is already above the area), so this is
                         // a no-op for them. Opt-out OXI_S596_DISABLE.
-                        let body_bottom_y = if std::env::var("OXI_S596_DISABLE").is_ok() {
+                        let body_bottom_y = if crate::env_flag!("OXI_S596_DISABLE") {
                             lp.elements
                                 .iter()
                                 .map(|e| e.y + e.height)
@@ -11738,7 +11812,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // shape); a wrapping shape moves the text, which is measured.
                             // en/forms__0068e33b's page frames and inline text box left Oxi
                             // no room and dropped its footnote (Word 789.84).
-                            let flow_only = std::env::var_os("OXI_FN_BODY_FLOW_ONLY_DISABLE").is_none();
+                            let flow_only = !crate::env_flag!("OXI_FN_BODY_FLOW_ONLY_DISABLE");
                             lp.elements[..body_element_count]
                                 .iter()
                                 .filter(|e| e.y < footnote_bottom)
@@ -11746,7 +11820,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     LayoutContent::ClipStart | LayoutContent::ClipEnd | LayoutContent::PresetShape { .. }))
                                 .map(|e| {
                                     let height = if !self.doc_body_has_real_cjk
-                                        && std::env::var("OXI_FN_PLACEMENT_FIT_DISABLE").is_err()
+                                        && !crate::env_flag!("OXI_FN_PLACEMENT_FIT_DISABLE")
                                     {
                                         e.content_fit_height.unwrap_or(e.height)
                                     } else {
@@ -11775,7 +11849,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // natural, NOT the pitch. est == place == render.
                         // Corpus scan: no-type grid + footnoteReference = the 4
                         // EN docs only → JP byte-identical by construction.
-                        let s828 = std::env::var("OXI_S828_DISABLE").is_err();
+                        let s828 = !crate::env_flag!("OXI_S828_DISABLE");
                         let fn_gp = if s828 && page.doc_grid_no_type {
                             None
                         } else {
@@ -11847,7 +11921,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                         // centred) + after, the LAST note's after included,
                                         // bottom-anchored at the margin (last box 763.18 + 8 =
                                         // 771.18; single 753.1 + 18 = 771.1).
-                                        if std::env::var_os("OXI_FN_LAST_CENTRE_DISABLE").is_none() {
+                                        if !crate::env_flag!("OXI_FN_LAST_CENTRE_DISABLE") {
                                             0.0
                                         } else {
                                             ((pitch - natural_last) * 0.5).max(0.0)
@@ -11869,7 +11943,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // too, so take it out here or it is subtracted twice and no
                         // note fits (cppp Goods p24/p25: fit=0, Word draws note 1 at
                         // 742.0). Opt-out OXI_FN_NOTICE_ONCE_DISABLE.
-                        let notice_once = if std::env::var_os("OXI_FN_NOTICE_ONCE_DISABLE").is_none() {
+                        let notice_once = if !crate::env_flag!("OXI_FN_NOTICE_ONCE_DISABLE") {
                             legacy_notice_height()
                         } else { 0.0 };
                         let separator_pad_pre = notes.first().map(|note|
@@ -11883,7 +11957,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // into that line's lower padding, (L - natural)/2, before a note is
                         // dropped. `_pb_fnarea_mult_gen.py` bottom_6: Word keeps six notes
                         // under a body line whose full box ends 1.2pt below the area top.
-                        let fn_place_slack: f32 = if std::env::var_os("OXI_FN_PLACE_SLACK_DISABLE").is_none()
+                        let fn_place_slack: f32 = if !crate::env_flag!("OXI_FN_PLACE_SLACK_DISABLE")
                             && self.doc_body_has_real_cjk
                             && grid_pitch.is_some_and(|p| p > 0.0) && !page.doc_grid_no_type
                         {
@@ -11924,7 +11998,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }
                             total_h += note_heights[i];
                         }
-                        if std::env::var("OXI_FN_PROBE").is_ok() {
+                        if crate::env_flag!("OXI_FN_PROBE") {
                             eprintln!("[FN_PLACE] page_idx={} n_req={} fit={} body_bot={:.1} fn_bot={:.1} total_h={:.1} area_top={:.1} gap={:.1} heights={:?}",
                                 page_idx, notes.len(), fit_count, body_bottom_y, footnote_bottom, total_h,
                                 footnote_bottom - total_h - separator_pad_pre - separator_h_pre,
@@ -11947,7 +12021,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // overflows and equals bottom_2. Oxi ignored the property
                         // (probeqfnbeneath +11.4 .. +20).
                         let area_top = if self.fn_pos_beneath
-                            && std::env::var_os("OXI_FN_BENEATH_DISABLE").is_none()
+                            && !crate::env_flag!("OXI_FN_BENEATH_DISABLE")
                             && body_bottom_y > start_y
                         {
                             area_top.min(body_bottom_y)
@@ -11961,7 +12035,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // pixel-confirmed on b837 p1: 144.0pt at x0=71pt). Cap at
                         // content width for narrow columns. 1pt thick, black.
                         // Default ON, opt-out OXI_S479_DISABLE.
-                        let sep_w = if std::env::var("OXI_S479_DISABLE").is_ok() {
+                        let sep_w = if crate::env_flag!("OXI_S479_DISABLE") {
                             hdr_width * 0.33
                         } else {
                             144.0_f32.min(hdr_width)
@@ -12066,7 +12140,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 _ => None,
             })
             .unwrap_or(prev_space_after);
-        if std::env::var("OXI_DBG1073").is_ok() {
+        if crate::env_flag!("OXI_DBG1073") {
             eprintln!(
                 "[S1073-STORE] running={:.3} ir_tail={:.3}",
                 prev_space_after, s1073_tail
@@ -12088,7 +12162,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // (pitch 11.52 / 15.36 / 21.27 for charSpace 4096 / 20000 / 44093) and the
         // glyph sits (pitch - em) / 2 in (0.48 / 2.40 / 5.40). ja/creative__285f61cb's
         // 原稿用紙 (charSpace 44093): every character 5.35 right of Oxi's.
-        if page.doc_grid_snap_to_chars && std::env::var_os("OXI_SNAP_CHARS_CENTER_DISABLE").is_none() {
+        if page.doc_grid_snap_to_chars && !crate::env_flag!("OXI_SNAP_CHARS_CENTER_DISABLE") {
             let wide = |c: char| ('\u{2E80}'..='\u{9FFF}').contains(&c)
                 || ('\u{F900}'..='\u{FAFF}').contains(&c)
                 || ('\u{FF01}'..='\u{FF60}').contains(&c);
@@ -12117,7 +12191,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
     /// begins. None (the legacy bar) for a custom separator with text or more
     /// than one paragraph, or a face without strikeout metrics.
     fn footnote_separator_rule(&self, page: &Page) -> Option<(f32, f32)> {
-        if std::env::var_os("OXI_FN_RULE_STRIKE_DISABLE").is_some() {
+        if crate::env_flag!("OXI_FN_RULE_STRIKE_DISABLE") {
             return None;
         }
         let note = page.footnotes.iter().find(|n| n.number == u32::MAX)?;
@@ -12172,7 +12246,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             _ => None,
         })?;
         let strikeout = crate::font::catalog_glyph_strikeout(&family, bold, italic);
-        if std::env::var_os("OXI_FN_PROBE").is_some() {
+        if crate::env_flag!("OXI_FN_PROBE") {
             eprintln!("[FN_RULE] face={family} size={size} baseline={baseline:.3} height={height:.3} strikeout={strikeout:?} elems={:?}", elements.iter().map(|e| (e.y, e.height, e.text_y_off, e.baseline_offset)).collect::<Vec<_>>());
         }
         let (position, thickness) = strikeout?;

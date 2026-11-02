@@ -62,7 +62,7 @@ fn cell_has_em_advance(metrics: &FontMetrics, ch: char) -> bool {
     metrics.char_widths.contains_key(&ch)
         || (ch == '\u{00a0}'
             && crate::font::s892_nbsp_as_space()
-            && std::env::var("OXI_CELL_NBSP_METRIC_DISABLE").is_err()
+            && !crate::env_flag!("OXI_CELL_NBSP_METRIC_DISABLE")
             && metrics.char_widths.contains_key(&' '))
 }
 /// S697 (2026-06-29): Word's FIXED "1 line" for NO-GRID beforeLines/afterLines
@@ -80,7 +80,7 @@ const NO_GRID_LINE_PT: f32 = 12.0;
 /// the pitch for every non-360 no-type grid (S571 keeps that pitch for LINE
 /// snapping; this only changes the spacing unit).
 fn s1480_lines_unit(no_type_grid: bool, pitch: f32) -> f32 {
-    if no_type_grid && std::env::var("OXI_S1480_DISABLE").is_err() {
+    if no_type_grid && !crate::env_flag!("OXI_S1480_DISABLE") {
         NO_GRID_LINE_PT
     } else {
         pitch
@@ -104,7 +104,7 @@ fn char_to_string(ch: char) -> String {
 /// still kills the whole set; `OXI_S864<PART>_DISABLE` (A..F) kills one part.
 /// A..C live here, D..F in the parser (`parser::ooxml::s864_part`).
 pub(crate) fn s864_part(part: &str) -> bool {
-    std::env::var("OXI_S864_DISABLE").is_err()
+    !crate::env_flag!("OXI_S864_DISABLE")
         && std::env::var(format!("OXI_S864{part}_DISABLE")).is_err()
 }
 
@@ -152,7 +152,7 @@ fn s958_center_slack(center_tab_stop_tw: Option<(i32, i32)>, current_width_tw: i
 /// are the population, which is what the census predicted. `cargo test
 /// -p oxidocs-core` clean.
 fn latinem_in_scope(doc_body_has_real_cjk: bool) -> bool {
-    !doc_body_has_real_cjk || std::env::var("OXI_LATCJK_DISABLE").is_err()
+    !doc_body_has_real_cjk || !crate::env_flag!("OXI_LATCJK_DISABLE")
 }
 
 /// S1600 (2026-09-29, default ON, opt-out OXI_S1600_DISABLE): in a Latin
@@ -165,7 +165,7 @@ fn latinem_in_scope(doc_body_has_real_cjk: bool) -> bool {
 fn s1600_cell_break_after_dash(c: char) -> bool {
     c == '-'
         || (matches!(c, '\u{2013}' | '\u{2014}')
-            && std::env::var_os("OXI_S1600_DISABLE").is_none())
+            && !crate::env_flag!("OXI_S1600_DISABLE"))
 }
 
 fn is_break_after(ch: char) -> bool {
@@ -182,7 +182,7 @@ fn cell_nbsp_cluster_blocks_break(
     left: impl DoubleEndedIterator<Item = char>,
     right: impl Iterator<Item = char>,
 ) -> bool {
-    if std::env::var_os("OXI_CELL_NBSP_CLUSTER_DISABLE").is_some() { return false; }
+    if crate::env_flag!("OXI_CELL_NBSP_CLUSTER_DISABLE") { return false; }
     let cluster = |ch: &char| matches!(*ch, ' ' | '\u{00a0}');
     left.rev().take_while(cluster)
         .chain(right.take_while(cluster))
@@ -228,7 +228,7 @@ fn cell_nbsp_cluster_blocks_break(
 /// here.
 fn is_break_space(ch: char) -> bool {
     ch.is_whitespace()
-        && !(ch == '\u{00A0}' && std::env::var("OXI_S1241_DISABLE").is_err())
+        && !(ch == '\u{00A0}' && !crate::env_flag!("OXI_S1241_DISABLE"))
 }
 
 /// Word's default 8-color rotation for tracked-change author tints. The
@@ -347,7 +347,7 @@ fn vml_color_to_hex(c: &str) -> String {
 /// floored-CJK cell paragraph (all lines same fs, observed gaps ≈ floor(83/64×fs))
 /// so mixed-font / spaced cells are untouched. δ via OXI_S713_DELTA (default 0.12).
 fn s713_cell_snap(pages: &mut [LayoutPage]) {
-    if std::env::var("OXI_S713").is_err() {
+    if !crate::env_flag!("OXI_S713") {
         return;
     }
     let delta: f32 = std::env::var("OXI_S713_DELTA")
@@ -556,8 +556,13 @@ fn cell_aki_joint(a: char, b: char, de: bool, dn: bool) -> bool {
 // square compatibility symbols in a face with proportional kana advances.
 // A full-em glyph in such a face still uses the half addition. Latin pitch
 // and the current glyph alone cannot distinguish the CJK design.
-fn cell_cjk_grid_increment(ch: char, metrics: &FontMetrics, registry: &FontMetricsRegistry, fs: f32, delta: f32) -> f32 {
-    if delta > 0.0 && grid_half_increment_class(ch) && face_has_proportional_kana(metrics, registry, fs) {
+fn cell_cjk_grid_increment(ch: char, metrics: &FontMetrics, registry: &FontMetricsRegistry, fs: f32, delta: f32, balance: bool) -> f32 {
+    // OXI_GRID_HALF_NEEDS_BALANCE: the half increment is a balance effect in a
+    // cell as in the body (`_pb_balance_propkana_gen.py` one-cell arms: ＭＳ Ｐゴシック
+    // に 12.11 with balance, 13.19 without, spacing 22).
+    if delta > 0.0 && grid_half_increment_class(ch) && face_has_proportional_kana(metrics, registry, fs)
+        && (balance || crate::env_flag!("OXI_GRID_HALF_NEEDS_BALANCE_DISABLE"))
+    {
         return delta * 0.5;
     }
     delta
@@ -574,7 +579,7 @@ fn cell_cjk_grid_increment(ch: char, metrics: &FontMetrics, registry: &FontMetri
 /// width test gave the brackets half). Body and cell agree to the 0.01pt.
 /// Squared-unit ligatures keep the pre-existing cell rule.
 fn grid_half_increment_class(ch: char) -> bool {
-    if std::env::var_os("OXI_S1592_DISABLE").is_some() {
+    if crate::env_flag!("OXI_S1592_DISABLE") {
         return matches!(ch as u32, 0x3041..=0x3096 | 0x30A1..=0x30FA | 0x3300..=0x33FF);
     }
     matches!(ch as u32, 0x3041..=0x3096 | 0x30A1..=0x30FA | 0x30FC | 0x3001 | 0x3002 | 0x3300..=0x33FF)
@@ -599,7 +604,7 @@ fn face_has_proportional_kana(metrics: &FontMetrics, registry: &FontMetricsRegis
 /// per-glyph law. Take the table entry when there is one, else the resolved advance.
 fn cell_resolved_em(metrics: &FontMetrics, registry: &FontMetricsRegistry, ch: char, fs: f32) -> f32 {
     if metrics.char_widths.contains_key(&ch) || fs <= 0.0
-        || std::env::var_os("OXI_S1592_DISABLE").is_some()
+        || crate::env_flag!("OXI_S1592_DISABLE")
     {
         return metrics.char_width_em(ch);
     }
@@ -649,6 +654,7 @@ fn autospace_cell_segments(
     grid_kern: bool,
     char_width_adjustments: &[f32],
     natural_gaps_after: &[f32],
+    balance_cs: f32,
 ) -> Option<Vec<(String, f32, f32)>> {
     if let Some((pitch, ratio, balance, scale)) = grid {
         let chars: Vec<char> = text.chars().collect();
@@ -672,7 +678,7 @@ fn autospace_cell_segments(
             }
             let balanced = balance_spaces && balanced_cjk_space(ch, prev, next);
             let mut base = if balanced { fs * 0.5 + metrics.synthetic_bold_advance * fs } else { natural };
-            let mut extra = if crate::font::is_fullwidth(ch) { cell_cjk_grid_increment(ch, metrics, registry, fs, delta) }
+            let mut extra = if crate::font::is_fullwidth(ch) { cell_cjk_grid_increment(ch, metrics, registry, fs, delta, balance) }
                 else { cell_single_byte_grid_increment(ch, Some(pitch), Some(ratio), balance) };
             if let Some((space_base, space_extra)) = cell_proportional_space_grid(ch, metrics, fs,
                 Some(pitch), Some(ratio), balance) {
@@ -688,7 +694,19 @@ fn autospace_cell_segments(
                     x += gap_override.or_else(|| natural_gaps_after.get(i-1).copied()).unwrap_or_else(|| s546_autospace_extra(fs));
                 }
             }
-            let width = base * scale + extra + cs_render
+            // OXI_CELL_GRID_BALANCE_CS (2026-11-01, default ON, opt-out _DISABLE):
+            // the grid glyphs take balance's second spacing like the cell wrap
+            // (`balance_extra_cs`) and the body do. `_pb_balance_propkana_gen.py`
+            // one-cell arms (spacing 22, charSpace 9011, balance): Word advances
+            // kanji 14.87, Oxi drew 13.80 -- one spacing short.
+            let balance_extra = if crate::font::is_fullwidth(ch)
+                && (crate::env_flag!("OXI_BALANCE_PROP_ONCE_DISABLE") || metrics.char_width_em(ch) >= 0.98)
+            {
+                balance_cs
+            } else {
+                0.0
+            };
+            let width = base * scale + extra + cs_render + balance_extra
                 + char_width_adjustments.get(i).copied().unwrap_or(0.0);
             segments.push((ch.to_string(), x, width));
             x += width;
@@ -753,7 +771,7 @@ fn autospace_cell_segments(
 }
 
 fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
-    if std::env::var("OXI_VMLRECT_DISABLE").is_ok() {
+    if crate::env_flag!("OXI_VMLRECT_DISABLE") {
         return None;
     }
     // Only VML-origin (`<w:pict>`) filled rects. A full-corpus SSIM A/B showed
@@ -1958,7 +1976,7 @@ fn filter_runs_for_show_revisions(doc: &mut Document, final_view: bool) {
 /// `Original` view is the mirror (an INSERTED mark does not exist yet), so the
 /// same pass runs with the opposite predicate.
 fn merge_marked_paragraph_breaks(doc: &mut Document, final_view: bool) {
-    if std::env::var("OXI_S1249_DISABLE").is_ok() {
+    if crate::env_flag!("OXI_S1249_DISABLE") {
         return;
     }
     fn merges(p: &Paragraph, final_view: bool) -> bool {
@@ -2227,7 +2245,7 @@ struct MergedCellTextFlow {
 /// resumes below a wrapTopAndBottom box -- the shape's path bottom plus half
 /// its stroke, snapped up to the 0.75pt device grid (`vmlwrap.py`, 7 arms).
 fn s1486_wrap_bottom(path_bottom: f32, stroke_width: Option<f32>) -> f32 {
-    if std::env::var_os("OXI_S1486_DISABLE").is_some() {
+    if crate::env_flag!("OXI_S1486_DISABLE") {
         return path_bottom;
     }
     let b = path_bottom + stroke_width.unwrap_or(0.0).max(0.0) / 2.0;
@@ -2265,7 +2283,7 @@ fn s1486_wrap_bottom(path_bottom: f32, stroke_width: Option<f32>) -> f32 {
 /// spaces and lost a line); «5000/-.» stays whole because '.' cannot start a line.
 fn s1475_token_tail(frags: &[LineFragment], cand_first: Option<char>) -> Option<(i32, i32)> {
     let tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
-    let hyphen_breaks = std::env::var_os("OXI_JSHRINK_HYPHEN_DISABLE").is_none();
+    let hyphen_breaks = !crate::env_flag!("OXI_JSHRINK_HYPHEN_DISABLE");
     let trailing_punct = |c: char| matches!(c, '.' | ',' | ':' | ';' | '?' | '!' | '%' | ')' | ']' | '}' | '\u{2019}' | '\u{201d}');
     let (mut tok, mut sp, mut in_space) = (0.0f32, 0.0f32, false);
     let mut later_first = cand_first;
@@ -2311,8 +2329,8 @@ pub(crate) fn s1475_last_word_cap(credit_tw: i32, word_tw: i32, space_tw: i32, o
 }
 
 pub(crate) fn s1467_float_column_flow() -> bool {
-    std::env::var_os("OXI_FLOAT_COLUMN_FLOW").is_some()
-        || std::env::var_os("OXI_S1467_DISABLE").is_none()
+    crate::env_flag!("OXI_FLOAT_COLUMN_FLOW")
+        || !crate::env_flag!("OXI_S1467_DISABLE")
 }
 
 impl MergedCellTextFlow {
@@ -2385,7 +2403,7 @@ impl MergedCellTextFlow {
 
 #[track_caller]
 fn dbg_page_push(n_before: usize, n_elems: usize) {
-    if std::env::var("OXI_DBG_PGPUSH").is_ok() {
+    if crate::env_flag!("OXI_DBG_PGPUSH") {
         let loc = std::panic::Location::caller();
         eprintln!(
             "[PGPUSH] before={} elems={} at {}:{}",
@@ -2966,7 +2984,7 @@ fn advance_table_page_geometry(
     elements: &mut [LayoutElement],
 ) -> f32 {
     let Some(geometry) = geometry else {
-        if std::env::var("OXI_DBG_GEOM").is_ok() {
+        if crate::env_flag!("OXI_DBG_GEOM") {
             eprintln!("[GEOM] page_no={} geometry=None (no shift)", page_no);
         }
         return 0.0;
@@ -2975,7 +2993,7 @@ fn advance_table_page_geometry(
     let next_height = geometry.ch(page_no);
     let bottom_delta = next_top + next_height - (*page_top + *content_height);
     let dy = next_top - *page_top;
-    if std::env::var("OXI_DBG_GEOM").is_ok() {
+    if crate::env_flag!("OXI_DBG_GEOM") {
         eprintln!("[GEOM] page_no={} page_top {:.2} -> {:.2} dy={:.2} ch {:.2} -> {:.2} bottom_delta={:.2} n_elems={} override={:?}",
             page_no, *page_top, next_top, dy, *content_height, next_height, bottom_delta,
             elements.len(), geometry.page_override);
@@ -3041,7 +3059,7 @@ impl LayoutCursor {
         // (caller line via the panic-free Location) whenever the cursor jumps
         // UP by more than half a page (a page push), so block-level pushes
         // with no dedicated instrument can be attributed.
-        if self.cursor_y - y > 300.0 && std::env::var("OXI_DBG_CURSET").is_ok() {
+        if self.cursor_y - y > 300.0 && crate::env_flag!("OXI_DBG_CURSET") {
             eprintln!(
                 "[CURSET] {:.2} -> {:.2} at {}",
                 self.cursor_y,
@@ -3079,7 +3097,7 @@ impl BodyWrapPolicy {
     /// 6-7pt lanes are below the floor either way. Text frames keep their 72,
     /// floating tables their 18.75.
     fn min_lane(&self) -> f32 {
-        if self.minimum_lane_width == 30.0 && std::env::var_os("OXI_LANE_MIN18_DISABLE").is_none() {
+        if self.minimum_lane_width == 30.0 && !crate::env_flag!("OXI_LANE_MIN18_DISABLE") {
             18.0
         } else {
             self.minimum_lane_width
@@ -3138,7 +3156,7 @@ pub(crate) fn ascdesc_mix_height<'a>(items: impl Iterator<Item = (&'a FontMetric
         // and once a non-breaking hyphen is its own fragment (symbol fallback)
         // the hhea reading opened a 9pt Arial line to 50pt (en/legal__003ac6a4).
         let (box_h, desc) = if m.use_typo_metrics && m.typo_descent > 0.0
-            && std::env::var_os("OXI_ASCDESC_TYPO_BOX_DISABLE").is_none()
+            && !crate::env_flag!("OXI_ASCDESC_TYPO_BOX_DISABLE")
         {
             ((m.typo_ascent + m.typo_descent + m.typo_line_gap) * fs, m.typo_descent * fs)
         } else {
@@ -3217,7 +3235,7 @@ impl LayoutEngine {
         runs: impl Iterator<Item = (&'a RunStyle, &'a str)>,
         para_style: &ParagraphStyle,
     ) -> (f32, f32) {
-        if std::env::var_os("OXI_TEXT_SHADOW_LINE_DISABLE").is_some() {
+        if crate::env_flag!("OXI_TEXT_SHADOW_LINE_DISABLE") {
             return (0.0, 0.0);
         }
         // OXI_SHADOW_SMALL_RUN (2026-10-25, default ON, opt-out _DISABLE): a shadow on a
@@ -3232,7 +3250,7 @@ impl LayoutEngine {
         // (blur + dist) x 0.05 x size^0.7 minus 0.289em x (40 - size), within 0.06. Oxi
         // added the small run's extents whole. ja/reference__5593c6a7's title box (40pt
         // run + 20pt shadowed run): Word's second line sat 2.1pt above Oxi's.
-        let small_run_slack = std::env::var_os("OXI_SHADOW_SMALL_RUN_DISABLE").is_none();
+        let small_run_slack = !crate::env_flag!("OXI_SHADOW_SMALL_RUN_DISABLE");
         let runs: Vec<(&RunStyle, &str)> = runs.collect();
         let fs_big = runs.iter()
             .filter(|(_, text)| !text.trim().is_empty())
@@ -3249,7 +3267,7 @@ impl LayoutEngine {
         // «他にも有名で誇れることが！» 4.2pt above Word's (blind-G line census).
         let mark_runs: Vec<(&RunStyle, &str)>;
         let runs = if fs_big <= 0.0
-            && std::env::var_os("OXI_MARK_SHADOW_EMPTY_DISABLE").is_none()
+            && !crate::env_flag!("OXI_MARK_SHADOW_EMPTY_DISABLE")
             && para_style.ppr_rpr.as_ref().is_some_and(|m| m.text_shadow.is_some())
         {
             mark_runs = vec![(para_style.ppr_rpr.as_ref().unwrap(), "\u{B6}")];
@@ -3378,6 +3396,11 @@ pub struct LayoutEngine {
     /// the lane's left edge relative to the paragraph's own left edge, so that
     /// tab stops (explicit and the default grid) keep their margin origin.
     s1636_lane_shift: std::cell::Cell<f32>,
+    /// OXI_TWOSEG_TAB: the right strip's x measured from the paragraph's tab
+    /// origin (column left + indent), set by a caller of break_two_segment_lines.
+    twoseg_seg2_shift: std::cell::Cell<Option<f32>>,
+    /// OXI_TWOSEG_TAB: true while break_two_segment_lines fills the LEFT strip.
+    twoseg_left_strip: std::cell::Cell<bool>,
     default_font_family: Option<String>,
     default_font_family_east_asia: Option<String>,
     /// S1370: the face a CJK character takes when its eastAsia font is
@@ -3568,7 +3591,7 @@ fn block_has_aum_ja_run(block: &Block, default_family: Option<&str>) -> bool {
 /// Round an explicit restart up to the odd/even section's requested parity.
 fn section_page_number_start(page: &Page) -> Option<u32> {
     page.page_number_start.map(|start| {
-        if std::env::var("OXI_SECTION_PARITY_DISABLE").is_ok() { return start; }
+        if crate::env_flag!("OXI_SECTION_PARITY_DISABLE") { return start; }
         match page.section_start_type.as_deref() {
             Some("oddPage") if start % 2 == 0 => start.saturating_add(1),
             Some("evenPage") if start % 2 == 1 => start.saturating_add(1),
@@ -3794,6 +3817,8 @@ thread_local! {
     /// header / footer frame paragraph (the Latin baseline law applies there
     /// even in a CJK document).
     static IN_HF_FRAME_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// OXI_HF_FRAME_OUTSIDE: true while an even page's header / footer is painted.
+    pub(crate) static HF_PAGE_EVEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// OXI_HF_TXBX_NO_CHARGRID: set while a header / footer text box is laid out.
     static IN_HF_TEXT_BOX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// S816 (2026-07-13): true once the document's FIRST IR section has been
@@ -3922,7 +3947,7 @@ fn snap_character_spacing(cs_pt: f32) -> f32 {
 /// the paragraph has no emitted marker, so every caller keeps its old
 /// first-run behaviour by construction.
 fn s1037_marker_style(para: &Paragraph) -> Option<&RunStyle> {
-    if std::env::var("OXI_S1037_DISABLE").is_ok() {
+    if crate::env_flag!("OXI_S1037_DISABLE") {
         return None;
     }
     para.style.list_marker_style.as_deref()
@@ -3989,7 +4014,7 @@ impl GridColumnSearch {
             } else if observation.is_some() && current.height + 0.001 < current.maximum {
                 current.height = (current.height + current.pitch).min(current.maximum);
                 self.active = Some(key);
-                if std::env::var("OXI_DBG_COL").is_ok() {
+                if crate::env_flag!("OXI_DBG_COL") {
                     eprintln!("[GRID_SEARCH] ir={} start={} page={} height={}", key.0, key.1, current.page, current.height);
                 }
                 return true;
@@ -4079,6 +4104,8 @@ impl LayoutEngine {
             doc_default_sz_declared: false,
             s1318_floor_slack: std::cell::Cell::new(0.0),
             s1636_lane_shift: std::cell::Cell::new(0.0),
+            twoseg_seg2_shift: std::cell::Cell::new(None),
+            twoseg_left_strip: std::cell::Cell::new(false),
             default_font_family: None,
             default_font_family_east_asia: None,
             cjk_substitute_face: "Yu Mincho".to_string(),
@@ -4246,7 +4273,7 @@ impl LayoutEngine {
             // `_pb_exact_mixed_desc_gen.py` (Times New Roman + U+FF0C -> MS-Mincho
             // in every arm), blind-G en/creative__03a7fb6a. The truth corpus is
             // this endpoint's, so the default follows it.
-            .unwrap_or_else(|| if std::env::var_os("OXI_SUBSTITUTE_MS_MINCHO_DISABLE").is_none() {
+            .unwrap_or_else(|| if !crate::env_flag!("OXI_SUBSTITUTE_MS_MINCHO_DISABLE") {
                 "MS Mincho".to_string()
             } else {
                 "Yu Mincho".to_string()
@@ -4299,6 +4326,8 @@ impl LayoutEngine {
                 .is_some(),
             s1318_floor_slack: std::cell::Cell::new(0.0),
             s1636_lane_shift: std::cell::Cell::new(0.0),
+            twoseg_seg2_shift: std::cell::Cell::new(None),
+            twoseg_left_strip: std::cell::Cell::new(false),
             default_font_family,
             default_font_family_east_asia,
             cjk_substitute_face,
@@ -4395,7 +4424,7 @@ impl LayoutEngine {
             // (CG Times -> Times New Roman on usnyserda) are NOT distrusted --
             // their saved layout matches ours and the LRPBs are load-bearing.
             // Latin-doc scope (JP keeps its calibrated LRPB machinery).
-            doc_lrpb_distrust: std::env::var("OXI_S811_DISABLE").is_err()
+            doc_lrpb_distrust: !crate::env_flag!("OXI_S811_DISABLE")
                 && !doc
                     .pages
                     .iter()
@@ -4428,7 +4457,7 @@ impl LayoutEngine {
         // is the body's own paragraph estimate (grid snap included); the
         // adjusted document is a clone made only when such a box exists.
         let s1498_doc;
-        let doc = if std::env::var_os("OXI_S1498_DISABLE").is_none()
+        let doc = if !crate::env_flag!("OXI_S1498_DISABLE")
             && doc.pages.iter().any(|p| p.text_boxes.iter().any(|tb| tb.auto_fit))
         {
             let mut d = doc.clone();
@@ -4525,7 +4554,7 @@ impl LayoutEngine {
         // cheap static estimate is NOT safe here: twenty LIVE documents sit at
         // delta exactly 0, so an estimate off by one page would distrust them.
         // Lay out, count, and lay out once more only when the file over-counts.
-        if std::env::var("OXI_S1304_DISABLE").is_err() && !self.lrpb_count_distrust.get() {
+        if !crate::env_flag!("OXI_S1304_DISABLE") && !self.lrpb_count_distrust.get() {
             let markers: usize = doc
                 .pages
                 .iter()
@@ -4535,7 +4564,7 @@ impl LayoutEngine {
             if markers > 0 {
                 // Cached page breaks cannot validate their own page count.
                 // Compare their count with natural pagination before applying them.
-                if std::env::var("OXI_NATURAL_LRPB_DISABLE").is_err() {
+                if !crate::env_flag!("OXI_NATURAL_LRPB_DISABLE") {
                     self.lrpb_count_distrust.set(true);
                     let natural = self.layout_pass(doc);
                     self.lrpb_count_distrust.set(false);
@@ -4558,7 +4587,7 @@ impl LayoutEngine {
 
     fn layout_pass(&self, doc: &Document) -> LayoutResult {
         let mut columns = GridColumnSearch::default();
-        columns.enabled = std::env::var("OXI_AUTO_GRID_COLUMNS").is_ok();
+        columns.enabled = crate::env_flag!("OXI_AUTO_GRID_COLUMNS");
         let mut references = style_pagination::StylePagination::default();
         let mut source_anchors=FloatSourceAnchors::default();
         loop {
@@ -4579,7 +4608,7 @@ impl LayoutEngine {
         // Contextual spacing follows neighboring source paragraphs across
         // cell and nested-table boundaries. Resolve it on the layout copy
         // before any measurement or replay, retaining the authored IR.
-        if std::env::var_os("OXI_CELL_SOURCE_CONTEXT_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_CELL_SOURCE_CONTEXT_DISABLE") {
             cell_context::apply(&mut doc_resolved, self.cell_end_style_id.as_deref());
         }
         // Word preserves the declared top margin for CJK text as well. Fresh
@@ -4588,8 +4617,8 @@ impl LayoutEngine {
         // quantization of the declared 0.15pt changes. Half-point rounding
         // instead moves them by 0/0.5pt and can lose a near-boundary table line.
         // Keep the old origin only as a diagnostic opt-out.
-        let legacy_top_origin = std::env::var("OXI_EXACT_LATIN_MARGIN_DISABLE").is_ok()
-            && std::env::var("OXI_S1097").is_err();
+        let legacy_top_origin = crate::env_flag!("OXI_EXACT_LATIN_MARGIN_DISABLE")
+            && !crate::env_flag!("OXI_S1097");
         for page in &mut doc_resolved.pages {
             if legacy_top_origin {
                 page.margin.top = (page.margin.top * 2.0).round() / 2.0;
@@ -4600,7 +4629,7 @@ impl LayoutEngine {
             // Resolve line-valued cell spacing on the private layout copy.
             // All table measurement, replay and painting paths then see the
             // same point value, while the source IR retains the authored units.
-            if std::env::var_os("OXI_TABLE_LINE_SPACING_UNIT").is_some()
+            if crate::env_flag!("OXI_TABLE_LINE_SPACING_UNIT")
                 && (page.doc_grid_no_type || page.grid_line_pitch.is_none())
             {
                 fn resolve_cells(blocks: &mut [Block], in_cell: bool) {
@@ -4646,7 +4675,7 @@ impl LayoutEngine {
             // runs in cells). Upper-cased here on the private layout copy, so every
             // cell path -- estimate and placement -- sees the same text. A character
             // whose capital is longer (ß) keeps its spelling, so source offsets hold.
-            if std::env::var_os("OXI_CELL_CAPS_DISABLE").is_none() {
+            if !crate::env_flag!("OXI_CELL_CAPS_DISABLE") {
                 fn caps_cells(blocks: &mut [Block], in_cell: bool) {
                     for block in blocks {
                         match block {
@@ -4744,7 +4773,7 @@ impl LayoutEngine {
         // paragraphs; skipped work everywhere when no STYLEREF header exists.
         S1174_FIRST.with(|m| m.borrow_mut().clear());
         S1174_LAST.with(|m| m.borrow_mut().clear());
-        let s1174_doc_active = std::env::var("OXI_S1174_DISABLE").is_err()
+        let s1174_doc_active = !crate::env_flag!("OXI_S1174_DISABLE")
             && doc_resolved.pages.iter().any(|p| {
                 Self::s1174_has_ref(&p.header)
                     || Self::s1174_has_ref(&p.footer)
@@ -4783,8 +4812,8 @@ impl LayoutEngine {
         // now survives the merge in `page_number_runs`, so the running logical
         // number is trustworthy where one exists. While S1294 is off the guard
         // stays armed.
-        let s1291_usable = std::env::var("OXI_S1291_DISABLE").is_err()
-            && (std::env::var("OXI_S1294_DISABLE").is_err()
+        let s1291_usable = !crate::env_flag!("OXI_S1291_DISABLE")
+            && (!crate::env_flag!("OXI_S1294_DISABLE")
                 || !doc_resolved.pages.iter().any(|p| p.dropped_pgnum_restart));
 
         // S1291: the logical page number of the LAST physical page emitted.
@@ -4847,9 +4876,9 @@ impl LayoutEngine {
             // its 1789 paragraphs sat exactly one page early.
             // A blank filler takes the next logical number itself, so each pass
             // flips the parity and the loop adds at most one page.
-            if std::env::var("OXI_S732_DISABLE").is_err() && !pages.is_empty() {
+            if !crate::env_flag!("OXI_S732_DISABLE") && !pages.is_empty() {
                 let s1291 = s1291_usable;
-                let s957_on = std::env::var("OXI_S957_DISABLE").is_err();
+                let s957_on = !crate::env_flag!("OXI_S957_DISABLE");
                 for _ in 0..2 {
                     // The logical number this section's first page would take.
                     let section_parity = match page.section_start_type.as_deref() {
@@ -4858,7 +4887,7 @@ impl LayoutEngine {
                         _ => None,
                     };
                     let restart_parity = s1291
-                        && std::env::var("OXI_SECTION_PARITY_DISABLE").is_err();
+                        && !crate::env_flag!("OXI_SECTION_PARITY_DISABLE");
                     // An odd/even section uses the continuing page sequence to
                     // choose its side. An explicit restart suppresses padding
                     // when odd/even headers are disabled; with those headers,
@@ -4942,7 +4971,7 @@ impl LayoutEngine {
                     }
                 }
             }
-            if std::env::var("OXI_DBG_IRPAGES").is_ok() {
+            if crate::env_flag!("OXI_DBG_IRPAGES") {
                 eprintln!(
                     "[IRPAGE] ir={} blocks={} pages={} (cum_before={})",
                     ir_idx,
@@ -5014,7 +5043,7 @@ impl LayoutEngine {
         // Page without carrying page_number_start), so probe case cont_s2s7 —
         // Word 1,2,8 — renders 1,2,3 either way. Fixing it needs the start to
         // survive the merge as a per-section run.
-        let s912 = std::env::var("OXI_S912_DISABLE").is_err();
+        let s912 = !crate::env_flag!("OXI_S912_DISABLE");
         let page_numbers: Vec<u32> = {
             let mut nums = Vec::with_capacity(pages.len());
             let mut num: u32 = 0;
@@ -5028,7 +5057,7 @@ impl LayoutEngine {
             // a page numbered 89): Word blank (90) then 91, Oxi blank 91 then 92 on
             // every following page. The filler rules above already count it this
             // way (`logical_prev += 1` before the section's start is applied).
-            let filler_pgnum = std::env::var_os("OXI_FILLER_PGNUM_DISABLE").is_none();
+            let filler_pgnum = !crate::env_flag!("OXI_FILLER_PGNUM_DISABLE");
             for page_idx in 0..pages.len() {
                 if filler_pgnum && parity_fillers.contains(&page_idx) {
                     num += 1;
@@ -5050,6 +5079,34 @@ impl LayoutEngine {
             }
             nums
         };
+
+        // OXI_MIRROR_MARGINS (2026-11-01, default ON, opt-out _DISABLE): under
+        // w:mirrorMargins an even-numbered page takes the right margin on its left
+        // and the left (plus gutter) on its right; the text width is unchanged, so
+        // the page's content moves sideways as a whole. w:gutterAtTop turns the
+        // mirroring off. `_pb_mirror_margins_gen.py` (left 1080, right 720): p2
+        // text 36.00..557.70 against 54.02..575.72 on p1/p3; gutter 360 -> p1/p3
+        // 72.02..575.58, p2 36.00..539.56; with gutterAtTop every page 54.02.
+        // en/technical__019d92d9 p2: Word's text starts at 36, Oxi drew 54.
+        if doc_resolved.mirror_margins && !doc_resolved.gutter_at_top
+            && !crate::env_flag!("OXI_MIRROR_MARGINS_DISABLE")
+        {
+            for (page_idx, page) in pages.iter_mut().enumerate() {
+                if page_numbers.get(page_idx).map_or(true, |n| n % 2 != 0) {
+                    continue;
+                }
+                let Some(ir) = layout_to_ir_page.get(page_idx).and_then(|&i| doc_resolved.pages.get(i)) else {
+                    continue;
+                };
+                let dx = ir.margin.right - ir.margin.left;
+                if dx.abs() < 0.01 {
+                    continue;
+                }
+                for e in &mut page.elements {
+                    e.x += dx;
+                }
+            }
+        }
 
         for (page_idx, page) in pages.iter_mut().enumerate() {
             // S534 (2026-06-10): apply the section's pgNumType format to the
@@ -5126,7 +5183,7 @@ impl LayoutEngine {
 
         // Renderers consume RGB colors; OOXML highlight names are a palette,
         // not hexadecimal strings. Normalize at the shared rendering boundary.
-        if std::env::var("OXI_HIGHLIGHT_COLORS").is_ok() {
+        if crate::env_flag!("OXI_HIGHLIGHT_COLORS") {
             for page in &mut pages {
                 for element in &mut page.elements {
                     if let LayoutContent::Text { highlight, .. } = &mut element.content {
@@ -5220,7 +5277,7 @@ impl LayoutEngine {
         // Use the declared complex-script face for shaping and drawing when
         // it covers the supported script. Keep Latin and East Asian routing
         // and the separate line-box metrics unchanged.
-        if std::env::var("OXI_DEVA_DISABLE").is_err()
+        if !crate::env_flag!("OXI_DEVA_DISABLE")
             && text.chars().any(crate::font::is_complex_script)
         {
             if let Some(family) = run_style.font_family_cs.as_deref().or_else(|| {
@@ -5252,9 +5309,9 @@ impl LayoutEngine {
         run_style: &RunStyle,
         para_style: &ParagraphStyle,
     ) -> Option<bool> {
-        let math = std::env::var_os("OXI_MATH_FONT_HINT").is_some()
+        let math = crate::env_flag!("OXI_MATH_FONT_HINT")
             && matches!(ch, '\u{2190}'..='\u{22FF}');
-        let punctuation = std::env::var_os("OXI_PUNCT_FONT_HINT").is_some()
+        let punctuation = crate::env_flag!("OXI_PUNCT_FONT_HINT")
             && matches!(ch, '\u{2013}' | '\u{2014}' | '\u{2018}' | '\u{2019}'
                 | '\u{201C}' | '\u{201D}' | '\u{2026}' | '\u{2022}');
         // S1419 (2026-09-15, default ON, opt-out OXI_SCRIPT_FONT_HINT_DISABLE):
@@ -5266,7 +5323,7 @@ impl LayoutEngine {
         // (0.60..0.69) and has no table here, so it keeps the ascii routing,
         // which is the nearer of the two. educational__0ad73366 p2: sigma/pi
         // at the Latin width packed 45 chars on a line Word ends at 43.
-        let alphabet = std::env::var_os("OXI_SCRIPT_FONT_HINT_DISABLE").is_none()
+        let alphabet = !crate::env_flag!("OXI_SCRIPT_FONT_HINT_DISABLE")
             && matches!(ch, '\u{0370}'..='\u{04FF}')
             && self
                 .metrics_for_cjk_script(run_style, para_style, false)
@@ -5295,7 +5352,7 @@ impl LayoutEngine {
         para_style: &'a ParagraphStyle,
         quote_latin: bool,
     ) -> Option<&'a str> {
-        let s763 = quote_latin && std::env::var("OXI_S763_DISABLE").is_err();
+        let s763 = quote_latin && !crate::env_flag!("OXI_S763_DISABLE");
         // S801 (2026-07-12, opt-out OXI_S801_DISABLE): the EN/EM DASH
         // (U+2013/U+2014) is the same ambiguous General-Punctuation class as the
         // curly quotes — is_cjk classifies it CJK, so an en-dash in an English
@@ -5304,7 +5361,7 @@ impl LayoutEngine {
         // the dash LINE grew 13.43→15.0 [com 11pt], +1.56/line = the p36-37
         // drift feeding the wp38 keepNext knife-edge). The S763c eastAsia-LANG
         // gate keeps CJK-lang docs on the eastAsia chain exactly as before.
-        let s801 = std::env::var("OXI_S801_DISABLE").is_err();
+        let s801 = !crate::env_flag!("OXI_S801_DISABLE");
         // S830 (2026-07-13, opt-out OXI_S830_DISABLE): HORIZONTAL ELLIPSIS
         // (U+2026) is the same East-Asian-Width=Ambiguous class as the curly
         // quotes/dashes — is_cjk classified it CJK unconditionally, so «…» in
@@ -5314,16 +5371,16 @@ impl LayoutEngine {
         // jump; ASCII-substitution A/B isolated the ellipsis, quotes clean).
         // The S763c eastAsia-LANG gate keeps CJK-lang docs on the eastAsia
         // chain exactly as before (JP byte-identical by construction).
-        let s830 = std::env::var("OXI_S830_DISABLE").is_err();
+        let s830 = !crate::env_flag!("OXI_S830_DISABLE");
         // S888: U+2011/U+2010 (noBreakHyphen / hyphen) join the ambiguous
         // class — see metrics_for_char_in.
-        let s888 = std::env::var("OXI_S888_DISABLE").is_err();
+        let s888 = !crate::env_flag!("OXI_S888_DISABLE");
         // S951: Arrows + Math Operators (U+2190..U+22FF) — Latin-doc scope
         // (doc_body_has_real_cjk gate like S801/S888 at the break site).
         // reference__0029c1c: a ≥ in «AHI ≥ 30» routed the LINE to the
         // eastAsia chain (Book Antiqua eastAsia → S634 MS Mincho) and grew it
         // 22.37→25.50 where Word keeps the Latin line height.
-        let s951 = !self.doc_body_has_real_cjk && std::env::var("OXI_S951_DISABLE").is_err();
+        let s951 = !self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S951_DISABLE");
         // S966 (default ON, opt-out OXI_S966_DISABLE): U+2022 BULLET belongs to
         // the ambiguous class (the fifth member after
         // S801 dashes, S830 ellipsis, S888 hyphens, S951 arrows/math).
@@ -5340,7 +5397,7 @@ impl LayoutEngine {
         // That missing ~10pt is S968 (style-derived cell autospacing); the
         // two ship together as a compensating pair — either alone leaves
         // administrative__0001ce58 at 0.9583, both together restore 1.0.
-        let s966 = !self.doc_body_has_real_cjk && std::env::var("OXI_S966_DISABLE").is_err();
+        let s966 = !self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S966_DISABLE");
         // S1103 (2026-08-08, opt-out OXI_S1103_DISABLE): U+2015 HORIZONTAL BAR
         // joins the ambiguous class (the seventh member after S801 dashes,
         // S830 ellipsis, S888 hyphens, S951 arrows/math, S966 bullet, S1081's
@@ -5358,7 +5415,7 @@ impl LayoutEngine {
         // Latin (upm 2048, GDI px round) and the CJK (upm 256) paths — and
         // Word's own advance measures 12.0.  Only the LINE HEIGHT moves.
         // Doc-level Latin gate like S801/S888/S951/S966 → JP byte-identical.
-        let s1103 = !self.doc_body_has_real_cjk && std::env::var("OXI_S1103_DISABLE").is_err();
+        let s1103 = !self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S1103_DISABLE");
         // S1115 (2026-08-14, SHIPPED default-ON, opt-out OXI_S1115_DISABLE):
         // the six rules above are six
         // carve-outs from ONE class — East Asian Width = Ambiguous.  Each was
@@ -5389,7 +5446,7 @@ impl LayoutEngine {
         // bytes; lib tests 152/0.  That closes the last PASS->FAIL of the
         // 2026-08-13 {S1112,S1091,S1074,S1113,S1114} bundle.
         let s1115 = !self.doc_body_has_real_cjk
-            && std::env::var("OXI_S1115_DISABLE").is_err();
+            && !crate::env_flag!("OXI_S1115_DISABLE");
         // S1178 (2026-08-20, opt-out OXI_S1178_DISABLE): U+00D7 ×  / U+00F7 ÷ —
         // Latin-1's two EAW-Ambiguous math signs join the class. is_cjk claims
         // them unconditionally, so creative__0158c02a's ÷ lines rode the
@@ -5403,7 +5460,7 @@ impl LayoutEngine {
         // uniform pitch. Doc-level Latin gate → JP (tokyoshugyo ×44, 3a4f,
         // parttime… all eastAsia-rendered) byte-identical by construction.
         let s1178 = !self.doc_body_has_real_cjk
-            && std::env::var("OXI_S1178_DISABLE").is_err();
+            && !crate::env_flag!("OXI_S1178_DISABLE");
         let is_q = move |c: char| {
             matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
                 || (s801 && matches!(c, '\u{2013}' | '\u{2014}'))
@@ -5438,7 +5495,7 @@ impl LayoutEngine {
         // not the document: quote glued to ASCII -> Latin, quote alone -> the
         // eastAsia chain (S763b/S763c keep deciding that case).
         let s1081_latin_ctx = has_quote
-            && std::env::var("OXI_S1081_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S1081_DISABLE")
             && text
                 .chars()
                 .any(|c| c.is_ascii() && !c.is_ascii_whitespace());
@@ -5464,12 +5521,12 @@ impl LayoutEngine {
         // (+13pt) and lone-quote fragments in body lines (+5/line) priced at
         // 游明朝 once S1397 replaced the "MS Mincho" stand-in that hid this.
         let s1398 = !self.doc_body_has_real_cjk
-            && std::env::var("OXI_S1398_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S1398_DISABLE")
             && has_quote
             && !has_real_cjk
             && !run_style.east_asia_hint
             && run_style.font_hint_east_asia != Some(true);
-        let latin_ellipsis = std::env::var("OXI_LATIN_ELLIPSIS_FONT").is_ok()
+        let latin_ellipsis = crate::env_flag!("OXI_LATIN_ELLIPSIS_FONT")
             && !self.doc_body_has_real_cjk
             && text.contains('\u{2026}')
             && text.chars().all(|c| c == '\u{2026}' || c.is_whitespace());
@@ -5494,7 +5551,7 @@ impl LayoutEngine {
             // in MS PGothic (the flat quote-as-Latin rule regressed db9ca
             // −0.0094). So a NON-CJK eastAsia lang → Latin quote; a CJK lang →
             // eastAsia chain (S763b). Opt-out OXI_S763C_DISABLE.
-            if !self.doc_east_asia_lang_cjk && std::env::var("OXI_S763C_DISABLE").is_err() {
+            if !self.doc_east_asia_lang_cjk && !crate::env_flag!("OXI_S763C_DISABLE") {
                 false
             } else {
                 let ea = run_style
@@ -5531,7 +5588,7 @@ impl LayoutEngine {
             }
             // With no East Asian slot, Japanese text uses the document's
             // default CJK face even if the ASCII face can draw those glyphs.
-            if cjk_script && std::env::var_os("OXI_CJK_DEFAULT_SLOT_DISABLE").is_none() {
+            if cjk_script && !crate::env_flag!("OXI_CJK_DEFAULT_SLOT_DISABLE") {
                 return Some(self.cjk_substitute_face.as_str());
             }
         }
@@ -5563,7 +5620,7 @@ impl LayoutEngine {
     ) -> &'a str {
         if family == "Arial Unicode MS"
             && !self.aum_japanese_substitute(text)
-            && std::env::var("OXI_S1036_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S1036_DISABLE")
             && self.resolve_font_family(run_style, para_style) == Some("Arial Unicode MS")
         {
             // S1564 (2026-09-26, default ON, opt-out OXI_S1564_DISABLE): with
@@ -5578,7 +5635,7 @@ impl LayoutEngine {
             // (Arial 11 body, AUM run '≈'/'A', COM Info(6)): 12.0 / 12.75 = the
             // Arial control's 12.75, while MS Mincho (14.25) and Meiryo (21.75)
             // runs do grow the line. The substitute is Arial (PDF face name).
-            if std::env::var_os("OXI_S1564_DISABLE").is_none() {
+            if !crate::env_flag!("OXI_S1564_DISABLE") {
                 "Arial"
             } else {
                 "Arial Unicode MS Latin"
@@ -5608,7 +5665,7 @@ impl LayoutEngine {
     /// Word sets «mysign公式» with no gap, Oxi's +2.5 at each joint wrapped «て».
     fn doc_autospace(&self) -> bool {
         *self.doc_autospace_cache.get_or_init(|| {
-            std::env::var_os("OXI_AUTOSPACE_DD_EA_DISABLE").is_some()
+            crate::env_flag!("OXI_AUTOSPACE_DD_EA_DISABLE")
                 || self.default_font_family_east_asia.as_deref().is_some_and(|f|
                     crate::font::shape::family_covers(f, '\u{672C}')
                         || self.registry.get(f).is_cjk_83_64_font())
@@ -5616,20 +5673,34 @@ impl LayoutEngine {
     }
 
     fn aum_japanese_substitute(&self, text: Option<&str>) -> bool {
-        if std::env::var_os("OXI_AUMJA_DISABLE").is_some() {
+        if crate::env_flag!("OXI_AUMJA_DISABLE") {
             return self.doc_body_has_real_cjk;
         }
         match text {
             Some(t) if !t.chars().any(|c| c.is_ascii_alphanumeric() || c == ' ') => self.doc_body_has_real_cjk,
-            _ => self.doc_aum_ja_lang,
+            _ => self.doc_aum_ja_lang || self.aum_charset_80_absent(),
         }
+    }
+
+    /// OXI_AUM_CHARSET80_LATIN (2026-11-01, default ON, opt-out _DISABLE): with Arial
+    /// Unicode MS absent, a document whose fontTable declares it charset 80 gets ＭＳ
+    /// 明朝 for its AUM Latin too -- the 2026-10-17 law (one Word process per
+    /// document: declared charset 80 -> ＭＳ 明朝, undeclared -> Arial), so far used
+    /// only for markers. en/forms__006c06b0 (Normal = AUM 9pt, charset 80, lang
+    /// en-CA): every AUM paragraph is MS-Mincho half-width in a fresh Word process
+    /// («Local» 22.5 wide); Oxi set Arial (21.5). reports__619945 declares charset 0
+    /// and stays Arial.
+    fn aum_charset_80_absent(&self) -> bool {
+        self.aum_charset_80
+            && !crate::env_flag!("OXI_AUM_CHARSET80_LATIN_DISABLE")
+            && crate::font::runtime::resolve("Arial Unicode MS", false, false).is_none()
     }
 
     /// S1614: the ascent (pt) of a numbering marker set in Arial Unicode MS in a
     /// Latin document -- AUM's own 1.332em box, not S1564's Arial (see the body
     /// S1037 site). None for any other marker.
     fn s1614_aum_marker_asc(&self, para: &Paragraph) -> Option<f32> {
-        if std::env::var_os("OXI_S1614_DISABLE").is_some() || self.doc_body_has_real_cjk {
+        if crate::env_flag!("OXI_S1614_DISABLE") || self.doc_body_has_real_cjk {
             return None;
         }
         para.style.list_marker.as_ref()?;
@@ -5645,7 +5716,7 @@ impl LayoutEngine {
         // as the generic marker. en/policies__0097fbf2 (checklist rows in a table,
         // blind-G line census): the S1614 box kept every numbered row 4.0pt low
         // after the body fix -- Word 239.70, Oxi 243.7, the cell site unchanged.
-        if std::env::var_os("OXI_MARKER_CJK_ASC_DISABLE").is_none()
+        if !crate::env_flag!("OXI_MARKER_CJK_ASC_DISABLE")
             && crate::font::runtime::resolve("Arial Unicode MS", false, false).is_none()
         {
             if !self.aum_charset_80 {
@@ -5670,7 +5741,7 @@ impl LayoutEngine {
     /// = 1.3828·s − Calibri-Bold winAscent within 0.06; policies__0097fbf2's
     /// heading rows +4.20/4.32/4.32 (Oxi gave +3.84).
     pub(crate) fn aum_marker_ascent_em(win_ascent: f32) -> f32 {
-        if std::env::var_os("OXI_AUM_MARKER_BOX_DISABLE").is_none()
+        if !crate::env_flag!("OXI_AUM_MARKER_BOX_DISABLE")
             && crate::font::runtime::resolve("Arial Unicode MS", false, false).is_none()
         {
             1.3828
@@ -5683,7 +5754,7 @@ impl LayoutEngine {
     // balancing is off. CJK and balanced runs retain the quarter-em basis.
     fn natural_autospace_after(&self, ch: char, style: &RunStyle,
         para: &ParagraphStyle, font_size: f32, cs: f32) -> f32 {
-        if std::env::var("OXI_AUTOSPACE2_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_AUTOSPACE2_DISABLE") {
             return s546_autospace_extra(font_size);
         }
         let balance = self.balance_single_byte_double_byte_width
@@ -5718,8 +5789,8 @@ impl LayoutEngine {
     // Vertical empty paragraphs use the paragraph mark's Latin font chain.
     // An unresolved chain inherits the same host font as an unstyled document.
     fn metrics_for_vertical_mark(&self, run: &RunStyle, para: &ParagraphStyle) -> FontMetricsRef<'_> {
-        if std::env::var_os("OXI_VERTICAL_MARK_ASCII_DISABLE").is_some() {
-            return if std::env::var_os("OXI_VERTICAL_MARK_DISABLE").is_none()
+        if crate::env_flag!("OXI_VERTICAL_MARK_ASCII_DISABLE") {
+            return if !crate::env_flag!("OXI_VERTICAL_MARK_DISABLE")
                 && run.font_family.is_some() && run.font_family_east_asia.is_none()
             { self.metrics_for(run, para) } else { self.metrics_for_para_mark(run, para) };
         }
@@ -5749,8 +5820,8 @@ impl LayoutEngine {
         // half the 83/64 surplus; the union raise + ruby_asc + base_desc decides
         // the rows and is centred in them). Opt-out OXI_S1638_DISABLE (or the old
         // opt-in OXI_RUBY_FONT_ASCENT keeps forcing it on).
-        if std::env::var_os("OXI_RUBY_FONT_ASCENT").is_none()
-            && std::env::var_os("OXI_S1638_DISABLE").is_some()
+        if !crate::env_flag!("OXI_RUBY_FONT_ASCENT")
+            && crate::env_flag!("OXI_S1638_DISABLE")
         {
             return ruby::paragraph_ruby_expansion_pt(runs, default_size);
         }
@@ -5799,7 +5870,7 @@ impl LayoutEngine {
         // or Office cloud cache); Nirmala UI is the floor if it does not. Reached
         // only for text with a complex-script char, so the frozen corpus is
         // byte-identical by construction.
-        if std::env::var("OXI_DEVA_DISABLE").is_err()
+        if !crate::env_flag!("OXI_DEVA_DISABLE")
             && text.chars().any(crate::font::is_complex_script)
         {
             // The cs font if THIS machine can measure it (v1/v11 declare
@@ -5817,7 +5888,7 @@ impl LayoutEngine {
                 if m.char_widths.contains_key(&'\u{0915}') {
                     return m;
                 }
-                if std::env::var_os("OXI_INDIA_CS_METRICS_DISABLE").is_none()
+                if !crate::env_flag!("OXI_INDIA_CS_METRICS_DISABLE")
                     && !self.registry.supports_family(cs)
                     && crate::font::runtime::resolve(cs, false, false).is_none()
                 {
@@ -5830,7 +5901,7 @@ impl LayoutEngine {
                 return nirmala;
             }
         }
-        let quote_latin = std::env::var("OXI_S763M_DISABLE").is_err();
+        let quote_latin = !crate::env_flag!("OXI_S763M_DISABLE");
         match self.resolve_font_family_for_text_g(text, run_style, para_style, quote_latin) {
             Some(family) => self.registry.get_with_style(
                 self.s1036_metric_family(run_style, para_style, family, Some(text)),
@@ -5859,7 +5930,7 @@ impl LayoutEngine {
         para_style: &ParagraphStyle,
         prefer_ascii: bool,
     ) -> FontMetricsRef<'_> {
-        if std::env::var_os("OXI_INDIA_CS_MARK_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_INDIA_CS_MARK_DISABLE") {
             if let Some(family) = self.resolve_font_family(run_style, para_style) {
                 if self.deva_font_families.contains(&family.to_lowercase())
                     && !self.registry.supports_family(family)
@@ -5898,7 +5969,7 @@ impl LayoutEngine {
         //   ... no theme at all                   -> 33.48 (OS default JP)
         // The mark's OWN w:lang is ignored in both directions; the document
         // default is what decides. Opt-out OXI_S956_DISABLE.
-        let s956 = self.doc_latin_lang_cjk && std::env::var("OXI_S956_DISABLE").is_err();
+        let s956 = self.doc_latin_lang_cjk && !crate::env_flag!("OXI_S956_DISABLE");
         // S1300 (2026-09-04, opt-out OXI_S1300_DISABLE): the ¶ mark takes the
         // ASCII font's line EVEN WHEN that font is itself CJK-83/64. S707 kept
         // the eastAsia metric in that case, but the two readings only ever
@@ -5916,7 +5987,7 @@ impl LayoutEngine {
         // `<w:rFonts w:eastAsiaTheme="minorEastAsia"/>` marks in a table -- Word
         // puts the following text 64.23pt below the previous line, which is the
         // ＭＳ 明朝 reading (Oxi's eastAsia reading gives 70.61).
-        let s1300 = std::env::var("OXI_S1300_DISABLE").is_err();
+        let s1300 = !crate::env_flag!("OXI_S1300_DISABLE");
         // S1302 (2026-09-04, opt-out OXI_S1302_DISABLE): the same ASCII rule
         // reaches a TYPED grid when the mark's East Asian family is only a
         // THEME REFERENCE. `_pb_markea_gen.py`'s grid arm measures 11.66 --
@@ -5933,8 +6004,8 @@ impl LayoutEngine {
         // and regressed ed025 by 0.0065: that document's shortfall is a TEXT
         // line, not a mark, so the blanket form moved the wrong quantity.
         let s1302 = run_style.east_asia_from_theme
-            && std::env::var("OXI_S1302_DISABLE").is_err();
-        if (prefer_ascii || s1302) && !s956 && std::env::var("OXI_S707_DISABLE").is_err() {
+            && !crate::env_flag!("OXI_S1302_DISABLE");
+        if (prefer_ascii || s1302) && !s956 && !crate::env_flag!("OXI_S707_DISABLE") {
             let ascii = self.metrics_for(run_style, para_style);
             if s1300 || s1302 || !ascii.is_cjk_83_64_font() {
                 return ascii;
@@ -5968,7 +6039,7 @@ impl LayoutEngine {
                 // theme Jpan ＭＳ 明朝 / ゴシック / Meiryo alike; only a CJK eastAsia
                 // (ＭＳ 明朝, c4/c5/c9) gives its own 1.297. mysignaiguide's empty
                 // Arial-17 paragraphs: Word 22.5 (Arial x 1.15), Oxi 25.35.
-                if linked != ff && std::env::var_os("OXI_S956_LATIN_EA_ASCII_DISABLE").is_none() {
+                if linked != ff && !crate::env_flag!("OXI_S956_LATIN_EA_ASCII_DISABLE") {
                     return self.metrics_for(run_style, para_style);
                 }
                 return self.registry.get(linked);
@@ -6000,12 +6071,12 @@ impl LayoutEngine {
         run_style: &RunStyle,
         para_style: &ParagraphStyle,
     ) -> FontMetricsRef<'_> {
-        let s763 = std::env::var("OXI_S763_DISABLE").is_err();
+        let s763 = !crate::env_flag!("OXI_S763_DISABLE");
         // S801: en/em dash = the same ambiguous class (see
         // resolve_font_family_for_text_g) — Latin metrics for a dash in a
         // Latin run; CJK-companion runs keep eastAsia.
         let quote = matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
-            || (std::env::var("OXI_S801_DISABLE").is_err()
+            || (!crate::env_flag!("OXI_S801_DISABLE")
                 && matches!(ch, '\u{2013}' | '\u{2014}'))
             // S888: U+2011 NON-BREAKING HYPHEN (S747's noBreakHyphen) is the
             // same ambiguous General-Punctuation class — is_cjk routed it to
@@ -6013,36 +6084,36 @@ impl LayoutEngine {
             // Mincho, upm-256) priced it at fs/2 = 6.0 @TNR12 vs Word's
             // hyphen 4.0. legal__0001482d's noBreakHyphen ISBN/Gazette lines
             // wrapped one line early each (+14..17pt ×4 anomalies).
-            || (std::env::var("OXI_S888_DISABLE").is_err()
+            || (!crate::env_flag!("OXI_S888_DISABLE")
                 && matches!(ch, '\u{2011}' | '\u{2010}'))
             // S966: U+2022 BULLET, same ambiguous class as the dashes above.
             || (!self.doc_body_has_real_cjk
-                && std::env::var("OXI_S966_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S966_DISABLE")
                 && ch == '\u{2022}')
             // S951: Arrows + Math Operators (U+2190..U+22FF) in a Latin doc —
             // see the break-site comment (reference__0029c1c «AHI ≥ 30»).
             || (!self.doc_body_has_real_cjk
-                && std::env::var("OXI_S951_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S951_DISABLE")
                 && matches!(ch, '\u{2190}'..='\u{22FF}'))
             // S1103: U+2015 HORIZONTAL BAR, same ambiguous class — Word draws
             // legal__000ad039's catchword separators in TNR Italic.  The width
             // is unchanged either way (is_fullwidth lists U+2015 → 1.0em).
             || (!self.doc_body_has_real_cjk
-                && std::env::var("OXI_S1103_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S1103_DISABLE")
                 && ch == '\u{2015}')
             // S1178: U+00D7 × / U+00F7 ÷, same ambiguous class — see
             // resolve_font_family_for_text_g. Here the WIDTH follows the Latin
             // face too (Word prices creative__0158c02a's ÷ in ArialMT).
             || (!self.doc_body_has_real_cjk
-                && std::env::var("OXI_S1178_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S1178_DISABLE")
                 && matches!(ch, '\u{00D7}' | '\u{00F7}'));
         let cjk_class = self.ambiguous_symbol_east_asia(ch, run_style, para_style)
             .unwrap_or_else(|| kinsoku::is_cjk(ch) && !(s763 && quote && !run_has_real_cjk));
         if cjk_class {
             if let Some(m) = self.metrics_for_cjk_script(
                 run_style, para_style,
-                (std::env::var_os("OXI_CJK_SUBSTITUTE_METRICS_DISABLE").is_none()
-                    || std::env::var_os("OXI_CJK_SUBSTITUTE_METRICS").is_some())
+                (!crate::env_flag!("OXI_CJK_SUBSTITUTE_METRICS_DISABLE")
+                    || crate::env_flag!("OXI_CJK_SUBSTITUTE_METRICS"))
                     && Self::s1370_is_cjk_script(ch),
             ) {
                 return m;
@@ -6072,8 +6143,8 @@ impl LayoutEngine {
     /// byte-identical by construction.
     fn s1052_cell_latin_quote(&self, chars: &[char], i: usize) -> bool {
         if self.doc_body_has_real_cjk
-            || std::env::var("OXI_S1052_DISABLE").is_ok()
-            || std::env::var("OXI_LATINQUOTE_DISABLE").is_ok()
+            || crate::env_flag!("OXI_S1052_DISABLE")
+            || crate::env_flag!("OXI_LATINQUOTE_DISABLE")
         {
             return false;
         }
@@ -6086,7 +6157,7 @@ impl LayoutEngine {
         // blind-G EN legal__00485f15's header "Listed drug with water
         // purified - BP" (TNR Bold 10: hyphen 3.33, Oxi 5.0) wrapped "BP",
         // the header grew a line and the page's last row went over.
-        if std::env::var_os("OXI_S1602_DISABLE").is_none()
+        if !crate::env_flag!("OXI_S1602_DISABLE")
             && matches!(chars.get(i), Some('\u{2010}') | Some('\u{2011}') | Some('\u{2013}') | Some('\u{2014}'))
         {
             return true;
@@ -6148,7 +6219,7 @@ impl LayoutEngine {
             }
         }
         if cjk_script
-            && std::env::var("OXI_S1371_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S1371_DISABLE")
             && !crate::font::is_latin_only_font(ff)
             && !self.registry.supports_family(ff)
             && crate::font::runtime::resolve(ff, false, false).is_none()
@@ -6165,15 +6236,15 @@ impl LayoutEngine {
             // Arial -> YuMincho (3 arms). reference__3de85ac121902dd0
             // 「オーストラリア人の…」: Word 14.25/line, Oxi 18.40.
             if has_explicit
-                && std::env::var("OXI_S634_DISABLE").is_err()
-                && std::env::var_os("OXI_S1495_DISABLE").is_none()
+                && !crate::env_flag!("OXI_S634_DISABLE")
+                && !crate::env_flag!("OXI_S1495_DISABLE")
             {
                 return "MS Mincho";
             }
-            if cjk_script && std::env::var("OXI_S1370_DISABLE").is_err() {
+            if cjk_script && !crate::env_flag!("OXI_S1370_DISABLE") {
                 return self.cjk_substitute_face.as_str();
             }
-            if has_explicit && std::env::var("OXI_S634_DISABLE").is_err() {
+            if has_explicit && !crate::env_flag!("OXI_S634_DISABLE") {
                 return "MS Mincho";
             }
         }
@@ -6215,7 +6286,7 @@ impl LayoutEngine {
     ) -> Option<FontMetricsRef<'_>> {
         let metrics = |family: &str| {
             if self.registry.synthesizes_bold(family)
-                || std::env::var_os("OXI_CJK_SYNTHETIC_BOLD").is_some()
+                || crate::env_flag!("OXI_CJK_SYNTHETIC_BOLD")
             {
                 self.registry.get_with_style(
                     family,
@@ -6239,7 +6310,7 @@ impl LayoutEngine {
         if let Some(ref ff) = self.default_font_family_east_asia {
             return Some(metrics(self.cjk_ea_family(ff.as_str(), false, cjk_script)));
         }
-        if cjk_script && std::env::var_os("OXI_CJK_DEFAULT_SLOT_DISABLE").is_none() {
+        if cjk_script && !crate::env_flag!("OXI_CJK_DEFAULT_SLOT_DISABLE") {
             return Some(metrics(self.cjk_substitute_face.as_str()));
         }
         None
@@ -6251,7 +6322,7 @@ impl LayoutEngine {
         // bold OFF and does NOT fall through to the paragraph style's ON. The
         // monotonic OR below measured such a run with BOLD glyph widths (Arial
         // Bold is ~10% wider than regular), over-wrapping the line.
-        if run_style.has_explicit_bold && std::env::var("OXI_S976_DISABLE").is_err() {
+        if run_style.has_explicit_bold && !crate::env_flag!("OXI_S976_DISABLE") {
             return run_style.bold;
         }
         if run_style.bold {
@@ -6272,7 +6343,7 @@ impl LayoutEngine {
         // the «Role of the department as shareholder» wrap pushed «8. The
         // Responsible Minister» +1 page (the natural-flow +1 class). bCs stays
         // a separate field (not Latin bold), per ECMA-376 §17.3.2.2.
-        if std::env::var("OXI_S797_LEGACY_HEADING_BOLD").is_ok() {
+        if crate::env_flag!("OXI_S797_LEGACY_HEADING_BOLD") {
             if let Some(level) = para_style.heading_level {
                 return level <= 2;
             }
@@ -6298,7 +6369,7 @@ impl LayoutEngine {
 
     fn resolve_italic(&self, run_style: &RunStyle, para_style: &ParagraphStyle) -> bool {
         // S976: see resolve_bold — an explicit `<w:i w:val="0"/>` wins.
-        if run_style.has_explicit_italic && std::env::var("OXI_S976_DISABLE").is_err() {
+        if run_style.has_explicit_italic && !crate::env_flag!("OXI_S976_DISABLE") {
             return run_style.italic;
         }
         if run_style.italic {
@@ -6333,7 +6404,7 @@ impl LayoutEngine {
         // content carries fitText too. 09422f63's box «寒さに負けず元気に外で遊ぼう»
         // (fitText 8400 = 420pt over 14pt runs with ruby) was set at its natural
         // 308pt because only body / notes / header / footer were resolved.
-        if std::env::var_os("OXI_S1637_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_S1637_DISABLE") {
             for tb in &mut page.text_boxes {
                 self.resolve_fit_text_blocks(&mut tb.blocks);
             }
@@ -6351,7 +6422,7 @@ impl LayoutEngine {
     /// installed cmaps (the base must be installed to know it lacks the glyph).
     pub(crate) fn symbol_chain_extra(&self, text: &str, m: &crate::font::FontMetrics, fs: f32) -> f32 {
         if text.is_empty()
-            || std::env::var_os("OXI_SYMBOL_CHAIN_FOLD_DISABLE").is_some()
+            || crate::env_flag!("OXI_SYMBOL_CHAIN_FOLD_DISABLE")
             || !text.chars().any(|c| crate::font::sym_range_index(c).is_some() && !c.is_whitespace())
         {
             return 0.0;
@@ -6436,7 +6507,7 @@ impl LayoutEngine {
                     // whatever the document's East Asian language -- which is
                     // what the base face already gives it here. (Its line box,
                     // which Word does take from the symbol face, is still open.)
-                    if std::env::var_os("OXI_SYMBOL_FALLBACK_FRAG_DISABLE").is_some()
+                    if crate::env_flag!("OXI_SYMBOL_FALLBACK_FRAG_DISABLE")
                         || crate::font::sym_range_index(ch).is_none()
                         || ch.is_whitespace()
                         || crate::font::runtime::font_file_for(base, false, false).is_none()
@@ -6520,10 +6591,10 @@ impl LayoutEngine {
         for block in blocks.iter_mut() {
             match block {
                 Block::Paragraph(para) => {
-                    if std::env::var_os("OXI_DEVA_XRUN_MERGE_DISABLE").is_none() {
+                    if !crate::env_flag!("OXI_DEVA_XRUN_MERGE_DISABLE") {
                         merge_split_deva_clusters(&mut para.runs);
                     }
-                    if std::env::var_os("OXI_CJK_FALLBACK_DISABLE").is_none() {
+                    if !crate::env_flag!("OXI_CJK_FALLBACK_DISABLE") {
                         self.resolve_cjk_fallback_runs(&mut para.runs, &para.style);
                     }
                     self.resolve_fit_text_runs(&mut para.runs, &para.style);
@@ -6552,7 +6623,7 @@ impl LayoutEngine {
     /// exactly like fit_text, and the render's base width includes it so the
     /// ruby lands over the spread base with no offset.
     fn resolve_ruby_spread_runs(&self, runs: &mut Vec<Run>, para_style: &ParagraphStyle) {
-        if std::env::var("OXI_S1314_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_S1314_DISABLE") {
             return;
         }
         // S1627 (2026-10-01, default ON, opt-out OXI_S1627_DISABLE): a ruby
@@ -6563,7 +6634,7 @@ impl LayoutEngine {
         // 01c5a769 «氏名» (fitText 972 = 48.6pt, ruby «ふりがな» 8pt = 32pt): each
         // one-character half looked 14 < 32 wide and took +18pt, so 氏 advanced
         // 38.6 where Word gives 19.0 (the fit width already exceeds the ruby).
-        let s1627 = std::env::var_os("OXI_S1627_DISABLE").is_none();
+        let s1627 = !crate::env_flag!("OXI_S1627_DISABLE");
         let mut k = 0;
         while k < runs.len() {
             let Some(ruby_ir) = runs[k].ruby.clone() else { k += 1; continue };
@@ -6606,7 +6677,7 @@ impl LayoutEngine {
                     base_w += r.style.character_spacing.unwrap_or(0.0) * chars;
                 }
             }
-            if std::env::var("OXI_DBG_RUBYSPREAD").is_ok() {
+            if crate::env_flag!("OXI_DBG_RUBYSPREAD") {
                 eprintln!("[RUBYSPREAD] runs={} n={} base_pt={:.2} hps={:.2} base_w={:.2} ruby_w={:.2}",
                     end - k, n, base_pt, hps_pt, base_w, ruby_w);
             }
@@ -6623,7 +6694,7 @@ impl LayoutEngine {
                     // (= overhang/2); BR_BASE=漢字 BR_RT=かんじかん: 漢 1.44, 字
                     // 16.44 (pitch 15 = 12 + 3). The trailing-only spacing put
                     // 09422f63's «量» 3.05pt left of Word.
-                    if std::env::var_os("OXI_S1650_DISABLE").is_none() {
+                    if !crate::env_flag!("OXI_S1650_DISABLE") {
                         r.style.ruby_lead = extra / 2.0;
                     }
                 }
@@ -6643,7 +6714,7 @@ impl LayoutEngine {
         // box is a fixed-width unit Word never breaks; Oxi broke it at 「年」 and
         // grew the header row 13.5 -> 22.25, four paragraphs over the page.
         // Gates under the env flag: golden 183/187, ja 179 -> 180, en 291/298.
-        if std::env::var_os("OXI_FIT_TEXT_ATOMIC_CELL_DISABLE").is_some() { return None; }
+        if crate::env_flag!("OXI_FIT_TEXT_ATOMIC_CELL_DISABLE") { return None; }
         let run = &runs[run_idx];
         let width = run.style.fit_text?;
         let id = run.style.fit_text_id?;
@@ -6703,7 +6774,7 @@ impl LayoutEngine {
                     .map(|f| f.width)
                     .sum();
 
-                if std::env::var_os("OXI_DEBUG_FIT_GROUP").is_some() {
+                if crate::env_flag!("OXI_DEBUG_FIT_GROUP") {
                     eprintln!("[FIT_GROUP] id={} target={} natural={} count={} runs={:?}",
                         group_id, target_w, natural_w, char_count,
                         runs[start..i].iter().map(|run| (&run.text, &run.style)).collect::<Vec<_>>());
@@ -6873,7 +6944,7 @@ impl LayoutEngine {
         // every continuous section's `w:cols` at the block index where its
         // blocks begin; run 0 is the page's own section. Disabled -> the old
         // single page-level layout, which is what run 0 alone amounts to.
-        let s1290 = std::env::var("OXI_S1290_DISABLE").is_err();
+        let s1290 = !crate::env_flag!("OXI_S1290_DISABLE");
         let runs: Vec<(usize, Option<ColumnLayout>)> = if s1290 && !page.column_runs.is_empty() {
             page.column_runs.clone()
         } else {
@@ -6884,7 +6955,7 @@ impl LayoutEngine {
         // line grid), falling back to ~1.2em.
         let page_pitch = page.grid_line_pitch.unwrap_or(self.default_font_size * 1.2);
 
-        if std::env::var_os("OXI_DBG_VCOLS").is_some() {
+        if crate::env_flag!("OXI_DBG_VCOLS") {
             eprintln!("[VPASS] obstacles={}", obstacles.iter().map(|v| v.len()).sum::<usize>());
         }
         let mut elements: Vec<LayoutElement> = Vec::new();
@@ -6917,7 +6988,7 @@ impl LayoutEngine {
                 / num_bands as f32)
                 .max(0.0);
             let band_top = |b: usize| top + b as f32 * (band_h + band_space);
-            if std::env::var("OXI_DBG_BANDS").is_ok() {
+            if crate::env_flag!("OXI_DBG_BANDS") {
                 eprintln!(
                     "[BANDS] run={} blocks={}..{} num_bands={} space={:.1} band_h={:.2}",
                     run_idx, run_start, run_end, num_bands, band_space, band_h
@@ -7044,7 +7115,7 @@ impl LayoutEngine {
                         }
                         let sx0 = x - pitch;
                         let mut text_width = pitch;
-                        if !cols[k].image && std::env::var_os("OXI_VERTICAL_WRAP_NATURAL_DISABLE").is_none() {
+                        if !cols[k].image && !crate::env_flag!("OXI_VERTICAL_WRAP_NATURAL_DISABLE") {
                             let recipe = &recipes[cols[k].recipe];
                             if let Block::Paragraph(para) = &page.blocks[recipe.block_idx] {
                                 // Collision uses the natural vertical line box inside its grid cell.
@@ -7063,7 +7134,7 @@ impl LayoutEngine {
                                     for (run_index, text) in &cols[k].segs {
                                         if let Some(run) = para.runs.get(*run_index) {
                                             let mut size = self.resolve_font_size(&run.style, &para.style);
-                                            if std::env::var_os("OXI_VERTICAL_SCRIPTS_DISABLE").is_none()
+                                            if !crate::env_flag!("OXI_VERTICAL_SCRIPTS_DISABLE")
                                                 && run.style.font_size.is_some()
                                                 && matches!(run.style.vertical_align, Some(VerticalAlign::Superscript | VerticalAlign::Subscript))
                                             {
@@ -7142,7 +7213,7 @@ impl LayoutEngine {
                             }
                         }
                         let block = recipes[cols[k].recipe].block_idx;
-                        if std::env::var_os("OXI_DBG_VCOLS").is_some() {
+                        if crate::env_flag!("OXI_DBG_VCOLS") {
                             eprintln!("[VCOLS] page={} band={} block={} x={:.2} y={:.2} pitch={:.1} blank={}",
                                 pages_out.len(), b, block, sx0, place_y, pitch, cols[k].blank);
                         }
@@ -7228,7 +7299,7 @@ impl LayoutEngine {
 
         // Blank paragraph columns occupy space even when they emit no glyphs.
         if !elements.is_empty() || pages_out.is_empty()
-            || (std::env::var("OXI_VERTICAL_BLANKS_DISABLE").is_err() && avail_right < right - 0.01)
+            || (!crate::env_flag!("OXI_VERTICAL_BLANKS_DISABLE") && avail_right < right - 0.01)
         {
             Self::finalize_vertical_page(
                 &mut elements,
@@ -7247,7 +7318,7 @@ impl LayoutEngine {
         // on Word's page (1.0). Gates under the env flag: golden 183/187 (same
         // fail set), ja 179 -> 180, en 291/298 (same). The other four vertical
         // fails are untouched by it (separate walls).
-        if std::env::var_os("OXI_VERTICAL_FLOAT_TABLES_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_VERTICAL_FLOAT_TABLES_DISABLE") {
             for (block_idx, block) in page.blocks.iter().enumerate() {
                 let Block::Table(table) = block else { continue };
                 let Some(pos) = table.style.position.as_ref() else { continue };
@@ -7318,7 +7389,7 @@ impl LayoutEngine {
         // S1412 (2026-09-15, default ON, opt-out OXI_VERTICAL_DRAWING_LAYER_DISABLE):
         // the checkpoint's opt-in promoted together with S1411 -- the anchors
         // that cut the strips are drawn on the page they cut.
-        if std::env::var_os("OXI_VERTICAL_DRAWING_LAYER_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_VERTICAL_DRAWING_LAYER_DISABLE") {
             let anchor_y: Vec<f32> = block_starts.iter()
                 .map(|a| a.map_or(top, |(_, _, y)| y)).collect();
             // A vertical section's bands divide the vertical axis; each band
@@ -7384,7 +7455,7 @@ impl LayoutEngine {
     fn layout_page_vertical(&self, page: &Page) -> Vec<LayoutPage> {
         let mut starts: Vec<Option<(usize, f32, f32)>> = Vec::new();
         let mut pages = self.layout_page_vertical_pass(page, &[], &mut starts);
-        if std::env::var_os("OXI_VERTICAL_WRAP_DISABLE").is_some() {
+        if crate::env_flag!("OXI_VERTICAL_WRAP_DISABLE") {
             return pages;
         }
         // Word meets the anchors as the story fills: an anchor joins the page
@@ -7445,7 +7516,7 @@ impl LayoutEngine {
         let column_left = vec![left; page.blocks.len()];
         let page_of = |b: usize| Self::vertical_page_of(starts, b);
         let mut out: Vec<(usize, VertObstacle)> = Vec::new();
-        let dbg = std::env::var_os("OXI_DBG_VWRAP").is_some();
+        let dbg = crate::env_flag!("OXI_DBG_VWRAP");
         let mut push = |blk: usize,
                         x: f32,
                         y: f32,
@@ -7619,7 +7690,7 @@ impl LayoutEngine {
     /// four sites did; nothing restores the 0.583, which no measurement ever
     /// supported.
     fn vertical_align_font_size(base: f32) -> f32 {
-        let ratio = if std::env::var("OXI_S1359_DISABLE").is_ok() { 2.0 / 3.0 } else { 0.65 };
+        let ratio = if crate::env_flag!("OXI_S1359_DISABLE") { 2.0 / 3.0 } else { 0.65 };
         ((base * ratio) * 2.0).round() / 2.0
     }
 
@@ -7640,7 +7711,7 @@ impl LayoutEngine {
         // A genuinely taller row (a 30.75 heading, 1.5 pitches) keeps its two
         // slots: reports__16785375 p10 splits 10/13 in Word only that way
         // (a half-row slack there gave 12/11 and pushed 15 paragraphs).
-        let slack = if std::env::var_os("OXI_S1434_DISABLE").is_none() { 0.1 } else { 0.001 };
+        let slack = if !crate::env_flag!("OXI_S1434_DISABLE") { 0.1 } else { 0.001 };
         let slots = |r: &(usize, f32, Vec<usize>, f32, f32)| {
             (((r.3 + r.4) / pitch - slack).ceil() as i32).max(1)
         };
@@ -7746,7 +7817,7 @@ impl LayoutEngine {
 
     fn rebalance_text_columns(elements: &mut [LayoutElement], top: f32, xs: &[f32], blocks: &[Block], tail_gap: f32, compat_mode: u32, active_grid_pitch: Option<f32>) -> Option<f32> {
         if xs.len() != 2 { return None; }
-        let prefix_table = std::env::var("OXI_PREFIX_TABLE_BALANCE_DISABLE").is_err();
+        let prefix_table = !crate::env_flag!("OXI_PREFIX_TABLE_BALANCE_DISABLE");
         let first_body_index = elements.iter().filter(|e| e.y >= top - 0.1
             && e.cell_paragraph_index.is_none() && matches!(e.content, LayoutContent::Text { .. }))
             .filter_map(|e| e.paragraph_index).min();
@@ -7770,7 +7841,7 @@ impl LayoutEngine {
                     has_fixed_prefix = true;
                     continue;
                 }
-                if std::env::var("OXI_DBG_COL").is_ok() {
+                if crate::env_flag!("OXI_DBG_COL") {
                     eprintln!("[BALANCE_REJECT] pi={:?} cpi={:?} x={} y={} h={} first={} text={}", e.paragraph_index,e.cell_paragraph_index,e.x,e.y,e.height,first_body,matches!(e.content, LayoutContent::Text { .. }));
                 }
                 return None;
@@ -7801,7 +7872,7 @@ impl LayoutEngine {
         let first_right = columns[1].iter().flat_map(|(_, members)| members)
             .filter_map(|&i| elements[i].paragraph_index).min();
         if matches!((last_left, first_right), (Some(left), Some(right)) if right < left) {
-            if std::env::var("OXI_DBG_COL").is_ok() { eprintln!("[BALANCE_ORDER_REJECT] left={:?} right={:?}",last_left,first_right); }
+            if crate::env_flag!("OXI_DBG_COL") { eprintln!("[BALANCE_ORDER_REJECT] left={:?} right={:?}",last_left,first_right); }
             return None;
         }
         let mut rows = Vec::new();
@@ -7811,7 +7882,7 @@ impl LayoutEngine {
             for (i, (y, members)) in rs.iter().enumerate() {
                 let h = if let Some(next) = rs.get(i + 1) { next.0 - y } else {
                     members.iter().filter(|&&j| elements[j].flow_line_offset == 0.0)
-                        .map(|&j| if std::env::var("OXI_COLUMN_FLOW_HEIGHT").is_ok() {
+                        .map(|&j| if crate::env_flag!("OXI_COLUMN_FLOW_HEIGHT") {
                             elements[j].flow_line_height.unwrap_or(elements[j].height)
                         } else { elements[j].height }).fold(0.0f32, f32::max)
                 };
@@ -7835,11 +7906,11 @@ impl LayoutEngine {
             }
         }
         if rows.len() < 2 { return None; }
-        if std::env::var("OXI_DBG_COL").is_ok() {
+        if crate::env_flag!("OXI_DBG_COL") {
             eprintln!("[BALANCE_IN] tail_gap={:.3} rows={:?}", tail_gap,
                 rows.iter().map(|r| (r.3, r.4)).collect::<Vec<_>>());
         }
-        let mode_balance = std::env::var("OXI_COLUMN_COMPAT_BALANCE_DISABLE").is_err();
+        let mode_balance = !crate::env_flag!("OXI_COLUMN_COMPAT_BALANCE_DISABLE");
         let plain_balance = mode_balance && !has_fixed_prefix;
         let total: f32 = rows.iter().map(|r| r.3 + r.4).sum();
         let mut sum = 0.0;
@@ -7849,7 +7920,7 @@ impl LayoutEngine {
         // This engine used to take a different arm below 15, and that arm got
         // the same three wrong that the old compat-15 rule did.
         let word_balance = plain_balance
-            && (compat_mode >= 15 || std::env::var("OXI_COL_SPLIT_COMPAT14_DISABLE").is_err());
+            && (compat_mode >= 15 || !crate::env_flag!("OXI_COL_SPLIT_COMPAT14_DISABLE"));
         for (i, row) in rows.iter().enumerate().take(rows.len() - 1) {
             sum += row.3 + row.4;
             let cost = sum.max(total - sum);
@@ -7887,9 +7958,9 @@ impl LayoutEngine {
                 // arm already carried; the probes that pinned this rule are all
                 // grid-free, so they say nothing about it either way.
                 let grid = active_grid_pitch
-                    .filter(|p| *p > 0.0 && std::env::var("OXI_COL_SPLIT_GRID_DISABLE").is_err());
+                    .filter(|p| *p > 0.0 && !crate::env_flag!("OXI_COL_SPLIT_GRID_DISABLE"));
                 best = match grid {
-                    Some(_) if std::env::var("OXI_LOGICAL_GRID_BALANCE").is_ok() => {
+                    Some(_) if crate::env_flag!("OXI_LOGICAL_GRID_BALANCE") => {
                         let total: f32 = logical_heights.iter().sum();
                         let mut left = 0.0;
                         let mut split = (f32::INFINITY, 1usize);
@@ -7900,7 +7971,7 @@ impl LayoutEngine {
                         }
                         split
                     }
-                    Some(pitch) if std::env::var_os("OXI_S1435_DISABLE").is_none() => {
+                    Some(pitch) if !crate::env_flag!("OXI_S1435_DISABLE") => {
                         // the painted box snapped to the grid (a 13.6pt line on a
                         // 20.55 grid occupies one pitch; the S1434 tenth-row slack
                         // absorbs Oxi's own rounding) -- whatever the row's gap-based
@@ -7923,14 +7994,14 @@ impl LayoutEngine {
                         let befores: Vec<f32> = rows.iter().map(|r| r.2.iter()
                             .map(|&j| elements[j].flow_space_before)
                             .fold(0.0f32, f32::max)).collect();
-                        if std::env::var("OXI_DBG_COL").is_ok() {
+                        if crate::env_flag!("OXI_DBG_COL") {
                             eprintln!("[S1435] pitch={:.2} h={:?} gap={:?} before={:?}", pitch,
                                 heights.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>(),
                                 gaps.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>(),
                                 befores.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>());
                         }
                         let mut out = Self::balance_split_heights(&heights, &gaps, &befores, pitch);
-                        if std::env::var("OXI_DBG_COL").is_ok() {
+                        if crate::env_flag!("OXI_DBG_COL") {
                             eprintln!("[S1435] split={} taller={:.2}", out.1, out.0);
                         }
                         // A keepNext paragraph cannot end the left column (S1324's
@@ -7946,7 +8017,7 @@ impl LayoutEngine {
                             if first == 0 { break; }
                             out.1 = first;
                         }
-                        if std::env::var("OXI_DBG_COL").is_ok() {
+                        if crate::env_flag!("OXI_DBG_COL") {
                             eprintln!("[S1435] split={} taller={:.2}", out.1, out.0);
                         }
                         out
@@ -7955,15 +8026,15 @@ impl LayoutEngine {
                     None => Self::balance_split(&rows, total, 0.001),
                 };
                 break;
-            } else if (has_fixed_prefix || plain_balance) && std::env::var("OXI_BALANCE_LEFT_CEILING_DISABLE").is_err() {
+            } else if (has_fixed_prefix || plain_balance) && !crate::env_flag!("OXI_BALANCE_LEFT_CEILING_DISABLE") {
                 if sum + if plain_balance && compat_mode < 15 { active_grid_pitch.map_or(0.01, |pitch| pitch * 0.5) } else { 0.01 } >= total - sum {
                     best = (cost, i + 1);
                     break;
                 }
             } else if cost <= best.0 + 0.01 { best = (cost, i + 1); }
         }
-        if has_fixed_prefix && std::env::var("OXI_BALANCE_LEFT_CEILING_DISABLE").is_err()
-            && std::env::var("OXI_BALANCE_WIDOW_DISABLE").is_err() && best.1 > 0 && best.1 < rows.len()
+        if has_fixed_prefix && !crate::env_flag!("OXI_BALANCE_LEFT_CEILING_DISABLE")
+            && !crate::env_flag!("OXI_BALANCE_WIDOW_DISABLE") && best.1 > 0 && best.1 < rows.len()
         {
             let paragraph = |i: usize| rows[i].2.first().and_then(|&ei| elements[ei].paragraph_index);
             if let Some(pi) = paragraph(best.1) {
@@ -7987,7 +8058,7 @@ impl LayoutEngine {
             }
             cy[col] += h;
         }
-        if std::env::var("OXI_DBG_COL").is_ok() {
+        if crate::env_flag!("OXI_DBG_COL") {
             eprintln!("[TEXT_BALANCE] rows={} split={} bottoms={:?}", rows.len(), best.1, cy);
         }
         Some(if plain_balance {
@@ -8069,14 +8140,14 @@ impl LayoutEngine {
     ) -> (Vec<VertParaRecipe>, Vec<VertColumn>) {
         let mut recipes: Vec<VertParaRecipe> = Vec::new();
         let mut cols: Vec<VertColumn> = Vec::new();
-        let s1165_on = std::env::var("OXI_S1165_DISABLE").is_err();
+        let s1165_on = !crate::env_flag!("OXI_S1165_DISABLE");
         // OXI_VERT_PARA_SPACING (2026-10-21, default ON, opt-out _DISABLE): a vertical
         // section spaces its paragraphs like a horizontal one -- the previous after
         // plus this before, as a blank column between them. golden probevert (tbRl,
         // lines grid 18, Normal.dotm 1.158 / after 8): Word's column steps are
         // 20.8 inside a paragraph and 28.9 between paragraphs, 9 articles a page;
         // Oxi stepped 20.85 everywhere and packed 11.
-        let vert_spacing = std::env::var_os("OXI_VERT_PARA_SPACING_DISABLE").is_none();
+        let vert_spacing = !crate::env_flag!("OXI_VERT_PARA_SPACING_DISABLE");
         let mut prev_after: Option<f32> = None;
 
         for block_idx in run_start..run_end {
@@ -8107,7 +8178,7 @@ impl LayoutEngine {
             let para = match &page.blocks[block_idx] {
                 Block::Paragraph(p) => p,
                 Block::Image(img) if img.position.is_none()
-                    && std::env::var_os("OXI_VERTICAL_INLINE_IMAGE_DISABLE").is_none() =>
+                    && !crate::env_flag!("OXI_VERTICAL_INLINE_IMAGE_DISABLE") =>
                 {
                     // S1413: an inline image is a column of its own width.
                     recipes.push(VertParaRecipe {
@@ -8141,7 +8212,7 @@ impl LayoutEngine {
             // Charging it a column made section 1 run 55 columns instead of 54,
             // so the cut landed one column late and every section after it was
             // off by one — p4 opened at col 2 where Word opens at col 1.
-            if std::env::var("OXI_S730_DISABLE").is_err()
+            if !crate::env_flag!("OXI_S730_DISABLE")
                 && para.style.continuous_section_break
                 && para.runs.iter().all(|r| r.text.is_empty())
             {
@@ -8211,8 +8282,8 @@ impl LayoutEngine {
             // PDF's glyph x's (glyph left − the centring inset); p7's 18
             // paragraph columns then sum to 630pt and 742.5 − 630 = 112.5 =
             // the last column's measured x, so the page closes at 0.00pt.
-            let s1185_on = std::env::var("OXI_S1185_DISABLE").is_err();
-            let per_line = std::env::var("OXI_S1296_DISABLE").is_err();
+            let s1185_on = !crate::env_flag!("OXI_S1185_DISABLE");
+            let per_line = !crate::env_flag!("OXI_S1296_DISABLE");
             // Each run's own natural column width, so a line can be as wide as
             // only the runs that land on it. A whitespace-only run measures
             // nothing, exactly as the paragraph-wide max skipped it.
@@ -8224,7 +8295,7 @@ impl LayoutEngine {
                         return 0.0;
                     }
                     let mut rfs = self.resolve_font_size(&run.style, &para.style);
-                    if std::env::var("OXI_VERTICAL_SCRIPTS_DISABLE").is_err() && run.style.font_size.is_some()
+                    if !crate::env_flag!("OXI_VERTICAL_SCRIPTS_DISABLE") && run.style.font_size.is_some()
                         && matches!(run.style.vertical_align, Some(VerticalAlign::Superscript | VerticalAlign::Subscript))
                     {
                         rfs = Self::vertical_align_font_size(rfs);
@@ -8268,7 +8339,7 @@ impl LayoutEngine {
                 }
             };
             let pitch_of = |cells: f32| -> f32 {
-                if std::env::var("OXI_S1166_DISABLE").is_ok() {
+                if crate::env_flag!("OXI_S1166_DISABLE") {
                     return page_pitch;
                 }
                 match para.style.line_spacing_rule.as_deref() {
@@ -8297,7 +8368,7 @@ impl LayoutEngine {
                 pitch_for_nat(nat)
             };
             let pitch = pitch_for_nat(nat_para);
-            if std::env::var("OXI_DBGVERT").is_ok() {
+            if crate::env_flag!("OXI_DBGVERT") {
                 eprintln!(
                     "[DBGVERT] blk={} fam={:?} 83/64={} fs={:.2} nat={:.3} \
 cells={} pitch={:.2} text={:?}",
@@ -8345,7 +8416,7 @@ cells={} pitch={:.2} text={:?}",
             // 425pt column) and the original at 10.5 (38-43), Oxi walked both
             // at 10.5 (40) and drew the gloss at 10.5 -- one column too many
             // per gloss and the page's last paragraph pushed over.
-            let s1329_on = std::env::var("OXI_S1329_DISABLE").is_err();
+            let s1329_on = !crate::env_flag!("OXI_S1329_DISABLE");
             let run_fs: Vec<f32> = para
                 .runs
                 .iter()
@@ -8368,7 +8439,7 @@ cells={} pitch={:.2} text={:?}",
             // neighbours begin at 94.5 (Word PDF glyph origins), so it holds
             // 38 chars + the indent; Oxi began at the band top and held 40,
             // which pulled the next gloss's first two characters up a column.
-            let s1331_on = std::env::var("OXI_S1331_DISABLE").is_err();
+            let s1331_on = !crate::env_flag!("OXI_S1331_DISABLE");
             let s1331_left = if s1331_on {
                 para.style
                     .indent_left
@@ -8387,7 +8458,7 @@ cells={} pitch={:.2} text={:?}",
                 0.0
             };
             let mut buf: Vec<char> = Vec::new();
-            if std::env::var("OXI_VERTICAL_BREAKER_DISABLE").is_err() {
+            if !crate::env_flag!("OXI_VERTICAL_BREAKER_DISABLE") {
                 let fragments: Vec<_> = para.runs.iter().enumerate()
                     .map(|(i, r)| (r.text.as_str(), &r.style, None, i, 0usize)).collect();
                 let char_grid = self.vertical_grid_for_block(page, block_idx);
@@ -8396,7 +8467,7 @@ cells={} pitch={:.2} text={:?}",
                     &para.style,
                     char_grid.map(|g| g.0), char_grid.map(|g| g.1),
                     false, true, true, false, false, true,
-                    std::env::var("OXI_VERTICAL_CAPACITY_DISABLE").is_err(),
+                    !crate::env_flag!("OXI_VERTICAL_CAPACITY_DISABLE"),
                     char_grid.map_or(false, |g| g.2),
                 );
                 for (li, line) in lines.iter().enumerate() {
@@ -8407,13 +8478,30 @@ cells={} pitch={:.2} text={:?}",
                             _ => segs.push((f.run_index, f.text.clone())),
                         }
                     }
+                    // OXI_VERT_JC (2026-11-01, default ON, opt-out _DISABLE): a centred /
+                    // right-aligned paragraph is aligned along the column, line by line.
+                    // `_pb_eavert_jc_gen.py` (eaVert box 200pt, insets 3.6, ＭＳ 明朝 11):
+                    // «あいうえお» starts at 125.90 / 194.54 / 263.30 for left / center /
+                    // right = (192.8 - 55) x 0 / 0.5 / 1; a 30-character paragraph centres
+                    // its 17- and 13-character lines separately (+2.6 / +24.7).
+                    // ja/reports__67cf8704's eaVert section labels are centred.
+                    let line_start = (s1331_left + if li == 0 { s1331_first } else { 0.0 }).max(0.0);
+                    let jc_shift = if std::env::var_os("OXI_VERT_JC_DISABLE").is_none() {
+                        let w: f32 = line.fragments.iter().map(|f| f.width).sum();
+                        let room = (band_h - line_start - para.style.indent_right.unwrap_or(0.0).max(0.0) - w).max(0.0);
+                        match para.alignment {
+                            Alignment::Center => room * 0.5,
+                            Alignment::Right => room,
+                            _ => 0.0,
+                        }
+                    } else { 0.0 };
                     if let (Some(a), Some(b)) = (segs.first(), segs.last()) {
                         cols.push(VertColumn {
                             recipe,
                             text: segs.iter().map(|(_, s)| s.as_str()).collect(),
                             pitch: col_pitch(a.0, b.0),
                             segs,
-                            top: (s1331_left + if li == 0 { s1331_first } else { 0.0 }).max(0.0),
+                            top: line_start + jc_shift,
                             blank: false,
                             hard_break: hard_break && li == 0,
                             image: false, spacer: false,
@@ -8541,7 +8629,7 @@ cells={} pitch={:.2} text={:?}",
         // Any column with segments takes each segment's own run size; the
         // legacy path (paragraph-first-run size) stays for the opt-out and
         // for columns that carry no segments.
-        let multi = std::env::var("OXI_S1329_DISABLE").is_err()
+        let multi = !crate::env_flag!("OXI_S1329_DISABLE")
             && !col.segs.is_empty()
             && para.is_some();
         let y = y + col.top;
@@ -8564,8 +8652,29 @@ cells={} pitch={:.2} text={:?}",
         let para = para.unwrap();
         let mut out = Vec::new();
         let mut cy = y;
+        let vert_ruby = !crate::env_flag!("OXI_VERT_RUBY_DISABLE");
+        // OXI_VERT_RUBY: a column carrying ruby sets its base LEFT of centre
+        // (toward tbRl's "below"), by half the raise plus 0.3 x the ruby size,
+        // less 0.34 x the base size. `_pb_vert_ruby_gen.py` grid arms (ＭＳ 明朝
+        // 10.5 / 12, ruby 6 / 8pt, hpsRaise 7 / 11 / 15pt, linesAndChars 326):
+        // Word's base sits 1.37..6.56pt left of the two-cell column's centre,
+        // fitted to 0.1pt by 0.5 raise + 0.3 rfs - 0.34 fs + 0.15;
+        // ja/reference__6358c5e9 (12 / 6 / 11) measures 3.33 (formula 3.29).
+        let x = if vert_ruby && self.vertical_grid_for_block(page, recipe.block_idx).is_some() {
+            let shift = col.segs.iter().filter_map(|(ri, _)| {
+                let run = &para.runs[*ri];
+                let ruby = run.ruby.as_ref().filter(|r| !r.text.is_empty())?;
+                let fs = self.resolve_font_size(&run.style, &para.style);
+                let rfs = ruby.font_size.or(ruby.hps_halfpt.map(|h| h as f32 / 2.0)).unwrap_or(fs * 0.5);
+                let raise = ruby.hps_raise_halfpt.map(|h| h as f32 / 2.0).unwrap_or(fs * 0.5 + rfs * 0.5);
+                Some((0.5 * raise + 0.3 * rfs - 0.34 * fs + 0.15).max(0.0))
+            }).fold(0.0_f32, f32::max);
+            x - shift
+        } else { x };
         for (ri, text) in &col.segs {
             let run = &para.runs[*ri];
+            let seg_start = cy;
+            let ruby_out = out.len();
             let fs = self.resolve_font_size(&run.style, &para.style);
             let fam = self
                 .resolve_font_family_for_text(text, &run.style, &para.style)
@@ -8587,7 +8696,7 @@ cells={} pitch={:.2} text={:?}",
                             && Self::vertical_balance_spacing_char(ch) && run.style.fit_text.is_none()
                             && !run.style.ruby_spread { 2.0 * cs } else { cs };
                         let mut natural = advance.unwrap_or_else(|| metrics.char_width_em(ch) * fs);
-                        let kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
+                        let kern_active = !crate::env_flag!("OXI_KERNBREAK_DISABLE")
                             && run.style.kern.or_else(|| para.style.default_run_style.as_ref().and_then(|rs| rs.kern))
                                 .map_or(false, |k| k > 0.0 && fs >= k);
                         if advance.is_none() && kern_active && !kinsoku::is_cjk(ch)
@@ -8609,12 +8718,18 @@ cells={} pitch={:.2} text={:?}",
                         // A mixed segment can select a different face per glyph.
                         // Paint with the face whose vertical metric was used.
                         let glyph_family = Some(metrics.family.clone());
+                        let lead = if vert_ruby && run.style.ruby_spread { run.style.ruby_lead } else { 0.0 };
                         out.push(self.vertical_line_element(
-                            ch.to_string(), x, cy, col.pitch, advance, fs, 0.0,
+                            ch.to_string(), x, cy + lead, col.pitch, advance, fs, 0.0,
                             &glyph_family, &run.style, &para_style, recipe.block_idx,
                         ));
                         cy += advance;
                     }
+                    if vert_ruby {
+                        out.extend(self.vertical_ruby_elements(run, para, &para_style, x, col.pitch, fs,
+                            seg_start, cy, recipe.block_idx));
+                    }
+                    let _ = ruby_out;
                     continue;
                 }
             }
@@ -8633,8 +8748,79 @@ cells={} pitch={:.2} text={:?}",
                 recipe.block_idx,
             ));
             cy += n * fs;
+            if vert_ruby {
+                out.extend(self.vertical_ruby_elements(run, para, &para_style, x, col.pitch, fs,
+                    seg_start, cy, recipe.block_idx));
+            }
         }
         out
+    }
+
+    /// OXI_VERT_RUBY (2026-11-02, default ON, opt-out _DISABLE): a vertical
+    /// section draws a run's ruby beside its base, on the right (tbRl's "above").
+    /// Word PDF, ja/reference__6358c5e9 (ＭＳ 明朝 12, ruby hps 12 / hpsRaise 22,
+    /// distributeSpace): «南州» field 108.03..138.03 (= the five 6pt kana), base
+    /// glyphs at 109.47 / 124.47 (the S1650 lead and spread), «なんしゅう» stacked
+    /// from 108.03 at 6pt in a column centred 10.92 right of the base's centre
+    /// (hpsRaise 11); Oxi reserved the column pitch for the ruby but drew none.
+    #[allow(clippy::too_many_arguments)]
+    fn vertical_ruby_elements(
+        &self,
+        run: &Run,
+        para: &Paragraph,
+        para_style: &ParagraphStyle,
+        x: f32,
+        pitch: f32,
+        fs: f32,
+        field_start: f32,
+        field_end: f32,
+        block_idx: usize,
+    ) -> Vec<LayoutElement> {
+        let Some(ruby) = run.ruby.as_ref() else { return Vec::new(); };
+        let n = ruby.text.chars().count();
+        if n == 0 {
+            return Vec::new();
+        }
+        let rfs = ruby.font_size
+            .or(ruby.hps_halfpt.map(|h| h as f32 / 2.0))
+            .unwrap_or(fs * 0.5);
+        let raise = ruby.hps_raise_halfpt.map(|h| h as f32 / 2.0).unwrap_or(fs * 0.5 + rfs * 0.5);
+        let field = (field_end - field_start).max(0.0);
+        let natural = n as f32 * rfs;
+        let (start, spacing) = if natural >= field - 0.01 {
+            (field_start - (natural - field) * 0.5, 0.0)
+        } else {
+            match ruby.align {
+                Some(crate::ir::RubyAlign::DistributeSpace) => {
+                    let gap = (field - natural) / n as f32;
+                    (field_start + gap * 0.5, gap)
+                }
+                Some(crate::ir::RubyAlign::DistributeLetter) if n > 1 => {
+                    (field_start, (field - natural) / (n - 1) as f32)
+                }
+                Some(crate::ir::RubyAlign::Left) => (field_start, 0.0),
+                Some(crate::ir::RubyAlign::Right) => (field_end - natural, 0.0),
+                _ => (field_start + (field - natural) * 0.5, 0.0),
+            }
+        };
+        let mut style = run.style.clone();
+        style.character_spacing = None;
+        let family = ruby.annotation_fonts.first().cloned()
+            .or_else(|| self.resolve_font_family_for_text(&ruby.text, &run.style, &para.style).map(|s| s.to_string()));
+        let cx = x + pitch * 0.5 + raise;
+        vec![self.vertical_line_element(
+            ruby.text.clone(),
+            cx - rfs * 0.5,
+            start,
+            rfs,
+            natural + spacing * n as f32,
+            rfs,
+            spacing,
+            &family,
+            &style,
+            para_style,
+            block_idx,
+        )]
     }
 
     /// Build one vertical-line Text element (is_vertical=true). The renderer
@@ -8697,7 +8883,7 @@ cells={} pitch={:.2} text={:?}",
 
     /// Resolve absolute (x, y) position for a text box based on its anchor references.
     fn legacy_square_textbox_clamp(&self, text_box: &TextBox) -> bool {
-        std::env::var_os("OXI_LEGACY_SQUARE_TEXTBOX_CLAMP_DISABLE").is_none()
+        !crate::env_flag!("OXI_LEGACY_SQUARE_TEXTBOX_CLAMP_DISABLE")
             && (self.compat_mode <= 14 || !self.compat_mode_explicit)
             && text_box.wrap_type == Some(crate::ir::WrapType::Square)
             && text_box.position.as_ref().map_or(false, |pos| {
@@ -8751,7 +8937,7 @@ cells={} pitch={:.2} text={:?}",
         block_col_x: &[f32],
     ) -> (f32, f32) {
         // S1222: the left edge of the column the anchor paragraph flows in.
-        let anchor_col_left = if std::env::var("OXI_S1222_DISABLE").is_err() {
+        let anchor_col_left = if !crate::env_flag!("OXI_S1222_DISABLE") {
             block_col_x
                 .get(text_box.anchor_block_index)
                 .copied()
@@ -8792,7 +8978,7 @@ cells={} pitch={:.2} text={:?}",
             // 55.5. Only a text narrower than the box is measured (the wider case
             // is unprobed and keeps the declared width).
             let align_w = if text_box.body_wrap_none
-                && std::env::var_os("OXI_WRAPNONE_WIDTH_DISABLE").is_none()
+                && !crate::env_flag!("OXI_WRAPNONE_WIDTH_DISABLE")
             {
                 let ins = text_box.inset_left.unwrap_or(7.2) + text_box.inset_right.unwrap_or(7.2);
                 let w = self.textbox_unwrapped_text_width(text_box) + ins;
@@ -8877,7 +9063,7 @@ cells={} pitch={:.2} text={:?}",
         // it, and arm r_edu_c2 -- same box anchored from a paragraph flowing in
         // column 2 -- confirms the S1222 column reference at 1150.9, i.e. Word
         // keeps a box whose right edge is 800pt past the page.
-        let s1268 = std::env::var("OXI_S1268_DISABLE").is_err();
+        let s1268 = !crate::env_flag!("OXI_S1268_DISABLE");
         let abs_y = if (!s1268 || self.legacy_square_textbox_clamp(text_box))
             && abs_y + text_box.height > page.size.height {
             (page.size.height - text_box.height).max(0.0)
@@ -8954,7 +9140,7 @@ cells={} pitch={:.2} text={:?}",
             }
         } else {
             match pos.v_relative.as_deref() {
-                Some("topMargin") if (std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || std::env::var_os("OXI_HEADER_FLOAT_BANDS_DISABLE").is_none()) => pos.y,
+                Some("topMargin") if (std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || !crate::env_flag!("OXI_HEADER_FLOAT_BANDS_DISABLE")) => pos.y,
                 Some("page") => pos.y,
                 Some("paragraph") | Some("line") => {
                     let anchor_y = block_y_positions
@@ -8977,7 +9163,7 @@ cells={} pitch={:.2} text={:?}",
         // in all 6. Note only the Y axis was ever clamped here, so an image and
         // a text box in the same position disagreed with each other as well as
         // with Word.
-        let abs_y_clamped = if std::env::var("OXI_S1268_DISABLE").is_ok()
+        let abs_y_clamped = if crate::env_flag!("OXI_S1268_DISABLE")
             && abs_y + img.height > page.size.height
         {
             (page.size.height - img.height).max(0.0)
@@ -9033,7 +9219,7 @@ cells={} pitch={:.2} text={:?}",
         // index maps to the table, resolving ~97pt off) are deferred.
         if !text_box.vector_shapes.is_empty()
             && text_box.blocks.is_empty()
-            && std::env::var("OXI_S839_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S839_DISABLE")
         {
             let is_inline_sig = matches!(text_box.wrap_type, Some(crate::ir::WrapType::None))
                 && text_box.position.as_ref().map_or(false, |p| {
@@ -9065,7 +9251,7 @@ cells={} pitch={:.2} text={:?}",
                                 style: None,
                             },
                         ));
-                    } else if !vs.path.is_empty() && std::env::var_os("OXI_ANCHORED_GROUP_PATH_DISABLE").is_none() {
+                    } else if !vs.path.is_empty() && !crate::env_flag!("OXI_ANCHORED_GROUP_PATH_DISABLE") {
                         // OXI_ANCHORED_GROUP_PATH (2026-10-29, default ON, opt-out
                         // _DISABLE): an anchored group's curve member is its outline,
                         // as on the inline path (S1120) -- it was filled as its box
@@ -9098,8 +9284,10 @@ cells={} pitch={:.2} text={:?}",
                     }
                 }
             }
-            // OXI_WPG_TEXT_CHILDREN: the group's text members, over its shapes
-            for child in &text_box.children {
+            // OXI_WPG_TEXT_CHILDREN: the group's text members, over its shapes.
+            // An inline group whose members ride its line is drawn there.
+            let on_line = is_inline_sig && text_box.children_on_line;
+            for child in text_box.children.iter().filter(|_| !on_line) {
                 let (cx, cy) = child.position.as_ref().map_or((0.0, 0.0), |p| (p.x, p.y));
                 elements.extend(self.layout_text_box_at(
                     child, page, block_y_positions, block_col_x, Some((abs_x + cx, abs_y + cy))));
@@ -9182,7 +9370,7 @@ cells={} pitch={:.2} text={:?}",
         // shows the fourth («□室内に入る前に花粉を落とす», baseline 805.68) under
         // the border -- Oxi dropped it. S481 found the same in 2026 and held back
         // for the anchor-position errors fixed since.
-        let s1644_overflow = std::env::var_os("OXI_S1644_DISABLE").is_none()
+        let s1644_overflow = !crate::env_flag!("OXI_S1644_DISABLE")
             && text_box.vert_overflow.as_deref() != Some("clip");
         let s1644_extra = if s1644_overflow { 2000.0 } else { 0.0 };
         elements.push(LayoutElement::new(
@@ -9208,7 +9396,7 @@ cells={} pitch={:.2} text={:?}",
         // unchanged (symmetric). The parser already carried the half width as
         // `text_outline_inset`; only the vertical-text path consumed it. blind-G
         // ja/administrative__1a08ddac's 2pt-outlined title box sat 1.06 high.
-        let txbx_outline = if std::env::var_os("OXI_TXBX_OUTLINE_INSET_DISABLE").is_none() {
+        let txbx_outline = if !crate::env_flag!("OXI_TXBX_OUTLINE_INSET_DISABLE") {
             text_box.text_outline_inset.max(0.0)
         } else {
             0.0
@@ -9237,7 +9425,7 @@ cells={} pitch={:.2} text={:?}",
         // +3.24/exp +3.16, adj4000 −1.56/exp −1.68, cy×2 +3.24/exp +3.21).
         // Corpus scope: exactly 2 docs carry roundRect textboxes (1ec1 ×4,
         // 2ea81a ×4), both word_png → honest SSIM gate. Opt-out OXI_S761_DISABLE.
-        let v_corner_inset = if std::env::var("OXI_S761_DISABLE").is_ok() {
+        let v_corner_inset = if crate::env_flag!("OXI_S761_DISABLE") {
             0.0
         } else {
             corner_inset
@@ -9260,8 +9448,8 @@ cells={} pitch={:.2} text={:?}",
         // (HG丸ゴシックM-PRO 11, eaVert): Word sets 学び・授業づくり部 one em apart
         // (10.8pt); the horizontal fallback broke after every character and
         // stacked them a line height (19.45pt) apart, running past the label.
-        if text_box.vertical_text && (std::env::var_os("OXI_VERTICAL_TEXTBOX_LAYOUT").is_some()
-            || std::env::var_os("OXI_VERTICAL_TEXTBOX_LAYOUT_DISABLE").is_none()) {
+        if text_box.vertical_text && (crate::env_flag!("OXI_VERTICAL_TEXTBOX_LAYOUT")
+            || !crate::env_flag!("OXI_VERTICAL_TEXTBOX_LAYOUT_DISABLE")) {
             // (already folded into the insets above when OXI_TXBX_OUTLINE_INSET is on)
             let outline = (text_box.text_outline_inset.max(0.0) - txbx_outline).max(0.0);
             let width = (inner_width - 2.0 * outline).max(0.0);
@@ -9317,13 +9505,13 @@ cells={} pitch={:.2} text={:?}",
         // (Word PDF, one box, three paragraphs): Arial 14 line 240 after 160 steps
         // 24.12 = 16.08 + 8 with and without compatLnSpc, compat 14/15 alike; Oxi
         // 16.10. Threaded like the footer loop (prev style / contextualSpacing too).
-        let txbx_after_on = std::env::var_os("OXI_TXBX_AFTER_DISABLE").is_none();
+        let txbx_after_on = !crate::env_flag!("OXI_TXBX_AFTER_DISABLE");
         // OXI_CLNSP_EMPTY_PARA (2026-10-11, default ON, opt-out _DISABLE): a paragraph
         // with no text lines has no entry in the CLNSP chain, so its whole height
         // vanished (ja/reference__5593c6a7: the empty line between «何が有名なの？» and
         // the list, Word 47.76 between the two baselines, Oxi 36.7). Carry it as space
         // before the next text line.
-        let clnsp_empty_on = std::env::var_os("OXI_CLNSP_EMPTY_PARA_DISABLE").is_none();
+        let clnsp_empty_on = !crate::env_flag!("OXI_CLNSP_EMPTY_PARA_DISABLE");
         let mut clnsp_pending_gap: f32 = 0.0;
         // OXI_WRAPNONE_WIDTH: an unwrapped line is as wide as its text, so jc
         // centre / right have nothing to distribute (Word: x0 = the left inset in
@@ -9331,7 +9519,7 @@ cells={} pitch={:.2} text={:?}",
         // out left-aligned.
         let wrapnone_blocks: Vec<Block>;
         let box_blocks: &Vec<Block> = if text_box.body_wrap_none
-            && std::env::var_os("OXI_WRAPNONE_WIDTH_DISABLE").is_none()
+            && !crate::env_flag!("OXI_WRAPNONE_WIDTH_DISABLE")
         {
             wrapnone_blocks = text_box
                 .blocks
@@ -9395,7 +9583,7 @@ cells={} pitch={:.2} text={:?}",
                         // ja/policies__20069856 (lac 360/855, a poster of boxes): every box −4
                         // to −12 before.
                         if page.grid_char_pitch.is_some()
-                            && std::env::var_os("OXI_TXBX_LAC_GRID_DISABLE").is_some()
+                            && crate::env_flag!("OXI_TXBX_LAC_GRID_DISABLE")
                         {
                             None
                         } else {
@@ -9580,14 +9768,14 @@ cells={} pitch={:.2} text={:?}",
                         clip_bottom // S1644: whole lines past the box bottom are drawn, as in Word
                     } else if line_h > 0.5 && inner_h > 0.0 {
                         let mut avail = (inner_h / line_h).floor();
-                        if std::env::var("OXI_S1266_DISABLE").is_err() {
+                        if !crate::env_flag!("OXI_S1266_DISABLE") {
                             avail = avail.max(1.0);
                         }
                         abs_y + inset_t + v_corner_inset + avail * line_h
                     } else {
                         clip_bottom
                     };
-                    if std::env::var("OXI_DEBUG_TB").is_ok() {
+                    if crate::env_flag!("OXI_DEBUG_TB") {
                         eprintln!(
                             "[TBCUT] abs_y={:.2} h={:.2} inner_h={:.2} line_h={:.2} avail={:.0} cutoff={:.2} n_text={} n_drop={} txt={:?}",
                             abs_y, text_box.height, inner_h, line_h,
@@ -9628,7 +9816,7 @@ cells={} pitch={:.2} text={:?}",
                         // (3A3A3A / C00000 white; 3C3C3C / C80000 / 404040 / 4472C4 /
                         // 969696 / FF0000 black). reports__167853's thirteen 969696
                         // banners lost every title under the old r+g+b < 600 drop.
-                        if std::env::var("OXI_S1326_DISABLE").is_err() {
+                        if !crate::env_flag!("OXI_S1326_DISABLE") {
                             if let LayoutContent::Text { ref mut color, .. } = pe.content {
                                 if color.is_none() {
                                     if let Some(c) = text_box.font_ref_color.as_ref() {
@@ -9818,17 +10006,17 @@ cells={} pitch={:.2} text={:?}",
         // An exact line never snaps, so a box with one keeps the chain (its 13:3
         // split is right; ja/administrative__19d467ed's line=400 exact footer box
         // moved +2.3 on the regular path).
-        let clnsp_box_on_grid = std::env::var_os("OXI_CLNSP_TYPED_GRID_DISABLE").is_none()
+        let clnsp_box_on_grid = !crate::env_flag!("OXI_CLNSP_TYPED_GRID_DISABLE")
             // OXI_TXBX_LAC_GRID: a linesAndChars grid snaps the box's lines too
             && (page.grid_char_pitch.is_none()
-                || std::env::var_os("OXI_TXBX_LAC_GRID_DISABLE").is_none())
+                || !crate::env_flag!("OXI_TXBX_LAC_GRID_DISABLE"))
             && page.grid_line_pitch.is_some()
             && text_box.blocks.iter().all(|b| {
                 matches!(b, Block::Paragraph(p) if p.style.snap_to_grid
                     && p.style.line_spacing_rule.as_deref() != Some("exact"))
             });
         if text_box.compat_line_spacing
-            && std::env::var("OXI_CLNSP_DISABLE").is_err()
+            && !crate::env_flag!("OXI_CLNSP_DISABLE")
             && !clnsp_box_on_grid
             && matches!(v_anchor, "t" | "" | "top")
             && text_box
@@ -9836,7 +10024,7 @@ cells={} pitch={:.2} text={:?}",
                 .iter()
                 .all(|b| matches!(b, Block::Paragraph(_)))
         {
-            let clnsp_font_law = std::env::var_os("OXI_CLNSP_FONT_LAW_DISABLE").is_none();
+            let clnsp_font_law = !crate::env_flag!("OXI_CLNSP_FONT_LAW_DISABLE");
             // The face of the line's largest text run -- not its first element,
             // which on a list line is the marker (a Symbol bullet read as the line
             // face gave en/policies__009ab5c3's Arial 14 bullets 17.15, Word 16.08).
@@ -9878,7 +10066,7 @@ cells={} pitch={:.2} text={:?}",
             // (bullet 161.5, text 164.3), Oxi drew the text at 175.1. A group within
             // 0.3 em above the next joins it, after that line's own elements (the
             // chain measures the line from its first element).
-            if std::env::var_os("OXI_CLNSP_MARKER_MERGE_DISABLE").is_none() {
+            if !crate::env_flag!("OXI_CLNSP_MARKER_MERGE_DISABLE") {
                 let groups: Vec<(i64, Vec<usize>)> = std::mem::take(&mut lines).into_iter().collect();
                 let fs_of = |idxs: &[usize]| idxs.iter().filter_map(|&i| match &elements[i].content {
                     LayoutContent::Text { font_size, .. } => Some(*font_size),
@@ -9961,7 +10149,7 @@ cells={} pitch={:.2} text={:?}",
                         // +0.55, Calibri 11 +0.03 (no leading) = the leading 0.46 / 0.51 / 0;
                         // blind-G en/policies__009ab5c3's Arial Bold 24 title +0.79 (0.785).
                         let a = if !m.is_cjk_83_64_font()
-                            && std::env::var_os("OXI_CLNSP_CURBASE_DISABLE").is_none()
+                            && !crate::env_flag!("OXI_CLNSP_CURBASE_DISABLE")
                         {
                             m.baseline_ascent()
                         } else {
@@ -10017,7 +10205,7 @@ cells={} pitch={:.2} text={:?}",
                     // (`_pb_txbx_before_gen.py` cB_g1: Word +12 / +24 for 240 / 480tw
                     // with compatLnSpc, as without it; ja/reference__5593c6a7 Title box
                     // −12.2).
-                    let first_sb = if std::env::var_os("OXI_CLNSP_FIRST_BEFORE_DISABLE").is_none() {
+                    let first_sb = if !crate::env_flag!("OXI_CLNSP_FIRST_BEFORE_DISABLE") {
                         clnsp_line_specs.first().map_or(0.0, |s| s.2)
                     } else {
                         0.0
@@ -10031,7 +10219,7 @@ cells={} pitch={:.2} text={:?}",
                     }
                 }
             }
-        } else if text_box.compat_line_spacing && std::env::var("OXI_S662_DISABLE").is_err() {
+        } else if text_box.compat_line_spacing && !crate::env_flag!("OXI_S662_DISABLE") {
             // S662 flat DY RETIRED to 0.0 (2026-07-08): the +2.0 was calibrated
             // in the pre-ROWBOX2/pre-S638_ALL/pre-S761 geometry and was partly
             // COMPENSATING the missing roundRect text-rect inset (S559 pattern).
@@ -10198,9 +10386,9 @@ cells={} pitch={:.2} text={:?}",
         // (ＭＳ 明朝); Word (COM Font.Name Century 10.5) sets each at
         // one 13.6 cell, the eastAsia reading is 13.62 -> two cells.
         let s1376_mark = pprrpr_fs.is_none()
-            && std::env::var("OXI_EMPTY_MARK_FAMILY_DISABLE").is_err()
+            && !crate::env_flag!("OXI_EMPTY_MARK_FAMILY_DISABLE")
             && (!self.doc_body_has_real_cjk
-                || std::env::var("OXI_S1376_DISABLE").is_err())
+                || !crate::env_flag!("OXI_S1376_DISABLE"))
             && para.style.ppr_rpr.as_ref().is_some_and(|r| r.font_family.is_some());
         let pprrpr_fs = pprrpr_fs.or_else(|| {
             if s1376_mark {
@@ -10260,12 +10448,12 @@ cells={} pitch={:.2} text={:?}",
             // line 360) in a cell at 23.35/21.4 (Mincho 83/64 x 1.5)
             // against Word's 21.0/18.75 -> +14pt, and the page's last
             // three-line paragraph moved to p4.
-            let s1559_mult = std::env::var_os("OXI_S1559_DISABLE").is_none()
+            let s1559_mult = !crate::env_flag!("OXI_S1559_DISABLE")
                 && effective_line_spacing.map_or(false, |f| f > 0.0);
             let s989_ascii = std::env::var("OXI_S989_DISABLE")
                 .is_err()
                 && (!self.doc_body_has_real_cjk || s1376_mark
-                    || (std::env::var_os("OXI_S1574_DISABLE").is_none() && (!self.adjust_line_height_in_table || !para.style.snap_to_grid)))
+                    || (!crate::env_flag!("OXI_S1574_DISABLE") && (!self.adjust_line_height_in_table || !para.style.snap_to_grid)))
                 // A Latin mark keeps its ASCII face under minimum and exact
                 // spacing too; the rule governs the height, not the font slot.
 
@@ -10286,8 +10474,8 @@ cells={} pitch={:.2} text={:?}",
                 // fell to p3 (+1 page).
                 && (rpr_ref.font_family.is_some()
                     || ((!self.doc_body_has_real_cjk
-                        || (std::env::var_os("OXI_S1574_DISABLE").is_none() && (!self.adjust_line_height_in_table || !para.style.snap_to_grid)))
-                        && std::env::var_os("OXI_S1512_DISABLE").is_none()))
+                        || (!crate::env_flag!("OXI_S1574_DISABLE") && (!self.adjust_line_height_in_table || !para.style.snap_to_grid)))
+                        && !crate::env_flag!("OXI_S1512_DISABLE")))
                 // An empty paragraph mark uses its ASCII face even when
                 // eastAsia is explicitly declared. The measured CJK-context
                 // pair retains identical Century/Arial advances in both forms.
@@ -10300,7 +10488,7 @@ cells={} pitch={:.2} text={:?}",
             // eastAsia MS Mincho, 12pt marks): the empty rows step 15.0 in
             // Word (one cell), Oxi 29.8 (MS Mincho 15.56 -> two).
             let s1597_cell = !s989_ascii
-                && std::env::var_os("OXI_S1597_DISABLE").is_none()
+                && !crate::env_flag!("OXI_S1597_DISABLE")
                 && self.doc_body_has_real_cjk
                 && self.adjust_line_height_in_table
                 && para.style.snap_to_grid
@@ -10319,7 +10507,7 @@ cells={} pitch={:.2} text={:?}",
             if s989_ascii
                 && self.doc_body_has_real_cjk
                 && !empty_metrics.is_cjk_83_64_font()
-                && (std::env::var_os("OXI_S1574_DISABLE").is_none() && (!self.adjust_line_height_in_table || !para.style.snap_to_grid))
+                && (!crate::env_flag!("OXI_S1574_DISABLE") && (!self.adjust_line_height_in_table || !para.style.snap_to_grid))
             {
                 Self::empty_mark_spacing_height(
                     empty_metrics.natural_line_height_hhea(empty_fs),
@@ -10386,7 +10574,7 @@ cells={} pitch={:.2} text={:?}",
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(1.5);
-                if std::env::var("OXI_S1231_DISABLE").is_err()
+                if !crate::env_flag!("OXI_S1231_DISABLE")
                     && (chain - self.default_font_size).abs()
                         >= s1231_th
                 {
@@ -10473,10 +10661,36 @@ cells={} pitch={:.2} text={:?}",
     /// the header distance for the header's leading paragraph (the only shape
     /// measured: reports__003862302b660a86 and the probe both anchor in the
     /// header's first paragraph). 0.0 when the header has no such float.
-    fn s1381_header_band(&self, blocks: &[Block], page: &Page) -> f32 {
-        if std::env::var("OXI_S1381_DISABLE").is_ok() {
+    /// OXI_HDR_MARGIN_REANCHOR (2026-11-02, default ON, opt-out _DISABLE): how far a
+    /// header that outgrows the top margin moves the "margin" a header drawing's
+    /// relativeFrom="margin" offset counts from. Word lays the header out once
+    /// against the declared margin (a topAndBottom drawing there pushes the header
+    /// lines it overlaps), starts the body at that header's bottom, then places the
+    /// margin-relative drawing from the BODY TOP -- once, not to a fixed point.
+    /// `_pb_hdr_anchor_negmargin_gen.py` (top 72, header 36, 95.25pt picture,
+    /// Word PDF): offset -54 topAndBottom -> 84.2 (the empty header paragraph,
+    /// pushed under the picture at 18..113.2, ends at 138.2); five 25pt header
+    /// lines, wrapNone, offsets 0 / -54 / +30 -> 185.8 / 131.8 / 215.8 (body top
+    /// 185.8); topAndBottom 0 / -54 / +30 -> 292.1 / 209.1 / 302.1. page- and
+    /// paragraph-relative drawings stay put. en/administrative__00777f39: the logo
+    /// at 73.8 (header line under the picture ends at 127.8, minus 54), Oxi 18.
+    fn hdr_margin_reanchor_shift(&self, blocks: &[Block], page: &Page) -> f32 {
+        if crate::env_flag!("OXI_HDR_MARGIN_REANCHOR_DISABLE") || page.margin_top_negative {
             return 0.0;
         }
+        (self.s755_header_bottom_ex(blocks, page, false) - page.margin.top).max(0.0)
+    }
+
+    fn s1381_header_band(&self, blocks: &[Block], page: &Page) -> f32 {
+        if crate::env_flag!("OXI_S1381_DISABLE") {
+            return 0.0;
+        }
+        // OXI_HDR_MARGIN_REANCHOR: a margin-relative topAndBottom drawing, once
+        // re-placed from the body top, pushes the body when it covers that top
+        // (the probe's body lines start at the picture's bottom: 190.8 / 315.6
+        // baselines = 179.5 / 304.3 + ascent).
+        let reanchor_shift = self.hdr_margin_reanchor_shift(blocks, page);
+        let body_top = page.margin.top + reanchor_shift;
         let header_y = page.header_distance.unwrap_or(36.0);
         // S1389: a square/tight float that leaves no lane (width within 30pt of
         // the column) closes the column like topAndBottom. MEASURED
@@ -10489,14 +10703,21 @@ cells={} pitch={:.2} text={:?}",
             .filter_map(|b| match b {
                 Block::Image(img)
                     if img.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
-                        || (std::env::var("OXI_S1389_DISABLE").is_err()
+                        || (!crate::env_flag!("OXI_S1389_DISABLE")
                             && matches!(img.wrap_type, Some(crate::ir::WrapType::Square | crate::ir::WrapType::Tight))
                             && img.width >= column_w - 30.0) =>
                 {
                     img.position.as_ref().and_then(|p| match p.v_relative.as_deref() {
                         Some("page") => Some(p.y + img.height),
                         Some("paragraph") => Some(header_y + p.y + img.height),
-                        Some("text") if std::env::var("OXI_S1389_DISABLE").is_err() => Some(header_y + p.y + img.height),
+                        Some("margin")
+                            if reanchor_shift > 0.0
+                                && img.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
+                                && p.y <= 0.5 =>
+                        {
+                            Some(body_top + p.y + img.height)
+                        }
+                        Some("text") if !crate::env_flag!("OXI_S1389_DISABLE") => Some(header_y + p.y + img.height),
                         _ => None,
                     })
                 }
@@ -10512,7 +10733,7 @@ cells={} pitch={:.2} text={:?}",
     /// square box, not for a half-width square box or wrapNone (forms__001ae487's
     /// header banner, Word body 47.25 + the paragraph's 12 before).
     fn header_text_box_band(&self, blocks: &[Block], page: &Page, column_w: f32) -> f32 {
-        if std::env::var_os("OXI_HDR_TEXTBOX_BAND_DISABLE").is_some() || page.hf_text_boxes.is_empty() {
+        if crate::env_flag!("OXI_HDR_TEXTBOX_BAND_DISABLE") || page.hf_text_boxes.is_empty() {
             return 0.0;
         }
         let is = |v: &Vec<Block>| !blocks.is_empty() && std::ptr::eq(blocks.as_ptr(), v.as_ptr());
@@ -10541,7 +10762,7 @@ cells={} pitch={:.2} text={:?}",
         // picture alone; Oxi gave the picture 85.04 and nothing else, -10.17).
         // The leading was the opt-in OXI_HEADER_IMAGE_LEADING=1 experiment.
         if std::env::var("OXI_HEADER_IMAGE_LEADING").ok().as_deref() != Some("1")
-            && std::env::var_os("OXI_HF_IMG_LINE_DISABLE").is_some()
+            && crate::env_flag!("OXI_HF_IMG_LINE_DISABLE")
         {
             return 0.0;
         }
@@ -10559,7 +10780,7 @@ cells={} pitch={:.2} text={:?}",
         let fs = self.resolve_font_size(run_style, &host.style);
         let metrics = &*self.metrics_for_para_mark_g(run_style, &host.style, !self.doc_body_has_real_cjk);
         let natural = if !self.doc_body_has_real_cjk && !metrics.is_cjk_83_64_font()
-            && std::env::var("OXI_S979_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S979_DISABLE")
         {
             metrics.natural_line_height_hhea(fs)
         } else { metrics.word_line_height(fs, 96.0) };
@@ -10632,9 +10853,18 @@ cells={} pitch={:.2} text={:?}",
         let min_x = elements.iter().map(|e| e.x).fold(f32::INFINITY, f32::min);
         let max_x = elements.iter().map(|e| e.x + e.width).fold(0.0, f32::max);
         let width = fp.width.unwrap_or_else(|| if min_x.is_finite() { max_x - min_x } else { 0.0 });
+        // OXI_HF_FRAME_OUTSIDE (2026-10-31, default ON, opt-out _DISABLE): xAlign
+        // outside / inside put the frame at the right / left edge on an odd page
+        // and the reverse on an even one. en/reference__00f99483's footer page
+        // number (framePr xAlign outside, hAnchor margin): Word sets «1» at the
+        // right margin; Oxi read the unknown value as x = 0 and set it at the left.
+        let even = HF_PAGE_EVEN.with(|c| c.get());
+        let outside_on = !crate::env_flag!("OXI_HF_FRAME_OUTSIDE_DISABLE");
         let x = match fp.x_align.as_deref() {
             Some("right") => left + span - width,
             Some("center") => left + (span - width) * 0.5,
+            Some("outside") if outside_on => if even { left } else { left + span - width },
+            Some("inside") if outside_on => if even { left + span - width } else { left },
             Some("left") => left, _ => left + fp.x,
         };
         let shift = x - if fp.width.is_none() && min_x.is_finite() { min_x } else { 0.0 };
@@ -10669,6 +10899,15 @@ cells={} pitch={:.2} text={:?}",
     }
 
     fn s755_header_bottom(&self, blocks: &[Block], page: &Page) -> f32 {
+        self.s755_header_bottom_ex(blocks, page, true)
+    }
+
+    /// `margin_floor = false`: the header's own extent, without the bottoms of
+    /// margin-relative floats (they push the header lines they cover, but the
+    /// body clears them by wrapping, not because the header reaches them --
+    /// `_pb_hdr_anchor_negmargin_gen.py` o0 topAndBottom: picture 72..167.2,
+    /// header line at 36 untouched, the picture stays at 72).
+    fn s755_header_bottom_ex(&self, blocks: &[Block], page: &Page, margin_floor: bool) -> f32 {
         let mut frame_floor = 0.0_f32;
         let mut flow_blocks = Vec::new();
         for block in blocks {
@@ -10702,7 +10941,7 @@ cells={} pitch={:.2} text={:?}",
             // 0 → the body started at the top margin). The S843 canaries
             // (framework/risk/nyserda ink-free headers) have ZERO pBdr, so this
             // is byte-identical for them. Gated with the rest of S1014.
-            let s1014_ink = std::env::var("OXI_S1014_DISABLE").is_err();
+            let s1014_ink = !crate::env_flag!("OXI_S1014_DISABLE");
             // S1050 (2026-07-31, opt-out OXI_S1050_DISABLE): a header paragraph
             // that HOSTS A WATERMARK is visible ink. Its runs carry no text (the
             // VML `v:textpath` string is lifted into `Page.watermark`), so the
@@ -10726,7 +10965,7 @@ cells={} pitch={:.2} text={:?}",
             // same header blocks. A blanket `p.shapes` gate is refused (census:
             // header VML shapes exist in golden 1 / real_en 11 / JP 1 docs, most
             // of them non-watermark drawings).
-            let s1050_ink = std::env::var("OXI_S1050_DISABLE").is_err() && page.watermark.is_some();
+            let s1050_ink = !crate::env_flag!("OXI_S1050_DISABLE") && page.watermark.is_some();
             // S1064 (2026-08-03, opt-out OXI_S1064_DISABLE): an EMPTY header
             // paragraph reserves its line + after like any other paragraph —
             // EXCEPT that a header whose whole content is ONE empty paragraph
@@ -10753,7 +10992,7 @@ cells={} pitch={:.2} text={:?}",
             // ink-free → 0 → the body over-packed → +1 page.
             // ukrisk / legal__00081e80 (each 1 empty) stay collapsed; S1050's
             // watermark-host paragraphs stay ink (their VML runs are empty).
-            let s1064 = !self.doc_body_has_real_cjk && std::env::var("OXI_S1064_DISABLE").is_err();
+            let s1064 = !self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S1064_DISABLE");
             // S1395 (2026-09-13, opt-out OXI_S1395_DISABLE): in a JAPANESE document
             // an empty header paragraph reserves its line even when it is the
             // header's only paragraph. MEASURED (`_pb_jphdr_empty_gen.py`, Word
@@ -10762,7 +11001,7 @@ cells={} pitch={:.2} text={:?}",
             // Latin ladder collapsed the n=1 case to the margin instead.
             // forms__009bbe8a5704589a: Word 58.5, Oxi 42.55 -> every page ran a
             // line ahead and an empty paragraph crossed the page boundary.
-            let s1395 = self.doc_body_has_real_cjk && std::env::var("OXI_S1395_DISABLE").is_err();
+            let s1395 = self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S1395_DISABLE");
             let s1064_multi = (s1064
                 && blocks
                     .iter()
@@ -10774,7 +11013,7 @@ cells={} pitch={:.2} text={:?}",
                 Block::Paragraph(p) => {
                     p.runs.iter().any(|r| !r.text.trim().is_empty())
                         || p.runs.iter().any(|r| r.style.inline_object_image.is_some())
-                        || (std::env::var("OXI_HEADER_DIRECT_ALIGNMENT").is_ok()
+                        || (crate::env_flag!("OXI_HEADER_DIRECT_ALIGNMENT")
                             && p.style.has_direct_alignment)
                         || (s1014_ink && p.style.borders.is_some())
                         || (s1050_ink && p.shapes.iter().any(|s| s.is_vml && s.position.is_some()))
@@ -10783,7 +11022,7 @@ cells={} pitch={:.2} text={:?}",
                 Block::Table(_) | Block::Image(_) => true,
                 _ => false,
             });
-            if !s843_has_ink && std::env::var("OXI_S843_DISABLE").is_err() {
+            if !s843_has_ink && !crate::env_flag!("OXI_S843_DISABLE") {
                 // S1649 (2026-10-02, default ON, opt-out OXI_S1649_DISABLE): the
                 // footer's untouched-blank exemption (S909/S1525) holds for the
                 // header too. An ink-less header made of ONE paragraph that
@@ -10801,7 +11040,7 @@ cells={} pitch={:.2} text={:?}",
                 // own height (+ its before/after); direct spacing that merely
                 // restates the inherited values does not (not modelled: the
                 // census has no such doc).
-                let s1649_touched = std::env::var_os("OXI_S1649_DISABLE").is_none()
+                let s1649_touched = !crate::env_flag!("OXI_S1649_DISABLE")
                     && (blocks.len() > 1
                         || blocks.iter().any(|b| match b {
                             Block::Paragraph(p) => p.style.has_direct_tabs_or_ind
@@ -10815,7 +11054,7 @@ cells={} pitch={:.2} text={:?}",
                                 // no run / mark rPr only / an empty <w:r/> -> 36.0; two
                                 // <w:tab/> runs -> 41.25, one tab -> 42.0, one space ->
                                 // 42.0 (header + that line). Oxi kept the margin.
-                                || (std::env::var_os("OXI_HDR_WS_RUN_TOUCH_DISABLE").is_none()
+                                || (!crate::env_flag!("OXI_HDR_WS_RUN_TOUCH_DISABLE")
                                     && p.runs.iter().any(|r| !r.text.is_empty())),
                             _ => false,
                         }));
@@ -10840,7 +11079,7 @@ cells={} pitch={:.2} text={:?}",
             // under-reserves. Census: this shape (header + page-relative
             // TopAndBottom image) is target-ONLY across 677 corpus paths, and
             // does not overlap S734's paragraph-relative body band.
-            let s1010 = std::env::var("OXI_S1010_DISABLE").is_err();
+            let s1010 = !crate::env_flag!("OXI_S1010_DISABLE");
             let band_bottom = if s1010 {
                 blocks
                     .iter()
@@ -10857,7 +11096,7 @@ cells={} pitch={:.2} text={:?}",
                         // S1381: a paragraph-relative band hangs off the header's
                         // leading paragraph (header distance); see s1381_header_band.
                         Block::Image(img)
-                            if std::env::var("OXI_S1381_DISABLE").is_err()
+                            if !crate::env_flag!("OXI_S1381_DISABLE")
                                 && img.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
                                 && img
                                     .position
@@ -10880,7 +11119,7 @@ cells={} pitch={:.2} text={:?}",
             // banner (Picture 4, paragraph -20.25, 89pt) sits over the header line;
             // Word sets «As of November 2, 2021» under it at 107.7 and the body
             // follows the deeper header; Oxi set the line at 39, under the banner.
-            let floating_bands: Vec<(f32, f32, bool)> = if (std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || std::env::var_os("OXI_HEADER_FLOAT_BANDS_DISABLE").is_none()) {
+            let floating_bands: Vec<(f32, f32, bool, bool)> = if (std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || !crate::env_flag!("OXI_HEADER_FLOAT_BANDS_DISABLE")) {
                 blocks.iter().filter_map(|block| {
                     let Block::Image(image) = block else { return None; };
                     let position = image.position.as_ref()?;
@@ -10904,10 +11143,13 @@ cells={} pitch={:.2} text={:?}",
                     };
                     // A top-margin anchor excludes the body at its page
                     // position without moving its own header paragraph.
-                    Some((y, y + image.height + image.effect_extent_b.max(0.0), !top_margin_anchor))
+                    Some((y, y + image.height + image.effect_extent_b.max(0.0), !top_margin_anchor,
+                        position.v_relative.as_deref() == Some("margin")))
                 }).collect()
             } else { Vec::new() };
-            let floating_floor = floating_bands.iter().map(|(_, bottom, _)| *bottom)
+            let floating_floor = floating_bands.iter()
+                .filter(|(_, _, _, margin)| margin_floor || !*margin)
+                .map(|(_, bottom, _, _)| *bottom)
                 .fold(header_y, f32::max);
             // S813 (2026-07-13, default ON, opt-out OXI_S813_DISABLE): the header
             // stack includes the FIRST paragraph's style space_before and
@@ -10921,7 +11163,7 @@ cells={} pitch={:.2} text={:?}",
             // sections hid the bug: their top margin (81) exceeds the header
             // bottom, so the body top was margin-driven (the discriminator).
             // Latin scope (JP header calibration untouched).
-            let s813 = !self.doc_body_has_real_cjk && std::env::var("OXI_S813_DISABLE").is_err();
+            let s813 = !self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S813_DISABLE");
             let mut s813_first = true;
             let mut s813_prev_sa: Option<f32> = None;
             // S1392 (2026-09-13, opt-out OXI_S1392_DISABLE): contextualSpacing
@@ -10933,8 +11175,8 @@ cells={} pitch={:.2} text={:?}",
             // pushed the page-1 table's last row to page 2.
             let mut s1392_prev: Option<(bool, Option<String>)> = None;
             let mut header_previous: Option<&Paragraph> = None;
-            let header_contextual = std::env::var("OXI_HEADER_CONTEXTUAL_SPACING").is_ok();
-            if std::env::var("OXI_DBG_HDR").is_ok() {
+            let header_contextual = crate::env_flag!("OXI_HEADER_CONTEXTUAL_SPACING");
+            if crate::env_flag!("OXI_DBG_HDR") {
                 eprintln!(
                     "[DBG_HDR] blocks.len()={} blocktypes={:?}",
                     blocks.len(),
@@ -10986,7 +11228,7 @@ cells={} pitch={:.2} text={:?}",
                     // explicit tiny marks (for example sz=2 = 1pt) into full 11pt
                     // lines and can push the body down by tens of points.
                     let fallback_style = RunStyle::default();
-                    let s862 = std::env::var("OXI_S862_DISABLE").is_err();
+                    let s862 = !crate::env_flag!("OXI_S862_DISABLE");
                     // S1010 (Stage B): skip DRAWING-ONLY runs (an anchored image
                     // leaves an empty run whose rPr [sz=80 in forms__0010349d]
                     // must NOT be read as the empty-paragraph mark formatting) —
@@ -11031,7 +11273,7 @@ cells={} pitch={:.2} text={:?}",
                         // (12pt -> 15.500 where the hhea line is 12.000), inflating
                         // the header stack by ~6pt per page.
                         let s1106_ascii = !self.doc_body_has_real_cjk
-                            && std::env::var("OXI_S1106_DISABLE").is_err();
+                            && !crate::env_flag!("OXI_S1106_DISABLE");
                         self.metrics_for_para_mark_g(mark, &para.style, s1106_ascii)
                     } else if !self.doc_body_has_real_cjk {
                         // An empty header mark still inherits its paragraph font.
@@ -11054,7 +11296,7 @@ cells={} pitch={:.2} text={:?}",
                     // word_line_height (83/64) calibration.
                     let mut lh = if !self.doc_body_has_real_cjk
                         && !metrics.is_cjk_83_64_font()
-                        && std::env::var("OXI_S979_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S979_DISABLE")
                     {
                         metrics.natural_line_height_hhea(fs)
                     } else {
@@ -11065,7 +11307,7 @@ cells={} pitch={:.2} text={:?}",
                     // header4: Word 21.14 at 12pt; 8/10/16pt 14.18/17.66/28.22).
                     // Opt-out OXI_AUM_HEADER_MARK_LH_DISABLE.
                     if visible_run.is_none()
-                        && std::env::var_os("OXI_AUM_HEADER_MARK_LH_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_AUM_HEADER_MARK_LH_DISABLE")
                         && self.resolve_font_family(mark_style, &para.style) == Some("Arial Unicode MS")
                         && crate::font::runtime::resolve("Arial Unicode MS", false, false).is_none()
                     {
@@ -11084,11 +11326,11 @@ cells={} pitch={:.2} text={:?}",
                     // 90.1 = 42.55 + 2 x (13.617 x 1.158 + 8); the single-spacing
                     // 13.5 + 8 per paragraph gave 85.55).
                     let hf_cjk_mult = self.doc_body_has_real_cjk
-                        && std::env::var_os("OXI_HF_CJK_MULTIPLE_DISABLE").is_none();
+                        && !crate::env_flag!("OXI_HF_CJK_MULTIPLE_DISABLE");
                     if (!self.doc_body_has_real_cjk || hf_cjk_mult)
                         && visible_run.is_some()
                         && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
-                        && std::env::var("OXI_HEADER_TEXT_MULTIPLE_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_HEADER_TEXT_MULTIPLE_DISABLE")
                     {
                         let factor = para.style.line_spacing.unwrap_or(1.0).max(1.0);
                         if hf_cjk_mult && factor > 1.0 && metrics.is_cjk_83_64_font() {
@@ -11106,7 +11348,7 @@ cells={} pitch={:.2} text={:?}",
                     // Golden corpus scan: 0 headers with atLeast (direct or
                     // Header-style) → JP byte-identical by construction.
                     if matches!(para.style.line_spacing_rule.as_deref(), Some("atLeast"))
-                        && std::env::var("OXI_S1175_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S1175_DISABLE")
                     {
                         if let Some(fl) = para.style.line_spacing {
                             if fl > lh {
@@ -11114,7 +11356,7 @@ cells={} pitch={:.2} text={:?}",
                             }
                         }
                     }
-                    if std::env::var("OXI_DBG_HDR").is_ok() {
+                    if crate::env_flag!("OXI_DBG_HDR") {
                         let txt: String = para
                             .runs
                             .iter()
@@ -11154,8 +11396,8 @@ cells={} pitch={:.2} text={:?}",
                     // est/one technique). Images are assigned row-sequentially;
                     // each row height = max(lh, images on that row).
                     let s1hdr = !self.doc_body_has_real_cjk
-                        && std::env::var("OXI_S1HDR_DISABLE").is_err()
-                        && std::env::var("OXI_S742_DISABLE").is_err();
+                        && !crate::env_flag!("OXI_S1HDR_DISABLE")
+                        && !crate::env_flag!("OXI_S742_DISABLE");
                     // S1084 (2026-08-06): the merge gate must mirror the PARSER's
                     // own `image_only` predicate (parser/ooxml.rs: all runs have
                     // EMPTY text), not "has a non-whitespace char". A header host
@@ -11171,7 +11413,7 @@ cells={} pitch={:.2} text={:?}",
                     // paragraph; no-text => the paragraph was not suppressed for
                     // some other reason and a following bare Image may be its own
                     // image-only paragraph, so stay conservative and do not merge.
-                    let has_any_text = if std::env::var("OXI_S1084_DISABLE").is_err() {
+                    let has_any_text = if !crate::env_flag!("OXI_S1084_DISABLE") {
                         para.runs.iter().any(|r| !r.text.is_empty())
                     } else {
                         para.runs
@@ -11198,7 +11440,7 @@ cells={} pitch={:.2} text={:?}",
                                 .map(|r| r.text.matches('\n').count())
                                 .sum::<usize>();
                             let mut wrap = 0usize;
-                            if std::env::var("OXI_S731_DISABLE").is_err() {
+                            if !crate::env_flag!("OXI_S731_DISABLE") {
                                 let est = self.estimate_para_height(
                                     para, hdr_cw, None, None, false, None, None,
                                 );
@@ -11217,7 +11459,7 @@ cells={} pitch={:.2} text={:?}",
                             }
                             let para_h: f32 = line_hs.iter().sum();
                             hdr_h += para_h;
-                            if std::env::var("OXI_DBG_HDR").is_ok() {
+                            if crate::env_flag!("OXI_DBG_HDR") {
                                 eprintln!(
                                     "[DBG_HDR-S1HDR] br={} wrap={} lines={} imgs={:?} para_h={:.3}",
                                     br_count, wrap, line_count, img_heights, para_h
@@ -11227,7 +11469,7 @@ cells={} pitch={:.2} text={:?}",
                             // S1014 Stage B: the s813 before/after collapse for
                             // this paragraph (kept in sync with the non-S1HDR
                             // path below).
-                            let s1014_hdr = std::env::var("OXI_S1014_DISABLE").is_err();
+                            let s1014_hdr = !crate::env_flag!("OXI_S1014_DISABLE");
                             if s813 && (s1014_hdr || !para.style.has_direct_spacing) {
                                 let sb = para.style.space_before.unwrap_or(0.0);
                                 let sa = para.style.space_after.unwrap_or(0.0);
@@ -11243,7 +11485,7 @@ cells={} pitch={:.2} text={:?}",
                                 s813_prev_sa = None;
                                 s813_first = false;
                             }
-                            if std::env::var("OXI_DBG_HDR").is_ok() {
+                            if crate::env_flag!("OXI_DBG_HDR") {
                                 eprintln!("[DBG_HDR] end-of-block hdr_h={:.3}", hdr_h);
                             }
                             continue;
@@ -11254,8 +11496,8 @@ cells={} pitch={:.2} text={:?}",
                     loop {
                         let line_top = band_bottom.max(header_y) + hdr_h;
                         let pushed = floating_bands.iter()
-                            .filter(|(top, bottom, moves_host)| *moves_host && line_top < *bottom && line_top + lh_used > *top)
-                            .map(|(_, bottom, _)| *bottom).fold(line_top, f32::max);
+                            .filter(|(top, bottom, moves_host, _)| *moves_host && line_top < *bottom && line_top + lh_used > *top)
+                            .map(|(_, bottom, _, _)| *bottom).fold(line_top, f32::max);
                         if pushed <= line_top { break; }
                         hdr_h += pushed - line_top;
                     }
@@ -11265,10 +11507,10 @@ cells={} pitch={:.2} text={:?}",
                     let mixed_inline_header = has_inline_image
                         && para.runs.iter().any(|r| r.text.chars().any(|c| !c.is_whitespace()));
                     let inline_header = has_inline_image
-                        && (mixed_inline_header || std::env::var_os("OXI_HEADER_INLINE_OBJECTS").is_some());
+                        && (mixed_inline_header || crate::env_flag!("OXI_HEADER_INLINE_OBJECTS"));
                     let text_height = if (!self.doc_body_has_real_cjk || inline_header)
                         && (mixed_inline_header || para.runs.iter().any(|run| run.style.styleref.is_some())
-                            || std::env::var("OXI_HEADER_TEXT_FLOW").is_ok())
+                            || crate::env_flag!("OXI_HEADER_TEXT_FLOW"))
                         && (visible_run.is_some() || inline_header)
                         && (inline_header || para.runs.iter().all(|r| r.style.inline_object_image.is_none()))
                     {
@@ -11279,7 +11521,7 @@ cells={} pitch={:.2} text={:?}",
                     // An isolated bottom border also consumes space before the next header paragraph.
                     if text_height.is_none() && !self.doc_body_has_real_cjk
                         && matches!(blocks.get(bi + 1), Some(Block::Paragraph(next)) if next.style.borders.is_none())
-                        && std::env::var("OXI_HEADER_BOTTOM_BORDER_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_HEADER_BOTTOM_BORDER_DISABLE")
                     {
                         if let Some(edge) = para.style.borders.as_ref().and_then(|b| b.bottom.as_ref()) {
                             if !matches!(edge.style.as_str(), "nil" | "none") {
@@ -11299,11 +11541,11 @@ cells={} pitch={:.2} text={:?}",
                     // widow-push (+1 ×5). space_before/space_after hold the
                     // effective value whether direct or style, so the collapse
                     // model is identical.
-                    let s1014_hdr = std::env::var("OXI_S1014_DISABLE").is_err();
+                    let s1014_hdr = !crate::env_flag!("OXI_S1014_DISABLE");
                     if s813 && (s1014_hdr || !para.style.has_direct_spacing) {
                         let sb = para.style.space_before.unwrap_or(0.0);
                         let sa = para.style.space_after.unwrap_or(0.0);
-                        let s1392_collapse = std::env::var("OXI_S1392_DISABLE").is_err()
+                        let s1392_collapse = !crate::env_flag!("OXI_S1392_DISABLE")
                             && s1392_prev.as_ref().map_or(false, |(ctx, sid)| {
                                 (*ctx || para.style.contextual_spacing) && *sid == para.style.style_id
                             });
@@ -11332,7 +11574,7 @@ cells={} pitch={:.2} text={:?}",
                     // single-line height stays the ORIGINAL word_line_height
                     // computation (no sub-pt shift); corpus headers have no
                     // wrapping paras (>44ch scan: 0) → extra=0 → byte-identical.
-                    if text_height.is_none() && std::env::var("OXI_S731_DISABLE").is_err() {
+                    if text_height.is_none() && !crate::env_flag!("OXI_S731_DISABLE") {
                         let est =
                             self.estimate_para_height(para, hdr_cw, None, None, false, None, None);
                         let one =
@@ -11348,7 +11590,7 @@ cells={} pitch={:.2} text={:?}",
                             // (the estimate carries the paragraph's before/after, so
                             // take them out before dividing by the line -- a 12pt after
                             // on a 14pt line is not a second line)
-                            let one_lines = if std::env::var("OXI_S1391_DISABLE").is_err() && lh > 0.1 {
+                            let one_lines = if !crate::env_flag!("OXI_S1391_DISABLE") && lh > 0.1 {
                                 let sp = para.style.space_before.unwrap_or(0.0).max(0.0)
                                     + para.style.space_after.unwrap_or(0.0).max(0.0);
                                 (((one - sp).max(lh) / lh).round() as i32).max(1)
@@ -11356,7 +11598,7 @@ cells={} pitch={:.2} text={:?}",
                                 1
                             };
                             let extra_lines = ((est / one).round() as i32 * one_lines - 1).max(0);
-                            if std::env::var("OXI_S1391_DISABLE").is_err() && one_lines > 1 && lh > 0.1 {
+                            if !crate::env_flag!("OXI_S1391_DISABLE") && one_lines > 1 && lh > 0.1 {
                                 // The lines after a forced break keep their OWN height
                                 // (policies: Lato 14 + br + Calibri 11 = 18.13 + 13.4, not
                                 // 2 x 18.13): take the estimate's extra height as is.
@@ -11366,7 +11608,7 @@ cells={} pitch={:.2} text={:?}",
                             } else {
                                 hdr_h += extra_lines as f32 * lh;
                             }
-                            if std::env::var("OXI_DBG_HDR").is_ok() {
+                            if crate::env_flag!("OXI_DBG_HDR") {
                                 let txt: String = para
                                     .runs
                                     .iter()
@@ -11391,9 +11633,9 @@ cells={} pitch={:.2} text={:?}",
                     // Block::Paragraph was handled) — probezhdrtbl {-1:5}. Sum
                     // the rows' natural heights (trHeight floor per row).
                     // Corpus-safe: 0 corpus docs have tables in headers.
-                    if std::env::var("OXI_S731_DISABLE").is_err()
+                    if !crate::env_flag!("OXI_S731_DISABLE")
                         && (t.style.position.is_none()
-                            || std::env::var_os("OXI_HEADER_FLOAT_FLOW_DISABLE").is_some())
+                            || crate::env_flag!("OXI_HEADER_FLOAT_FLOW_DISABLE"))
                     {
                         let col_widths = self.resolve_table_col_widths_n(t, hdr_cw, false);
                         let dp = t.style.default_cell_margins.as_ref();
@@ -11436,7 +11678,7 @@ cells={} pitch={:.2} text={:?}",
                     // header image block (scan below in the ship notes).
                     // S759: a FLOATING image (position Some) is page-absolute —
                     // it must NOT push the body down; only inline images add height.
-                    if std::env::var("OXI_S742_DISABLE").is_err() && img.position.is_none() {
+                    if !crate::env_flag!("OXI_S742_DISABLE") && img.position.is_none() {
                         // S1385 (2026-09-13, default ON, opt-out OXI_S1385_DISABLE):
                         // the header's inline image line is priced like the body's
                         // (s971 / S1179): under a multiplied line spacing the line is
@@ -11445,14 +11687,14 @@ cells={} pitch={:.2} text={:?}",
                         // Montserrat-10 line=276 header paragraph -- Word body top
                         // 109.5 = 36 + 71.625 + 0.15 x 12.19; Oxi 107.63, and the
                         // 1.9pt let a second line into the spec table's split row.
-                        if std::env::var("OXI_S1385_DISABLE").is_err() && !self.doc_body_has_real_cjk {
+                        if !crate::env_flag!("OXI_S1385_DISABLE") && !self.doc_body_has_real_cjk {
                             hdr_h += self.s971_image_line_h(img, hdr_cw, page.grid_line_pitch, true);
                         } else {
                             hdr_h += img.height + self.header_inline_image_leading(img)
-                                + if std::env::var_os("OXI_HF_IMG_LINE_DISABLE").is_none() { img.paragraph_space_after.max(0.0) } else { 0.0 };
+                                + if !crate::env_flag!("OXI_HF_IMG_LINE_DISABLE") { img.paragraph_space_after.max(0.0) } else { 0.0 };
                         }
                     }
-                    if std::env::var("OXI_DBG_HDR").is_ok() {
+                    if crate::env_flag!("OXI_DBG_HDR") {
                         eprintln!(
                             "[DBG_HDR] Image block h={:.3} pos={:?} -> hdr_h={:.3}",
                             img.height,
@@ -11461,7 +11703,7 @@ cells={} pitch={:.2} text={:?}",
                         );
                     }
                 }
-                if std::env::var("OXI_DBG_HDR").is_ok() {
+                if crate::env_flag!("OXI_DBG_HDR") {
                     eprintln!("[DBG_HDR] end-of-block hdr_h={:.3}", hdr_h);
                 }
                 bi += 1;
@@ -11475,7 +11717,7 @@ cells={} pitch={:.2} text={:?}",
             // Direct paragraph measurement already includes the bottom rule.
             // Add its width and text distance only for the estimated path.
             if !last_header_measured && !self.doc_body_has_real_cjk
-                && std::env::var("OXI_HEADER_BOTTOM_BORDER_DISABLE").is_err()
+                && !crate::env_flag!("OXI_HEADER_BOTTOM_BORDER_DISABLE")
             {
                 if let Some(Block::Paragraph(last)) = blocks.last() {
                     if let Some(edge) = last.style.borders.as_ref().and_then(|b| b.bottom.as_ref()) {
@@ -11487,7 +11729,7 @@ cells={} pitch={:.2} text={:?}",
             }
             // S1010: the header text flow resumes below the page-relative
             // TopAndBottom band (band_bottom == header_y when there is none).
-            if std::env::var("OXI_DBG_HDR").is_ok() {
+            if crate::env_flag!("OXI_DBG_HDR") {
                 eprintln!(
                     "[DBG_HDR] header_y={:.3} band_bottom={:.3} hdr_h={:.3} -> {:.3}",
                     header_y,
@@ -11525,7 +11767,7 @@ cells={} pitch={:.2} text={:?}",
     /// A footer with no text keeps the document's scope.
     fn footer_face_latin(&self, blocks: &[Block]) -> bool {
         let doc_latin = !self.doc_body_has_real_cjk;
-        if std::env::var_os("OXI_FTR_FACE_SCOPE_DISABLE").is_some() {
+        if crate::env_flag!("OXI_FTR_FACE_SCOPE_DISABLE") {
             return doc_latin;
         }
         fn paras<'a>(blocks: &'a [Block], out: &mut Vec<&'a Paragraph>) {
@@ -11562,7 +11804,7 @@ cells={} pitch={:.2} text={:?}",
         if !self.footer_face_latin(blocks) {
             return 0.0;
         }
-        if std::env::var("OXI_S992_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_S992_DISABLE") {
             return 0.0;
         }
         fn first_text_para(blocks: &[Block]) -> Option<&Paragraph> {
@@ -11666,7 +11908,7 @@ cells={} pitch={:.2} text={:?}",
     /// line sat +3.59. Header arms already match (a header grows downward).
     /// Latin scope as S886.
     fn ftr_pbdr_paint_extent(&self, blocks: &[Block], para: &Paragraph) -> f32 {
-        if !self.footer_face_latin(blocks) || std::env::var_os("OXI_FTR_PBDR_PAINT_DISABLE").is_some() {
+        if !self.footer_face_latin(blocks) || crate::env_flag!("OXI_FTR_PBDR_PAINT_DISABLE") {
             return 0.0;
         }
         let Some(b) = para.style.borders.as_ref() else { return 0.0 };
@@ -11716,7 +11958,7 @@ cells={} pitch={:.2} text={:?}",
                     // An empty footer paragraph whose ascii font is the missing Arial
                     // Unicode MS takes a 1.76em line in Word (8/10/12/16pt: 14.04 /
                     // 17.64 / 21.12 / 28.20). default ON, opt-out OXI_AUM_MARK_LH_DISABLE.
-                    if std::env::var_os("OXI_AUM_MARK_LH_DISABLE").is_none()
+                    if !crate::env_flag!("OXI_AUM_MARK_LH_DISABLE")
                         && p.runs.iter().all(|r| r.text.trim().is_empty() && r.style.inline_object_image.is_none())
                     {
                         let mark = p.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
@@ -11745,7 +11987,7 @@ cells={} pitch={:.2} text={:?}",
         // formatting. A CJK character in the body does not turn a single
         // untouched empty footer into a visible line reservation.
         if !blocks.is_empty()
-            && std::env::var("OXI_S894_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S894_DISABLE")
         {
             let has_ink = blocks.iter().any(|b| match b {
                 Block::Paragraph(p) => p.runs.iter().any(|r| !r.text.trim().is_empty() || r.style.inline_object_image.is_some()),
@@ -11769,7 +12011,7 @@ cells={} pitch={:.2} text={:?}",
             // discriminator. (F_STRIP shows Word also counts a direct-spacing
             // para whose values differ from the style chain — synthetic-only,
             // needs the equality machinery; not implemented.)
-            let s909_formatted = std::env::var("OXI_S909_DISABLE").is_err()
+            let s909_formatted = !crate::env_flag!("OXI_S909_DISABLE")
                 && blocks.iter().any(|b| match b {
                     // DIRECT pPr tabs/ind only — ea8f's pStyle "Footer"
                     // (style-inherited tab stops) stays untouched; bd832's
@@ -11783,10 +12025,10 @@ cells={} pitch={:.2} text={:?}",
                     // tests/fixtures/ftr_jc).
                     Block::Paragraph(p) => p.style.has_direct_tabs_or_ind
                         || (p.style.has_direct_alignment_off_style
-                            && std::env::var_os("OXI_S1525_DISABLE").is_none()),
+                            && !crate::env_flag!("OXI_S1525_DISABLE")),
                     _ => false,
                 });
-            if std::env::var("OXI_DBG_FTR").is_ok() {
+            if crate::env_flag!("OXI_DBG_FTR") {
                 eprintln!("[FTR-S894] n_blocks={} has_ink={} s909_formatted={} runs={:?}", blocks.len(), has_ink, s909_formatted,
                     blocks.iter().map(|b| match b { Block::Paragraph(p) => p.runs.iter().map(|r| (r.text.clone(), r.field_type.is_some())).collect::<Vec<_>>(), _ => vec![] }).collect::<Vec<_>>());
             }
@@ -11829,7 +12071,7 @@ cells={} pitch={:.2} text={:?}",
                 // value 782.65 kept it = the residual −1). The fE10 probe was
                 // DEGENERATE here (margin 72 > dist 64.65 − line → max() hid
                 // the term; uklocal-class docs are value-identical).
-                let s905_line = if std::env::var("OXI_S905_DISABLE").is_err() {
+                let s905_line = if !crate::env_flag!("OXI_S905_DISABLE") {
                     blocks
                         .iter()
                         .find_map(|b| match b {
@@ -11868,7 +12110,7 @@ cells={} pitch={:.2} text={:?}",
         // loop never skips: it reserved footer_h 34.0 -> 69.4, cutting 12.7pt
         // from every page and adding one. Decide it for the whole footer so
         // the table goes with its frame, instead of carving out the table.
-        if std::env::var_os("OXI_FRAME_FOOTER_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_FRAME_FOOTER_DISABLE") {
             let paras: Vec<&Paragraph> = blocks
                 .iter()
                 .filter_map(|b| match b {
@@ -11877,7 +12119,7 @@ cells={} pitch={:.2} text={:?}",
                 })
                 .collect();
             if !paras.is_empty() && paras.iter().all(|p| p.style.frame_pr.is_some()) {
-                if std::env::var("OXI_DBG_FTR").is_ok() {
+                if crate::env_flag!("OXI_DBG_FTR") {
                     eprintln!("[FTR-FRAME] all {} paras framed -> reserve bottom margin {:.2} only",
                         paras.len(), page.margin.bottom);
                 }
@@ -11902,7 +12144,7 @@ cells={} pitch={:.2} text={:?}",
             // para's after; the FIRST para's before is the existing S780
             // keep-out. Gated to !has_direct_spacing (= exactly when the
             // estimate dropped it).
-            let s803_on = std::env::var("OXI_S803_DISABLE").is_err();
+            let s803_on = !crate::env_flag!("OXI_S803_DISABLE");
             // S806 (2026-07-12, default ON, opt-out OXI_S806_DISABLE): the
             // DERIVED Latin footer stack (controlled sweep _pb_footer_gen.py,
             // 4 footer configs × bottom sweep, + the uklocalspending real-doc
@@ -11923,7 +12165,7 @@ cells={} pitch={:.2} text={:?}",
             // calibrated legacy path (bd90b00/04b88e/ed025) byte-identical.
             // OXI_FTR_FACE_SCOPE: the footer's own faces decide the scope.
             let s806_latin =
-                self.footer_face_latin(blocks) && std::env::var("OXI_S806_DISABLE").is_err();
+                self.footer_face_latin(blocks) && !crate::env_flag!("OXI_S806_DISABLE");
             let mut s806_first_before = true;
             let mut s803_prev_sa: Option<f32> = None;
             let image_flow = blocks.iter().any(|b| matches!(b, Block::Paragraph(p) if p.runs.iter().any(|r| r.style.inline_object_image.is_some())));
@@ -11965,7 +12207,7 @@ cells={} pitch={:.2} text={:?}",
                     // _pb_ftext probe confirms borders are ADDITIVE: fNY −
                     // fTE10 = 2.45 ≈ top sz12+space1 = 2.5; fLGL 33.70 incl
                     // bottom 1.5 EXACT.
-                    if s806_latin && std::env::var("OXI_S886_DISABLE").is_err() {
+                    if s806_latin && !crate::env_flag!("OXI_S886_DISABLE") {
                         if let Some(b) = p.style.borders.as_ref() {
                             // A later paragraph's top border is part of the footer stack.
                             // The first paragraph's top is already counted below.
@@ -11973,7 +12215,7 @@ cells={} pitch={:.2} text={:?}",
                                 && matches!(&blocks[block_index - 1], Block::Paragraph(prev)
                                     if prev.style.borders.as_ref() == Some(b));
                             if block_index > 0 && !merges_with_prev
-                                && std::env::var("OXI_FOOTER_MIDDLE_TOP_BORDER_DISABLE").is_err() {
+                                && !crate::env_flag!("OXI_FOOTER_MIDDLE_TOP_BORDER_DISABLE") {
                                 if let Some(top) = b.top.as_ref() {
                                     footer_h += top.space + top.width;
                                 }
@@ -11983,7 +12225,7 @@ cells={} pitch={:.2} text={:?}",
                             }
                         }
                     }
-                    if std::env::var("OXI_DBG_FTR").is_ok() {
+                    if crate::env_flag!("OXI_DBG_FTR") {
                         eprintln!(
                             "[FTR-P] h={:.3} sb={:?} sa={:?} direct={} lsr={:?} ls={:?} n_runs={}",
                             h,
@@ -12005,12 +12247,12 @@ cells={} pitch={:.2} text={:?}",
                         // 11.5pt — one line — below Word while f13/f16 matched:
                         // the missing first-before exactly cancelled the trailing
                         // after it does add.
-                        let s1131_first = std::env::var("OXI_S1131_DISABLE").is_err()
+                        let s1131_first = !crate::env_flag!("OXI_S1131_DISABLE")
                             && matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto"));
                         if !p.style.has_direct_spacing || s1131_first {
                             footer_h += p.style.space_before.unwrap_or(0.0).max(0.0);
                         } else if (p.runs.is_empty() || p.runs.iter().all(|r| r.text.is_empty()))
-                            && std::env::var("OXI_S930_DISABLE").is_err()
+                            && !crate::env_flag!("OXI_S930_DISABLE")
                         {
                             // S930: an EMPTY first paragraph's estimate is the
                             // LINE only (the empty arm above never adds spacing),
@@ -12038,7 +12280,7 @@ cells={} pitch={:.2} text={:?}",
                     // whether the spacing came from the style or from a direct
                     // `w:spacing`; f14/f15 with rule=exact already agree to
                     // 0.4pt because the estimate keeps spacing there).
-                    let s1131 = std::env::var("OXI_S1131_DISABLE").is_err()
+                    let s1131 = !crate::env_flag!("OXI_S1131_DISABLE")
                         && matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto"));
                     if s803_on && (!p.style.has_direct_spacing || s1131) {
                         let sb = p.style.space_before.unwrap_or(0.0);
@@ -12083,7 +12325,7 @@ cells={} pitch={:.2} text={:?}",
                     // DOUBLE = 3×sz/8 per side (double sz4 ≡ single sz12 =
                     // 1.5pt/side). forms' footer row closes: cell line 9.77 +
                     // double sz4 1.5×2 = 12.77 ≈ Word 12.72.
-                    if std::env::var("OXI_S868_DISABLE").is_err() {
+                    if !crate::env_flag!("OXI_S868_DISABLE") {
                         let col_widths = self.resolve_table_col_widths_n(t, cw, false);
                         let dp = t.style.default_cell_margins.as_ref();
                         let (pl, pr, pt, pb) = (
@@ -12157,7 +12399,7 @@ cells={} pitch={:.2} text={:?}",
                                     _ => (th + self.rowbox2_trh_bw(t, row)).max(nat),
                                 })
                                 .unwrap_or(nat);
-                            if std::env::var("OXI_DBG_FTR").is_ok() {
+                            if crate::env_flag!("OXI_DBG_FTR") {
                                 eprintln!(
                                     "[FTR-T] row nat={:.3} h={:.3} trh={:?}",
                                     nat, h, row.height
@@ -12182,7 +12424,7 @@ cells={} pitch={:.2} text={:?}",
                         // `_pb_ftr_after_table_multi.py` 0067cba8: Word and Oxi both rise
                         // 12 at before 12), so only a table after a paragraph needs it.
                         if !s806_first_before
-                            && std::env::var_os("OXI_FTR_TBL_NEXT_BEFORE_DISABLE").is_none()
+                            && !crate::env_flag!("OXI_FTR_TBL_NEXT_BEFORE_DISABLE")
                         {
                             s803_prev_sa = Some(0.0);
                         }
@@ -12215,7 +12457,7 @@ cells={} pitch={:.2} text={:?}",
             // flips the slice while the footer RENDER stays fixed. Latin scope
             // (!doc_body_has_real_cjk) — JP corpus byte-identical by construction.
             let mut s780_extra = 0.0f32;
-            if !image_flow && self.footer_face_latin(blocks) && std::env::var("OXI_S780_DISABLE").is_err() {
+            if !image_flow && self.footer_face_latin(blocks) && !crate::env_flag!("OXI_S780_DISABLE") {
                 if let Some(p) = blocks.iter().find_map(|b| match b {
                     Block::Paragraph(p) if p.style.frame_pr.is_none() => Some(p),
                     _ => None,
@@ -12257,7 +12499,7 @@ cells={} pitch={:.2} text={:?}",
             // body line may leave below its ink is handled by that line's fit
             // test, rather than subtracting an unrelated footer font descent.
             let s1542_descent = 0.0;
-            if std::env::var("OXI_DBG_FTR").is_ok() {
+            if crate::env_flag!("OXI_DBG_FTR") {
                 eprintln!("[FTR] n_footer_blocks={} footer_dist={:.1} footer_h={:.1} s780_extra={:.2} s1542_descent={:.2} reserved={:.1} bottom_margin={:.1}",
                     blocks.len(), footer_dist, footer_h, s780_extra, s1542_descent,
                     (footer_dist + footer_h - s1542_descent).max(page.margin.bottom) + s780_extra, page.margin.bottom);
@@ -12265,7 +12507,7 @@ cells={} pitch={:.2} text={:?}",
             let unclamped = footer_dist + footer_h - s1542_descent;
             (unclamped.max(page.margin.bottom) + s780_extra, unclamped)
         } else {
-            if std::env::var("OXI_DBG_FTR").is_ok() {
+            if crate::env_flag!("OXI_DBG_FTR") {
                 eprintln!(
                     "[FTR] page.footer EMPTY -> reserved=bottom_margin {:.1}",
                     page.margin.bottom
@@ -12302,7 +12544,7 @@ cells={} pitch={:.2} text={:?}",
         // Apply paragraph spacing (space_before).
         // Word uses max(prev_space_after, space_before) — spacing collapse.
         let space_before = if para.style.before_autospacing
-            && std::env::var("OXI_S675_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S675_DISABLE")
             // Body style autospacing follows its declared property in either script.
             // Empty paragraphs get FULL autospacing too (the earlier empty-
             // exclusion was falsified: _pb_autosp cTET probe 27.75 == the
@@ -12325,9 +12567,9 @@ cells={} pitch={:.2} text={:?}",
             // 14.006; grid360: 18 + 14 = 32.0 EXACT. The 13.75 was the same
             // COM quantization artifact as the Latin one. Opt-out
             // OXI_S907_DISABLE restores 13.75 for CJK docs.
-            if !self.doc_body_has_real_cjk && std::env::var("OXI_S901_DISABLE").is_err() {
+            if !self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S901_DISABLE") {
                 14.0
-            } else if std::env::var("OXI_S907_DISABLE").is_err() {
+            } else if !crate::env_flag!("OXI_S907_DISABLE") {
                 14.0
             } else {
                 13.75
@@ -12338,7 +12580,7 @@ cells={} pitch={:.2} text={:?}",
             // beforeLines=50 at pitch=17.5 gives exactly 8.75pt, not 17.5pt.
             bl / 100.0 * s1480_lines_unit(page.doc_grid_no_type, pitch)
         } else if let Some(bl) = para.style.before_lines.filter(|_| {
-            page.grid_line_pitch.is_none() && std::env::var("OXI_S697_DISABLE").is_err()
+            page.grid_line_pitch.is_none() && !crate::env_flag!("OXI_S697_DISABLE")
         }) {
             // S697 (2026-06-29): NO-GRID beforeLines. Without a docGrid there is no
             // linePitch, so Word uses a FIXED "line" of 12.0pt (=240 twips, the default
@@ -12364,7 +12606,7 @@ cells={} pitch={:.2} text={:?}",
         } else {
             space_before.max(prev_space_after)
         };
-        if std::env::var_os("OXI_DBG_SPACING").is_some() {
+        if crate::env_flag!("OXI_DBG_SPACING") {
             let head: String = para.runs.iter().flat_map(|r| r.text.chars()).take(24).collect();
             eprintln!("[SPACING] cy={:.2} before={:.2} prev_after={:.2} collapsed={:.2} bi={:?} «{}»",
                 cursor_y, space_before, prev_space_after, collapsed_spacing, body_para_index, head);
@@ -12418,7 +12660,7 @@ cells={} pitch={:.2} text={:?}",
                     // Each paragraph owns its contribution under addition.
                     effective_spacing = if prev_contextual_spacing { 0.0 } else { prev_space_after }
                         + if para.style.contextual_spacing { 0.0 } else { space_before };
-                } else if std::env::var("OXI_S874_DISABLE").is_err() {
+                } else if !crate::env_flag!("OXI_S874_DISABLE") {
                     let a = prev_space_after;
                     let b = space_before;
                     effective_spacing =
@@ -12443,7 +12685,7 @@ cells={} pitch={:.2} text={:?}",
                     effective_spacing = eff_sb.max(eff_psa);
                     if prev_contextual_spacing
                         && !para.style.has_explicit_contextual_spacing
-                        && std::env::var("OXI_S861_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S861_DISABLE")
                     {
                         effective_spacing = 0.0;
                     }
@@ -12451,7 +12693,7 @@ cells={} pitch={:.2} text={:?}",
             }
         }
 
-        if std::env::var("OXI_DBG_CTX").is_ok() {
+        if crate::env_flag!("OXI_DBG_CTX") {
             let t: String = para.runs.iter().flat_map(|r| r.text.chars()).take(14).collect();
             eprintln!("[CTX] sid={:?} prev_sid={:?} ctx={} prev_ctx={} a={:.2} b={:.2} eff={:.2} txt={:?}",
                 para.style.style_id, prev_style_id, para.style.contextual_spacing,
@@ -12489,7 +12731,7 @@ cells={} pitch={:.2} text={:?}",
         };
         if para.style.num_id.is_some()
             && para.style.num_id.as_deref() == s1516_prev_numid
-            && std::env::var("OXI_S931_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S931_DISABLE")
             && (para.style.before_autospacing || s1516_prev_auto)
         {
             // Adjacent items suppress each auto-spacing side independently.
@@ -12564,11 +12806,11 @@ cells={} pitch={:.2} text={:?}",
         // suppression put it at the margin, the 2-column section below then
         // balanced 4 lines / 3 instead of Word's 4 / 4, and every page after
         // shifted.
-        let s1073 = (!self.doc_body_has_real_cjk || std::env::var("OXI_S1339_DISABLE").is_err())
-            && std::env::var("OXI_S1073_DISABLE").is_err()
-            && std::env::var("OXI_S816_DISABLE").is_err();
+        let s1073 = (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_S1339_DISABLE"))
+            && !crate::env_flag!("OXI_S1073_DISABLE")
+            && !crate::env_flag!("OXI_S816_DISABLE");
         let s816_section_2_plus = body_para_index.is_some()
-            && std::env::var("OXI_S816_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S816_DISABLE")
             && S816_PAST_FIRST_SECTION.with(|c| c.get());
         // The first page of a non-first section: the per-section page vecs are
         // still empty, so only `s816_section_2_plus` makes this a page top.
@@ -12579,7 +12821,7 @@ cells={} pitch={:.2} text={:?}",
         // one of `grid_runs`' block indices: its first paragraph at a page top
         // is a section top too (0ea3ec86's heading is section 1's first
         // paragraph, on page 3 behind the cover and the restart's blank page).
-        let s1339_merged_section_start = std::env::var("OXI_S1339_DISABLE").is_err()
+        let s1339_merged_section_start = !crate::env_flag!("OXI_S1339_DISABLE")
             && body_para_index.map_or(false, |bi| {
                 page.grid_runs.iter().any(|&(start, _)| start > 0 && start == bi)
             });
@@ -12588,7 +12830,7 @@ cells={} pitch={:.2} text={:?}",
             && pages.iter().all(|p| p.elements.is_empty())
             && current_elements.is_empty())
             || (s1339_merged_section_start
-                && std::env::var("OXI_S816_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S816_DISABLE")
                 && current_elements.is_empty());
         // S1072 (2026-08-05, opt-out OXI_S1072_DISABLE): an AUTO space-before
         // (w:beforeAutospacing) collapses to ZERO at a page top even on PAGE 1,
@@ -12605,10 +12847,10 @@ cells={} pitch={:.2} text={:?}",
         // behaviour are measured under unconditional suppression.
         let s1072_auto_top = para.style.before_autospacing
             && !self.doc_body_has_real_cjk
-            && std::env::var("OXI_S1072_DISABLE").is_err();
+            && !crate::env_flag!("OXI_S1072_DISABLE");
         let is_page_2_plus =
             !pages.is_empty() || !current_elements.is_empty() || s816_section_2_plus;
-        if std::env::var("OXI_DBG1073").is_ok() && effective_spacing > 0.0 {
+        if crate::env_flag!("OXI_DBG1073") && effective_spacing > 0.0 {
             eprintln!("[S1073-GATE] cy={:.3} top={:.3} eff={:.3} p2p={} s1073={} sectfirst={} pages={} elems={} bpi={:?} runs={:?} txt={:?}",
                 cursor_y, page_top, effective_spacing, is_page_2_plus, s1073, s1073_section_first_page,
                 pages.len(), current_elements.len(), body_para_index, page.grid_runs.iter().map(|r| r.0).collect::<Vec<_>>(),
@@ -12622,7 +12864,7 @@ cells={} pitch={:.2} text={:?}",
             // Their excess before-spacing survives in CJK documents too;
             // the previous paragraph's after-spacing still consumes it below.
             let pbb_top = para.style.page_break_before
-                && std::env::var("OXI_S816_DISABLE").is_err();
+                && !crate::env_flag!("OXI_S816_DISABLE");
             if s1072_auto_top {
                 // An AUTO space-before never survives a page top.
                 effective_spacing = 0.0;
@@ -12634,7 +12876,7 @@ cells={} pitch={:.2} text={:?}",
                 // the two; compat 15 drops the 18pt before. en/reports__00b179e8 p10:
                 // Heading1 «<br type=page/>II. Undergraduate Education» at 71.7, Oxi 89.3.
                 && (!para.style.page_break_before_from_inline
-                    || std::env::var_os("OXI_INLINE_PB_TOP_SPACE_DISABLE").is_none())
+                    || !crate::env_flag!("OXI_INLINE_PB_TOP_SPACE_DISABLE"))
                 && !s1073_section_first_page {
                 // Modern pagination suppresses before-spacing after a paragraph's
                 // page break. Section boundaries retain their own spacing rule.
@@ -12643,7 +12885,7 @@ cells={} pitch={:.2} text={:?}",
                 // At a section top the local `prev_space_after` is 0 (a fresh
                 // `layout_page`); the previous section's trailing after is
                 // still sitting in the thread-local at this point.
-                if std::env::var("OXI_DBG1073").is_ok() {
+                if crate::env_flag!("OXI_DBG1073") {
                     eprintln!("[S1073] sect_top={} pbb={} eff={:.3} prev_sa={:.3} tls={:.3} txt={:?}",
                         s1073_section_first_page, pbb_top, effective_spacing, prev_space_after,
                         S1073_PREV_SECTION_AFTER.with(|c| c.get()),
@@ -12707,12 +12949,12 @@ cells={} pitch={:.2} text={:?}",
         // with S1455 registering the band and this gate lifted, Oxi reproduces
         // all nine at x1 401.4 and the document goes 0.9907 -> 0.9975.
         let intersection = (!self.doc_body_has_real_cjk
-            || std::env::var("OXI_CJK_WRAP_LINE_INTERSECTION").is_ok()
-            || std::env::var("OXI_S1456_DISABLE").is_err())
-            && std::env::var("OXI_WRAP_LINE_INTERSECTION_DISABLE").is_err();
+            || crate::env_flag!("OXI_CJK_WRAP_LINE_INTERSECTION")
+            || !crate::env_flag!("OXI_S1456_DISABLE"))
+            && !crate::env_flag!("OXI_WRAP_LINE_INTERSECTION_DISABLE");
         let before = if intersection {
             let b = para.style.space_before.unwrap_or(0.0).max(0.0);
-            if std::env::var_os("OXI_BAND_ENTRY_AFTER_DISABLE").is_none() { b.max(pending_after.max(0.0)) } else { b }
+            if !crate::env_flag!("OXI_BAND_ENTRY_AFTER_DISABLE") { b.max(pending_after.max(0.0)) } else { b }
         } else { 0.0 };
         let mut line_top = cursor_y + before;
         let mut advance = 0.0;
@@ -12734,9 +12976,9 @@ cells={} pitch={:.2} text={:?}",
             let left = start_x + para.style.indent_left.unwrap_or(0.0).max(0.0);
             let right = start_x + content_width - para.style.indent_right.unwrap_or(0.0).max(0.0);
             let s1511_thr: f32 = if para.runs.iter().all(|r| r.text.is_empty())
-                && std::env::var("OXI_EMPTY_WRAP_SLOT_DISABLE").is_err()
+                && !crate::env_flag!("OXI_EMPTY_WRAP_SLOT_DISABLE")
             { 9.75 } else { 30.0 };
-            let s1511_on = std::env::var_os("OXI_S1511_DISABLE").is_none();
+            let s1511_on = !crate::env_flag!("OXI_S1511_DISABLE");
             // S1635 (2026-10-02): an all-whitespace paragraph is never pushed below
             // a band -- it has nothing to collide with. ukframework's cover: a
             // tight-wrap picture positioned relative to the PAGE fills the whole
@@ -12744,7 +12986,7 @@ cells={} pitch={:.2} text={:?}",
             // at the page top; Word leaves that paragraph where it is (the S1387
             // observation) and the next content follows the picture. Pushing it
             // 725pt (to the next page) moved every page of the document by one.
-            let s1635_empty_stays = std::env::var_os("OXI_S1635_DISABLE").is_none()
+            let s1635_empty_stays = !crate::env_flag!("OXI_S1635_DISABLE")
                 && para.runs.iter().all(|r| r.text.chars().all(char::is_whitespace));
             while let Some(band) = {
                 // S1511 (2026-09-21, default ON, opt-out OXI_S1511_DISABLE): the
@@ -12784,7 +13026,7 @@ cells={} pitch={:.2} text={:?}",
                 // stops 42pt): with the tab Word goes below for lanes <= 42pt and
                 // beside for >= 50 (tab to the default stop 504.55 + one 16pt glyph
                 // <= 552.75); without the tab it flows into a 20pt lane.
-                let s1636_tab_block = std::env::var_os("OXI_S1636_DISABLE").is_none()
+                let s1636_tab_block = !crate::env_flag!("OXI_S1636_DISABLE")
                     && para.runs.iter().find(|r| !r.text.is_empty()).map_or(false, |r| r.text.starts_with('\t'))
                     && {
                         let first_w = para.runs.iter().find(|r| !r.text.is_empty())
@@ -12833,7 +13075,7 @@ cells={} pitch={:.2} text={:?}",
                 advance += step;
                 line_top = cursor_y + advance + before;
             }
-            if std::env::var("OXI_DBG_WRAP_INTERSECTION").is_ok() {
+            if crate::env_flag!("OXI_DBG_WRAP_INTERSECTION") {
                 eprintln!("[WRAP_INTERSECTION] y={} before={} lh={} advance={} bands={:?} text={:?}",
                     cursor_y, before, line_height, advance, s758_bands,
                     para.runs.iter().map(|r| r.text.as_str()).collect::<String>().chars().take(20).collect::<String>());
@@ -12866,7 +13108,7 @@ cells={} pitch={:.2} text={:?}",
                 // band's left edge. Indent-cleared bands compute
                 // red=0 and are dropped by the find() below.
                 let content_right = start_x + content_width;
-                let s772b = std::env::var("OXI_S772_DISABLE").is_err();
+                let s772b = !crate::env_flag!("OXI_S772_DISABLE");
                 let (para_ind_l, para_ind_r) = if s772b {
                     (
                         para.style
@@ -12918,8 +13160,8 @@ cells={} pitch={:.2} text={:?}",
                     (*bot, red + width_remainder(left_room), 0.0)
                 }
             })
-            .find(|(_, red, _)| *red > 6.0 || (!self.doc_body_has_real_cjk && (std::env::var("OXI_WRAP_WORD_FIT").is_ok()
-                || std::env::var("OXI_S1472_DISABLE").is_err())));
+            .find(|(_, red, _)| *red > 6.0 || (!self.doc_body_has_real_cjk && (crate::env_flag!("OXI_WRAP_WORD_FIT")
+                || !crate::env_flag!("OXI_S1472_DISABLE"))));
         // S1640 (2026-10-02, default ON, opt-out OXI_S1640_DISABLE): when the line
         // crosses SEVERAL bands the lane is the widest free interval of their
         // union, not the far side of whichever band is found first. 09422f63:
@@ -12927,7 +13169,7 @@ cells={} pitch={:.2} text={:?}",
         // (band from 487.5) -- the left band alone gave a lane to the column's
         // right edge (552.75) and the lines ran under the right picture, two
         // lines short of Word (which ends them at 486.67).
-        let s758_para_band: Option<(f32, f32, f32)> = if std::env::var_os("OXI_S1640_DISABLE").is_none() {
+        let s758_para_band: Option<(f32, f32, f32)> = if !crate::env_flag!("OXI_S1640_DISABLE") {
             let overl: Vec<&(usize, f32, f32, f32, f32, bool, BodyWrapPolicy)> = s758_bands
                 .iter()
                 .filter(|(pg, top, bot, bx0, bx1, _, _)| {
@@ -13031,7 +13273,7 @@ cells={} pitch={:.2} text={:?}",
         // Safety box (band from 390.5); the picture alone left a 140pt right strip,
         // which is the box, and Oxi ran the text through it. Word keeps the text in
         // the left strip only.
-        let s758_two_seg = if std::env::var_os("OXI_TWOSEG_UNION_DISABLE").is_none() && s758_two_seg.is_some() {
+        let s758_two_seg = if !crate::env_flag!("OXI_TWOSEG_UNION_DISABLE") && s758_two_seg.is_some() {
             let overl: Vec<(f32, f32)> = s758_bands
                 .iter()
                 .filter(|(pg, top, bot, bx0, bx1, _, _)| {
@@ -13333,6 +13575,28 @@ cells={} pitch={:.2} text={:?}",
                     .iter()
                     .map(|(t, st, ft, ri, co)| (t.as_str(), st, ft.clone(), *ri, *co))
                     .collect();
+                // OXI_TWOSEG_TAB (2026-11-01, default ON, opt-out _DISABLE): a default tab
+                // whose next stop lies past the left strip goes to the right strip and
+                // advances there -- from the strip's own start under legacy layout, to
+                // the paragraph's ordinary stops under compatibilityMode 15.
+                // `_pb_tab_float_cross_gen.py` (TNR 10 tabs, 36pt stops from 57, a
+                // wrapSquare picture keeping 288.0..434.2 clear), Word Information(5):
+                // tabs 57..237, the 7th at 434.2, then 470.2 / 506.2 (no settings and
+                // compat 14) or 453 / 489 (compat 15), and the tab that would pass the
+                // margin opens the next line. Oxi spent the 7th tab at the end of the
+                // left strip and counted the right strip's stops from its start in
+                // every mode. en/educational__0071453c p1: ten tabs beside the logo make
+                // two lines in Word (26.25) and one in Oxi; the page sat 11.65 high.
+                let twoseg_tab = !crate::env_flag!("OXI_TWOSEG_TAB_DISABLE");
+                let saved_shift = self.s1636_lane_shift.get();
+                if twoseg_tab {
+                    self.twoseg_left_strip.set(seg == 0);
+                    if seg == 1 && self.compat_mode >= 15 && self.compat_mode_explicit {
+                        if let Some(shift) = self.twoseg_seg2_shift.get() {
+                            self.s1636_lane_shift.set(shift);
+                        }
+                    }
+                }
                 let broken = self.break_into_lines(
                     &refs,
                     *width,
@@ -13350,6 +13614,8 @@ cells={} pitch={:.2} text={:?}",
                     caps_size_split,
                     false,
                 );
+                self.twoseg_left_strip.set(false);
+                self.s1636_lane_shift.set(saved_shift);
                 let Some(head) = broken.first() else { break };
                 if seg == 0 {
                     seam = head.fragments.len();
@@ -13420,7 +13686,7 @@ cells={} pitch={:.2} text={:?}",
     /// run the parser folded away when there was one, else the first run that
     /// has content (an empty run is skipped: `_pb_brrun_probe.py` arm D).
     fn s1351_unit_run<'a>(para_style: &'a ParagraphStyle, runs: &'a [crate::ir::Run]) -> Option<&'a RunStyle> {
-        if std::env::var("OXI_S1351_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_S1351_DISABLE") {
             return runs.first().map(|r| &r.style);
         }
         para_style.chars_unit_run_style.as_ref().or_else(|| {
@@ -13437,7 +13703,7 @@ cells={} pitch={:.2} text={:?}",
     /// the grid's charSpace (b35123 11.35, 0ea3ec86 23.05 for 200 whatever the
     /// run is), opt-in OXI_S1349=1; otherwise the S1214 unit.
     fn s1349_default_chars_pt(&self, chars: f32, para: &Paragraph, pitch: Option<f32>, ratio: Option<f32>) -> f32 {
-        if std::env::var("OXI_S1349_DISABLE").is_err()
+        if !crate::env_flag!("OXI_S1349_DISABLE")
             && std::env::var("OXI_S1349").ok().as_deref() != Some("0")
         {
             let extra = match (pitch, ratio) {
@@ -13493,12 +13759,12 @@ cells={} pitch={:.2} text={:?}",
         pitch: Option<f32>,
         ratio: Option<f32>,
     ) -> f32 {
-        if std::env::var("OXI_S1214_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_S1214_DISABLE") {
             return 10.5;
         }
         // S1351: the parser named the paragraph's unit run (a leading page
         // break or inline image is not in `Paragraph::runs` to be found)
-        let first = if std::env::var("OXI_S1351_DISABLE").is_ok() {
+        let first = if crate::env_flag!("OXI_S1351_DISABLE") {
             first
         } else {
             para_style.chars_unit_run_style.as_ref().or(first)
@@ -13526,7 +13792,7 @@ cells={} pitch={:.2} text={:?}",
     /// S1349: the chars-given left indent from a paragraph style (leftChars at
     /// the Normal size, hangingChars at the first run's size, whole twips).
     fn s1349_left_pt_style(&self, para_style: &ParagraphStyle, first: Option<&RunStyle>, pitch: Option<f32>, ratio: Option<f32>) -> Option<f32> {
-        let on = std::env::var("OXI_S1349_DISABLE").is_err() && std::env::var("OXI_S1349").ok().as_deref() != Some("0");
+        let on = !crate::env_flag!("OXI_S1349_DISABLE") && std::env::var("OXI_S1349").ok().as_deref() != Some("0");
         let extra = match (pitch, ratio) {
             (Some(p), Some(r)) if r > 0.0 && p > 0.0 => p - p / r,
             _ => 0.0,
@@ -13557,7 +13823,7 @@ cells={} pitch={:.2} text={:?}",
         pitch: Option<f32>,
         ratio: Option<f32>,
     ) -> f32 {
-        if std::env::var("OXI_S1214_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_S1214_DISABLE") {
             return 10.5;
         }
         let base = if first_run {
@@ -13624,7 +13890,7 @@ cells={} pitch={:.2} text={:?}",
     /// starting «す。» as a push; its own PDFs start a line with «、» at indent 1850.
     /// No language anywhere = Normal.dotm's ja-JP: kinsoku stays on.
     pub(super) fn ea_lang_kinsoku_off<'a>(&self, runs: impl Iterator<Item = (&'a str, Option<&'a str>)>) -> bool {
-        if std::env::var_os("OXI_EA_LANG_KINSOKU_OFF_DISABLE").is_some() {
+        if crate::env_flag!("OXI_EA_LANG_KINSOKU_OFF_DISABLE") {
             return false;
         }
         let mut any = false;
@@ -13742,7 +14008,7 @@ cells={} pitch={:.2} text={:?}",
         match std::env::var("OXI_CELLPAIR").ok().as_deref() {
             Some("all") => true,
             Some(_) => self.cellpair_neg_charspace,
-            None => self.cellpair_neg_charspace && std::env::var("OXI_CELLPAIR_DISABLE").is_err(),
+            None => self.cellpair_neg_charspace && !crate::env_flag!("OXI_CELLPAIR_DISABLE"),
         }
     }
 
@@ -13759,19 +14025,19 @@ cells={} pitch={:.2} text={:?}",
     /// pagination 0 real flips (bundle {ROWBOX2, OFFSLOT_INK, S638_ALL,
     /// SG0RAW}); SSIM net +0.71 (21 improved, e3c545 +0.384).
     fn rowbox2_active(&self) -> bool {
-        std::env::var("OXI_ROWBOX2_DISABLE").is_err()
+        !crate::env_flag!("OXI_ROWBOX2_DISABLE")
     }
 
     /// ROWBOX2 decomposition knobs (analysis only): disable one component
     /// at a time to attribute per-doc regressions.
     fn rowbox2_raw(&self) -> bool {
-        self.rowbox2_active() && std::env::var("OXI_ROWBOX2_NORAW").is_err()
+        self.rowbox2_active() && !crate::env_flag!("OXI_ROWBOX2_NORAW")
     }
     fn rowbox2_pad_on(&self) -> bool {
-        self.rowbox2_active() && std::env::var("OXI_ROWBOX2_NOPAD").is_err()
+        self.rowbox2_active() && !crate::env_flag!("OXI_ROWBOX2_NOPAD")
     }
     fn rowbox2_trh(&self) -> bool {
-        self.rowbox2_active() && std::env::var("OXI_ROWBOX2_NOTRH").is_err()
+        self.rowbox2_active() && !crate::env_flag!("OXI_ROWBOX2_NOTRH")
     }
 
     /// ROWBOX2: the border width that pads the cell content top (generalized
@@ -13850,7 +14116,7 @@ cells={} pitch={:.2} text={:?}",
         // Cell-level scope, independently switchable from the table-level one
         // (`OXI_S1187_TBL`) so the two can be A/B'd separately: they turn out
         // to have OPPOSITE signs on the corpus — see the ship note.
-        if std::env::var("OXI_S1187_CELL").is_err() {
+        if !crate::env_flag!("OXI_S1187_CELL") {
             return width;
         }
         let mult = match style {
@@ -13858,7 +14124,7 @@ cells={} pitch={:.2} text={:?}",
             "triple" => 5.0,
             _ => 1.0,
         };
-        if mult > 1.0 && std::env::var("OXI_DBG_S1187").is_ok() {
+        if mult > 1.0 && crate::env_flag!("OXI_DBG_S1187") {
             eprintln!("[S1187] cell style={} w={:.2} -> {:.2}", style, width, width * mult);
         }
         width * mult
@@ -13870,7 +14136,7 @@ cells={} pitch={:.2} text={:?}",
     /// not draw there (technical__00501ca3 = outer double sz4 + insideH single
     /// sz6). The flag exists so the two scopes can be A/B'd without a rebuild.
     fn s1187_tbl_bw(&self, style: Option<&str>, width: f32) -> f32 {
-        if std::env::var("OXI_S1187_TBL").is_err() {
+        if !crate::env_flag!("OXI_S1187_TBL") {
             return width;
         }
         let w = {
@@ -13881,7 +14147,7 @@ cells={} pitch={:.2} text={:?}",
             };
             width * mult
         };
-        if w != width && std::env::var("OXI_DBG_S1187").is_ok() {
+        if w != width && crate::env_flag!("OXI_DBG_S1187") {
             eprintln!("[S1187] TABLE style={:?} w={:.2} -> {:.2}", style, width, w);
         }
         w
@@ -14001,7 +14267,7 @@ cells={} pitch={:.2} text={:?}",
     }
 
     fn s1188_on(&self) -> bool {
-        std::env::var("OXI_S1188").is_ok() || self.s1189_on()
+        crate::env_flag!("OXI_S1188") || self.s1189_on()
     }
 
     /// S1191 (2026-08-21, default ON, opt-out `OXI_S1191_DISABLE`, Latin scope): the
@@ -14058,7 +14324,40 @@ cells={} pitch={:.2} text={:?}",
     /// absorption; this extends that to the zero case (S621) and to S1422.
     fn table_modern_compat(&self) -> bool {
         self.compat_mode >= 15
-            && (self.compat_mode_explicit || std::env::var_os("OXI_S1623_DISABLE").is_some())
+            && (self.compat_mode_explicit || crate::env_flag!("OXI_S1623_DISABLE"))
+    }
+
+    /// OXI_CELL_MATH_HOST (2026-11-02, default ON, opt-out _DISABLE): a cell's
+    /// display equation takes its host paragraph's run size like the body's
+    /// (S1613) instead of a fixed 10.5. en/educational__0072828f (12pt Cambria
+    /// Math answers in a table cell, ind 360, oMathPara centred): Word centres
+    /// «V = 1/3 πr²h» across the cell at 12pt; Oxi drew it at 10.5 on the
+    /// cell's left edge, 18pt left of the paragraph indent.
+    pub(crate) fn cell_math_font_size(math_block: &crate::ir::MathBlock) -> f32 {
+        if crate::env_flag!("OXI_CELL_MATH_HOST_DISABLE") {
+            return 10.5;
+        }
+        match math_block {
+            crate::ir::MathBlock::Display { host: Some(h), .. } => h.ppr_rpr.as_ref().and_then(|r| r.font_size)
+                .or_else(|| h.default_run_style.as_ref().and_then(|r| r.font_size))
+                .unwrap_or(10.5),
+            _ => 10.5,
+        }
+    }
+
+    /// OXI_C15_LEFT_HALF: the drawn width of the first row's leading cell's left
+    /// border (the cell's own tcBorders, else the table's lumped outer border).
+    fn c15_first_cell_left_width(&self, table: &Table) -> f32 {
+        let Some(row) = table.rows.first() else { return 0.0; };
+        if row.grid_before > 0 {
+            return 0.0;
+        }
+        let outer = table.style.left_border.as_ref()
+            .map_or(0.0, |d| self.s1188_drawn(&d.style, d.width));
+        row.cells.first().map_or(0.0, |cell| {
+            cell.borders.as_ref().and_then(|b| b.left.as_ref())
+                .map_or(outer, |d| self.s1188_drawn(&d.style, d.width))
+        })
     }
 
     fn table_fragment_top_width(&self, table: &Table, row: &TableRow) -> f32 {
@@ -14118,8 +14417,8 @@ cells={} pitch={:.2} text={:?}",
     /// `legal__001410a8` 0.9629 → 0.9649; JP 96 PASS 93→93 with 0 docs changed;
     /// ssim_ab 238 = 0 changed bytes.
     fn s1191_on(&self) -> bool {
-        (!self.doc_body_has_real_cjk || std::env::var("OXI_CJK_TABLE_FOOT").is_ok())
-            && std::env::var("OXI_S1191_DISABLE").is_err()
+        (!self.doc_body_has_real_cjk || crate::env_flag!("OXI_CJK_TABLE_FOOT"))
+            && !crate::env_flag!("OXI_S1191_DISABLE")
     }
 
     /// S1191b: fire the foot advance ONLY for a table whose row boxes have not
@@ -14180,7 +14479,7 @@ cells={} pitch={:.2} text={:?}",
     /// `15076df` +0.0000, zero regressions. (The 80 table-free golden docs
     /// cannot change: every S1188/S922 call site is table-cell scoped.)
     fn s1189_on(&self) -> bool {
-        std::env::var("OXI_S1189_DISABLE").is_err()
+        !crate::env_flag!("OXI_S1189_DISABLE")
     }
 
     fn rowbox2_border_pad(&self, table: &Table, cell: &TableCell) -> f32 {
@@ -14206,7 +14505,7 @@ cells={} pitch={:.2} text={:?}",
             // → Word row boundary 15.0 vs Oxi 15.9 (+1.0/row = the sz8 pad) →
             // the accelerating wp217-220 +1×40 tail. A cell whose top is a REAL
             // border (the first row's single sz8 = the table top) keeps the pad.
-            if std::env::var("OXI_S911_DISABLE").is_err() {
+            if !crate::env_flag!("OXI_S911_DISABLE") {
                 if let Some(b) = &cell.borders {
                     if b.top.as_ref().map_or(false, |d| d.style == "none") {
                         return 0.0;
@@ -14231,7 +14530,7 @@ cells={} pitch={:.2} text={:?}",
             // interior row). Every predicate below (S865's `> 1.0`) keeps
             // testing the RAW one-line width it was derived on.
             let mut declared: Option<String> = None;
-            let width = if std::env::var("OXI_S1030_DISABLE").is_err() {
+            let width = if !crate::env_flag!("OXI_S1030_DISABLE") {
                 cell.borders
                     .as_ref()
                     .and_then(|b| b.top.as_ref())
@@ -14254,7 +14553,7 @@ cells={} pitch={:.2} text={:?}",
             // pad), so the font name was the only thing keeping them safe.
             // tblLayout is the structural, docx-derivable discriminator:
             // 0009d767's thick tables are fixed; the tokumei ones are auto.
-            let thick_fixed = std::env::var("OXI_S865_DISABLE").is_err()
+            let thick_fixed = !crate::env_flag!("OXI_S865_DISABLE")
                 && width > 1.0
                 && table.style.layout.as_deref() == Some("fixed");
             return if thick_fixed {
@@ -14271,7 +14570,7 @@ cells={} pitch={:.2} text={:?}",
             // it must neither trigger the arm nor fall to the 0.5 default.
             let real = |d: &Option<BorderDef>| {
                 d.as_ref()
-                    .filter(|x| x.style != "none" || std::env::var("OXI_S911_DISABLE").is_ok())
+                    .filter(|x| x.style != "none" || crate::env_flag!("OXI_S911_DISABLE"))
                     .map(|x| self.s1187_eff_bw(&x.style, x.width))
             };
             let (t, bo) = (real(&b.top), real(&b.bottom));
@@ -14314,8 +14613,8 @@ cells={} pitch={:.2} text={:?}",
         // and a row that Word sends on fitted (-1 x64, pages 22-32).
         if (table.style.has_inside_h || table.style.border)
             && !self.doc_body_has_real_cjk
-            && std::env::var("OXI_REPEAT_HEADER_BORDER_DISABLE").is_err()
-            && std::env::var_os("OXI_S1601_DISABLE").is_none()
+            && !crate::env_flag!("OXI_REPEAT_HEADER_BORDER_DISABLE")
+            && !crate::env_flag!("OXI_S1601_DISABLE")
         {
             let Some(header) = table.rows.iter().take_while(|r| r.header).last() else { return 0.0; };
             let Some(row) = table.rows.get(row_idx) else { return 0.0; };
@@ -14329,9 +14628,9 @@ cells={} pitch={:.2} text={:?}",
             let padded = if own > 0.0 { own } else { table.style.border_width.unwrap_or(0.5) };
             return (horizontal(header, true).max(own) - padded).max(0.0);
         }
-        if std::env::var("OXI_REPEAT_HEADER_BORDER_DISABLE").is_ok()
+        if crate::env_flag!("OXI_REPEAT_HEADER_BORDER_DISABLE")
             || self.doc_body_has_real_cjk || table.style.border || table.style.has_inside_h
-            || std::env::var("OXI_S870_DISABLE").is_ok() {
+            || crate::env_flag!("OXI_S870_DISABLE") {
             return 0.0;
         }
         let Some(header) = table.rows.iter().take_while(|r| r.header).last() else { return 0.0; };
@@ -14346,7 +14645,7 @@ cells={} pitch={:.2} text={:?}",
 
     fn s870_row_top_border(&self, table: &Table, row_idx: usize) -> f32 {
         if self.doc_body_has_real_cjk
-            || std::env::var("OXI_S870_DISABLE").is_ok()
+            || crate::env_flag!("OXI_S870_DISABLE")
             || table.style.border
             || table.style.has_inside_h
         {
@@ -14393,13 +14692,13 @@ cells={} pitch={:.2} text={:?}",
         }
         if self.s1188_on() {
             let v = self.s1188_edge_bw(table, row_idx);
-            if std::env::var("OXI_DBG_S1188").is_ok() {
+            if crate::env_flag!("OXI_DBG_S1188") {
                 eprintln!("[S1188/pad] row={} new={:.2}", row_idx, v);
             }
             return v;
         }
         if !self.doc_body_has_real_cjk
-            && std::env::var("OXI_S870_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S870_DISABLE")
             && !table.style.border
             && !table.style.has_inside_h
         {
@@ -14419,7 +14718,7 @@ cells={} pitch={:.2} text={:?}",
         //   The S911-v2 all-nil test also missed those rows (their vMerged
         //   gene-name cell declares no tcBorders at all, so "row alive" held).
         // Row 0 keeps the table path: its rule IS the outer top border.
-        if std::env::var("OXI_S1030_DISABLE").is_err()
+        if !crate::env_flag!("OXI_S1030_DISABLE")
             && !self.doc_body_has_real_cjk
             && table.style.border
             && !table.style.has_inside_h
@@ -14457,7 +14756,7 @@ cells={} pitch={:.2} text={:?}",
         //   (p3 −0.0262). Row-alive ⇒ return the uniform table width
         //   (bypassing the per-cell check = byte-identical to pre-S911).
         if (table.style.border || table.style.has_inside_h)
-            && std::env::var("OXI_S911_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S911_DISABLE")
         {
             let nil = |d: &Option<BorderDef>| d.as_ref().map_or(false, |x| x.style == "none");
             if let Some(this_row) = table.rows.get(row_idx) {
@@ -14490,7 +14789,7 @@ cells={} pitch={:.2} text={:?}",
             // SCOPE note). S865's `> 1.0` test keeps reading the RAW one-line
             // width it was derived on.
             let mut declared_style: Option<String> = None;
-            let width = if std::env::var("OXI_S1030_DISABLE").is_err() {
+            let width = if !crate::env_flag!("OXI_S1030_DISABLE") {
                 let declared = table.rows.get(row_idx).map_or(0.0, |r| {
                     r.cells
                         .iter()
@@ -14515,7 +14814,7 @@ cells={} pitch={:.2} text={:?}",
             } else {
                 width
             };
-            let thick_fixed = std::env::var("OXI_S865_DISABLE").is_err()
+            let thick_fixed = !crate::env_flag!("OXI_S865_DISABLE")
                 && width > 1.0
                 && table.style.layout.as_deref() == Some("fixed");
             return if thick_fixed {
@@ -14598,7 +14897,7 @@ cells={} pitch={:.2} text={:?}",
             return 0.0;
         }
         if self.s1188_on() {
-            if std::env::var("OXI_DBG_S1188").is_ok() {
+            if crate::env_flag!("OXI_DBG_S1188") {
                 if let Some(ix) = self.s1188_row_idx(table, row) {
                     let legacy = if table.style.border || table.style.has_inside_h {
                         table.style.border_width.unwrap_or(0.5)
@@ -14640,7 +14939,7 @@ cells={} pitch={:.2} text={:?}",
         // both the prev row's bottom AND this row's top, so counting the TOP
         // consumes it once. A nil/none sentinel (S482, width 0) is not a real
         // border and yields NO 0.5 fallback.
-        if std::env::var("OXI_S1016_DISABLE").is_err()
+        if !crate::env_flag!("OXI_S1016_DISABLE")
             && self.sparse_mirrored_uniform_atleast_3col(table)
         {
             return row
@@ -14704,7 +15003,7 @@ cells={} pitch={:.2} text={:?}",
     /// (arms E/F), and only a cell that declares a zero margin shows it (arms
     /// B/G/H: 0.5pt rule -> 0.25pt a side, 3pt rule -> 1.5pt, no rule -> 0).
     fn celllaw(&self) -> bool {
-        std::env::var("OXI_CELLLAW_DISABLE").is_err()
+        !crate::env_flag!("OXI_CELLLAW_DISABLE")
     }
 
     /// Word does this arithmetic in whole twips, so a cell whose content fits
@@ -14766,7 +15065,7 @@ cells={} pitch={:.2} text={:?}",
     ) -> Option<FontMetricsRef<'a>> {
         if self.doc_body_has_real_cjk
             || text.is_empty()
-            || std::env::var("OXI_S1119_DISABLE").is_ok()
+            || crate::env_flag!("OXI_S1119_DISABLE")
         {
             return None;
         }
@@ -14858,7 +15157,7 @@ cells={} pitch={:.2} text={:?}",
                         (raw * 8.0).floor() / 8.0
                     }
                 } else if in_table_cell
-                && std::env::var("OXI_S815_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S815_DISABLE")
                 // S922: S815's hhea basis is specific to Single spacing.
                 // Multiple spacing uses a GDI single-line height only when an
                 // independently measured supplemental value exists. Generated
@@ -14882,7 +15181,7 @@ cells={} pitch={:.2} text={:?}",
                 && (is_single
                     || self.s1189_on()
                     || !self.registry.has_gdi_height_supplement(&metrics.family, ppem)
-                    || std::env::var("OXI_S922_DISABLE").is_ok())
+                    || crate::env_flag!("OXI_S922_DISABLE"))
                 {
                     // S815 (2026-07-13, default ON, opt-out OXI_S815_DISABLE): a LATIN
                     // document's table-cell LINE is the hhea natural EXACT — the
@@ -14900,8 +15199,8 @@ cells={} pitch={:.2} text={:?}",
                 }
             } else if in_table_cell
                 && metrics.is_cjk_83_64_font()
-                && std::env::var("OXI_S1310_DISABLE").is_err()
-                && std::env::var("OXI_S1311_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S1310_DISABLE")
+                && !crate::env_flag!("OXI_S1311_DISABLE")
             {
                 // S1310 (2026-09-05, default ON, opt-out OXI_S1310_DISABLE; also off
                 // under OXI_S1311_DISABLE -- shipped as S1311's pair): a CJK 83/64
@@ -14927,7 +15226,7 @@ cells={} pitch={:.2} text={:?}",
                 metrics.word_line_height_no_grid(font_size)
             } else if in_table_cell
                 && !metrics.is_cjk_83_64_font()
-                && std::env::var("OXI_S815_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S815_DISABLE")
             {
                 // Without a line grid, adjustLineHeightInTable does not change
                 // the Latin font's natural line height. Keep the same hhea
@@ -14938,7 +15237,7 @@ cells={} pitch={:.2} text={:?}",
             } else if in_table_cell {
                 // S815 (opt-in, see above): same rule on the no-GDI-table path.
                 if !metrics.is_cjk_83_64_font()
-                    && std::env::var("OXI_S815_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S815_DISABLE")
                 {
                     metrics.natural_line_height_hhea(font_size)
                 } else {
@@ -14981,7 +15280,7 @@ cells={} pitch={:.2} text={:?}",
                     && !self.doc_body_has_real_cjk
                     && !metrics.is_cjk_83_64_font()
                     && (grid_pitch.is_none() || self.doc_grid_all_no_type)
-                    && std::env::var("OXI_S1062_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S1062_DISABLE")
                 {
                     return base.max(val);
                 }
@@ -15050,7 +15349,7 @@ cells={} pitch={:.2} text={:?}",
                             // total = the raw sum; the S492y 0.75-floor (17.25) under-counts
                             // −0.25/grid-line (the b35123 p1 monotone bias).
                             if in_table_cell
-                                && std::env::var("OXI_S492Y_DISABLE").is_err()
+                                && !crate::env_flag!("OXI_S492Y_DISABLE")
                                 && !self.cellpair_active()
                                 && !self.rowbox2_raw()
                             {
@@ -15086,13 +15385,13 @@ cells={} pitch={:.2} text={:?}",
                     // (spaced>pitch) is a no-op. Opt-out OXI_S584_DISABLE.
                     if snap_to_grid
                         && cell_snap_allowed
-                        && std::env::var("OXI_S584_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S584_DISABLE")
                     {
                         match grid_pitch {
                             Some(pitch) if pitch > 0.0 => {
                                 let factor = line_spacing.unwrap_or(1.0);
                                 if !self.doc_grid_all_no_type
-                                    && std::env::var_os("OXI_CELL_GRID_MULTIPLE_DISABLE").is_none()
+                                    && !crate::env_flag!("OXI_CELL_GRID_MULTIPLE_DISABLE")
                                 {
                                     // A typed grid's multiple is measured in grid lines.
                                     // The font still needs enough whole grid lines to fit.
@@ -15191,7 +15490,7 @@ cells={} pitch={:.2} text={:?}",
         fragments: &[LineFragment],
         para_font_size: f32,
     ) -> Option<(usize, usize, f32)> {
-        if self.doc_body_has_real_cjk || std::env::var("OXI_S1045_DISABLE").is_ok() {
+        if self.doc_body_has_real_cjk || crate::env_flag!("OXI_S1045_DISABLE") {
             return None;
         }
         let visible = |f: &LineFragment| {
@@ -15217,7 +15516,7 @@ cells={} pitch={:.2} text={:?}",
     /// not keeps its own font (the S902 / empty-paragraph fallback), so the
     /// exclusion only ever removes a fragment that has a visible neighbour.
     fn s1298_has_visible(fragments: &[LineFragment]) -> bool {
-        std::env::var("OXI_S1298_DISABLE").is_err()
+        !crate::env_flag!("OXI_S1298_DISABLE")
             && fragments.iter().any(|f| {
                 f.tab_alignment.is_none() && f.text.chars().any(|c| !c.is_whitespace())
             })
@@ -15264,7 +15563,7 @@ cells={} pitch={:.2} text={:?}",
                 // BOTH the document is 0.9947 with 28 pages = Word, so they ship
                 // together. S1054 also carries creative__00a0a5d2, whose interior
                 // sz=27 space run S1079 would otherwise expose (PASS preserved).
-                (i < first || i > last) || std::env::var("OXI_S1054_DISABLE").is_err()
+                (i < first || i > last) || !crate::env_flag!("OXI_S1054_DISABLE")
             }
             None => false,
         }
@@ -15277,7 +15576,7 @@ cells={} pitch={:.2} text={:?}",
     /// +3.6pt). Same above-line-annotation class as ruby. 0/corpus
     /// (greenfield). Opt-out OXI_S656_DISABLE.
     fn emphasis_above_pt(&self, frag: &LineFragment, font_size: f32) -> Option<f32> {
-        if std::env::var("OXI_S656_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_S656_DISABLE") {
             return None;
         }
         match frag.style.emphasis_mark.as_deref() {
@@ -15299,7 +15598,7 @@ cells={} pitch={:.2} text={:?}",
     /// not the split). Returns 0 for non-vert frags / when disabled. 0/corpus
     /// (greenfield) → byte-identical. Opt-out OXI_S700_DISABLE.
     fn vert_in_horz_half_grow(&self, frag: &LineFragment, font_size: f32) -> f32 {
-        if frag.style.vert_in_horz && std::env::var("OXI_S700_DISABLE").is_err() {
+        if frag.style.vert_in_horz && !crate::env_flag!("OXI_S700_DISABLE") {
             let n = frag.text.chars().count().max(1) as f32;
             n * font_size * 0.5
         } else {
@@ -15326,8 +15625,8 @@ cells={} pitch={:.2} text={:?}",
         // technical__5175ec20 p8: '変更前' / '変更後' are the only runs on the page
         // with a w:bdr, and the 1.0pt each was the drift that kept the 3.18
         // heading off Word's page 9.
-        if std::env::var_os("OXI_RUN_BORDER_HEIGHT").is_none()
-            && std::env::var_os("OXI_S1453_DISABLE").is_some()
+        if !crate::env_flag!("OXI_RUN_BORDER_HEIGHT")
+            && crate::env_flag!("OXI_S1453_DISABLE")
         {
             return 0.0;
         }
@@ -15413,7 +15712,7 @@ cells={} pitch={:.2} text={:?}",
                 des += border_pad;
                 // S655: w:position raise (+) grows the ascent, lower (−) the
                 // descent (mirror of line_height_for_line_inner).
-                if std::env::var("OXI_S655_DISABLE").is_err() {
+                if !crate::env_flag!("OXI_S655_DISABLE") {
                     if let Some(pos) = frag.style.position.filter(|_| frag.style.inline_object_image.is_none()) {
                         asc += pos.max(0.0);
                         des += (-pos).max(0.0);
@@ -15467,7 +15766,7 @@ cells={} pitch={:.2} text={:?}",
         // The same mixing was noted at S620 and dismissed there on a 0.1pt
         // reading of one gen2 cohort; the arms above are 0.5pt and say which
         // way Word goes.
-        let ascdesc_mix = std::env::var_os("OXI_ASCDESC_MIX_DISABLE").is_none()
+        let ascdesc_mix = !crate::env_flag!("OXI_ASCDESC_MIX_DISABLE")
             && !ascdesc_mix_excluded(&line.fragments)
             && !line.fragments.iter().any(|f| {
                 self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font()
@@ -15492,7 +15791,7 @@ cells={} pitch={:.2} text={:?}",
         // Noto Sans JP 12pt (16.58 / 6.06) beside 游明朝 13.5pt (16.09 / 6.45)
         // is 23.03 natural in Word (34.68 pitch at 278/240 + 8), the tallest
         // face alone would be 22.64.
-        if std::env::var_os("OXI_LINE_UNION_BOX_DISABLE").is_none()
+        if !crate::env_flag!("OXI_LINE_UNION_BOX_DISABLE")
             && !line.fragments.is_empty()
             && line.fragments.iter().any(|f| {
                 !f.text.trim().is_empty()
@@ -15538,7 +15837,7 @@ cells={} pitch={:.2} text={:?}",
                 return (ua + ud).max(max_box);
             }
         }
-        if std::env::var("OXI_S1361_DISABLE").is_err() && max_box > 0.0 {
+        if !crate::env_flag!("OXI_S1361_DISABLE") && max_box > 0.0 {
             return max_box;
         }
         max_ascent + max_descent
@@ -15583,7 +15882,7 @@ cells={} pitch={:.2} text={:?}",
                 let font_size = frag.style.font_size.unwrap_or(para_font_size);
                 let metrics = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
                 // S700: a vert_in_horz column's ink spans n·fs (the stacked chars).
-                let ink = if frag.style.vert_in_horz && std::env::var("OXI_S700_DISABLE").is_err() {
+                let ink = if frag.style.vert_in_horz && !crate::env_flag!("OXI_S700_DISABLE") {
                     (frag.text.chars().count().max(1)) as f32 * font_size
                 } else {
                     metrics.glyph_ink_height_pt(font_size)
@@ -15671,7 +15970,7 @@ cells={} pitch={:.2} text={:?}",
     }
 
     fn s1396_ruby_expansion(&self, para: &Paragraph, fs: f32) -> f32 {
-        if std::env::var("OXI_S1396_DISABLE").is_err()
+        if !crate::env_flag!("OXI_S1396_DISABLE")
             && para.style.line_spacing_rule.as_deref() == Some("exact")
         {
             return 0.0;
@@ -15680,7 +15979,7 @@ cells={} pitch={:.2} text={:?}",
     }
 
     fn cjk_baseline_union(&self, line: &Line, para_style: &ParagraphStyle, para_font_size: f32) -> f32 {
-        if std::env::var_os("OXI_CJK_BASELINE_UNION_DISABLE").is_some() {
+        if crate::env_flag!("OXI_CJK_BASELINE_UNION_DISABLE") {
             return 0.0;
         }
         let mut above: f32 = 0.0;
@@ -15709,7 +16008,7 @@ cells={} pitch={:.2} text={:?}",
     }
 
     fn s1367_cjk_box(m: &FontMetrics, fs: f32) -> f32 {
-        if std::env::var("OXI_S1367_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_S1367_DISABLE") {
             return (m.win_ascent + m.win_descent) * fs * (83.0 / 64.0);
         }
         let upm = m.units_per_em.max(1) as f32;
@@ -15757,7 +16056,7 @@ cells={} pitch={:.2} text={:?}",
         // New Roman 10pt = 11.5033 = their hhea box. So take the exact box on
         // both sides and drop both roundings together.
         let s1363_exact =
-            grid_pitch.is_none() && !in_table_cell && std::env::var("OXI_S1363_DISABLE").is_err();
+            grid_pitch.is_none() && !in_table_cell && !crate::env_flag!("OXI_S1363_DISABLE");
         // The exact natural box of one fragment, split ascent/descent by the
         // font's own win ratio (only the sum reaches the line height).
         let s1363_box = |m: &FontMetrics, fs: f32| -> (f32, f32) {
@@ -15820,17 +16119,17 @@ cells={} pitch={:.2} text={:?}",
         // policies__060b605eaef40085: two such lines, +1.5pt, the page's last
         // paragraph a page late. (S1305's snap-off ASCII preference then
         // applies; a snapped line keeps the S583 grid calibration.)
-        let s1394 = std::env::var("OXI_S1394_DISABLE").is_err();
+        let s1394 = !crate::env_flag!("OXI_S1394_DISABLE");
         // S1574: a CJK document's cell line of only whitespace is an empty line
         // too (probe cell_blank_face: ASCII space / U+3000 arms = the empty arm).
         let s902_all_ws = !line.fragments.is_empty()
             && (!in_table_cell
-                || (self.doc_body_has_real_cjk && (std::env::var_os("OXI_S1574_DISABLE").is_none() && (!self.adjust_line_height_in_table || !para_style.snap_to_grid))))
+                || (self.doc_body_has_real_cjk && (!crate::env_flag!("OXI_S1574_DISABLE") && (!self.adjust_line_height_in_table || !para_style.snap_to_grid))))
             && (s1394 || !self.doc_body_has_real_cjk
                 || (line.whitespace_paragraph
-                    && std::env::var("OXI_CJK_WHITESPACE_MARK").is_ok()))
+                    && crate::env_flag!("OXI_CJK_WHITESPACE_MARK")))
             && line.fragments.iter().all(|f| f.text.chars().all(|c| c.is_whitespace() && c != '\u{00a0}'))
-            && std::env::var("OXI_S902_DISABLE").is_err();
+            && !crate::env_flag!("OXI_S902_DISABLE");
 
         if line.fragments.is_empty() || s902_all_ws {
             // Empty paragraph: use pPr/rPr font size if available (direct paragraph property),
@@ -15848,7 +16147,7 @@ cells={} pitch={:.2} text={:?}",
                 .as_ref()
                 .and_then(|r| r.font_size)
                 .unwrap_or(if s902_all_ws
-                    && std::env::var("OXI_S1080_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S1080_DISABLE")
                 {
                     self.resolve_font_size(&RunStyle::default(), para_style)
                 } else {
@@ -15883,18 +16182,18 @@ cells={} pitch={:.2} text={:?}",
             // three documents (d1e8ac8 −0.0177, ed025 −0.0065, kojin −0.0031).
             // The measurement is about blank separators; the rule stays there.
             let s1305 = !para_style.snap_to_grid
-                && std::env::var("OXI_S1305_DISABLE").is_err()
-                && std::env::var("OXI_S1306_DISABLE").is_err();
+                && !crate::env_flag!("OXI_S1305_DISABLE")
+                && !crate::env_flag!("OXI_S1306_DISABLE");
             let s949_ascii = grid_pitch.is_none()
                 || s1305
                 || (grid_no_type
                     && !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_S949_DISABLE").is_err());
+                    && !crate::env_flag!("OXI_S949_DISABLE"));
             // The empty cell's mark uses its ASCII font slot even under a
             // typed grid. A CJK glyph elsewhere in the document does not change
             // this mark into an East Asian glyph; snap that selected font box.
             let cell_mark_ascii = in_table_cell
-                && std::env::var_os("OXI_S1574_DISABLE").is_none();
+                && !crate::env_flag!("OXI_S1574_DISABLE");
             let metrics = &*self.metrics_for_para_mark_g(&rpr_ref, para_style, s949_ascii || cell_mark_ascii);
             dominant_cjk_83_64 = metrics.is_cjk_83_64_font();
             hhea_natural_max = metrics.natural_line_height_hhea(font_size);
@@ -15925,7 +16224,7 @@ cells={} pitch={:.2} text={:?}",
             // lines 17.40 = circled-number lines, body 15.60). The S612z synthesis
             // (=MS Mincho 15.56) under-counts empties ~2pt. SCOPE: family "Zen Old
             // Mincho" = aiguideline ONLY (canary-safe). Opt-out OXI_S612ZE_DISABLE.
-            if std::env::var("OXI_S612ZE_DISABLE").is_err() && metrics.family == "Zen Old Mincho" {
+            if !crate::env_flag!("OXI_S612ZE_DISABLE") && metrics.family == "Zen Old Mincho" {
                 max_ascent = max_ascent.max(font_size * 1160.0 / 1000.0);
                 max_descent = max_descent.max(font_size * 288.0 / 1000.0);
             }
@@ -15943,7 +16242,7 @@ cells={} pitch={:.2} text={:?}",
             // last visible fragment whose fs >= 2x the line's visible max fs, in
             // a Latin line. This oversized-white shape is target-only (a normal
             // trailing space is not white / not 2x-oversized → byte-identical).
-            let s1015 = !self.doc_body_has_real_cjk && std::env::var("OXI_S1015_DISABLE").is_err();
+            let s1015 = !self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S1015_DISABLE");
             let s1015_last_vis = if s1015 {
                 line.fragments
                     .iter()
@@ -15969,7 +16268,7 @@ cells={} pitch={:.2} text={:?}",
             // matter shifted +1 page). Skip tab/empty fragments in the height fold when
             // the line has a visible-glyph fragment (a tab-only line still uses its own
             // font — the S902 fallback). Latin/CJK agnostic (glyphless is glyphless).
-            let s1019 = std::env::var("OXI_S1019_DISABLE").is_err();
+            let s1019 = !crate::env_flag!("OXI_S1019_DISABLE");
             let s1019_has_visible = s1019
                 && line.fragments.iter().any(|f| {
                     f.tab_alignment.is_none()
@@ -16052,7 +16351,7 @@ cells={} pitch={:.2} text={:?}",
                 // circled-number glyphs the embedded box; the line's max-fragment height
                 // then matches Word. SCOPE: family "Zen Old Mincho" = aiguideline ONLY
                 // (canary-safe). Opt-out OXI_S612ZC_DISABLE. See [[corpus_collection_wheel_a]].
-                if std::env::var("OXI_S612ZC_DISABLE").is_err()
+                if !crate::env_flag!("OXI_S612ZC_DISABLE")
                     && metrics.family == "Zen Old Mincho"
                     && frag
                         .text
@@ -16071,7 +16370,7 @@ cells={} pitch={:.2} text={:?}",
                 // fragment with the first run's style). w:position is in
                 // 3a4f/model/tokyoshugyo (val=−22 manual fractions), gate-
                 // entangled → canary-verified. Opt-out OXI_S655_DISABLE.
-                if std::env::var("OXI_S655_DISABLE").is_err() {
+                if !crate::env_flag!("OXI_S655_DISABLE") {
                     if let Some(pos) = frag.style.position.filter(|_| frag.style.inline_object_image.is_none()) {
                         asc += pos.max(0.0);
                         des += (-pos).max(0.0);
@@ -16148,7 +16447,7 @@ cells={} pitch={:.2} text={:?}",
             f.text.chars().any(|c| matches!(c as u32, 0xF000..=0xF0FF))
                 && matches!(self.metrics_for_text(&f.text, &f.style, para_style).family.as_str(), "Symbol" | "Wingdings")
         });
-        let positioned_hhea = std::env::var("OXI_POSITIONED_HHEA_DISABLE").is_err()
+        let positioned_hhea = !crate::env_flag!("OXI_POSITIONED_HHEA_DISABLE")
             && line.fragments.iter().any(|f| f.style.inline_object_image.is_none()
                 && f.style.position.unwrap_or(0.0) != 0.0);
         if (has_inline_symbol || positioned_hhea) && !dominant_cjk_83_64 {
@@ -16199,7 +16498,7 @@ cells={} pitch={:.2} text={:?}",
         // ascent over the largest descent of the line's faces (Nirmala UI +
         // Courier New "-" 12pt: 16.5, Arial + Courier New: 14.85 -- above
         // either face's own box). default ON, opt-out OXI_ASCDESC_MIX_DISABLE.
-        let ascdesc_mix = std::env::var_os("OXI_ASCDESC_MIX_DISABLE").is_none()
+        let ascdesc_mix = !crate::env_flag!("OXI_ASCDESC_MIX_DISABLE")
             && !ascdesc_mix_excluded(&line.fragments)
             && !line.fragments.iter().any(|f| {
                 self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font()
@@ -16219,7 +16518,7 @@ cells={} pitch={:.2} text={:?}",
         // (max ascent + max descent about the shared baseline, 83/64 faces centred)
         // feeds the line ADVANCE here; mix_split's 23.03 is reached by neither
         // fold alone.
-        if std::env::var_os("OXI_LINE_UNION_BOX_DISABLE").is_none()
+        if !crate::env_flag!("OXI_LINE_UNION_BOX_DISABLE")
             && line.fragments.iter().any(|f| {
                 !f.text.trim().is_empty()
                     && self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font()
@@ -16263,7 +16562,7 @@ cells={} pitch={:.2} text={:?}",
                 max_combined = ua + ud;
             }
         }
-        let run_base = if std::env::var("OXI_S1361_DISABLE").is_err() && max_combined > 0.0 {
+        let run_base = if !crate::env_flag!("OXI_S1361_DISABLE") && max_combined > 0.0 {
             max_combined
         } else {
             max_ascent + max_descent
@@ -16282,7 +16581,7 @@ cells={} pitch={:.2} text={:?}",
         // multiple-spacing CJK base (no-grid ≠ run_base CJK 83/64) and REGRESSED 40
         // gen2_ docs (SSIM −0.58); so `base` is left as run_base for no-type and only
         // the single-spacing pitch floor is dropped.
-        let s609_no_type_natural = grid_no_type && std::env::var("OXI_S609_DISABLE").is_err();
+        let s609_no_type_natural = grid_no_type && !crate::env_flag!("OXI_S609_DISABLE");
         let base = if grid_pitch.is_none() && !in_table_cell {
             // LayoutMode=0: use no-grid formula for each fragment.
             // Round 9 (2026-04-08): per-(font,size) lookup table from
@@ -16319,7 +16618,7 @@ cells={} pitch={:.2} text={:?}",
             // at Word's value (test_line_heights p4: Libra 0.984 vs Oxi 0.840). Skip the
             // table for no-type docGrid (the natural formula matches Word).
             let lookup_no_grid = |family: &str, font_size: f32, fallback: f32| -> f32 {
-                if grid_no_type && std::env::var("OXI_S667_DISABLE").is_err() {
+                if grid_no_type && !crate::env_flag!("OXI_S667_DISABLE") {
                     return fallback;
                 }
                 // S1378 (2026-09-13, default ON, opt-in OXI_LM0_TABLE=1 restores):
@@ -16331,7 +16630,7 @@ cells={} pitch={:.2} text={:?}",
                 // 21.0 render line against the 20.698 advance tipped a 6-row
                 // column balance from 3/3 to 4/2 (the balancer steps its limit
                 // by one row, so 0.3pt on the last row is a whole row).
-                if std::env::var("OXI_LM0_TABLE").is_err() {
+                if !crate::env_flag!("OXI_LM0_TABLE") {
                     return fallback;
                 }
                 self.registry
@@ -16348,7 +16647,7 @@ cells={} pitch={:.2} text={:?}",
             // with eastAsia ＭＳ 明朝 12.0, two spaces 12.75, empty run 12.0,
             // mark at 18pt 21.0, U+3000 + あ 23.25 -- the whitespace-only
             // line is the mark's line. Oxi folded the U+3000 at 23.34.
-            let s1595_ws = s902_all_ws && std::env::var_os("OXI_S1595_DISABLE").is_none();
+            let s1595_ws = s902_all_ws && !crate::env_flag!("OXI_S1595_DISABLE");
             if line.fragments.is_empty() || s1595_ws {
                 // S1080's chain: an all-whitespace line's mark does not inherit
                 // the whitespace run's size.
@@ -16425,15 +16724,15 @@ cells={} pitch={:.2} text={:?}",
         // Apply line spacing rule
         let line_spacing = para_style.line_spacing;
         let line_spacing_rule = para_style.line_spacing_rule.as_deref();
-        if std::env::var_os("OXI_CJK_NATURAL_LINE").is_some()
+        if crate::env_flag!("OXI_CJK_NATURAL_LINE")
             && (grid_no_type || (grid_pitch.is_none()
-                && std::env::var_os("OXI_CJK_NO_GRID_NATURAL").is_some()))
+                && crate::env_flag!("OXI_CJK_NO_GRID_NATURAL")))
             && dominant_cjk_83_64
             && s1322_win_natural > 0.0
             && matches!(line_spacing_rule, None | Some("auto"))
             && line_spacing.map_or(true, |factor| (factor - 1.0).abs() < 0.001)
         {
-            return if std::env::var_os("OXI_CJK_FACE_NATURAL").is_some() {
+            return if crate::env_flag!("OXI_CJK_FACE_NATURAL") {
                 face_natural_max
             } else {
                 s1322_win_natural * (83.0 / 64.0)
@@ -16444,7 +16743,7 @@ cells={} pitch={:.2} text={:?}",
         } else {
             base
         };
-        if std::env::var("OXI_DBG_LH").is_ok() {
+        if crate::env_flag!("OXI_DBG_LH") {
             let t: String = line
                 .fragments
                 .iter()
@@ -16484,7 +16783,7 @@ cells={} pitch={:.2} text={:?}",
             && !dominant_cjk_83_64
             && !self.doc_body_has_real_cjk
             && matches!(line_spacing_rule, None | Some("auto"))
-            && std::env::var("OXI_S1111_DISABLE").is_err()
+            && !crate::env_flag!("OXI_S1111_DISABLE")
         {
             return hhea_natural_max;
         }
@@ -16512,7 +16811,7 @@ cells={} pitch={:.2} text={:?}",
                     && !dominant_cjk_83_64
                     && hhea_natural_max > 0.0
                     && (grid_pitch.is_none() || grid_no_type)
-                    && std::env::var("OXI_S887_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S887_DISABLE")
                 {
                     return hhea_natural_max.max(val);
                 }
@@ -16543,12 +16842,12 @@ cells={} pitch={:.2} text={:?}",
                     // Info6's 0.75; hhea x 83/64 would be 21.8 / 24.9 / 29.1 / 33.2.
                     // educational__0214ac95: three 14pt empties (AR P丸ゴシック体E,
                     // which Word substitutes with 游ゴシック) drifted +5.5 each.
-                    if hhea_natural_max > 0.0 && std::env::var("OXI_S1145_DISABLE").is_err() {
+                    if hhea_natural_max > 0.0 && !crate::env_flag!("OXI_S1145_DISABLE") {
                         return if dominant_cjk_83_64 {
                             if s1322_win_natural > 0.0
-                                && std::env::var("OXI_S1322_DISABLE").is_err()
+                                && !crate::env_flag!("OXI_S1322_DISABLE")
                             {
-                                if std::env::var_os("OXI_CJK_FACE_NATURAL").is_some() {
+                                if crate::env_flag!("OXI_CJK_FACE_NATURAL") {
                                     face_natural_max
                                 } else {
                                     s1322_win_natural * (83.0 / 64.0)
@@ -16584,7 +16883,7 @@ cells={} pitch={:.2} text={:?}",
                                 // 27.75), and linePitch 286 / 360 / absent give the same means.
                                 // Flooring the advance cost 0.277pt per line = ~28pt per page on
                                 // legal__05c84880, the drift its lastRenderedPageBreak masked.
-                                let dev = if std::env::var_os("OXI_S1450_DISABLE").is_none() {
+                                let dev = if !crate::env_flag!("OXI_S1450_DISABLE") {
                                     base
                                 } else {
                                     (base / 0.75).floor() * 0.75
@@ -16648,10 +16947,10 @@ cells={} pitch={:.2} text={:?}",
                 if grid_no_type
                     && !dominant_cjk_83_64
                     && hhea_natural_max > 0.0
-                    && std::env::var("OXI_S671_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S671_DISABLE")
                 {
                     let factor = line_spacing.unwrap_or(1.0);
-                    if std::env::var("OXI_DBG_LH").is_ok() {
+                    if crate::env_flag!("OXI_DBG_LH") {
                         eprintln!("[LH-S671] fired ret={:.3}", hhea_natural_max * factor);
                     }
                     // hhea_natural_max alone (NOT .max(run_base)): run_base is the
@@ -16667,7 +16966,7 @@ cells={} pitch={:.2} text={:?}",
                     // device-rounded metrics. Use the COM-measured single line height for
                     // the known Latin fonts, then × factor (the multiple is 1.15 × single,
                     // COM-confirmed). Opt-in OXI_S680 (default OFF = S671 hhea base).
-                    let single = if std::env::var("OXI_S680").is_ok() {
+                    let single = if crate::env_flag!("OXI_S680") {
                         word_com_single_line_height(&hhea_natural_family, hhea_natural_size)
                             .unwrap_or(hhea_natural_max)
                     } else {
@@ -16713,7 +17012,7 @@ cells={} pitch={:.2} text={:?}",
                     && grid_pitch.map_or(false, |p| p > 0.0)
                     && !in_table_cell
                     && !IN_FOOTNOTE_LAYOUT.with(|c| c.get())
-                    && std::env::var("OXI_SG0RAW_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_SG0RAW_DISABLE")
                 {
                     let mut raw_max: f32 = 0.0;
                     if line.fragments.is_empty() {
@@ -16755,8 +17054,8 @@ cells={} pitch={:.2} text={:?}",
                         let metrics = &*self.metrics_for_para_mark_g(
                             &rpr_ref,
                             para_style,
-                            std::env::var("OXI_S1305_DISABLE").is_err()
-                                && std::env::var("OXI_S1306_DISABLE").is_err(),
+                            !crate::env_flag!("OXI_S1305_DISABLE")
+                                && !crate::env_flag!("OXI_S1306_DISABLE"),
                         );
                         // OXI_SG0_BLANK_HHEA (2026-10-25, default ON, opt-out _DISABLE): a
                         // Latin mark face prices the blank at its hhea natural, as every
@@ -16768,7 +17067,7 @@ cells={} pitch={:.2} text={:?}",
                         // ja/forms__02157d72 p1: three such blanks between the floating
                         // tables, -0.34 each on the blind-G line census.
                         raw_max = if !metrics.is_cjk_83_64_font()
-                            && std::env::var_os("OXI_SG0_BLANK_HHEA_DISABLE").is_none()
+                            && !crate::env_flag!("OXI_SG0_BLANK_HHEA_DISABLE")
                         {
                             metrics.natural_line_height_hhea(font_size)
                         } else {
@@ -16829,9 +17128,9 @@ cells={} pitch={:.2} text={:?}",
                 // `linesAndChars` (`_pb_blankmult_gen.py`, 16 arms). The page
                 // that spilled under the unscoped version was S1307's doing (the
                 // floating table's row grown by a wrapNone anchor), not this law.
-                let s1306 = std::env::var("OXI_S1306_DISABLE").is_err()
+                let s1306 = !crate::env_flag!("OXI_S1306_DISABLE")
                     && (line.fragments.iter().any(|f| !f.text.trim().is_empty())
-                        || std::env::var("OXI_S1308_DISABLE").is_err());
+                        || !crate::env_flag!("OXI_S1308_DISABLE"));
                 if snap_to_grid && (is_single_line || (s1306 && !grid_no_type)) {
                     if let Some(pitch) = grid_pitch {
                         if pitch > 0.0 {
@@ -16862,7 +17161,7 @@ cells={} pitch={:.2} text={:?}",
                                 // because its pitch (14.3) ≈ its CJK natural (14.28).
                                 // S1450 (see the single-spacing site above): the advance is
                                 // exact; only the painted position is snapped.
-                                let dev = if std::env::var_os("OXI_S1450_DISABLE").is_none() {
+                                let dev = if !crate::env_flag!("OXI_S1450_DISABLE") {
                                     spaced
                                 } else {
                                     (spaced / 0.75).floor() * 0.75
@@ -16913,7 +17212,7 @@ cells={} pitch={:.2} text={:?}",
                             let is_empty = line.fragments.iter().all(|f| f.text.is_empty());
                             let just_over_pitch = spaced > pitch && spaced <= pitch + 0.5;
                             let ascii_is_cjk =
-                                is_empty && std::env::var("OXI_S583_DISABLE").is_err() && {
+                                is_empty && !crate::env_flag!("OXI_S583_DISABLE") && {
                                     let rpr_ref =
                                         para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                                     self.metrics_for(&rpr_ref, para_style).is_cjk_83_64_font()
@@ -16951,7 +17250,7 @@ cells={} pitch={:.2} text={:?}",
                             // 18.0 and Word keeps it in one cell.
                             let cell_basis = if !dominant_cjk_83_64
                                 && hhea_natural_max > 0.0
-                                && std::env::var("OXI_S1143_DISABLE").is_err()
+                                && !crate::env_flag!("OXI_S1143_DISABLE")
                             {
                                 hhea_natural_max * line_spacing.unwrap_or(1.0)
                             } else {
@@ -16996,7 +17295,7 @@ cells={} pitch={:.2} text={:?}",
                             // Mincho 12.88 box, 0.78 over the pitch, outside the window).
                             let cell_basis = if is_empty
                                 && !ascii_is_cjk
-                                && std::env::var_os("OXI_S1502_DISABLE").is_none()
+                                && !crate::env_flag!("OXI_S1502_DISABLE")
                             {
                                 let rpr_ref =
                                     para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
@@ -17008,7 +17307,7 @@ cells={} pitch={:.2} text={:?}",
                             };
                             let h_tw = ((cell_basis - tol) * 20.0).round();
                             let p_tw = (pitch * 20.0).round();
-                            let cells = if std::env::var("OXI_S1143_DISABLE").is_ok() {
+                            let cells = if crate::env_flag!("OXI_S1143_DISABLE") {
                                 (((cell_basis - tol) / pitch) + 1.0).floor()
                             } else {
                                 (h_tw / p_tw).ceil()
@@ -17030,7 +17329,7 @@ cells={} pitch={:.2} text={:?}",
                                 // 20.7 (+46pt, two paragraphs off the page).
                                 let s1328_nat = if is_empty
                                     && !ascii_is_cjk
-                                    && std::env::var("OXI_S1328_DISABLE").is_err()
+                                    && !crate::env_flag!("OXI_S1328_DISABLE")
                                 {
                                     let rpr_ref =
                                         para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
@@ -17068,7 +17367,7 @@ cells={} pitch={:.2} text={:?}",
                 let spaced = if snap_to_grid
                     && !grid_no_type
                     && !in_table_cell
-                    && std::env::var("OXI_S584_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S584_DISABLE")
                 {
                     match grid_pitch {
                         Some(pitch) if pitch > 0.0 => spaced.max(pitch),
@@ -17112,7 +17411,7 @@ cells={} pitch={:.2} text={:?}",
                 // keeps only the CJK gains.
                 let s611_no_type_round = grid_no_type
                     && dominant_cjk_83_64
-                    && std::env::var("OXI_S611_DISABLE").is_err();
+                    && !crate::env_flag!("OXI_S611_DISABLE");
                 // S620 (2026-06-19) ATTEMPTED + FALSIFIED + REVERTED. Hypothesis: the
                 // gen2 body para pitch is 26.5 but should be 26.4 (a +0.1pt/para drift),
                 // because run_base = max_ascent+max_descent MIXES the CJK ascent with the
@@ -17156,7 +17455,7 @@ cells={} pitch={:.2} text={:?}",
                 } else {
                     (tw / 10.0).ceil() * 10.0 / 20.0
                 };
-                if std::env::var("OXI_DBG_LH").is_ok() {
+                if crate::env_flag!("OXI_DBG_LH") {
                     eprintln!("[LH-TAIL] spaced={:.4} -> {:.4} (none={} s611={})",
                         spaced, s_dbg_ret, grid_pitch.is_none(), s611_no_type_round);
                 }
@@ -17214,7 +17513,7 @@ cells={} pitch={:.2} text={:?}",
         // PASS). Gates: Phase-1 full n=96 92->93 (parttime FAIL->PASS, no
         // other flip), full-corpus SSIM A/B: only parttime changes bytes,
         // net +0.6751 / 0 regressed.
-        let s1211c = std::env::var("OXI_S1211C_DISABLE").is_err()
+        let s1211c = !crate::env_flag!("OXI_S1211C_DISABLE")
             && para.style.adjust_right_ind
             && !(self.compat_mode >= 15 && self.compat_mode_explicit);
         let grid_has_char_space = match (char_pitch, cw_ratio) {
@@ -17229,7 +17528,7 @@ cells={} pitch={:.2} text={:?}",
         // untracked 「※」 run and continues at spacing -8 (cell 10.7 -> 46 cells
         // = 492.2; the first-run reading kept the 11.5 floor's 42 cells minus
         // the hanging indent = 44 and wrapped 「る。」 that Word keeps).
-        let s1340_track = if std::env::var("OXI_S1340_DISABLE").is_err() {
+        let s1340_track = if !crate::env_flag!("OXI_S1340_DISABLE") {
             para.runs
                 .iter()
                 .filter(|r| !r.text.trim().is_empty())
@@ -17278,8 +17577,8 @@ cells={} pitch={:.2} text={:?}",
                 // the line and never moves the first character off the margin.
                 // technical__9e4d04b4 (compat 11, leftChars -100) lost the 51st
                 // character of its first line and ran 14pt low from there on.
-                let out = if std::env::var_os("OXI_GRID_FLOOR_TWIPS").is_some()
-                    || std::env::var_os("OXI_S1448_DISABLE").is_none()
+                let out = if crate::env_flag!("OXI_GRID_FLOOR_TWIPS")
+                    || !crate::env_flag!("OXI_S1448_DISABLE")
                 {
                     // Compare grid boundaries in document twips. The content
                     // width comes from integer OOXML dimensions, while a grid
@@ -17301,7 +17600,7 @@ cells={} pitch={:.2} text={:?}",
                     (content_width / pitch).floor() * pitch
                 };
                 self.s1318_floor_slack.set(content_width - out);
-                if std::env::var("OXI_DBG_FLOORW").is_ok() && (out - content_width).abs() > 0.01 {
+                if crate::env_flag!("OXI_DBG_FLOORW") && (out - content_width).abs() > 0.01 {
                     let head: String = para.runs.iter().flat_map(|r| r.text.chars()).take(10).collect();
                     eprintln!("[FLOORW] cw={:.2} pitch={:.2} out={:.2} {:?}",
                         content_width, pitch, out, head);
@@ -17426,10 +17725,10 @@ cells={} pitch={:.2} text={:?}",
         // paragraph): Word's «1» baseline 11.95 below the frame top = Century's
         // win ascent 11.83 (+0.1); Oxi drew it at 10.83 (text_y_off 0 - the
         // renderer's -1 shift uncancelled). blind-H ja/legal__0f631d46.
-        if std::env::var("OXI_S1047_DISABLE").is_err()
+        if !crate::env_flag!("OXI_S1047_DISABLE")
             && (!self.doc_body_has_real_cjk
                 || (IN_HF_FRAME_LAYOUT.with(|c| c.get())
-                    && std::env::var_os("OXI_HF_FRAME_LATIN_BASE_DISABLE").is_none()))
+                    && !crate::env_flag!("OXI_HF_FRAME_LATIN_BASE_DISABLE")))
             // OXI_TXBX_LATIN_BASE (2026-10-16, default ON, opt-out _DISABLE): a text
             // box's lines follow the same Latin law as the body -- baseline = line
             // top + the face's baseline ascent (win ascent + the hhea leading above
@@ -17440,7 +17739,7 @@ cells={} pitch={:.2} text={:?}",
             // >= 18pt calibration (Times 24 +1.60, Arial 24 +1.25) and the 11pt
             // Times line +0.47; blind-G en/policies__009ab5c3's Calibri 24 title box
             // sat 0.78 low.
-            && (!in_shape_context || std::env::var_os("OXI_TXBX_LATIN_BASE_DISABLE").is_none())
+            && (!in_shape_context || !crate::env_flag!("OXI_TXBX_LATIN_BASE_DISABLE"))
             && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto"))
             // OXI_BULLET_UNION_BASELINE (2026-10-14, default ON, opt-out _DISABLE):
             // a Symbol-bullet line follows the Latin law too, with the line's
@@ -17451,7 +17750,7 @@ cells={} pitch={:.2} text={:?}",
             // multiple, Century Gothic's (11.07) do not move. Oxi's calibrated
             // bullet placement was right only at 1.15x (1.0x: -1.0, 1.08x: -0.5;
             // blind-G en/correspondence__00afe08d, en/creative__03aea325).
-            && (std::env::var_os("OXI_BULLET_UNION_BASELINE_DISABLE").is_none()
+            && (!crate::env_flag!("OXI_BULLET_UNION_BASELINE_DISABLE")
                 || !para_style
                     .list_marker
                     .as_deref()
@@ -17502,7 +17801,7 @@ cells={} pitch={:.2} text={:?}",
                 // (the Symbol marker's larger ascent is already applied by S821 as
                 // line growth at the paragraph entry, so the line's own law suffices)
                 let b = a_text;
-                let m = if factor < 0.999 && std::env::var_os("OXI_SUBMULT_BASELINE_DISABLE").is_none() { factor } else { 1.0 };
+                let m = if factor < 0.999 && !crate::env_flag!("OXI_SUBMULT_BASELINE_DISABLE") { factor } else { 1.0 };
                 if a_text > 0.0 {
                     // renderer: baseline = y + text_y_off - 1 + a_text; wanted y + b * m
                     return comp + b * m - a_text;
@@ -17520,7 +17819,7 @@ cells={} pitch={:.2} text={:?}",
         // + win_ascent×fs ⇒ text_y_off = fs×(1−win_ascent) + COMP. Gated to LARGE
         // fonts (fs≥18) so the 11/14pt body/headings stay byte-identical (the
         // dominant SSIM, untouched). Render-only. SWEEP OXI_S670_COMP.
-        if std::env::var("OXI_S670_DISABLE").is_err()
+        if !crate::env_flag!("OXI_S670_DISABLE")
             && doc_grid_no_type
             && para_font_size >= 18.0
             && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto"))
@@ -17569,7 +17868,7 @@ cells={} pitch={:.2} text={:?}",
         // `_pb_txbxatleast_gen.py` (139e74eb's bevel title box, 32pt HGS創英角
         // ﾎﾟｯﾌﾟ体 line=0 atLeast): Word's baseline 32.66 below the content top =
         // (41.5 - 32)/2 + 27.5 (+0.4 bearing); the arm below put it at 36.05.
-        let natbox_atleast_on = std::env::var_os("OXI_NATBOX_ATLEAST_DISABLE").is_none();
+        let natbox_atleast_on = !crate::env_flag!("OXI_NATBOX_ATLEAST_DISABLE");
         match (
             para_style.line_spacing_rule.as_deref(),
             para_style.line_spacing,
@@ -17611,7 +17910,7 @@ cells={} pitch={:.2} text={:?}",
                 // +0.0052, 459f05 +0.0017, ed025 +0.0004 -- every document up.
                 // Without it (OXI_S1261=1, the historical form): 1ec1 -0.0023,
                 // 459f05 -0.0266, ed025 -0.0026, and only exactclip gains.
-                let s1356 = std::env::var("OXI_S1356_DISABLE").is_err();
+                let s1356 = !crate::env_flag!("OXI_S1356_DISABLE");
                 // OXI_TXBX_EXACT_BASE (2026-10-16, default ON, opt-out _DISABLE): a
                 // text box's exact line sits on 0.8 L too. `_pb_txbx_exact_gen.py`
                 // (Word PDF, 29 arms, ＭＳ 明朝 / Calibri / Meiryo UI x 10.5 / 12 / 16pt
@@ -17620,7 +17919,7 @@ cells={} pitch={:.2} text={:?}",
                 // path put it 0.6 to 6.4 lower (Meiryo UI 16 at 240); blind-G
                 // ja/correspondence__14012ac2's box (ＭＳ 明朝 12 at 340) sat 0.67 low.
                 if (s1356 || std::env::var("OXI_S1261").ok().as_deref() == Some("1"))
-                    && (!in_shape_context || std::env::var_os("OXI_TXBX_EXACT_BASE_DISABLE").is_none())
+                    && (!in_shape_context || !crate::env_flag!("OXI_TXBX_EXACT_BASE_DISABLE"))
                     && para_style.line_spacing_rule.as_deref() == Some("exact")
                 {
                     if let Some(lh) = para_style.line_spacing {
@@ -17650,7 +17949,7 @@ cells={} pitch={:.2} text={:?}",
                             // `_pb_exactline_latin.py EL_BIG_SPACE=36`, whose
                             // Word baselines are identical with and without
                             // the space at every line height measured.
-                            let bounds = if std::env::var("OXI_S1357_DISABLE").is_err() {
+                            let bounds = if !crate::env_flag!("OXI_S1357_DISABLE") {
                                 self.s1045_height_drivers(&line.fragments, para_font_size)
                             } else {
                                 None
@@ -17673,7 +17972,7 @@ cells={} pitch={:.2} text={:?}",
                             // a Century «15%» both sit at 0.8 L (blind-G forms__02157cbe;
                             // `_pb_exact_mixed_desc_gen.py` ex480 / ex300).
                             let (mut any_cjk, mut any_lat, mut a_max) = (false, false, 0.0_f32);
-                            if std::env::var_os("OXI_ATLEAST_UNION_CELL_DISABLE").is_none() {
+                            if !crate::env_flag!("OXI_ATLEAST_UNION_CELL_DISABLE") {
                                 for f in line.fragments.iter().filter(|f| !f.text.trim().is_empty()) {
                                     let ffs = f.style.font_size.unwrap_or(para_font_size);
                                     let m = &*self.metrics_for_text(&f.text, &f.style, para_style);
@@ -17724,7 +18023,7 @@ cells={} pitch={:.2} text={:?}",
                 // exceed fs (win>1.0em) and shifting CJK exact lines REGRESSED 34140b
                 // −0.0006 — so CJK / mixed lines keep the S495 point-size subtrahend
                 // (unchanged). Floored at fs. See session504_s495_latin_exact_overshoot.
-                let s504_latin_line = std::env::var("OXI_S504_DISABLE").is_err()
+                let s504_latin_line = !crate::env_flag!("OXI_S504_DISABLE")
                     && !line.fragments.is_empty()
                     && line.fragments.iter().all(|frag| {
                         !self
@@ -17742,7 +18041,7 @@ cells={} pitch={:.2} text={:?}",
                 // the paragraph MARK's metrics, the same source
                 // `natural_line_height_for_line` uses for an empty line.
                 let s1136_cell: Option<f32> = if line.fragments.is_empty()
-                    && std::env::var("OXI_S1136_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S1136_DISABLE")
                 {
                     let rpr = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                     // prefer_ascii: an empty paragraph's height follows the ASCII
@@ -17769,7 +18068,7 @@ cells={} pitch={:.2} text={:?}",
                 // baseline; an exact line does not move (S1356's 0.8 L holds).
                 // Oxi kept the point size as the cell (S504 excludes mixed lines)
                 // and put the line 1.54 LOW (blind-G en/creative__03a7fb6a).
-                let union_cell: Option<f32> = if std::env::var_os("OXI_ATLEAST_UNION_CELL_DISABLE").is_none()
+                let union_cell: Option<f32> = if !crate::env_flag!("OXI_ATLEAST_UNION_CELL_DISABLE")
                     && s1136_cell.is_none()
                     && !s504_latin_line
                     && line.fragments.iter().any(|f| !f.text.trim().is_empty()
@@ -17822,7 +18121,7 @@ cells={} pitch={:.2} text={:?}",
                     // -5.27 (= b5f706 -3.91, db9ca -5.27 to the decimal). Word leaves
                     // (line - fontCell) above. Floored at the S78 0.5pt so the box~=font case
                     // (fded6/04b88e, line~=font) is unchanged. opt-out OXI_S495_EXACT_BOTTOM_DISABLE.
-                    if std::env::var("OXI_S495_EXACT_BOTTOM_DISABLE").is_ok() {
+                    if crate::env_flag!("OXI_S495_EXACT_BOTTOM_DISABLE") {
                         return 0.5;
                     }
                     // NB: the ideal subtrahend is the font's GLYPH CELL (where the dwrite
@@ -17864,7 +18163,7 @@ cells={} pitch={:.2} text={:?}",
                     // that document's line BOXES sit ~1.9pt high -- a cumulative
                     // y error the law would expose rather than fix. Measure the
                     // box positions first.
-                    if std::env::var("OXI_DBG_TYO").is_ok() {
+                    if crate::env_flag!("OXI_DBG_TYO") {
                         eprintln!("[TYO-exact] fs={:.2} line_h={:.2} max_font_cell={:.2} -> {:.2} | Word 0.8*L would need {:.2}",
                             max_font_size, line_height, max_font_cell,
                             (line_height - max_font_cell).max(0.5),
@@ -17884,7 +18183,7 @@ cells={} pitch={:.2} text={:?}",
                     // atLeast 16.5 over Arial 12-13.5): -1.2..-1.6 on all 28 lines.
                     if para_style.line_spacing_rule.as_deref() == Some("atLeast")
                         && (s504_latin_line || union_cell.is_some())
-                        && std::env::var_os("OXI_S1652_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_S1652_DISABLE")
                     {
                         return 1.0 + (line_height - max_font_cell).max(0.0);
                     }
@@ -17979,7 +18278,7 @@ cells={} pitch={:.2} text={:?}",
                 // 17.54. Oxi centred the box in the multiplied line (+1.3 at 276, +3.3 at
                 // 360): blind-G ja/legal__0e9cf147 «注１…» (+2.17). S1047 measured the same
                 // for Latin lines. The cell path has the Latin sibling (table_fit.rs).
-                let mult_text_top_body = std::env::var_os("OXI_MULT_TEXT_TOP_DISABLE").is_none()
+                let mult_text_top_body = !crate::env_flag!("OXI_MULT_TEXT_TOP_DISABLE")
                     && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto"))
                     && para_style.line_spacing.map_or(false, |v| v > 1.01);
                 // OXI_NATBOX_SHAPE (2026-10-13, default ON, opt-out _DISABLE): the same
@@ -17992,8 +18291,8 @@ cells={} pitch={:.2} text={:?}",
                 let natbox_atleast_zero = natbox_atleast_on
                     && para_style.line_spacing_rule.as_deref() == Some("atLeast")
                     && para_style.line_spacing.map_or(false, |v| v <= 0.01);
-                if std::env::var_os("OXI_CJK_NATBOX_DISABLE").is_none()
-                    && (!in_shape_context || std::env::var_os("OXI_NATBOX_SHAPE_DISABLE").is_none())
+                if !crate::env_flag!("OXI_CJK_NATBOX_DISABLE")
+                    && (!in_shape_context || !crate::env_flag!("OXI_NATBOX_SHAPE_DISABLE"))
                     && para_style.list_marker.is_none()
                     && (para_style.line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01)
                         || mult_text_top_body
@@ -18102,7 +18401,7 @@ cells={} pitch={:.2} text={:?}",
                     .map_or(false, |m| m.contains('\u{F0B7}'));
                 if doc_grid_no_type
                     && !is_symbol_bullet
-                    && std::env::var("OXI_S695_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S695_DISABLE")
                 {
                     let line_all_latin = if !line.fragments.is_empty() {
                         line.fragments.iter().all(|f| {
@@ -18228,7 +18527,7 @@ cells={} pitch={:.2} text={:?}",
                         // construction; verified element.y byte-identical ON/OFF).
                         // The 11/12pt BODY (natural < pitch) is untouched (byte-
                         // identical) — only LARGE headings/titles move.
-                        if doc_grid_no_type && std::env::var("OXI_S614_DISABLE").is_err() {
+                        if doc_grid_no_type && !crate::env_flag!("OXI_S614_DISABLE") {
                             let mut best: Option<(f32, f32, f32)> = None; // (fs, win_ascent, natural)
                             if !line.fragments.is_empty() {
                                 for f in &line.fragments {
@@ -18370,7 +18669,7 @@ cells={} pitch={:.2} text={:?}",
                             0.0
                         } else if let Ok(v) = std::env::var("OXI_S457_GRID_CJK_DY") {
                             v.parse::<f32>().unwrap_or(2.5)
-                        } else if std::env::var("OXI_S457_PROP").is_ok() {
+                        } else if crate::env_flag!("OXI_S457_PROP") {
                             let k = std::env::var("OXI_S457_PROP_K")
                                 .ok()
                                 .and_then(|v| v.parse::<f32>().ok())
@@ -18414,7 +18713,7 @@ cells={} pitch={:.2} text={:?}",
                         // a Latin line on a grid follows the Latin baseline law
                         // (S1047) and keeps its path -- ed025's 182 Latin lines
                         // move 2.25pt DOWN under an unscoped rule.
-                        let s1354 = std::env::var("OXI_S1354_DISABLE").is_err()
+                        let s1354 = !crate::env_flag!("OXI_S1354_DISABLE")
                             && line.fragments.iter().any(|f| {
                                 self.metrics_for_text(&f.text, &f.style, para_style)
                                     .is_cjk_83_64_font()
@@ -18440,7 +18739,7 @@ cells={} pitch={:.2} text={:?}",
                             // (53.55 − 33)/2 + 23.32); the em model is 5.5 / 5.1 low on
                             // メイリオ / 游ゴシック 22pt. Same law in `_pb_txbxgrid_gen.py`
                             // (text boxes, three grids).
-                            let line_box = if std::env::var_os("OXI_S1354_WINBOX_DISABLE").is_none() {
+                            let line_box = if !crate::env_flag!("OXI_S1354_WINBOX_DISABLE") {
                                 line.fragments
                                     .iter()
                                     .map(|f| {
@@ -18457,13 +18756,13 @@ cells={} pitch={:.2} text={:?}",
                                 line_fs
                             };
                             let em_centred = (line_height - line_box).max(0.0) / 2.0 + 1.0;
-                            if std::env::var("OXI_DBG_TYO").is_ok() {
+                            if crate::env_flag!("OXI_DBG_TYO") {
                                 eprintln!("[TYO] fs={:.2} line_h={:.2} pitch={:.2} centering_h={:.2} old={:.2} -> S1354 {:.2}",
                                     line_fs, line_height, pitch, centering_height, grid_base + s457_dy, em_centred);
                             }
                             return em_centred;
                         }
-                        if std::env::var("OXI_DBG_TYO").is_ok() {
+                        if crate::env_flag!("OXI_DBG_TYO") {
                             eprintln!("[TYO] fs={:.2} line_h={:.2} pitch={:.2} centering_h={:.2} raw={:.3} grid_base={:.2} s457={:.2} -> {:.2} | em-centred would be {:.2}",
                                 para_font_size, line_height, pitch, centering_height, raw, grid_base, s457_dy,
                                 grid_base + s457_dy, (line_height - para_font_size).max(0.0) / 2.0);
@@ -18502,7 +18801,7 @@ cells={} pitch={:.2} text={:?}",
                     // 72.96 / Oxi 76.32, constant over 34 lines) -- the offset the
                     // old too-short pitch happened to cancel mid-page. Centre on
                     // the single-spacing height instead.
-                    let s1366_base = if std::env::var("OXI_S1366").is_ok()
+                    let s1366_base = if crate::env_flag!("OXI_S1366")
                         && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto"))
                     {
                         let f = para_style.line_spacing.unwrap_or(1.0);
@@ -18652,7 +18951,7 @@ cells={} pitch={:.2} text={:?}",
                             })
                             .map(|f| f.style.font_size.unwrap_or(para_font_size))
                             .fold(0.0_f32, f32::max);
-                        let extra = if std::env::var_os("OXI_S1633_DISABLE").is_none() {
+                        let extra = if !crate::env_flag!("OXI_S1633_DISABLE") {
                             0.15 * (max_cjk_fs - 10.5).max(0.0)
                         } else {
                             0.0
@@ -18737,7 +19036,7 @@ cells={} pitch={:.2} text={:?}",
         page_geometry: Option<&S755Geom>,
         flow_fit_offset: Option<f32>,
     ) -> Vec<LayoutElement> {
-        let enabled = !is_nested && std::env::var("OXI_CELL_FLOAT_FRAGMENT_REPLAY_DISABLE").is_err()
+        let enabled = !is_nested && !crate::env_flag!("OXI_CELL_FLOAT_FRAGMENT_REPLAY_DISABLE")
             && table.rows.iter().any(|r| r.cells.iter().any(|c| c.blocks.iter().any(|b|
                 matches!(b, Block::Image(image) if image.position.as_ref()
                     .is_some_and(|p| p.v_relative.as_deref() == Some("margin"))))));
@@ -18757,7 +19056,7 @@ cells={} pitch={:.2} text={:?}",
             let stable = observed.iter().all(|(key, value)|
                 (replay.origins.get(key).copied().unwrap_or(0.0) - value).abs() <= 0.01)
                 && replay.origins.keys().all(|key| observed.contains_key(key));
-            if std::env::var("OXI_DBG_CELL_FLOAT_REPLAY").is_ok() {
+            if crate::env_flag!("OXI_DBG_CELL_FLOAT_REPLAY") {
                 eprintln!("[CELL_FLOAT_REPLAY] block={:?} attempt={} stable={} origins={:?}", block_idx, attempt, stable, observed);
             }
             if stable || attempt == 15 {
@@ -18777,7 +19076,7 @@ cells={} pitch={:.2} text={:?}",
     /// the table. `cell_effective_spacing` reads it for the contextualSpacing
     /// test on the cell's space-before.
     fn s1612_fill_above(&self, table: &Table, block_idx: Option<usize>, page: &Page) {
-        if std::env::var_os("OXI_S1612_DISABLE").is_some() {
+        if crate::env_flag!("OXI_S1612_DISABLE") {
             return;
         }
         let before_table: Option<Option<String>> = block_idx
@@ -18884,7 +19183,7 @@ cells={} pitch={:.2} text={:?}",
     fn column_content_mins_brk(&self, table: &Table, hyphen_only: bool) -> Vec<f32> {
         let ncols = table.grid_columns.len();
         let content_min = self.compat_mode >= 15
-            && std::env::var_os("OXI_CELL_AUTOFIT_CONTENT_MIN_DISABLE").is_none();
+            && !crate::env_flag!("OXI_CELL_AUTOFIT_CONTENT_MIN_DISABLE");
         let mut mins = vec![0.0f32; ncols];
         let mut merged = std::collections::BTreeMap::<(usize,usize),f32>::new();
         let (def_l, def_r) = table
@@ -18936,7 +19235,7 @@ cells={} pitch={:.2} text={:?}",
                                     let kern_active = run.style.kern
                                         .or_else(|| p.style.default_run_style.as_ref().and_then(|r| r.kern))
                                         .map_or(false, |k| k > 0.0 && fs >= k);
-                                    if std::env::var("OXI_AUTOFIT_EM_MIN_DISABLE").is_err()
+                                    if !crate::env_flag!("OXI_AUTOFIT_EM_MIN_DISABLE")
                                         && !self.doc_body_has_real_cjk
                                         && !kinsoku::is_cjk(ch)
                                         && cell_has_em_advance(metrics, ch)
@@ -19001,7 +19300,7 @@ cells={} pitch={:.2} text={:?}",
                                         line_advance += bw;
                                     }
                                     if self.table_modern_compat()
-                                        && std::env::var_os("OXI_MODERN_AUTO_TABLES_DISABLE").is_none() /* S1422 */
+                                        && !crate::env_flag!("OXI_MODERN_AUTO_TABLES_DISABLE") /* S1422 */
                                         && kinsoku::is_cjk(ch)
                                     {
                                         // CJK characters offer inter-character
@@ -19112,6 +19411,75 @@ cells={} pitch={:.2} text={:?}",
     /// (preferred − content_min) proportionally to the collective deficit, clamped
     /// to content_min; a column hitting content_min freezes and its share
     /// redistributes; a column whose content_min exceeds preferred expands.
+    /// OXI_AUTO_CONTENT_COLS: (min, max) content widths per column of a table
+    /// with no declared widths, then Word's autofit share. None when a row spans.
+    fn auto_content_columns(&self, table: &Table, available: f32) -> Option<Vec<f32>> {
+        let ncols = table.rows.iter().map(|r| r.cells.len()).max()?;
+        // Spans and nested tables keep the old split (a nested table's own content
+        // width is not measured here; the 1-column host of reference__00f2bb61's
+        // nested table must stay the full width).
+        if ncols == 0 || table.rows.iter().any(|r| r.cells.iter().any(|c| c.grid_span > 1
+            || c.blocks.iter().any(|b| matches!(b, Block::Table(_)))))
+        {
+            return None;
+        }
+        let (def_l, def_r) = table.style.default_cell_margins.as_ref()
+            .map(|m| (m.left.unwrap_or(5.4), m.right.unwrap_or(5.4)))
+            .unwrap_or((5.4, 5.4));
+        let mut mins = vec![0.0f32; ncols];
+        let mut maxs = vec![0.0f32; ncols];
+        for row in &table.rows {
+            for (ci, cell) in row.cells.iter().enumerate() {
+                let (ml, mr) = cell.margins.as_ref()
+                    .map(|m| (m.left.unwrap_or(def_l), m.right.unwrap_or(def_r)))
+                    .unwrap_or((def_l, def_r));
+                let (mut cmin, mut cmax) = (0.0f32, 0.0f32);
+                for block in &cell.blocks {
+                    let Block::Paragraph(p) = block else { continue; };
+                    let ind = p.style.indent_left.unwrap_or(0.0).max(0.0)
+                        + p.style.indent_right.unwrap_or(0.0).max(0.0);
+                    let (mut word, mut line) = (0.0f32, 0.0f32);
+                    for run in &p.runs {
+                        let fs = self.resolve_font_size(&run.style, &p.style);
+                        let metrics = &*self.metrics_for_text(&run.text, &run.style, &p.style);
+                        for ch in run.text.chars() {
+                            let w = self.registry.char_width_pt_with_fallback(ch, fs, metrics);
+                            if ch == '\n' || ch == '\u{0b}' {
+                                cmax = cmax.max(line + ind);
+                                cmin = cmin.max(word + ind);
+                                word = 0.0;
+                                line = 0.0;
+                                continue;
+                            }
+                            line += w;
+                            if ch == ' ' || ch == '\t' {
+                                cmin = cmin.max(word + ind);
+                                word = 0.0;
+                            } else {
+                                word += w;
+                            }
+                        }
+                    }
+                    cmin = cmin.max(word + ind);
+                    cmax = cmax.max(line + ind);
+                }
+                mins[ci] = mins[ci].max(cmin + ml + mr);
+                maxs[ci] = maxs[ci].max(cmax.max(cmin) + ml + mr);
+            }
+        }
+        let sum_min: f32 = mins.iter().sum();
+        let sum_max: f32 = maxs.iter().sum();
+        if sum_max <= available {
+            return Some(maxs);
+        }
+        if sum_min >= available {
+            return Some(mins.iter().map(|m| m * available / sum_min).collect());
+        }
+        let extra = available - sum_min;
+        let span = sum_max - sum_min;
+        Some(mins.iter().zip(&maxs).map(|(lo, hi)| lo + (hi - lo) * extra / span).collect())
+    }
+
     fn waterfill_autofit_columns(&self, table: &Table, available: f32) -> Vec<f32> {
         let preferred = table.grid_columns.clone();
         let content_min = self.column_content_mins(table);
@@ -19246,8 +19614,8 @@ cells={} pitch={:.2} text={:?}",
             // flagships (3a4f / model / tokyoshugyo), the word_png floor docs
             // (d77a / ed025c / e3c545) and frozen ukhmrc / uklocalspending.
             let mut grid_cols = table.grid_columns.clone();
-            let s1078_broad = std::env::var("OXI_S1078").is_ok();
-            let s1078_narrow = std::env::var("OXI_S1078_DISABLE").is_err();
+            let s1078_broad = crate::env_flag!("OXI_S1078");
+            let s1078_narrow = !crate::env_flag!("OXI_S1078_DISABLE");
             if (s1078_broad || s1078_narrow)
                 && table.style.layout.as_deref() != Some("fixed")
             {
@@ -19281,7 +19649,7 @@ cells={} pitch={:.2} text={:?}",
                         // The fit test is what keeps every JP form byte-identical
                         // (their tcW overshoots the column by ~10pt); the
                         // Latin-only narrow test was standing in for it.
-                        let s1364_fit = std::env::var("OXI_S1364_DISABLE").is_err()
+                        let s1364_fit = !crate::env_flag!("OXI_S1364_DISABLE")
                             && ws.iter().sum::<f32>()
                                 <= content_width - table.style.indent.unwrap_or(0.0) + 0.01;
                         let take = if s1078_broad || s1364_fit {
@@ -19311,7 +19679,7 @@ cells={} pitch={:.2} text={:?}",
             // the day-name column was one glyph wide and one page ran to three.
             // (An autofit pct table also takes the share, but sizes its columns
             // from their content -- not this rule.)
-            if std::env::var_os("OXI_FIXED_PCT_GRID_DISABLE").is_none()
+            if !crate::env_flag!("OXI_FIXED_PCT_GRID_DISABLE")
                 && table.style.layout.as_deref() == Some("fixed")
                 && table.style.width_type.as_deref() == Some("pct")
                 && table.style.position.is_none()
@@ -19331,9 +19699,34 @@ cells={} pitch={:.2} text={:?}",
                 } else {
                     margins.and_then(|m| m.left).unwrap_or(5.4) + margins.and_then(|m| m.right).unwrap_or(5.4)
                 };
+                // OXI_PCT_BORDER_BASE (2026-11-01, default ON, opt-out _DISABLE): under
+                // compatibilityMode 15 the percentage is taken of the text width less
+                // half of each outer side rule. `_pb_fixed_tblw_grid_gen.py` (text
+                // 415.65, grid 418.2, compat 15): 5043 pct -> 419.2 with no rule, 418.2
+                // with 1pt rules, 416.2 with 3pt; 4500 pct -> 374.1 / 373.2 / 371.4;
+                // tblInd moves the table and never its width. ja/policies__07543a6b
+                // p46 (cell tcBorders sz 8, 5043 pct): Word's first column 133.23,
+                // Oxi 133.58 -- the half point let «…この製品は2週間» keep «間»,
+                // which Word wraps, and the next row moved a page up.
+                let edge = |cell: Option<&crate::ir::TableCell>, left: bool| -> f32 {
+                    let own = cell.and_then(|c| c.borders.as_ref()).and_then(|b| if left { b.left.as_ref() } else { b.right.as_ref() });
+                    match own {
+                        Some(b) => if matches!(b.style.as_str(), "nil" | "none") { 0.0 } else { b.width },
+                        None => if table.style.border_style.as_deref().map_or(true, |s| matches!(s, "nil" | "none")) { 0.0 }
+                            else { table.style.border_width.unwrap_or(0.0) },
+                    }
+                };
+                let border_cut = if self.table_modern_compat()
+                    && !crate::env_flag!("OXI_PCT_BORDER_BASE_DISABLE")
+                {
+                    let row0 = table.rows.first();
+                    (edge(row0.and_then(|r| r.cells.first()), true) + edge(row0.and_then(|r| r.cells.last()), false)) * 0.5
+                } else {
+                    0.0
+                };
                 let share = table.style.width.unwrap_or(0.0);
                 let sum: f32 = grid_cols.iter().sum();
-                let target = (content_width + lr) * share / 100.0;
+                let target = (content_width + lr - border_cut) * share / 100.0;
                 if share > 0.0 && sum > 0.0 && target > 0.0 && (target - sum).abs() > 0.5 {
                     let k = target / sum;
                     for w in &mut grid_cols {
@@ -19367,7 +19760,7 @@ cells={} pitch={:.2} text={:?}",
             // empties + «（様式：記入例）»#2 spilled to p18 (the residual +1 after S592).
             // S591 established the dxa=keep-wide / auto=clamp discriminator for cell
             // margins; apply the same discriminator to col-width resolution here.
-            let is_dxa_fixed = std::env::var("OXI_S593_DISABLE").is_err()
+            let is_dxa_fixed = !crate::env_flag!("OXI_S593_DISABLE")
                 && table.style.width_type.as_deref() == Some("dxa");
             // S1107 (2026-08-08, default ON, opt-out OXI_S1107_DISABLE): a tblW=pct
             // table keeps its declared tblGrid too — the R7.24 last-column shrink is
@@ -19379,14 +19772,14 @@ cells={} pitch={:.2} text={:?}",
             // that table's rules run x=85.1..575.26, i.e. Word draws it at the FULL
             // declared width (85.05 + 489.55 = 574.60) and lets it overflow the
             // content area, exactly as S593 established for dxa.
-            let is_pct_overwide = std::env::var("OXI_S1107_DISABLE").is_err()
+            let is_pct_overwide = !crate::env_flag!("OXI_S1107_DISABLE")
                 && table.style.width_type.as_deref() == Some("pct");
             if !is_floating
                 && !is_fixed
                 && !is_dxa_fixed
                 && !is_pct_overwide
                 && (total > available || (self.table_modern_compat()
-                    && std::env::var_os("OXI_MODERN_AUTO_TABLES_DISABLE").is_none() /* S1422 */))
+                    && !crate::env_flag!("OXI_MODERN_AUTO_TABLES_DISABLE") /* S1422 */))
                 && table_grid_columns.len() > 1
             {
                 // S1126 (2026-08-15, opt-out OXI_S1126_DISABLE): Word's AUTOFIT
@@ -19450,8 +19843,8 @@ cells={} pitch={:.2} text={:?}",
                 // ja 188 same, golden 185 same.
                 let modern_auto = self.table_modern_compat()
                     && !is_nested && s1126_dxa
-                    && std::env::var_os("OXI_MODERN_AUTO_TABLES_DISABLE").is_none();
-                let s1126 = std::env::var("OXI_S1126_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_MODERN_AUTO_TABLES_DISABLE");
+                let s1126 = !crate::env_flag!("OXI_S1126_DISABLE")
                     && !is_nested
                     && s1126_dxa
                     && (!self.doc_body_has_real_cjk || modern_auto);
@@ -19492,7 +19885,7 @@ cells={} pitch={:.2} text={:?}",
                 // whole excess on the last column instead (60.25->50.25 and
                 // 52.10->41.30), which is what made the derived S1173 cell budget
                 // over-wrap those cells and cost the doc its PASS.
-                let s1196 = std::env::var("OXI_S1196_DISABLE").is_err();
+                let s1196 = !crate::env_flag!("OXI_S1196_DISABLE");
                 let first_cell = table.rows.first().and_then(|r| r.cells.first());
                 let last_cell = table.rows.first().and_then(|r| r.cells.last());
                 let tbl_pad = |right: bool| -> f32 {
@@ -19549,7 +19942,7 @@ cells={} pitch={:.2} text={:?}",
                         // (per-cell tcMar 108, no tblCellMar) is unchanged — its
                         // per-cell value equals the default this used to assume.
                         let usable = if s1196 { cap } else { available + first_cell_inset };
-                        if std::env::var("OXI_AUTOFIT_FIXED_INSETS_DISABLE").is_err()
+                        if !crate::env_flag!("OXI_AUTOFIT_FIXED_INSETS_DISABLE")
                             && mins.iter().sum::<f32>() > usable
                         {
                             // Preserve cell insets when words must break to fit.
@@ -19576,7 +19969,7 @@ cells={} pitch={:.2} text={:?}",
                                 let widths: Vec<f32> = mins.iter().zip(&insets)
                                     .map(|(m, inset)| inset + (m - inset).max(0.0)
                                         * (usable - fixed) / flexible).collect();
-                                if std::env::var("OXI_DBG_AUTOFIT_MIN").is_ok() {
+                                if crate::env_flag!("OXI_DBG_AUTOFIT_MIN") {
                                     eprintln!("[AUTOFIT-FIXED-INSETS] mins={:?} widths={:?}", mins, widths);
                                 }
                                 return widths;
@@ -19597,7 +19990,7 @@ cells={} pitch={:.2} text={:?}",
                                 .collect();
                             let ss: f32 = slack.iter().sum();
                             if ss > 0.01
-                                && !(std::env::var("OXI_AUTOFIT_INFEASIBLE_DISABLE").is_err() && deficit >= ss)
+                                && !(!crate::env_flag!("OXI_AUTOFIT_INFEASIBLE_DISABLE") && deficit >= ss)
                             {
                                 for (wi, s) in w.iter_mut().zip(&slack) {
                                     *wi -= deficit * s / ss;
@@ -19611,7 +20004,7 @@ cells={} pitch={:.2} text={:?}",
                                 }
                             }
                         }
-                        if std::env::var("OXI_DBG_AUTOFIT_MIN").is_ok() {
+                        if crate::env_flag!("OXI_DBG_AUTOFIT_MIN") {
                             eprintln!("[AUTOFIT-MIN] grid={:?} mins={:?} usable={} widths={:?}", table_grid_columns, mins, usable, w);
                         }
                         return w;
@@ -19619,7 +20012,7 @@ cells={} pitch={:.2} text={:?}",
                 }
                 // S1003: a DIRECT BODY autofit table waterfills all columns; the
                 // last-column-only clamp is the nested-table rule (report §14.2).
-                if std::env::var("OXI_S1003").is_ok() && !is_nested {
+                if crate::env_flag!("OXI_S1003") && !is_nested {
                     return self.waterfill_autofit_columns(table, available);
                 }
                 let legacy_available = if s1196 { cap } else { available };
@@ -19641,7 +20034,7 @@ cells={} pitch={:.2} text={:?}",
         // out as 100pt columns -- one word per line, Word 3 pages / Oxi 9-10.
         // Take the row with the MOST cells; cells with a width keep it and the
         // cells without one share what is left of the table width equally.
-        if std::env::var_os("OXI_S1543_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_S1543_DISABLE") {
             let base = match table.style.width_type.as_deref() {
                 Some("dxa") => table.style.width.unwrap_or(content_width),
                 Some("pct") => content_width * table.style.width.unwrap_or(100.0) / 100.0,
@@ -19690,6 +20083,25 @@ cells={} pitch={:.2} text={:?}",
             return vec![tw / num_cols as f32; num_cols];
         }
 
+        // OXI_AUTO_CONTENT_COLS (2026-11-02, default ON, opt-out _DISABLE): an AUTO
+        // table with no widths anywhere (empty gridCols, no tcW, tblW auto) is sized
+        // by its content like Word's autofit: every column gets its min-content
+        // (widest word + cell margins), and what is left of the width goes to the
+        // columns in proportion to max-content - min-content (all max when they
+        // fit). en/reference__00f2bb61 (METEOR export, 4 columns «Seq No.» /
+        // «Metadata item» / «Obligation» / «Max occurs»): Word's text starts
+        // 60.86 / 97.82 / 443.71 / 510.58 -- «Seq No.» and «Max occurs» wrap, the
+        // «Obligation» column is exactly «Mandatory»'s width; Oxi split 4 ways.
+        if !crate::env_flag!("OXI_AUTO_CONTENT_COLS_DISABLE")
+            && table.grid_columns.iter().all(|w| *w <= 0.01)
+            && matches!(table.style.width_type.as_deref(), None | Some("auto"))
+            && table.rows.iter().all(|r| r.cells.iter().all(|c| c.width.is_none() && c.width_pct.is_none()))
+        {
+            if let Some(w) = self.auto_content_columns(table, content_width - table.style.indent.unwrap_or(0.0)) {
+                return w;
+            }
+        }
+
         // 4. Equal split fallback
         let num_cols = table.rows.first().map_or(1, |r| r.cells.len().max(1));
         vec![content_width / num_cols as f32; num_cols]
@@ -19709,8 +20121,8 @@ cells={} pitch={:.2} text={:?}",
     fn cell_next_tab_stop(&self, para: &Paragraph, current: f32,
         indent_left: f32, first_indent: f32) -> (f32, TabStopAlignment) {
         let explicit = para.style.tab_stops.iter().find(|t| t.position > current + 0.01);
-        let implied = if std::env::var("OXI_S881_DISABLE").is_err()
-            && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_S1560_DISABLE").is_none())
+        let implied = if !crate::env_flag!("OXI_S881_DISABLE")
+            && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_S1560_DISABLE"))
             && first_indent < -0.01 && indent_left > current + 0.01 {
             Some(indent_left)
         } else { None };
@@ -19725,7 +20137,7 @@ cells={} pitch={:.2} text={:?}",
 
     #[allow(unused_assignments)]
     fn cell_tab_word_overflows(&self, para: &Paragraph, pos: usize, current: f32, right: f32, indent_left: f32, first_indent: f32) -> bool {
-        if std::env::var("OXI_CELL_TAB_WORD_FIT_DISABLE").is_ok() || self.doc_body_has_real_cjk { return false; }
+        if crate::env_flag!("OXI_CELL_TAB_WORD_FIT_DISABLE") || self.doc_body_has_real_cjk { return false; }
         let (stop, alignment) = self.cell_next_tab_stop(para, current, indent_left, first_indent);
         // OXI_CELL_TAB_ALL: a left tab resolved to a DEFAULT-grid stop strictly
         // BEYOND the cell's right edge wraps (`_pb_tab_overflow_gen.py` cell_k8..k15:
@@ -19744,7 +20156,7 @@ cells={} pitch={:.2} text={:?}",
             && !explicit_next
             && current < right - 0.01
             && stop > right + 0.01
-            && std::env::var_os("OXI_CELL_TAB_ALL_DISABLE").is_none()
+            && !crate::env_flag!("OXI_CELL_TAB_ALL_DISABLE")
         {
             return true;
         }
@@ -19772,7 +20184,7 @@ cells={} pitch={:.2} text={:?}",
     // every paragraph lands on Word's page (0.5 -> 1.0). Gates under the env
     // flag: golden 183/187 (same fail set), ja 179 -> 180, en 291/298 (same).
     fn cell_float_enabled(cell: &TableCell) -> bool {
-        std::env::var("OXI_CELL_FLOAT_FLOW_DISABLE").is_err()
+        !crate::env_flag!("OXI_CELL_FLOAT_FLOW_DISABLE")
             && cell.blocks.iter().any(|block| matches!(block, Block::Image(image) if image.position.is_some()))
     }
 
@@ -19814,7 +20226,7 @@ cells={} pitch={:.2} text={:?}",
         prev_ctx: Option<(bool, Option<&str>)>, prev_list: Option<(bool, Option<&str>)>) -> f32 {
         let (sb, sa) = self.cell_para_spacing(para, table.style.para_style.as_ref(), grid);
         let (sb, _) = self.cell_effective_spacing(para, table.style.para_style.as_ref(), first, last, sb, sa);
-        let collapse = if std::env::var("OXI_S427_DISABLE").is_err() {
+        let collapse = if !crate::env_flag!("OXI_S427_DISABLE") {
             prev_sa.map_or(0.0, |sa| sa.min(sb))
         } else { 0.0 };
         top + sb - collapse
@@ -19844,7 +20256,7 @@ cells={} pitch={:.2} text={:?}",
         }
         let wrap = cell_float::ParagraphWrap { obstacles: obstacles.to_vec(), top, heights: measure.heights };
         let empty_float = measure.geometry == (0.0, 0.0, 0.0, 0.0)
-            && std::env::var_os("OXI_CELL_EMPTY_FLOAT_DISABLE").is_none();
+            && !crate::env_flag!("OXI_CELL_EMPTY_FLOAT_DISABLE");
         let (width, first_width, indent, first_indent) = if empty_float {
             let left = para.style.indent_left.or_else(|| self.s1349_left_pt(para, char_pitch, char_ratio)).unwrap_or(0.0);
             let right = para.style.indent_right.or_else(|| para.style.indent_right_chars.map(|c|
@@ -19924,12 +20336,12 @@ cells={} pitch={:.2} text={:?}",
             && self.compat_mode >= 15
             && self.compat_mode_explicit
             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
-            && std::env::var("OXI_S1082_DISABLE").is_err()
-            && std::env::var("OXI_S825_DISABLE").is_err();
+            && !crate::env_flag!("OXI_S1082_DISABLE")
+            && !crate::env_flag!("OXI_S825_DISABLE");
         // S1174 estimate mirror -- must match the render loop or pagination and
         // drawing disagree about how many lines a cell holds.
         // Estimate mirror of the corrected gate: alignment first, compatibility second.
-        let s1174_yakucomp = std::env::var("OXI_YAKUCOMP_DISABLE").is_err()
+        let s1174_yakucomp = !crate::env_flag!("OXI_YAKUCOMP_DISABLE")
             && self.compress_punctuation
             && (self.compat_mode <= 14
                 || matches!(para.alignment, Alignment::Justify | Alignment::Distribute));
@@ -19939,7 +20351,7 @@ cells={} pitch={:.2} text={:?}",
         // S1082: paragraph-wide char stream + running offset, so the estimate can
         // answer the same "is this the paragraph's last word?" question the render
         // loop answers with s586_para_chars / s586_run_offset.
-        let s1082_para_chars: Vec<char> = para.runs.iter().flat_map(|r| r.text.chars()).filter(|&c| !(c == '\x0C' && std::env::var_os("OXI_S1443_DISABLE").is_none())).collect();
+        let s1082_para_chars: Vec<char> = para.runs.iter().flat_map(|r| r.text.chars()).filter(|&c| !(c == '\x0C' && !crate::env_flag!("OXI_S1443_DISABLE"))).collect();
         let mut s1082_gpos = 0usize;
 
         for (fit_run_idx, run) in para.runs.iter().enumerate() {
@@ -19947,7 +20359,7 @@ cells={} pitch={:.2} text={:?}",
             // S1518 second site: the line COUNTER measures a sub/superscript
             // run at 0.65 of its declared size too (01242a0a Table 3 header:
             // 4 counted lines x 17.25 = 70.5 where Word's row is 36).
-            let font_size = if std::env::var_os("OXI_S1518_DISABLE").is_none()
+            let font_size = if !crate::env_flag!("OXI_S1518_DISABLE")
                 && run.style.font_size.is_some()
                 && matches!(
                     run.style.vertical_align,
@@ -19970,8 +20382,8 @@ cells={} pitch={:.2} text={:?}",
             // gate + width arithmetic as S703c; shared opt-out OXI_S703_DISABLE.
             if run.style.combine
                 && !run.text.trim().is_empty()
-                && std::env::var("OXI_S703_DISABLE").is_err()
-                && std::env::var("OXI_S1225_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S703_DISABLE")
+                && !crate::env_flag!("OXI_S1225_DISABLE")
             {
                 let n = run.text.chars().count();
                 let rows_chars = (n + 1) / 2;
@@ -19997,10 +20409,10 @@ cells={} pitch={:.2} text={:?}",
                     buf_nonempty = false;
                 }
                 if line_x + cw > ew && line_nonempty {
-                    if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
+                    if crate::env_flag!("OXI_DBG_CELL_LINE_SIZES") || !crate::env_flag!("OXI_CELL_PER_LINE_HEIGHT_DISABLE") {
                         let CellLineSample { run_indices: mut sizes, uses_paragraph_mark } =
                             CellLineSample::from_chars(current_line_chars.iter(), &diagnostic_tab_runs, self.doc_body_has_real_cjk);
-                        if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
+                        if crate::env_flag!("OXI_DBG_CELL_LINE_SIZES") { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
                         line_size_samples.push(CellLineSample { run_indices: sizes, uses_paragraph_mark });
                 line_ruby_samples.push(line_has_ruby);
                     }
@@ -20032,7 +20444,7 @@ cells={} pitch={:.2} text={:?}",
             let mut buf_chars: Vec<CellFitChar> = Vec::new();
             // S1017 (2026-07-26): indexed so the KERNBREAK next-char lookup
             // (below) matches the render loop's s586_run_chars.get(ci+1).
-            let s1017_chars: Vec<char> = run.text.chars().filter(|&c| !(c == '\x0C' && std::env::var_os("OXI_S1443_DISABLE").is_none())).collect();
+            let s1017_chars: Vec<char> = run.text.chars().filter(|&c| !(c == '\x0C' && !crate::env_flag!("OXI_S1443_DISABLE"))).collect();
             for (s1017_i, ch) in s1017_chars.iter().copied().enumerate() {
                 let s1082_here = s1082_gpos;
                 s1082_gpos += 1;
@@ -20046,16 +20458,16 @@ cells={} pitch={:.2} text={:?}",
                     && self.cell_tab_word_overflows(para, s1082_here,
                         line_x + buf_w + if is_first_line { (indent_l_pt + first_indent_pt).max(0.0) } else { indent_l_pt },
                         wrap_w + indent_l_pt, indent_l_pt, first_indent_pt);
-                if tab_break && std::env::var("OXI_CELL_TAB_CHAR_PACK_DISABLE").is_err() { cell_tab_char_pack = true; }
+                if tab_break && !crate::env_flag!("OXI_CELL_TAB_CHAR_PACK_DISABLE") { cell_tab_char_pack = true; }
                 if ch == '\n' || ch == '\x0B' || ch == '\x0C' || tab_break {
                     cell_edge_tab_nowrap = false;
-                    if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
+                    if crate::env_flag!("OXI_DBG_CELL_LINE_SIZES") || !crate::env_flag!("OXI_CELL_PER_LINE_HEIGHT_DISABLE") {
                         let CellLineSample { run_indices: mut sizes, uses_paragraph_mark } =
                             CellLineSample::from_chars(current_line_chars.iter().chain(buf_chars.iter()), &diagnostic_tab_runs, self.doc_body_has_real_cjk);
                         if sizes.is_empty() && !tab_break && !self.doc_body_has_real_cjk
-                            && std::env::var("OXI_CELL_BREAK_FONT_DISABLE").is_err() { sizes.push(fit_run_idx); }
+                            && !crate::env_flag!("OXI_CELL_BREAK_FONT_DISABLE") { sizes.push(fit_run_idx); }
 
-                        if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
+                        if crate::env_flag!("OXI_DBG_CELL_LINE_SIZES") { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
                         line_size_samples.push(CellLineSample { run_indices: sizes, uses_paragraph_mark: tab_break && uses_paragraph_mark });
                 line_ruby_samples.push(line_has_ruby);
                     }
@@ -20080,7 +20492,7 @@ cells={} pitch={:.2} text={:?}",
                 // S443 (2026-05-30, env-gated): TAB-STOP advancement in the cell
                 // line-count estimate (mirrors the render-loop fix). Must match the
                 // render so estimate==render (Fix C invariant). See render path.
-                if ch == '\t' && std::env::var("OXI_S443_DISABLE").is_err() && first_indent_pt < 0.0
+                if ch == '\t' && !crate::env_flag!("OXI_S443_DISABLE") && first_indent_pt < 0.0
                 {
                     let indent_off = if is_first_line {
                         (indent_l_pt + first_indent_pt).max(0.0)
@@ -20089,7 +20501,7 @@ cells={} pitch={:.2} text={:?}",
                     };
                     let abs_pos = line_x + buf_w + indent_off;
                     let (next_pos, _) = self.cell_next_tab_stop(para, abs_pos, indent_l_pt, first_indent_pt);
-                    if std::env::var("OXI_CELL_EDGE_TAB_DISABLE").is_err()
+                    if !crate::env_flag!("OXI_CELL_EDGE_TAB_DISABLE")
                         && !self.doc_body_has_real_cjk
                         && (next_pos * 20.0).round() >= ((wrap_w + indent_l_pt) * 20.0).round()
                     {
@@ -20120,8 +20532,8 @@ cells={} pitch={:.2} text={:?}",
                 // cell wrapper): count_cell_lines MUST measure identically to
                 // the render or the row height diverges from the placed lines
                 // (the S716/S751 three-pass lesson).
-                if std::env::var("OXI_S869_DISABLE").is_err() {
-                    let kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
+                if !crate::env_flag!("OXI_S869_DISABLE") {
+                    let kern_active = !crate::env_flag!("OXI_KERNBREAK_DISABLE")
                         && run
                             .style
                             .kern
@@ -20130,7 +20542,7 @@ cells={} pitch={:.2} text={:?}",
                             })
                             .map_or(false, |k| k > 0.0 && font_size >= k);
                     if !kern_active
-                        && std::env::var("OXI_LATINEM_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_LATINEM_DISABLE")
                         && latinem_in_scope(self.doc_body_has_real_cjk)
                         && !kinsoku::is_cjk(ch)
                         && cell_has_em_advance(cm, ch)
@@ -20141,8 +20553,8 @@ cells={} pitch={:.2} text={:?}",
                         // count_cell_lines MUST measure identically to the
                         // render or the row height diverges (the S716/S751
                         // three-pass lesson).
-                        && std::env::var("OXI_S1017_DISABLE").is_err()
-                        && (!self.doc_body_has_real_cjk || std::env::var_os("OXI_CJK_CELL_KERN_DISABLE").is_none())
+                        && !crate::env_flag!("OXI_S1017_DISABLE")
+                        && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_CJK_CELL_KERN_DISABLE"))
                         && !kinsoku::is_cjk(ch)
                         && cell_has_em_advance(cm, ch)
                     {
@@ -20160,7 +20572,7 @@ cells={} pitch={:.2} text={:?}",
                     }
                 }
                 let mut deferred_fullwidth_grid = 0.0;
-                if std::env::var_os("OXI_CELL_BALANCED_SPACE").is_some()
+                if crate::env_flag!("OXI_CELL_BALANCED_SPACE")
                     && self.balance_single_byte_double_byte_width
                     && balanced_cjk_space(ch,
                         s1082_here.checked_sub(1).and_then(|i| s1082_para_chars.get(i).copied()),
@@ -20195,10 +20607,10 @@ cells={} pitch={:.2} text={:?}",
                             let char_space_pt = pitch - default_fs;
                             // R7.59 hybrid (see break_into_lines comment).
                             // S141 H6: skip expansion when font_size < default_fs
-                            let h6_skip = std::env::var("OXI_H6_GRID_GATE").is_ok()
+                            let h6_skip = crate::env_flag!("OXI_H6_GRID_GATE")
                                 && char_space_pt > 0.0
                                 && font_size < default_fs;
-                            let h7_skip = std::env::var("OXI_H7_GRID_GATE_LE").is_ok()
+                            let h7_skip = crate::env_flag!("OXI_H7_GRID_GATE_LE")
                                 && char_space_pt > 0.0
                                 && font_size <= default_fs;
                             // S158 (2026-05-21): added missing H8 site — was the only
@@ -20207,13 +20619,13 @@ cells={} pitch={:.2} text={:?}",
                             // S239 (2026-05-23): removed OXI_LEGACY_GRID_KERN.
                             // S466CELL re-test (2026-06-25): mirror of the emit-site change
                             // (count_cell_lines must match the visible wrap). Default OFF.
-                            let s466cell = std::env::var("OXI_S466CELL").is_ok();
+                            let s466cell = crate::env_flag!("OXI_S466CELL");
                             // S1210: the height estimate has to break where the
                             // visible wrap breaks, so it carries the same additive
                             // pitch. Leaving this site behind would give a row a
                             // line count its own cell never renders.
                             let s1210 =
-                                std::env::var("OXI_S1210_DISABLE").is_err();
+                                !crate::env_flag!("OXI_S1210_DISABLE");
                             let h8_skip = char_space_pt > 0.0
                                 && !s1210
                                 && (!s466cell || font_size < default_fs);
@@ -20223,17 +20635,18 @@ cells={} pitch={:.2} text={:?}",
                                 s344_fs_gate && !para.style.snap_to_grid && font_size >= default_fs;
                             // S1374: see the estimate site -- no charSpace, no cell.
                             let s1374_no_cell = char_space_pt.abs() < 0.01
-                                && std::env::var("OXI_S1374_DISABLE").is_err();
+                                && !crate::env_flag!("OXI_S1374_DISABLE");
                             if !(h6_skip || h7_skip || h8_skip || s344_skip || s1374_no_cell) {
                                 let grid_base = if char_space_pt > 0.0 && cell_resolved_em(cm, &self.registry, ch, font_size) < 0.99 { cw } else { font_size };
                                 cw = if char_space_pt >= 0.0 && !s1210 {
                                     grid_base * pitch / default_fs
                                 } else {
                                     // S1210: additive for both signs.
-                                    grid_base + cell_cjk_grid_increment(ch, cm, &self.registry, font_size, char_space_pt)
+                                    grid_base + cell_cjk_grid_increment(ch, cm, &self.registry, font_size, char_space_pt,
+                                        self.balance_single_byte_double_byte_width)
                                 };
-                                if (std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some()
-                                            || std::env::var_os("OXI_S1449_DISABLE").is_none()) {
+                                if (crate::env_flag!("OXI_CELL_GRID_SINGLE_BYTE")
+                                            || !crate::env_flag!("OXI_S1449_DISABLE")) {
                                     deferred_fullwidth_grid = cw - grid_base;
                                     cw = grid_base;
                                 }
@@ -20264,8 +20677,8 @@ cells={} pitch={:.2} text={:?}",
                         cw = base * run.style.text_scale.unwrap_or(100.0) / 100.0 + extra;
                     }
                 }
-                if (std::env::var_os("OXI_CELL_GRID_SINGLE_BYTE").is_some()
-                                            || std::env::var_os("OXI_S1449_DISABLE").is_none()) && run.style.fit_text.is_none() {
+                if (crate::env_flag!("OXI_CELL_GRID_SINGLE_BYTE")
+                                            || !crate::env_flag!("OXI_S1449_DISABLE")) && run.style.fit_text.is_none() {
                     cw += cell_single_byte_grid_increment(ch, grid_char_pitch,
                         grid_char_cw_ratio, self.balance_single_byte_double_byte_width);
                 }
@@ -20275,6 +20688,7 @@ cells={} pitch={:.2} text={:?}",
                 // balance doubling via resolve_fit_text_runs). Mirrors cell renderer fix.
                 let balance_extra_cs = if self.balance_single_byte_double_byte_width
                     && crate::font::is_fullwidth(ch)
+                    && (crate::env_flag!("OXI_BALANCE_PROP_ONCE_DISABLE") || cm.char_width_em(ch) >= 0.98)
                     && run.style.fit_text.is_none() && !run.style.ruby_spread
                 {
                     cs
@@ -20295,13 +20709,13 @@ cells={} pitch={:.2} text={:?}",
                     let de_boundary = (prev_cjk_ideo && cur_alpha) || (prev_alpha && cur_cjk_ideo);
                     let dn_boundary = (prev_cjk_ideo && cur_digit) || (prev_digit && cur_cjk_ideo);
                     // S1316: no auto-space against a ruby field.
-                    let s1316_adj = std::env::var("OXI_S1316_DISABLE").is_err()
+                    let s1316_adj = !crate::env_flag!("OXI_S1316_DISABLE")
                         && (prev_char_ruby || run.style.ruby_field);
                     if !s1316_adj
                         && ((de_boundary && (para.style.auto_space_de && self.doc_autospace()))
                             || (dn_boundary && (para.style.auto_space_dn && self.doc_autospace())))
                     {
-                        if let Some(gap) = prev_char_gap { gap } else if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err() {
+                        if let Some(gap) = prev_char_gap { gap } else if !crate::env_flag!("OXI_AUTOSPACE2_DISABLE") {
                             s1175_autospace(
                                 font_size,
                                 cs,
@@ -20347,7 +20761,7 @@ cells={} pitch={:.2} text={:?}",
                 let would_overflow_natural = line_x + buf_w + cw > effective_wrap;
                 let run_has_neg_cs = cs <= -0.1;
                 // S466CELL 約物-oikomi (count mirror of the emit-site gate; see emit comment).
-                let s466_oikomi = std::env::var("OXI_S466CELL").is_ok()
+                let s466_oikomi = crate::env_flag!("OXI_S466CELL")
                     && self.compress_punctuation
                     && grid_char_cw_ratio.map_or(false, |r| r > 1.0);
                 // OXI_CELLPAIR estimate mirror of the render small-cap credit
@@ -20359,13 +20773,13 @@ cells={} pitch={:.2} text={:?}",
                     && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
                 // S1174 supersedes this the same way it supersedes the render-side
                 // legacy_cell_break branch -- stacking the two counts the pool twice.
-                let would_overflow = if (s1174_yakucomp || s1176_space || std::env::var_os("OXI_CELL_AKI").is_some())
+                let would_overflow = if (s1174_yakucomp || s1176_space || crate::env_flag!("OXI_CELL_AKI"))
                     && would_overflow_natural
                 {
                     // S1174 estimate mirror -- half an em for the line, plus half an
                     // em more when the character being placed is itself a 約物.
                     // S1175 estimate mirror -- the CJK/Latin joints are aki too.
-                    let joints = if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err() {
+                    let joints = if !crate::env_flag!("OXI_AUTOSPACE2_DISABLE") {
                         let mut n = 0.0f32;
                         let mut prev: Option<char> = None;
                         for c in current_line_chars
@@ -20375,7 +20789,7 @@ cells={} pitch={:.2} text={:?}",
                             .chain(std::iter::once(ch))
                         {
                             if let Some(p) = prev {
-                                if if std::env::var_os("OXI_CELL_AKI").is_some() { cell_aki_joint(p, c, (para.style.auto_space_de && self.doc_autospace()), (para.style.auto_space_dn && self.doc_autospace())) } else { self.doc_autospace() && is_cjk_latin_joint(p, c) } {
+                                if if crate::env_flag!("OXI_CELL_AKI") { cell_aki_joint(p, c, (para.style.auto_space_de && self.doc_autospace()), (para.style.auto_space_dn && self.doc_autospace())) } else { self.doc_autospace() && is_cjk_latin_joint(p, c) } {
                                     n += 1.0;
                                 }
                             }
@@ -20445,17 +20859,25 @@ cells={} pitch={:.2} text={:?}",
                     // here rather than coded.
                     let punctuation_unit = self.cell_punctuation_unit(para, font_size, grid_char_pitch, grid_char_cw_ratio);
                     let yaku = if s1174_yakucomp {
-                        let s1208 = std::env::var("OXI_S1208_DISABLE").is_err();
+                        let s1208 = !crate::env_flag!("OXI_S1208_DISABLE");
                         let mut has_a = false;
                         let mut n_a = 0.0f32;
                         let mut b = 0.0f32;
                         let mut last_ch: Option<char> = None;
-                        for c in current_line_chars.iter().chain(buf_chars.iter()) {
+                        let space_mark = !self.balance_single_byte_double_byte_width
+                            && !crate::env_flag!("OXI_CELL_SPACE_MARK_DISABLE");
+                        for (i, c) in current_line_chars.iter().chain(buf_chars.iter()).enumerate() {
+                            if c.ch == '\u{30fb}' && i == 0 && is_first_line && self.compat_mode >= 15
+                                && Self::cell_lead_middot_free()
+                            {
+                                last_ch = Some(c.ch);
+                                continue;
+                            }
                             if kinsoku::cell_yaku_type_b(c.ch) {
                                 b += 0.5 * c.natural_advance;
                             } else if kinsoku::cell_yaku_type_a(c.ch) {
                                 has_a = true;
-                                if c.ch != '\u{3000}' {
+                                if c.ch != '\u{3000}' || space_mark {
                                     n_a += 1.0;
                                 }
                             }
@@ -20485,13 +20907,13 @@ cells={} pitch={:.2} text={:?}",
                             .unwrap_or(1.0);
                     // Match the placement path: proportional punctuation has no
                     // full-width blank to lend to another glyph.
-                    let proportional = std::env::var("OXI_S1207_DISABLE").is_err()
+                    let proportional = !crate::env_flag!("OXI_S1207_DISABLE")
                         && (matches!(cm.family.as_str(), "MS PMincho" | "MS PGothic" | "HGPGothicM")
                             || ['\u{3001}', '\u{3002}'].iter().all(|&mark| {
                                 let width = cm.char_width_em(mark);
                                 width > 0.0 && width < 0.99
                             }));
-                    let compressing_grid = std::env::var("OXI_S1216_DISABLE").is_err()
+                    let compressing_grid = !crate::env_flag!("OXI_S1216_DISABLE")
                         && para.style.snap_to_grid
                         && match (grid_char_pitch, grid_char_cw_ratio) {
                             (Some(p), Some(r)) if r > 0.0 => p - p / r < -0.01,
@@ -20500,7 +20922,7 @@ cells={} pitch={:.2} text={:?}",
                     let pool = if compressing_grid {
                         let (sum, count) = current_line_chars.iter().chain(buf_chars.iter())
                             .filter(|c| kinsoku::cell_yaku_type_a(c.ch)
-                                && (c.ch != '\u{3000}' || std::env::var("OXI_S1208_DISABLE").is_ok()))
+                                && (c.ch != '\u{3000}' || crate::env_flag!("OXI_S1208_DISABLE")))
                             .fold((0.0f32, 0usize), |(sum, count), c| (sum + c.natural_advance, count + 1));
                         (sum - count as f32 * 0.5 * font_size).max(0.0)
                             * std::env::var("OXI_YAKUK").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0)
@@ -20508,7 +20930,7 @@ cells={} pitch={:.2} text={:?}",
                     let pool = pool.max(self.modern_cell_punctuation_capacity(
                         para, &run.style,
                         current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.ch),
-                        font_size, ch, grid_char_pitch,
+                        font_size, ch, grid_char_pitch, is_first_line,
                     ));
                     let pool = Self::cell_english_pair_capacity(para, &run.style, current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.ch), font_size, pool);
 
@@ -20561,7 +20983,7 @@ cells={} pitch={:.2} text={:?}",
                 if !is_space && would_overflow && !(!line_nonempty && !buf_nonempty) {
                     if kinsoku::is_line_start_prohibited(ch)
                         && !(ch.is_ascii() && !self.doc_body_has_real_cjk
-                            && std::env::var("OXI_ASCII_CELL_CLOSER_DISABLE").is_err())
+                            && !crate::env_flag!("OXI_ASCII_CELL_CLOSER_DISABLE"))
                     {
                         buf_w += cw;
                         buf_nonempty = true;
@@ -20575,10 +20997,10 @@ cells={} pitch={:.2} text={:?}",
                         line_nonempty = true;
                 line_has_ruby |= s1312_run_ruby;
                         current_line_chars.extend(buf_chars.drain(..));
-                        if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
+                        if crate::env_flag!("OXI_DBG_CELL_LINE_SIZES") || !crate::env_flag!("OXI_CELL_PER_LINE_HEIGHT_DISABLE") {
                             let CellLineSample { run_indices: mut sizes, uses_paragraph_mark } =
                             CellLineSample::from_chars(current_line_chars.iter().chain(buf_chars.iter()), &diagnostic_tab_runs, self.doc_body_has_real_cjk);
-                            if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
+                            if crate::env_flag!("OXI_DBG_CELL_LINE_SIZES") { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
                             line_size_samples.push(CellLineSample { run_indices: sizes, uses_paragraph_mark });
                 line_ruby_samples.push(line_has_ruby);
                         }
@@ -20604,8 +21026,8 @@ cells={} pitch={:.2} text={:?}",
                     // S818 estimate mirror: same two-stage token wrap as the
                     // render site (estimate==render line counts).
                     let s818_cell =
-                        !self.doc_body_has_real_cjk && std::env::var("OXI_S818_DISABLE").is_err();
-                    if std::env::var("OXI_CELLWORD_DISABLE").is_err() && !cell_tab_char_pack
+                        !self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S818_DISABLE");
+                    if !crate::env_flag!("OXI_CELLWORD_DISABLE") && !cell_tab_char_pack
                         && !self.hinted_alphabet_break(ch, &run.style, &para.style)
                         && (if s818_cell {
                             !is_break_space(ch) // S1241
@@ -20685,10 +21107,10 @@ cells={} pitch={:.2} text={:?}",
                             }
                         }
                         if let Some(carry) = stage_carry {
-                            if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
+                            if crate::env_flag!("OXI_DBG_CELL_LINE_SIZES") || !crate::env_flag!("OXI_CELL_PER_LINE_HEIGHT_DISABLE") {
                                 let CellLineSample { run_indices: mut sizes, uses_paragraph_mark } =
                             CellLineSample::from_chars(current_line_chars.iter().chain(buf_chars.iter()), &diagnostic_tab_runs, self.doc_body_has_real_cjk);
-                                if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
+                                if crate::env_flag!("OXI_DBG_CELL_LINE_SIZES") { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
                                 line_size_samples.push(CellLineSample { run_indices: sizes, uses_paragraph_mark });
                 line_ruby_samples.push(line_has_ruby);
                             }
@@ -20732,10 +21154,10 @@ cells={} pitch={:.2} text={:?}",
                             buf_nonempty = false;
                             current_line_chars.extend(buf_chars.drain(..));
                         }
-                        if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
+                        if crate::env_flag!("OXI_DBG_CELL_LINE_SIZES") || !crate::env_flag!("OXI_CELL_PER_LINE_HEIGHT_DISABLE") {
                             let CellLineSample { run_indices: mut sizes, uses_paragraph_mark } =
                             CellLineSample::from_chars(current_line_chars.iter().chain(buf_chars.iter()), &diagnostic_tab_runs, self.doc_body_has_real_cjk);
-                            if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
+                            if crate::env_flag!("OXI_DBG_CELL_LINE_SIZES") { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
                             line_size_samples.push(CellLineSample { run_indices: sizes, uses_paragraph_mark });
                 line_ruby_samples.push(line_has_ruby);
                         }
@@ -20755,7 +21177,7 @@ cells={} pitch={:.2} text={:?}",
                 let cw = if auto_space_extra > 0.0
                     && !line_nonempty
                     && !buf_nonempty
-                    && std::env::var_os("OXI_CELL_LINESTART_AKI_DISABLE").is_none()
+                    && !crate::env_flag!("OXI_CELL_LINESTART_AKI_DISABLE")
                 {
                     cw - auto_space_extra
                 } else {
@@ -20786,10 +21208,10 @@ cells={} pitch={:.2} text={:?}",
             .flat_map(|r| r.text.chars().rev()).next()
             .is_some_and(|c| matches!(c, '\n' | '\x0B' | '\x0C'));
         if line_nonempty || trailing_soft_break {
-            if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() || std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err() {
+            if crate::env_flag!("OXI_DBG_CELL_LINE_SIZES") || !crate::env_flag!("OXI_CELL_PER_LINE_HEIGHT_DISABLE") {
                 let CellLineSample { run_indices: mut sizes, uses_paragraph_mark } =
                             CellLineSample::from_chars(current_line_chars.iter(), &diagnostic_tab_runs, self.doc_body_has_real_cjk);
-                if std::env::var("OXI_DBG_CELL_LINE_SIZES").is_ok() { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
+                if crate::env_flag!("OXI_DBG_CELL_LINE_SIZES") { eprintln!("[CELL-LINE-SIZES] line={} runs={:?}", lines, sizes); }
                 let final_mark_only = current_line_chars.iter()
                     .all(|c| Self::mark_spacing_only_char(c.ch));
                 if final_mark_only { sizes.clear(); }
@@ -20835,7 +21257,7 @@ cells={} pitch={:.2} text={:?}",
         // → single-doc-scoped by construction; tbRlV docs byte-identical.
         match cell.text_direction.as_deref() {
             Some("tbRlV") => true,
-            Some("btLr") => std::env::var("OXI_S873_DISABLE").is_err(),
+            Some("btLr") => !crate::env_flag!("OXI_S873_DISABLE"),
             _ => false,
         }
     }
@@ -20881,8 +21303,8 @@ cells={} pitch={:.2} text={:?}",
         });
         let fs = self.resolve_font_size(&marker_style, &para.style);
         let m = &*self.metrics_for(&marker_style, &para.style);
-        let marker_cjk = std::env::var("OXI_MARKERCJK_DISABLE").is_err();
-        let prop = std::env::var_os("OXI_MARKER_PROP_FACE_DISABLE").is_none() && m.has_proportional_kana();
+        let marker_cjk = !crate::env_flag!("OXI_MARKERCJK_DISABLE");
+        let prop = !crate::env_flag!("OXI_MARKER_PROP_FACE_DISABLE") && m.has_proportional_kana();
         marker.chars().map(|c| {
             if marker_cjk && crate::font::is_fullwidth(c) && !prop {
                 fs
@@ -20909,7 +21331,7 @@ cells={} pitch={:.2} text={:?}",
     /// body and the cell alike. golden 3a4f p470 «① 一般勤務» (cell) / p974 /
     /// p1058 (body): label +18.2 / text +20.6 vs Word.
     pub(super) fn num_fl_text_x(&self, para: &Paragraph, indent_l: f32, first_line_raw: f32, marker_w: f32) -> Option<f32> {
-        if std::env::var_os("OXI_NUM_FL_STOP_DISABLE").is_some() {
+        if crate::env_flag!("OXI_NUM_FL_STOP_DISABLE") {
             return None;
         }
         para.style.list_marker.as_ref()?;
@@ -20934,7 +21356,7 @@ cells={} pitch={:.2} text={:?}",
     }
 
     fn s718_list_tab_pull(&self, indent_l: f32, list_indent: f32, marker_w: f32, hanging: f32, marker_w_exact: f32, tabs: &[TabStop]) -> f32 {
-        if std::env::var("OXI_S718_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_S718_DISABLE") {
             return 0.0;
         }
         let dts = self.default_tab_stop;
@@ -20958,7 +21380,7 @@ cells={} pitch={:.2} text={:?}",
         } else if hanging > 0.01
             && marker_w_exact > hanging + 0.01
             && !self.doc_body_has_real_cjk
-            && std::env::var_os("OXI_S1590_DISABLE").is_none()
+            && !crate::env_flag!("OXI_S1590_DISABLE")
         {
             // The marker sits at indent_l - hanging (the paragraph's own hanging,
             // not the level's list_indent): technical__0043bfe0's cell items
@@ -21042,7 +21464,7 @@ cells={} pitch={:.2} text={:?}",
     }
 
     fn s1311_hidemark_tail_pos(&self, cell: &TableCell) -> Option<usize> {
-        if !cell.hide_mark || std::env::var("OXI_S1311_DISABLE").is_ok() {
+        if !cell.hide_mark || crate::env_flag!("OXI_S1311_DISABLE") {
             return None;
         }
         let n = cell.blocks.len();
@@ -21053,7 +21475,7 @@ cells={} pitch={:.2} text={:?}",
     }
 
     fn nested_table_stub_pos(&self, cell: &TableCell) -> Option<usize> {
-        if std::env::var("OXI_S716_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_S716_DISABLE") {
             return None;
         }
         let n = cell.blocks.len();
@@ -21261,12 +21683,12 @@ cells={} pitch={:.2} text={:?}",
     /// TopAndBottom (sum) arms keep the S331b fold: only Square is now wrong by
     /// the sum-vs-max difference, on 7 corpus anchors.
     fn s1053_cell_float_no_reserve(img: &crate::ir::Image) -> bool {
-        let page_rel = std::env::var("OXI_S1053_DISABLE").is_err()
+        let page_rel = !crate::env_flag!("OXI_S1053_DISABLE")
             && img
                 .position
                 .as_ref()
                 .map_or(false, |p| p.v_relative.as_deref() == Some("page"));
-        let wrap_none = std::env::var("OXI_S1307_DISABLE").is_err()
+        let wrap_none = !crate::env_flag!("OXI_S1307_DISABLE")
             && matches!(img.wrap_type, Some(crate::ir::WrapType::None));
         page_rel || wrap_none
     }
@@ -21298,15 +21720,15 @@ cells={} pitch={:.2} text={:?}",
     ) -> f32 {
         let inline_cell = !s1179_body && img.position.is_none();
         let ext = img.height + if (inline_cell || (s1179_body && !self.doc_body_has_real_cjk))
-            && std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() {
+            && !crate::env_flag!("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE") {
             img.effect_extent_b.max(0.0) + img.effect_extent_t.max(0.0)
         } else { 0.0 };
-        if std::env::var("OXI_S971_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_S971_DISABLE") {
             return ext;
         }
         // S1320: the host's exact line spacing wins before any host metrics.
         if let Some(exact) = img.host_exact_line {
-            if exact > 0.0 && std::env::var("OXI_S1320_DISABLE").is_err() {
+            if exact > 0.0 && !crate::env_flag!("OXI_S1320_DISABLE") {
                 return exact;
             }
         }
@@ -21347,7 +21769,7 @@ cells={} pitch={:.2} text={:?}",
                 // estimate IS the line height. (The old `full − resolved sp` was a
                 // double subtraction whenever the spacing was not direct — the
                 // S855/S865 reset had already kept it out of the estimate.)
-                let sp = if std::env::var("OXI_S1180_DISABLE").is_ok() {
+                let sp = if crate::env_flag!("OXI_S1180_DISABLE") {
                     img.paragraph_space_before + img.paragraph_space_after
                 } else {
                     0.0
@@ -21371,7 +21793,7 @@ cells={} pitch={:.2} text={:?}",
                     // The host is an image-only paragraph whose runs were cleared,
                     // so `estimate_para_height` may answer 0 for it; the exact
                     // value itself is the line height Word keeps.
-                    if exact > 0.0 && std::env::var("OXI_S1320_DISABLE").is_err() {
+                    if exact > 0.0 && !crate::env_flag!("OXI_S1320_DISABLE") {
                         return exact.max(host_line);
                     }
                 }
@@ -21391,7 +21813,7 @@ cells={} pitch={:.2} text={:?}",
                 // natural × factor, so natural = host_line / factor. Inline
                 // cell images also reserve this leading, including when the
                 // image moves to the next page.
-                if (s1179_body || inline_cell) && std::env::var("OXI_S1179_DISABLE").is_err() {
+                if (s1179_body || inline_cell) && !crate::env_flag!("OXI_S1179_DISABLE") {
                     if matches!(host.style.line_spacing_rule.as_deref(), None | Some("auto")) {
                         if let Some(f) = host.style.line_spacing {
                             if f > 1.001 && host_line > 0.0 {
@@ -21499,7 +21921,7 @@ cells={} pitch={:.2} text={:?}",
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
     ) -> f32 {
-        if std::env::var("OXI_S1192_DISABLE").is_ok() {
+        if crate::env_flag!("OXI_S1192_DISABLE") {
             return 0.0;
         }
         let is_cont = |c: &TableCell| {
@@ -21508,7 +21930,7 @@ cells={} pitch={:.2} text={:?}",
         let Some(row) = table.rows.get(row_idx) else {
             return 0.0;
         };
-        if std::env::var("OXI_DBG_S1192").is_ok() {
+        if crate::env_flag!("OXI_DBG_S1192") {
             eprintln!("[S1192] enter row={} ncells={} vm={:?}", row_idx, row.cells.len(),
                 row.cells.iter().map(|c| c.v_merge.clone()).collect::<Vec<_>>());
         }
@@ -21594,7 +22016,7 @@ cells={} pitch={:.2} text={:?}",
                     );
                 }
             }
-            if std::env::var("OXI_DBG_S1192").is_ok() {
+            if crate::env_flag!("OXI_DBG_S1192") {
                 eprintln!("[S1192] row={} ci={} start={} merged_h={:.2} earlier={:.2} need={:.2}",
                     row_idx, ci, start, merged_h, earlier, merged_h - earlier);
             }
@@ -21628,7 +22050,7 @@ cells={} pitch={:.2} text={:?}",
             !blocks[..block_pos].iter().any(is_para),
             !blocks[block_pos + 1..].iter().any(is_para), sb, sa,
         );
-        let collapse = if std::env::var("OXI_S427_DISABLE").is_err() {
+        let collapse = if !crate::env_flag!("OXI_S427_DISABLE") {
             prev_sa.map_or(0.0, |prev| prev.min(sb))
         } else { 0.0 };
         let contextual = self.s939_cell_ctx_credit(
@@ -21667,7 +22089,7 @@ cells={} pitch={:.2} text={:?}",
         table_top: f32,
         table_bottom: f32,
     ) -> (f32, f32) {
-        let margins = if std::env::var("OXI_S1215_DISABLE").is_err() {
+        let margins = if !crate::env_flag!("OXI_S1215_DISABLE") {
             row.cell_margins_override.as_ref()
         } else {
             None
@@ -21739,7 +22161,7 @@ cells={} pitch={:.2} text={:?}",
             // 100/100; Word starts the content cell's first line on the label's
             // baseline (PDF 256.13 both) and the 3-line row is 5 + 43.92 + 5,
             // Oxi's content cell had no margin (43.9) and page 2 ran ~50pt short.
-            let (pad_t, pad_b) = if std::env::var_os("OXI_S1575_DISABLE").is_none() {
+            let (pad_t, pad_b) = if !crate::env_flag!("OXI_S1575_DISABLE") {
                 let mt = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.top).unwrap_or(row_default_pad_t)).fold(pad_t, f32::max);
                 let mb = row.cells.iter().map(|c| c.margins.as_ref().and_then(|m| m.bottom).unwrap_or(row_default_pad_b)).fold(pad_b, f32::max);
                 (mt, mb)
@@ -21764,8 +22186,8 @@ cells={} pitch={:.2} text={:?}",
             // lines (Word row 45pt, heading pushed under keepNext); at the full
             // width the look-ahead saw two and kept the heading on the page.
             let inner_w =
-                if (!self.doc_body_has_real_cjk && std::env::var("OXI_S923_DISABLE").is_err())
-                    || (self.doc_body_has_real_cjk && std::env::var_os("OXI_S1426_DISABLE").is_none()) {
+                if (!self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S923_DISABLE"))
+                    || (self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S1426_DISABLE")) {
                     (cell_w - pad_l - pad_r).max(0.0)
                 } else {
                     cell_w.max(0.0)
@@ -21783,19 +22205,19 @@ cells={} pitch={:.2} text={:?}",
                 let mut float_tops = vec![0.0; cell.blocks.len()];
             // S751: empty hideMark cell contributes zero content height (see pre-pass).
             let s751_hide_empty = cell.hide_mark
-                && std::env::var("OXI_S751_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S751_DISABLE")
                 && cell.blocks.iter().all(|b| {
                     matches!(b, Block::Paragraph(p)
                     if p.runs.iter().all(|r| r.text.is_empty()))
                 });
             let vert_writing_active = self.is_vert_writing_active(cell);
             // S753: see the pre-pass comment — vert cell contributes one line only.
-            let s753_vert = vert_writing_active && std::env::var("OXI_S753_DISABLE").is_err();
+            let s753_vert = vert_writing_active && !crate::env_flag!("OXI_S753_DISABLE");
             let mut s753_first_done = false;
             // S427 (2026-05-29): adjacent-paragraph spacing collapse (see pre-pass
             // comment at the cell_content_h loop). Keeps this row-fit estimate
             // consistent with the row-height pre-pass and content placement.
-            let s427_collapse = std::env::var("OXI_S427_DISABLE").is_err();
+            let s427_collapse = !crate::env_flag!("OXI_S427_DISABLE");
             let mut prev_sa: Option<f32> = None;
             // S939: prev paragraph's (contextual_spacing, style_id).
             let mut s939_prev_e: Option<(bool, Option<&str>)> = None;
@@ -21990,7 +22412,7 @@ cells={} pitch={:.2} text={:?}",
                         // image and the row collapsed to text height).
                         // S715: typed-grid cell image line snaps to whole cells.
                         let img_line = self.s971_image_line_h(img, 1.0e6, table_grid_pitch, false);
-                        let img_h_eff = if std::env::var("OXI_S715_DISABLE").is_err() {
+                        let img_h_eff = if !crate::env_flag!("OXI_S715_DISABLE") {
                             match table_grid_pitch {
                                 Some(p) if p > 0.0 => (img_line / p).ceil() * p,
                                 _ => img_line,
@@ -22137,7 +22559,7 @@ cells={} pitch={:.2} text={:?}",
     ) -> f32 {
         // Bookmark anchors have no glyph box, including in an otherwise
         // empty form field. Use the paragraph mark if only anchors remain.
-        if in_cell && std::env::var("OXI_CELL_BOOKMARK_METRICS").is_ok() {
+        if in_cell && crate::env_flag!("OXI_CELL_BOOKMARK_METRICS") {
             let anchor_only = |run: &Run| {
                 run.bookmark_name.is_some() && run.text.is_empty()
                     && run.style.inline_object_extent.is_none()
@@ -22177,7 +22599,7 @@ cells={} pitch={:.2} text={:?}",
         // in_cell scope (the S906b lesson): this shared estimate also serves
         // BODY callers (keepNext lookahead, footnote reserves) with
         // table_para_style=None — the cell reset must not leak there.
-        let s944 = std::env::var("OXI_S944_DISABLE").is_err()
+        let s944 = !crate::env_flag!("OXI_S944_DISABLE")
             && in_cell
             && para.style.line_spacing_from_doc_defaults
             && table_para_style.and_then(|ps| ps.line_spacing).is_some();
@@ -22224,7 +22646,7 @@ cells={} pitch={:.2} text={:?}",
         // runs are all whitespace (a lone U+3000) is an empty line here too,
         // priced in the ASCII face unless it is grid-snapped (the render-side
         // S1305 rule). Cells keep their own whitespace calibration (S1080 etc.).
-        let s1394_ws = std::env::var("OXI_S1394_DISABLE").is_err()
+        let s1394_ws = !crate::env_flag!("OXI_S1394_DISABLE")
             && self.doc_body_has_real_cjk
             && !in_cell
             && !para.runs.is_empty()
@@ -22235,7 +22657,7 @@ cells={} pitch={:.2} text={:?}",
         // the render side already lays it out (13.5 estimated vs 9.617 laid).
         let s1574_glyphless = in_cell
             && self.doc_body_has_real_cjk
-            && std::env::var_os("OXI_S1574_DISABLE").is_none()
+            && !crate::env_flag!("OXI_S1574_DISABLE")
             && !para.runs.is_empty()
             && para.runs.iter().all(|r| r.text.is_empty()
                 && r.style.inline_object_extent.is_none()
@@ -22262,9 +22684,9 @@ cells={} pitch={:.2} text={:?}",
             // rules): three text paragraphs 31.56, empty/space first+last 30.12
             // = 2 x (10.375 - 9.62), Century's hhea line 2462/2048 x 8.
             let s1574_cell = in_cell && self.doc_body_has_real_cjk
-                && std::env::var_os("OXI_S1574_DISABLE").is_none();
+                && !crate::env_flag!("OXI_S1574_DISABLE");
             let s940_mark_ascii =
-                (!self.doc_body_has_real_cjk || s1574_cell) && std::env::var("OXI_S940_DISABLE").is_err();
+                (!self.doc_body_has_real_cjk || s1574_cell) && !crate::env_flag!("OXI_S940_DISABLE");
             let s1394_ascii = s1394_ws && !(para.style.snap_to_grid && grid_pitch.is_some());
             let metrics = &*self.metrics_for_para_mark_g(&rpr_ref, &para.style, s940_mark_ascii || s1394_ascii);
             let is_single_empty = eff_lr.is_none() || eff_lr == Some("auto");
@@ -22272,8 +22694,8 @@ cells={} pitch={:.2} text={:?}",
             // Latin empty takes hhea × factor — the bare rule test routed
             // auto+1.15 empties into the single arm (default routing kept
             // byte-identical; only the S940-gated path forks).
-            let s943_mult = std::env::var("OXI_S940_DISABLE").is_err()
-                && std::env::var("OXI_S943_DISABLE").is_err()
+            let s943_mult = !crate::env_flag!("OXI_S940_DISABLE")
+                && !crate::env_flag!("OXI_S943_DISABLE")
                 && (!self.doc_body_has_real_cjk || s1574_cell)
                 && !metrics.is_cjk_83_64_font()
                 && (eff_lr.is_none() || eff_lr == Some("auto"))
@@ -22306,7 +22728,7 @@ cells={} pitch={:.2} text={:?}",
                     )
                 } else if (!self.doc_body_has_real_cjk || s1574_cell)
                     && !metrics.is_cjk_83_64_font()
-                    && std::env::var("OXI_S940_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_S940_DISABLE")
                 {
                     // S940 (2026-07-19, ★HELD OPT-IN OXI_S940=1 with S935/S936):
                     // a LATIN cell's single-spacing EMPTY paragraph = the hhea
@@ -22319,7 +22741,7 @@ cells={} pitch={:.2} text={:?}",
                     // the ¶-mark to a non-Calibri family here (15.5 for fs 12).
                     // The S499 tombstone ("do NOT change the cell estimate")
                     // was falsified on the JP corpus — Latin scope only.
-                    if std::env::var("OXI_DBG940").is_ok() {
+                    if crate::env_flag!("OXI_DBG940") {
                         eprintln!(
                             "[S940E] fam={} fs={} hhea={:.3} vs tbl={:.3}",
                             metrics.family,
@@ -22361,11 +22783,11 @@ cells={} pitch={:.2} text={:?}",
             let h_added = if cell_mark_only {
                 self.cell_mark_line_height(para, eff_ls, eff_lr, grid_pitch).1
             } else { h_added };
-            if std::env::var("OXI_DBG_CELLEMPTY").is_ok() {
+            if crate::env_flag!("OXI_DBG_CELLEMPTY") {
                 eprintln!("[CELLEMPTY] fam={} fs={:.2} cjk={} snap_in_cell={} use_render_lh={} grid={:?} ls={:?} lr={:?} h_added={:.3}",
                     metrics.family, empty_fs, metrics.is_cjk_83_64_font(), snap_in_cell, use_render_lh, grid_pitch, eff_ls, eff_lr, h_added);
             }
-            if std::env::var("OXI_DUMP_TABLE").is_ok() {
+            if crate::env_flag!("OXI_DUMP_TABLE") {
                 let pprrpr_fs = para.style.ppr_rpr.as_ref().and_then(|r| r.font_size);
                 eprintln!(
                     "[TBL_DUMP]   estimate_empty_para empty_fs={} ppr_rpr_fs={:?} is_single={} h_added={:.3} eff_ls={:?} eff_lr={:?}",
@@ -22405,7 +22827,7 @@ cells={} pitch={:.2} text={:?}",
                     // firstLineChars=300 = 28.9pt on the 9.63 pitch): the estimate
                     // used 3 x 10.5 = 31.5, wrapped 「mAs」 to a second line and made
                     // the row 76.75 against Word's 73.32 (the render was right).
-                    if std::env::var_os("OXI_S1586_DISABLE").is_none() {
+                    if !crate::env_flag!("OXI_S1586_DISABLE") {
                         Self::s1214_chars_pt(c, para, true, grid_char_pitch, grid_char_cw_ratio)
                     } else {
                         Self::s1214_chars_pt(c, para, true, None, None)
@@ -22443,7 +22865,7 @@ cells={} pitch={:.2} text={:?}",
                 self.s1211c_floor_body_width(para, available_width, note_pitch, note_ratio)
             } else { available_width };
             let raw_effective_width = note_width - indent_l - indent_r;
-            let effective_width = if !in_cell && std::env::var("OXI_DEGENERATE_CJK_SPACES").is_ok() { raw_effective_width } else { raw_effective_width.max(1.0) };
+            let effective_width = if !in_cell && crate::env_flag!("OXI_DEGENERATE_CJK_SPACES") { raw_effective_width } else { raw_effective_width.max(1.0) };
 
             // Fix C (2026-04-22): in cell context, count lines using the same
             // char-by-char wrap as the cell renderer (mod.rs:4480+). break_into_lines
@@ -22623,7 +23045,7 @@ cells={} pitch={:.2} text={:?}",
             // also drives the body keepNext lookahead + footnote reservation.
             // Opt-out OXI_S986_DISABLE.
             let s986_skip_anchor = in_cell
-                && std::env::var("OXI_S986_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S986_DISABLE")
                 && para.runs.iter().any(|r| !r.text.is_empty());
             // S1099 (2026-08-08): per-run line heights, so the "max_lh x lines"
             // model below can be corrected when the tallest run provably sits on
@@ -22641,7 +23063,7 @@ cells={} pitch={:.2} text={:?}",
             // render already excluded it, so the vAlign=bottom cell dropped its
             // text 4.7pt and the next 15 rows sat 3.3pt low -- the last row
             // slipped to page 2.
-            let s1380_visible = std::env::var("OXI_S1380_DISABLE").is_err()
+            let s1380_visible = !crate::env_flag!("OXI_S1380_DISABLE")
                 && para.runs.iter().any(|r| r.text.chars().any(|c| !c.is_whitespace()));
             for (s1099_ri, run) in para.runs.iter().enumerate() {
                 // A format-only run has no glyph box. Match the line emitter,
@@ -22663,7 +23085,7 @@ cells={} pitch={:.2} text={:?}",
                 // OXI_WS_RUN_NOGRID: a whitespace-only run does not size a line
                 // with visible text here either (the estimate feeds the footer
                 // stack: forms__00613e6b's footer kept 13.8 for an 11.5 line).
-                if s1380_visible && !in_cell && std::env::var_os("OXI_WS_RUN_NOGRID_DISABLE").is_none()
+                if s1380_visible && !in_cell && !crate::env_flag!("OXI_WS_RUN_NOGRID_DISABLE")
                     && !run.text.is_empty()
                     && run.text.chars().all(|c| matches!(c, ' ' | '\t' | '\u{00A0}' | '\u{3000}'))
                     && run.style.inline_object_extent.is_none() && run.style.inline_object_image.is_none()
@@ -22701,7 +23123,7 @@ cells={} pitch={:.2} text={:?}",
                     } else if use_render_lh
                         || (in_cell && self.doc_body_has_real_cjk && grid_pitch.is_none()
                             && metrics.is_cjk_83_64_font()
-                            && std::env::var("OXI_CJK_CELL_LINE_ESTIMATE").is_ok())
+                            && crate::env_flag!("OXI_CJK_CELL_LINE_ESTIMATE"))
                     {
                         // S503: actual GDI render line-height (matches emit), centering-only.
                         let render_lh = self.line_height_inner(
@@ -22722,10 +23144,10 @@ cells={} pitch={:.2} text={:?}",
                                 + self.symbol_chain_extra(&run.text, metrics, font_size)
                         }
                     } else if (!in_cell
-                            || (std::env::var_os("OXI_CELL_RENDER_LH_DISABLE").is_none()
+                            || (!crate::env_flag!("OXI_CELL_RENDER_LH_DISABLE")
                                 && metrics.units_per_em != 256))
                         && self.doc_body_has_real_cjk
-                        && std::env::var_os("OXI_S1568_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_S1568_DISABLE")
                     {
                         // OXI_CELL_RENDER_LH (2026-10-13, default ON, opt-out _DISABLE): a CJK
                         // document's CELL paragraph is estimated at its render line too (S1568
@@ -22759,14 +23181,14 @@ cells={} pitch={:.2} text={:?}",
                         )
                     } else if !self.doc_body_has_real_cjk
                         && !metrics.is_cjk_83_64_font()
-                        && std::env::var("OXI_S940T_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S940T_DISABLE")
                     {
                         // S940: Latin cell single-spacing text line estimate =
                         // hhea natural (matches the S815 render path; the
                         // word_line_height_table_cell tombstone under-counted
                         // Calibri-12 at 14.25 vs Word's 14.648 — the S499
                         // falsification was JP-corpus-only).
-                        if std::env::var("OXI_DBG940").is_ok() {
+                        if crate::env_flag!("OXI_DBG940") {
                             eprintln!(
                                 "[S940T] fam={} fs={} hhea={:.3} vs tbl={:.3}",
                                 metrics.family,
@@ -22779,7 +23201,7 @@ cells={} pitch={:.2} text={:?}",
                     } else if in_cell
                         && metrics.is_cjk_83_64_font()
                         && self.rowbox2_raw()
-                        && std::env::var_os("OXI_MS_CELL_EXACT_EST_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_MS_CELL_EXACT_EST_DISABLE")
                     {
                         // OXI_MS_CELL_EXACT_EST (2026-10-25, default ON, opt-out _DISABLE): the
                         // row is max(estimate, emitted line) and the emitted 83/64 cell line is
@@ -22805,7 +23227,7 @@ cells={} pitch={:.2} text={:?}",
                         && !self.doc_grid_all_no_type
                         && matches!(eff_lr, None | Some("auto"))
                         && eff_ls.is_some_and(|factor| factor > 1.0)
-                        && std::env::var_os("OXI_CELL_GRID_MULTIPLE_DISABLE").is_none();
+                        && !crate::env_flag!("OXI_CELL_GRID_MULTIPLE_DISABLE");
                     self.line_height_inner(font_size, eff_ls, eff_lr, metrics,
                         grid_multiple, if grid_multiple { grid_pitch } else { None }, true)
                 };
@@ -22870,7 +23292,7 @@ cells={} pitch={:.2} text={:?}",
             // broke the earlier one-shot attempt). Gated on OXI_S982 && in_cell:
             // the shared estimate also serves BODY callers (keepNext lookahead,
             // footnote reserves) with in_cell=false, and OFF is byte-identical.
-            if std::env::var("OXI_S982_DISABLE").is_err() && in_cell {
+            if !crate::env_flag!("OXI_S982_DISABLE") && in_cell {
                 let obj_h: f32 = para
                     .runs
                     .iter()
@@ -22919,14 +23341,14 @@ cells={} pitch={:.2} text={:?}",
                     // object+text cell line by the descent (policies__0016b30b:
                     // estimate 19.596 vs emit 17.000 vs Word 16.98), and since the
                     // row height is max(estimate, actual) the surplus was permanent.
-                    let s1094 = std::env::var("OXI_S1094_DISABLE").is_err();
+                    let s1094 = !crate::env_flag!("OXI_S1094_DISABLE");
                     let obj_composed = if s1094 {
                         obj_h.max(max_line_height) + extra
                     } else {
                         obj_h + descent + extra
                     };
                     let _ = descent;
-                    if std::env::var("OXI_DBG_CELLOLE").is_ok() {
+                    if crate::env_flag!("OXI_DBG_CELLOLE") {
                         eprintln!("[CELL-OLE] phase=estimate enabled=1 use_render_lh={} obj_h={} desc={:.2} extra={:.2} composed={:.2} prev_max_lh={:.2} lines={}",
                             use_render_lh, obj_h, descent, extra, obj_composed, max_line_height, line_count);
                     }
@@ -22942,7 +23364,7 @@ cells={} pitch={:.2} text={:?}",
                 && line_count == 1
                 && !self.doc_body_has_real_cjk
                 && matches!(eff_lr, None | Some("auto"))
-                && std::env::var("OXI_BODY_OBJECT_ESTIMATE_DISABLE").is_err()
+                && !crate::env_flag!("OXI_BODY_OBJECT_ESTIMATE_DISABLE")
                 && para.runs.iter().all(|r| {
                     r.text.chars().all(|c| c == '\u{FFFC}' || c == '\t' || c == ' ')
                 })
@@ -22950,7 +23372,7 @@ cells={} pitch={:.2} text={:?}",
                 let object_h = para.runs.iter()
                     .filter(|r| r.style.inline_object_image.is_some())
                     .filter_map(|r| r.style.inline_object_extent.map(|(_, h)| {
-                        h + if std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() {
+                        h + if !crate::env_flag!("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE") {
                             r.style.inline_object_image.as_ref().map_or(0.0, |im| im.effect_extent_b.max(0.0) + im.effect_extent_t.max(0.0))
                         } else { 0.0 }
                     }))
@@ -22993,7 +23415,7 @@ cells={} pitch={:.2} text={:?}",
                 && line_count >= 3
                 && s1099_rest > 0.0
                 && s1099_rest < max_line_height - 0.01
-                && std::env::var("OXI_S1099_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S1099_DISABLE")
                 && para.runs.first().map_or(false, |r| {
                     let t = r.text.trim();
                     !t.is_empty() && !t.contains(char::is_whitespace)
@@ -23010,7 +23432,7 @@ cells={} pitch={:.2} text={:?}",
             // Equal font sizes in different faces do not share a metric box.
             let per_line_eligible = in_cell && !self.doc_body_has_real_cjk
                 && !snap_in_cell && para.style.list_marker.is_none()
-                && std::env::var("OXI_CELL_PER_LINE_HEIGHT_DISABLE").is_err()
+                && !crate::env_flag!("OXI_CELL_PER_LINE_HEIGHT_DISABLE")
                 && cell_line_sizes.len() == line_count
                 && para.runs.iter().all(|r| r.ruby.is_none() && !r.style.combine
                     && r.style.inline_object_extent.is_none()
@@ -23043,7 +23465,7 @@ cells={} pitch={:.2} text={:?}",
                 }
             }
             let s1099_h = if measured_valid { measured_height } else { s1099_h };
-            if std::env::var("OXI_DUMP_TABLE").is_ok() {
+            if crate::env_flag!("OXI_DUMP_TABLE") {
                 let first_run_fs = self.resolve_font_size(
                     para.runs
                         .first()
@@ -23088,7 +23510,7 @@ cells={} pitch={:.2} text={:?}",
                     .as_deref()
                     .map_or(false, |m| m.contains('\u{F0B7}'))
                     || self.s1614_aum_marker_asc(para).is_some())
-                && std::env::var("OXI_S1125_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S1125_DISABLE")
             {
                 let mut s1125_asc: f32 = 0.0;
                 let mut s1125_desc: f32 = 0.0;
@@ -23140,7 +23562,7 @@ cells={} pitch={:.2} text={:?}",
             // Exact cell spacing already bounds the ruby line; annotation does not grow flow.
             if ruby_exp > 0.0
                 && !(in_cell && eff_lr == Some("exact")
-                    && std::env::var("OXI_EXACT_CELL_RUBY").is_ok())
+                    && crate::env_flag!("OXI_EXACT_CELL_RUBY"))
             {
                 // S654 (coverage): mirror the render-side ruby grid-snap so the
                 // page-break estimate matches. In a typed docGrid the ruby line
@@ -23148,7 +23570,7 @@ cells={} pitch={:.2} text={:?}",
                 // no-type-grid ruby is 0/corpus and the render path excludes it).
                 let typed_grid = para.style.snap_to_grid
                     && grid_pitch.map_or(false, |p| p > 0.0)
-                    && std::env::var("OXI_S654_DISABLE").is_err();
+                    && !crate::env_flag!("OXI_S654_DISABLE");
                 if typed_grid {
                     let pitch = grid_pitch.unwrap();
                     // S1624e (2026-10-01, opt-out OXI_S1624_DISABLE): the estimate
@@ -23159,7 +23581,7 @@ cells={} pitch={:.2} text={:?}",
                     // row at 54 for vAlign centring (its «性別» cell sat 9pt low).
                     let s1624e = in_cell
                         && eff_lr != Some("exact")
-                        && std::env::var_os("OXI_S1624_DISABLE").is_none();
+                        && !crate::env_flag!("OXI_S1624_DISABLE");
                     let augmented_snapped = if s1624e {
                         let nat = para.runs.iter()
                             .filter(|r| !r.text.trim().is_empty())
@@ -23174,21 +23596,21 @@ cells={} pitch={:.2} text={:?}",
                         ((max_line_height + ruby_exp - 0.5) / pitch).ceil() * pitch // S752 tolerance
                     };
                     // S1312: one augmented line per ruby-bearing line.
-                    let s1312_k = if std::env::var("OXI_S1312_DISABLE").is_err() { s1312_ruby_lines.max(1) } else { 1 };
+                    let s1312_k = if !crate::env_flag!("OXI_S1312_DISABLE") { s1312_ruby_lines.max(1) } else { 1 };
                     height += (augmented_snapped - max_line_height).max(0.0) * s1312_k as f32;
                     if let Some(measure) = float_measure.as_deref_mut() {
                         for (i, height) in measure.heights.iter_mut().enumerate() {
-                            if if std::env::var("OXI_S1312_DISABLE").is_err() {
+                            if if !crate::env_flag!("OXI_S1312_DISABLE") {
                                 cell_line_ruby.get(i).copied().unwrap_or(i == 0)
                             } else { i == 0 } { *height += (augmented_snapped - max_line_height).max(0.0); }
                         }
                     }
                 } else {
-                    let s1312_k = if std::env::var("OXI_S1312_DISABLE").is_err() { s1312_ruby_lines.max(1) } else { 1 };
+                    let s1312_k = if !crate::env_flag!("OXI_S1312_DISABLE") { s1312_ruby_lines.max(1) } else { 1 };
                     height += ruby_exp * s1312_k as f32;
                     if let Some(measure) = float_measure.as_deref_mut() {
                         for (i, height) in measure.heights.iter_mut().enumerate() {
-                            if if std::env::var("OXI_S1312_DISABLE").is_err() {
+                            if if !crate::env_flag!("OXI_S1312_DISABLE") {
                                 cell_line_ruby.get(i).copied().unwrap_or(i == 0)
                             } else { i == 0 } { *height += ruby_exp; }
                         }
@@ -23252,7 +23674,7 @@ cells={} pitch={:.2} text={:?}",
         cur_sb: f32,
     ) -> f32 {
         if self.preserve_same_style_cell_spacing
-            || self.doc_body_has_real_cjk || std::env::var("OXI_S939_DISABLE").is_ok() {
+            || self.doc_body_has_real_cjk || crate::env_flag!("OXI_S939_DISABLE") {
             return 0.0;
         }
         let Some(a) = prev_sa else { return 0.0 };
@@ -23302,7 +23724,7 @@ cells={} pitch={:.2} text={:?}",
         fs: f32,
         face: Option<String>,
     ) -> (f32, f32) {
-        let font_law = std::env::var_os("OXI_CLNSP_FONT_LAW_DISABLE").is_none();
+        let font_law = !crate::env_flag!("OXI_CLNSP_FONT_LAW_DISABLE");
         let m = face.as_deref().map(|f| self.registry.get_with_bold(f, false));
         let (a_nat, d_nat) = match &m {
             Some(m) if font_law && !m.is_cjk_83_64_font() => {
@@ -23324,7 +23746,7 @@ cells={} pitch={:.2} text={:?}",
             Some(m) if font_law
                 && m.is_cjk_83_64_font()
                 && ((m.win_ascent + m.win_descent) - 1.0).abs() > 0.01
-                && std::env::var_os("OXI_CLNSP_CJK_WINBOX_DISABLE").is_none() =>
+                && !crate::env_flag!("OXI_CLNSP_CJK_WINBOX_DISABLE") =>
             {
                 let win = (m.win_ascent + m.win_descent) * fs;
                 let natural = m.word_line_height_no_grid(fs).max(win);
@@ -23340,7 +23762,7 @@ cells={} pitch={:.2} text={:?}",
             // 5593c6a7's numbered box (HGP創英ﾌﾟﾚｾﾞﾝｽEB 22 + shadow): Word 31.15, Oxi 30.8.
             Some(m) if font_law
                 && m.is_cjk_83_64_font()
-                && std::env::var_os("OXI_CLNSP_CJK_NATURAL_PITCH_DISABLE").is_none() =>
+                && !crate::env_flag!("OXI_CLNSP_CJK_NATURAL_PITCH_DISABLE") =>
             {
                 let a = fs + 0.25;
                 let natural = m.word_line_height_no_grid(fs);
@@ -23377,7 +23799,7 @@ cells={} pitch={:.2} text={:?}",
         text_asc: f32,
         text_desc: f32,
     ) -> f32 {
-        if std::env::var_os("OXI_TXALIGN_MARKER_DISABLE").is_some() {
+        if crate::env_flag!("OXI_TXALIGN_MARKER_DISABLE") {
             return marker_asc;
         }
         match text_alignment {
@@ -23406,7 +23828,7 @@ cells={} pitch={:.2} text={:?}",
         cur: &ParagraphStyle,
         cur_sb: f32,
     ) -> f32 {
-        if self.doc_body_has_real_cjk || std::env::var("OXI_S1075_DISABLE").is_ok() {
+        if self.doc_body_has_real_cjk || crate::env_flag!("OXI_S1075_DISABLE") {
             return 0.0;
         }
         let Some(a) = prev_sa else { return 0.0 };
@@ -23447,8 +23869,8 @@ cells={} pitch={:.2} text={:?}",
         // 24.84 / 26.40 / 26.40 = line + 10 in all three). The CJK gate made
         // technical__002351b53effa5d7 (SimSun body, "文本" in one cell) reset
         // the 10pt on every row of its coordinate table, -19pt over 3 rows.
-        let s1364 = std::env::var("OXI_S1364_DISABLE").is_err();
-        if (self.doc_body_has_real_cjk && !s1364) || std::env::var("OXI_S936_DISABLE").is_ok() {
+        let s1364 = !crate::env_flag!("OXI_S1364_DISABLE");
+        if (self.doc_body_has_real_cjk && !s1364) || crate::env_flag!("OXI_S936_DISABLE") {
             return (None, None);
         }
         // S1000 (2026-07-25, default ON, opt-out OXI_S1000_DISABLE): the S936
@@ -23468,7 +23890,7 @@ cells={} pitch={:.2} text={:?}",
         // test_table_spacing) and ALL 3 IMPROVE SSIM (+0.0149/+0.0218/+0.0099
         // vs Word word_png, net +0.0466, 0 regressed) -> the docDefaults-kept
         // cell spacing MATCHES Word. JP byte-identical (Latin-scoped).
-        if std::env::var("OXI_S1000_DISABLE").is_err() {
+        if !crate::env_flag!("OXI_S1000_DISABLE") {
             let sb = if style.space_before_from_doc_defaults {
                 Some(
                     table_para_style
@@ -23523,7 +23945,7 @@ cells={} pitch={:.2} text={:?}",
         // ja/administrative__0ba21b0c (65-character lines, 4 marks): Word wraps «が、» at
         // 0.54 cell, the clamped table packed it to 0.69; ja/forms__009bbe8a / ja/policies
         // __11e25470 (5-8 marks on ~56-character lines) keep their X.
-        if std::env::var_os("OXI_COMPCAP_LONG_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_COMPCAP_LONG_DISABLE") {
             const NS: [f32; 5] = [14.0, 26.0, 40.0, 50.0, 64.0];
             const X: [[f32; 8]; 5] = [
                 // n <= 26, k = 1 keeps exactly half a cell (fixture language-capacity
@@ -23602,9 +24024,13 @@ cells={} pitch={:.2} text={:?}",
         pool.min(pairs as f32 * font_size * 0.5)
     }
 
+    fn cell_lead_middot_free() -> bool {
+        !crate::env_flag!("OXI_CELL_LEAD_MIDDOT_DISABLE")
+    }
+
     fn modern_cell_punctuation_capacity(
         &self, para: &Paragraph, style: &RunStyle, chars: impl Iterator<Item = char>,
-        font_size: f32, next: char, grid_char_pitch: Option<f32>,
+        font_size: f32, next: char, grid_char_pitch: Option<f32>, para_first_line: bool,
     ) -> f32 {
         let language = style.east_asia_lang.as_deref().or_else(||
             para.style.default_run_style.as_ref().and_then(|r| r.east_asia_lang.as_deref()));
@@ -23616,7 +24042,7 @@ cells={} pitch={:.2} text={:?}",
         // 0.86/0.88/0.90 em of overflow with 1..6 marks, mark kind and position
         // irrelevant, the S1490 table within 0.02 em; golden probethdr's 34-character
         // cell line pulls its last ideograph in over four 、.
-        let unset_ja = std::env::var_os("OXI_CELL_LANG_UNSET_JA_DISABLE").is_none();
+        let unset_ja = !crate::env_flag!("OXI_CELL_LANG_UNSET_JA_DISABLE");
         let language = language.or(self.default_east_asia_lang.as_deref());
         if self.compat_mode < 15 || !self.compat_mode_explicit || !self.compress_punctuation
             || !matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
@@ -23632,6 +24058,8 @@ cells={} pitch={:.2} text={:?}",
         let mut n = 0; let mut k = 0; let mut last = None;
         for ch in chars {
             n += 1; last = Some(ch);
+            // OXI_CELL_LEAD_MIDDOT: a paragraph-initial ・ lends nothing (see table_fit).
+            if ch == '・' && n == 1 && para_first_line && Self::cell_lead_middot_free() { continue; }
             if ch != '\u{3000}' && ch != '\u{ff1a}' && ch != '\u{ff1b}'
                 && (kinsoku::cell_yaku_type_a(ch) || kinsoku::cell_yaku_type_b(ch)) { k += 1; }
         }
@@ -23758,7 +24186,7 @@ cells={} pitch={:.2} text={:?}",
     fn footnote_twip_spacing_supported(&self, style: &ParagraphStyle) -> bool {
         style.before_lines.is_none() && style.after_lines.is_none()
             && !style.before_autospacing && !style.after_autospacing
-            && std::env::var_os("OXI_FOOTNOTE_SPACING_SIDES_DISABLE").is_none()
+            && !crate::env_flag!("OXI_FOOTNOTE_SPACING_SIDES_DISABLE")
     }
 
     fn footnote_twip_spacing_correction(
@@ -23788,7 +24216,7 @@ cells={} pitch={:.2} text={:?}",
         // = FootnoteText sb/sa 240/240 x2). Gate the keep on in_cell.
         in_cell: bool,
     ) -> (bool, bool) {
-        if std::env::var("OXI_S855_DISABLE").is_err() && std::env::var("OXI_S865_DISABLE").is_err()
+        if !crate::env_flag!("OXI_S855_DISABLE") && !crate::env_flag!("OXI_S865_DISABLE")
         {
             let (rb, ra) = (
                 !style.has_direct_before && !style_has_explicit_rule,
@@ -23838,7 +24266,7 @@ cells={} pitch={:.2} text={:?}",
             // is derived; the style-sourced keep (this branch) is the probe's
             // strongest, real-doc-confirmed finding (uklocal Annex row gap 24
             // = Word keeps Normal sb/sa 12+12).
-            if in_cell && std::env::var("OXI_S906_DISABLE").is_err()
+            if in_cell && !crate::env_flag!("OXI_S906_DISABLE")
             {
                 let keep_b = style.space_before.is_some()
                     && !style.space_before_from_doc_defaults
@@ -23849,7 +24277,7 @@ cells={} pitch={:.2} text={:?}",
                 return (rb && !keep_b, ra && !keep_a);
             }
             (rb, ra)
-        } else if std::env::var("OXI_S855_DISABLE").is_err() {
+        } else if !crate::env_flag!("OXI_S855_DISABLE") {
             let reset = !style.has_direct_before_after && !style_has_explicit_rule;
             (reset, reset)
         } else {
@@ -23951,7 +24379,7 @@ cells={} pitch={:.2} text={:?}",
         // before both painting and nested measurement. A middle Normal cell
         // may keep its after spacing when the next cell uses another style.
         let est_sa = if is_last && para.style.contextual_spacing && same_end_style
-            && std::env::var_os("OXI_CELL_SOURCE_CONTEXT_DISABLE").is_some()
+            && crate::env_flag!("OXI_CELL_SOURCE_CONTEXT_DISABLE")
         {
             0.0
         } else {
@@ -23969,8 +24397,8 @@ cells={} pitch={:.2} text={:?}",
         // Source-order normalization replaces the grid-column predecessor.
         // Retain the old model only when diagnosing without the new pass.
         let est_sb = if is_first && para.style.contextual_spacing
-            && std::env::var_os("OXI_CELL_SOURCE_CONTEXT_DISABLE").is_some()
-            && std::env::var_os("OXI_S1612_DISABLE").is_none()
+            && crate::env_flag!("OXI_CELL_SOURCE_CONTEXT_DISABLE")
+            && !crate::env_flag!("OXI_S1612_DISABLE")
         {
             let own = para.style.style_id.as_deref().or(self.cell_default_style_id.as_deref());
             let above = S1612_ABOVE.with(|m| m.borrow().get(&(para as *const Paragraph as usize)).cloned());
@@ -23995,7 +24423,7 @@ cells={} pitch={:.2} text={:?}",
         // = 001b0c6e ONLY (golden/ja/real_en 0) → single-doc by construction.
         let s952_b;
         let s952_a;
-        if std::env::var("OXI_S952_DISABLE").is_err() {
+        if !crate::env_flag!("OXI_S952_DISABLE") {
             // S1551 (2026-09-25, default ON, opt-out OXI_S1551_DISABLE): a direct
             // `beforeAutospacing="0"` / `afterAutospacing="0"` on the cell paragraph
             // switches the table style's autospacing OFF — direct pPr outranks the
@@ -24003,7 +24431,7 @@ cells={} pitch={:.2} text={:?}",
             // 1): the empty 10pt paragraph between 'Target: …' and 'Achieved …' has
             // before/after 48 + Autospacing 0; Word's PDF gaps are 2.0 / 2.2pt, Oxi
             // put 11.6 on each side, two such rows per page = the 34pt row drift.
-            let s1551 = std::env::var("OXI_S1551_DISABLE").is_err();
+            let s1551 = !crate::env_flag!("OXI_S1551_DISABLE");
             s952_b = tbl_ps.map_or(false, |ts| ts.before_autospacing)
                 && !(s1551 && para.style.before_autospacing_off);
             s952_a = tbl_ps.map_or(false, |ts| ts.after_autospacing)
@@ -24012,7 +24440,7 @@ cells={} pitch={:.2} text={:?}",
             s952_b = false;
             s952_a = false;
         }
-        let cellas_enabled = std::env::var("OXI_CELLAS_DISABLE").is_err()
+        let cellas_enabled = !crate::env_flag!("OXI_CELLAS_DISABLE")
             // S864 enables only the style-derived cell case. Direct-pPr
             // autospacing rides the main default-ON gate above.
             || (s864_part("C")
@@ -24031,7 +24459,7 @@ cells={} pitch={:.2} text={:?}",
         // across each of five boundaries (line 13.44 + auto 13.92) where Oxi
         // returned the explicit 5pt, i.e. 8.93-9.05pt short five times =
         // 44.902pt, and the Kiyana->Find-local span closes at 45.006pt.
-        let s968 = !self.doc_body_has_real_cjk && std::env::var("OXI_S968_DISABLE").is_err();
+        let s968 = !self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S968_DISABLE");
         let para_active = cellas_enabled && (!para.style.autospacing_from_style || s968);
         let b_flag = (para_active && para.style.before_autospacing) || s952_b;
         let a_flag = (para_active && para.style.after_autospacing) || s952_a;
@@ -24039,7 +24467,7 @@ cells={} pitch={:.2} text={:?}",
             return (est_sb, est_sa);
         }
         // S907: 14.0 (the PDF-true value; 13.75 was COM-quantized).
-        let auto_v: f32 = if std::env::var("OXI_S907_DISABLE").is_err() {
+        let auto_v: f32 = if !crate::env_flag!("OXI_S907_DISABLE") {
             14.0
         } else {
             13.75

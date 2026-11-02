@@ -19,6 +19,10 @@ encoding_rs = "0.8"
 flate2 = "1"
 rustybuzz = "0.20"
 
+[build-dependencies]
+serde_json = "1"
+flate2 = "1"
+
 [features]
 # The per-face metric catalog (font/data/font_catalog_metrics.gz, ~34 MB) is not
 # compiled in; its members are registered at run time instead (the browser

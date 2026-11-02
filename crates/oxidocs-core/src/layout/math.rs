@@ -225,7 +225,7 @@ pub fn glyph_advance_em(c: char) -> f32 {
     // math italic U+1D44E and that is the glyph whose width Word advances by;
     // measuring the ASCII `a` (which Cambria Math also carries, at a different
     // width) is a second, quieter version of the same bug.
-    if std::env::var("OXI_S1258_DISABLE").is_err() {
+    if !crate::env_flag!("OXI_S1258_DISABLE") {
         let t = crate::font::math_glyphs::MathAdvances::cambria_math();
         if let Some(em) = t.advance_em(math_substitute(c)).or_else(|| t.advance_em(c)) {
             return em;
@@ -544,7 +544,7 @@ fn nary_geometry(
     // subSup is right (n +14.04 / −10.68, k=0 +14.04 / +8.76). Oxi stacked every
     // undOvr and every display non-integral. blind-G ja/educational__20d9968b's
     // inline «∑_{k=0}^{n}»: the k=0 sat 6.7 low under the operator.
-    let stacked = if std::env::var_os("OXI_NARY_INLINE_SUBSUP_DISABLE").is_none() {
+    let stacked = if !crate::env_flag!("OXI_NARY_INLINE_SUBSUP_DISABLE") {
         ctx.style.is_display() && matches!(lim_loc, LimLoc::UndOvr)
     } else {
         matches!(lim_loc, LimLoc::UndOvr)
@@ -1029,7 +1029,7 @@ fn ink_extent(expr: &MathExpr, ctx: &MathLayoutContext) -> (f32, f32) {
 /// and not a 0.7em box (which would give 3 cells).
 fn fraction_shifts(table: &MathTable, fs: f32, display: bool, up: f32, down: f32,
                    num: &MathExpr, den: &MathExpr, sub_ctx: &MathLayoutContext) -> (f32, f32) {
-    if std::env::var_os("OXI_S1596_DISABLE").is_some() {
+    if crate::env_flag!("OXI_S1596_DISABLE") {
         return (up, down);
     }
     let axis = table.du_to_pt(table.constants.AxisHeight, fs);
@@ -1447,7 +1447,7 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
                 fs * 2.34
             } else if ctx.style.is_display() {
                 fs * 1.6
-            } else if std::env::var("OXI_S1252_DISABLE").is_err() {
+            } else if !crate::env_flag!("OXI_S1252_DISABLE") {
                 fs
             } else {
                 fs * 1.2
@@ -1467,7 +1467,7 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             // to the right -> height ≈ op_size, width += limits).
             // (op_is_integral computed above for the S653 op_size.)
             // OXI_NARY_INLINE_SUBSUP: mirror of nary_geometry's rule
-            let stacked = if std::env::var_os("OXI_NARY_INLINE_SUBSUP_DISABLE").is_none() {
+            let stacked = if !crate::env_flag!("OXI_NARY_INLINE_SUBSUP_DISABLE") {
                 ctx.style.is_display() && matches!(lim_loc, crate::ir::LimLoc::UndOvr)
             } else {
                 matches!(lim_loc, crate::ir::LimLoc::UndOvr)
@@ -1739,7 +1739,7 @@ fn emit_text_at(
     // `reference__0042471c`'s 47-character maths run at 258.5pt against
     // Word's 239.9. The table (see `MathAdvances`) sums the SUBSTITUTED
     // glyphs, which is what is drawn, and predicts 238.5.
-    let approx_width: f32 = if std::env::var("OXI_S1258_DISABLE").is_err() {
+    let approx_width: f32 = if !crate::env_flag!("OXI_S1258_DISABLE") {
         text.chars().map(|c| font_size * painted_glyph_advance_em(c)).sum()
     } else {
         text.chars().count() as f32 * font_size * 0.55
@@ -2350,7 +2350,7 @@ fn emit_nary(
         fs * 2.34
     } else if ctx.style.is_display() {
         fs * 1.6
-    } else if std::env::var("OXI_S1252_DISABLE").is_err() {
+    } else if !crate::env_flag!("OXI_S1252_DISABLE") {
         fs
     } else {
         fs * 1.2
@@ -2865,7 +2865,7 @@ pub fn emit_math_block(
         cur_x += b.advance;
     }
     if matches!(block,MathBlock::Display{..}) && !elems.is_empty()
-        && std::env::var("OXI_S652_DISABLE").is_err() {
+        && !crate::env_flag!("OXI_S652_DISABLE") {
         let (top,bottom)=reserved_line_extents(&elems);
         if top.is_finite() && bottom >= top {
             let table=MathTable::cambria_math();

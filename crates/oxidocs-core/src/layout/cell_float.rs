@@ -28,7 +28,7 @@ impl Obstacle {
         } else {
             let top = y - image.effect_extent_t.max(0.0);
             let bottom = y + image.height + image.effect_extent_b.max(0.0);
-            let effect = std::env::var_os("OXI_CELL_EMPTY_FLOAT_DISABLE").is_none();
+            let effect = !crate::env_flag!("OXI_CELL_EMPTY_FLOAT_DISABLE");
             let left = x - if effect { position.eff_l.max(0.0) } else { 0.0 };
             let right = x + image.width + if effect { position.eff_r.max(0.0) } else { 0.0 };
             vec![(left, top), (right, top), (right, bottom), (left, bottom)]

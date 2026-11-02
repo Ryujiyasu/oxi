@@ -78,6 +78,10 @@ struct ParseContext {
     comments: HashMap<String, Comment>,
     /// Theme colors from theme1.xml
     theme: ThemeColors,
+    /// Relationship ID -> a part drawn as a group: the SmartArt's laid-out
+    /// drawing (`diagrams/drawingN.xml`, keyed by its diagramData ID) and
+    /// each chart (`charts/chartN.xml`, keyed by its chart ID).
+    graphic_parts: HashMap<String, String>,
 }
 
 
@@ -523,8 +527,21 @@ fn s1425_merge_styles_xml(doc: &str, tpl: &str) -> String {
 }
 
 fn paragraph_base_run_style(styles: &StyleSheet, id: Option<&str>) -> RunStyle {
-    let mut base = id.or(styles.default_paragraph_style_id.as_deref())
-        .and_then(|id| styles.styles.get(id))
+    // OXI_PSTYLE_UNDEFINED_NORMAL (2026-11-02, default ON, opt-out _DISABLE): a
+    // pStyle the package does not define falls back to the default paragraph
+    // style, as Word does. en/reference__00f2bb61's footer names «Footer», which
+    // its styles.xml lacks: Word draws it in Normal's Segoe UI 11, Oxi in the
+    // application default (Times New Roman).
+    let defined = id.and_then(|id| styles.styles.get(id));
+    let fallback = if defined.is_none() && id.is_some()
+        && std::env::var_os("OXI_PSTYLE_UNDEFINED_NORMAL_DISABLE").is_none()
+    {
+        styles.default_paragraph_style_id.as_deref().and_then(|id| styles.styles.get(id))
+    } else { None };
+    let mut base = defined.or(fallback)
+        .or_else(|| if id.is_none() {
+            styles.default_paragraph_style_id.as_deref().and_then(|id| styles.styles.get(id))
+        } else { None })
         .and_then(|s| s.paragraph.default_run_style.clone())
         .unwrap_or_default();
     if let Some(defaults) = styles.effective_doc_default_run_style() {
@@ -1395,12 +1412,14 @@ impl OoxmlParser {
         // first-seen order), then any author surfaced by comments or tracked
         // changes. Color index = position in this Vec.
         let authors = build_author_palette(&people, &all_comments, &pages);
+        let unsupported = self.unsupported_census();
 
         let mut document = Document {
             pages,
             styles,
             metadata,
             comments: all_comments,
+            unsupported,
             people,
             authors,
             adjust_line_height_in_table,
@@ -1423,6 +1442,8 @@ impl OoxmlParser {
             keep_floating_tables_together: self.parse_compat_bool_flag("doNotBreakWrappedTables"),
             preserve_same_style_cell_spacing: self.parse_compat_bool_flag("allowSpaceOfSameStyleInTable"),
             additive_paragraph_spacing: self.parse_compat_bool_flag("doNotUseHTMLParagraphAutoSpacing"),
+            mirror_margins: self.parse_compat_bool_flag("mirrorMargins"),
+            gutter_at_top: self.parse_compat_bool_flag("gutterAtTop"),
         };
         // S1008 (2026-07-26): resolve fontTable w:altName substitutions
         // (source unsupported → alternate supported). No-op for the vast
@@ -1434,6 +1455,7 @@ impl OoxmlParser {
             apply_cs_run_flags_doc(&mut document);
         }
         apply_font_table_aliases(&mut document);
+        resolve_ptab_sentinels(&mut document);
         // Application font fallbacks belong to layout; retain authored defaults.
         // Glyph fallback is resolved once on the private layout copy.
         Ok(document)
@@ -1494,6 +1516,47 @@ impl OoxmlParser {
     }
 
     /// Resolve resources in the relationship namespace of one XML part.
+    /// The parts drawn as groups: the laid-out drawing of every SmartArt the
+    /// part references, keyed by the diagramData relationship ID its
+    /// `dgm:relIds r:dm` names (the data part points at the drawing through
+    /// `dsp:dataModelExt relId`, an ID in this same relationship set), and
+    /// every chart, keyed by its own relationship ID.
+    fn load_graphic_parts(
+        &mut self,
+        base_dir: &str,
+        rels: &HashMap<String, Relationship>,
+    ) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        for (id, rel) in rels {
+            if rel.rel_type.ends_with("/chart") {
+                if let Ok(path) = oxidocs_common::security::sanitize_rel_target(base_dir, &rel.target) {
+                    if let Ok(xml) = self.read_part(&path) {
+                        out.insert(id.clone(), xml);
+                    }
+                }
+                continue;
+            }
+            if !rel.rel_type.ends_with("/diagramData") {
+                continue;
+            }
+            let Ok(data_path) = oxidocs_common::security::sanitize_rel_target(base_dir, &rel.target) else { continue };
+            let Ok(data) = self.read_part(&data_path) else { continue };
+            let Some(drawing_id) = data
+                .find("dataModelExt")
+                .and_then(|i| data[i..].find("relId=\"").map(|j| i + j + 7))
+                .and_then(|start| data[start..].find('"').map(|end| data[start..start + end].to_string()))
+            else {
+                continue;
+            };
+            let Some(drawing_rel) = rels.get(&drawing_id).filter(|r| r.rel_type.ends_with("/diagramDrawing")) else { continue };
+            let Ok(path) = oxidocs_common::security::sanitize_rel_target(base_dir, &drawing_rel.target) else { continue };
+            if let Ok(xml) = self.read_part(&path) {
+                out.insert(id.clone(), xml);
+            }
+        }
+        out
+    }
+
     fn load_relationship_resources(
         &mut self,
         base_dir: &str,
@@ -1584,6 +1647,7 @@ impl OoxmlParser {
                         .and_then(|s| parse_relationships(&s).ok()).unwrap_or_default();
                     let (media, media_types, hyperlinks) =
                         self.load_relationship_resources(base_dir, &rels);
+                    let graphic_parts = self.load_graphic_parts(base_dir, &rels);
                     let part_ctx = ParseContext {
                         _rels: rels,
                         media,
@@ -1597,6 +1661,7 @@ impl OoxmlParser {
                         endnotes: ctx.endnotes.clone(),
                         comments: ctx.comments.clone(),
                         theme: ctx.theme.clone(),
+                        graphic_parts,
                     };
                     if let Ok(parsed) = parse_header_footer_xml(&xml, &part_ctx, styles) {
                         blocks.extend(parsed);
@@ -1605,6 +1670,54 @@ impl OoxmlParser {
             }
         }
         blocks
+    }
+
+    /// Content in the story parts that the renderer does not draw.
+    fn unsupported_census(&mut self) -> Vec<crate::ir::UnsupportedContent> {
+        let mut names: Vec<String> = self
+            .archive
+            .file_names()
+            .filter(|n| super::unsupported::is_story_part(n))
+            .map(str::to_string)
+            .collect();
+        names.sort();
+        let parts: Vec<(String, String)> = names
+            .into_iter()
+            .filter_map(|n| self.read_part(&n).ok().map(|xml| (n, xml)))
+            .collect();
+        let mut found = super::unsupported::census(parts.iter().map(|(n, x)| (n.as_str(), x.as_str())));
+        // A SmartArt is drawn from the laid-out drawing Word saves with it
+        // (OXI_SMARTART); one without that part is still a hole.
+        let drawings = self
+            .archive
+            .file_names()
+            .filter(|n| n.starts_with("word/diagrams/drawing") && n.ends_with(".xml"))
+            .count();
+        let smartart: usize = found.iter().filter(|u| u.kind == "smartart").map(|u| u.count).sum();
+        if smartart > 0 && smartart <= drawings && std::env::var_os("OXI_SMARTART_DISABLE").is_none() {
+            found.retain(|u| u.kind != "smartart");
+        }
+        // A chart is drawn from its cached values (OXI_CHART) when every plot
+        // in it is a kind parser::chart draws.
+        let charts: usize = found.iter().filter(|u| u.kind == "chart").map(|u| u.count).sum();
+        if charts > 0 && std::env::var_os("OXI_CHART_DISABLE").is_none() {
+            let mut names: Vec<String> = self
+                .archive
+                .file_names()
+                .filter(|n| n.starts_with("word/charts/") && n.ends_with(".xml") && !n.contains("/_rels/"))
+                .map(str::to_string)
+                .collect();
+            names.sort();
+            let chart_parts: Vec<String> = names.iter().filter(|n| !n.contains("colors") && !n.contains("style")).cloned().collect();
+            let drawable = chart_parts
+                .iter()
+                .filter(|n| self.read_part(n).is_ok_and(|xml| super::chart::is_drawable(&xml)))
+                .count();
+            if drawable == chart_parts.len() && charts <= drawable {
+                found.retain(|u| u.kind != "chart");
+            }
+        }
+        found
     }
 
     fn read_part(&mut self, name: &str) -> Result<String, ParseError> {
@@ -1650,6 +1763,7 @@ impl OoxmlParser {
 
         let (media, media_types, hyperlinks) =
             self.load_relationship_resources("word", &rels);
+        let graphic_parts = self.load_graphic_parts("word", &rels);
 
         // Parse footnotes (Round 29: pass styles for pStyle inheritance —
         // footnote text style "a8" sets snapToGrid=0, which without
@@ -1726,6 +1840,7 @@ impl OoxmlParser {
             endnotes,
             comments,
             theme,
+            graphic_parts,
         })
     }
 
@@ -1852,6 +1967,11 @@ impl OoxmlParser {
                                     &String::from_utf8_lossy(&attr.value), 16,
                                 ).ok();
                             }
+                            if local_name(attr.key.as_ref()) == "usb0" {
+                                current_info.unicode_range0 = u32::from_str_radix(
+                                    &String::from_utf8_lossy(&attr.value), 16,
+                                ).ok();
+                            }
                         }
                     }
                     if local == "font" {
@@ -1905,6 +2025,11 @@ impl OoxmlParser {
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "csb0" {
                                     current_info.code_page_range = u32::from_str_radix(
+                                        &String::from_utf8_lossy(&attr.value), 16,
+                                    ).ok();
+                                }
+                                if local_name(attr.key.as_ref()) == "usb0" {
+                                    current_info.unicode_range0 = u32::from_str_radix(
                                         &String::from_utf8_lossy(&attr.value), 16,
                                     ).ok();
                                 }
@@ -3333,6 +3458,53 @@ fn preceding_page_boundaries(runs: &[Run]) -> usize {
     runs.iter().flat_map(|run| run.text.chars()).filter(|ch| *ch == '\x0C').count()
 }
 
+const PTAB_LEFT_MARK: char = '\u{F8F0}';
+const PTAB_RIGHT_SENTINEL: f32 = 1.0e6;
+const PTAB_CENTER_SENTINEL: f32 = 2.0e6;
+thread_local! {
+    static PTAB_STOPS: std::cell::RefCell<Vec<TabStopAlignment>> = std::cell::RefCell::new(Vec::new());
+}
+
+/// OXI_PTAB: give the positional stops their place in each section's text column.
+fn resolve_ptab_sentinels(document: &mut Document) {
+    fn fix(blocks: &mut [Block], column: f32) {
+        for block in blocks.iter_mut() {
+            match block {
+                Block::Paragraph(p) => {
+                    if p.style.tab_stops.iter().any(|t| t.position >= PTAB_RIGHT_SENTINEL) {
+                        let width = (column - p.style.indent_left.unwrap_or(0.0)
+                            - p.style.indent_right.unwrap_or(0.0)).max(0.0);
+                        for t in p.style.tab_stops.iter_mut() {
+                            if t.position >= PTAB_CENTER_SENTINEL { t.position = width * 0.5; }
+                            else if t.position >= PTAB_RIGHT_SENTINEL { t.position = width; }
+                        }
+                        p.style.tab_stops.sort_by(|a, b| a.position.total_cmp(&b.position));
+                    }
+                }
+                Block::Table(t) => {
+                    for row in t.rows.iter_mut() {
+                        for cell in row.cells.iter_mut() {
+                            let w = cell.width.unwrap_or(column);
+                            fix(&mut cell.blocks, w);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for page in document.pages.iter_mut() {
+        let column = page.size.width - page.margin.left - page.margin.right;
+        fix(&mut page.blocks, column);
+        fix(&mut page.header, column);
+        fix(&mut page.footer, column);
+        fix(&mut page.header_first, column);
+        fix(&mut page.footer_first, column);
+        fix(&mut page.header_even, column);
+        fix(&mut page.footer_even, column);
+    }
+}
+
 fn parse_paragraph(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
@@ -3710,6 +3882,8 @@ fn parse_paragraph_with_inline_images_impl(
                                     })
                                 {
                                     run.style.inline_object_extent = Some((tb.width, tb.height));
+                                    run.style.inline_group_object = tb.children_on_line
+                                        && std::env::var_os("OXI_INLINE_GROUP_LINE_DISABLE").is_none();
                                 }
                             }
                             let drawing_source_page_offset = preceding_page_boundaries(&runs);
@@ -3803,6 +3977,8 @@ fn parse_paragraph_with_inline_images_impl(
                                     {
                                         run.style.inline_object_extent =
                                             Some((tb.width, tb.height));
+                                        run.style.inline_group_object = tb.children_on_line
+                                            && std::env::var_os("OXI_INLINE_GROUP_LINE_DISABLE").is_none();
                                     }
                                 }
                             }
@@ -5088,9 +5264,16 @@ fn parse_paragraph_with_inline_images_impl(
     // margin) out of scope. The routed runs were pushed in document order, so
     // unwinding here restores the exact pre-S1252 IR.
     if !s1252_slots.is_empty() {
+        // OXI_INLMATH_TAB (2026-11-02, default ON, opt-out _DISABLE): a TAB before
+        // the maths is content too -- it sets the maths at its stop, as text would.
+        // en/educational__0072828f («<tab/>r = ½h» in an ind-360 cell paragraph,
+        // tab stop 1269): Word draws the fraction at the stop (x 103), Oxi on the
+        // cell's left edge on a line of its own.
+        let inlmath_tab = std::env::var_os("OXI_INLMATH_TAB_DISABLE").is_none();
         let has_text = runs
             .iter()
-            .any(|r| r.style.inline_math.is_none() && !r.text.trim().is_empty());
+            .any(|r| r.style.inline_math.is_none()
+                && (!r.text.trim().is_empty() || (inlmath_tab && r.text.contains('\t'))));
         if has_text {
             // The route stands: give up the reserved block slots.
             for slot in s1252_slots.iter().rev() {
@@ -5102,6 +5285,37 @@ fn parse_paragraph_with_inline_images_impl(
             let removed:Vec<_>=runs.iter().enumerate().filter_map(|(index,run)|run.style.inline_math.is_some().then_some(index)).collect();
             remove_source_runs(&mut images,&mut found_shapes,&mut found_text_boxes,&removed);
             runs.retain(|r| r.style.inline_math.is_none());
+        }
+    }
+
+    // OXI_PTAB: the positional stops of this paragraph (positions resolved per
+    // section in resolve_ptab_sentinels), and its left ptabs.
+    for alignment in PTAB_STOPS.with(|v| std::mem::take(&mut *v.borrow_mut())) {
+        style.tab_stops.push(TabStop {
+            position: if alignment == TabStopAlignment::Center { PTAB_CENTER_SENTINEL } else { PTAB_RIGHT_SENTINEL },
+            alignment,
+            leader: None,
+            clear: false,
+        });
+    }
+    if runs.iter().any(|r| r.text.contains(PTAB_LEFT_MARK)) {
+        let mut seen = false;
+        for run in runs.iter_mut() {
+            if !run.text.contains(PTAB_LEFT_MARK) {
+                if run.text.chars().any(|c| !c.is_whitespace()) { seen = true; }
+                if run.text.contains('\n') { seen = run.text.rsplit('\n').next().map_or(false, |t| !t.trim().is_empty()); }
+                continue;
+            }
+            let mut out = String::new();
+            for ch in run.text.chars() {
+                if ch == PTAB_LEFT_MARK {
+                    if seen { out.push('\n'); seen = false; }
+                } else {
+                    if ch == '\n' { seen = false; } else if !ch.is_whitespace() { seen = true; }
+                    out.push(ch);
+                }
+            }
+            run.text = out;
         }
     }
 
@@ -7063,6 +7277,27 @@ fn parse_run(
                     "sym" if depth == 0 => {
                         append_run_symbol(&e, &mut text, &mut symbol_spans);
                     }
+                    // OXI_PTAB (2026-11-02, default ON, opt-out _DISABLE): a positional
+                    // tab (`w:ptab`) is an absolute stop: right / center at the right
+                    // edge / middle of the text column, left at its start -- which the
+                    // line has already passed, so the text after it takes a new line.
+                    // en/reference__00f2bb61 footer «ptab left / Metadata 578365 / ptab
+                    // right / Page 3 of 4 / ptab left / Downloaded …»: Word «Page 3 of 4»
+                    // right-aligned to 547.4, «Downloaded» on the next line at 50.04;
+                    // Oxi dropped the ptabs and ran all three into one line.
+                    "ptab" if depth == 0 && std::env::var_os("OXI_PTAB_DISABLE").is_none() => {
+                        let mut align = String::from("left");
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "alignment" {
+                                align = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                        match align.as_str() {
+                            "right" => { text.push('\t'); PTAB_STOPS.with(|v| v.borrow_mut().push(TabStopAlignment::Right)); }
+                            "center" => { text.push('\t'); PTAB_STOPS.with(|v| v.borrow_mut().push(TabStopAlignment::Center)); }
+                            _ => text.push(PTAB_LEFT_MARK),
+                        }
+                    }
                     // S927 (2026-07-18, default ON, opt-out
                     // OXI_S927_DISABLE): CT_Cr is the legacy carriage-return
                     // spelling of a text wrapping break.  Word gives `<w:cr/>`
@@ -7477,6 +7712,7 @@ fn parse_notes_xml(
         // Word's PDF), Oxi set them in Times New Roman 8 (9.2) and the notes
         // that overflow onto Word's page 4 fitted on page 3.
         theme: if std::env::var_os("OXI_S1599_DISABLE").is_none() { theme.clone() } else { ThemeColors::default() },
+        graphic_parts: HashMap::new(),
     };
 
     loop {
@@ -7619,7 +7855,7 @@ impl DrawingResult {
 
 /// Parse DrawingML color modifier child elements (lumMod, lumOff, tint, shade, etc.)
 /// and apply them to a base hex color. Consumes elements until the closing tag.
-fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, end_tag: &str) -> String {
+pub(super) fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, end_tag: &str) -> String {
     let mut lum_mod: Option<f32> = None;
     let mut lum_off: Option<f32> = None;
     let mut tint: Option<f32> = None;
@@ -7633,7 +7869,13 @@ fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, end_tag: &s
                 for attr in e.attributes().flatten() {
                     if local_name(attr.key.as_ref()) == "val" {
                         let val = String::from_utf8_lossy(&attr.value);
-                        let v = val.parse::<f32>().unwrap_or(0.0) / 100000.0;
+                        // Strict OOXML writes a percentage as "60%"; Transitional
+                        // as 60000. Read as 0, the Strict form washed every tinted
+                        // colour out to white.
+                        let v = match val.strip_suffix('%') {
+                            Some(pct) => pct.trim().parse::<f32>().unwrap_or(0.0) / 100.0,
+                            None => val.parse::<f32>().unwrap_or(0.0) / 100000.0,
+                        };
                         match local.as_str() {
                             "lumMod" => lum_mod = Some(v),
                             "lumOff" => lum_off = Some(v),
@@ -7835,6 +8077,10 @@ fn parse_drawing(
     let mut text_wrap_none = false;
     // S537b: wordprocessingCanvas marker (wpc:wpc child of graphicData).
     let mut is_canvas = false;
+    // The diagramData relationship of a SmartArt (`dgm:relIds r:dm`), and the
+    // chart relationship of a chart (`c:chart r:id`).
+    let mut smartart_dm: Option<String> = None;
+    let mut chart_rel: Option<String> = None;
     // S839 (2026-07-14): wpg vector-group per-shape extraction. The main
     // loop keeps ALL its existing (last-win, global) prop semantics; the
     // S839 state only PIGGYBACKS per-shape records so a visual-only group
@@ -8788,6 +9034,20 @@ fn parse_drawing(
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "chart" => {
+                        chart_rel = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| local_name(a.key.as_ref()) == "id")
+                            .map(|a| String::from_utf8_lossy(&a.value).into_owned());
+                    }
+                    "relIds" => {
+                        smartart_dm = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| local_name(a.key.as_ref()) == "dm")
+                            .map(|a| String::from_utf8_lossy(&a.value).into_owned());
+                    }
                     "start" | "lineTo" if in_wrapping_polygon => {
                         let mut x = None;
                         let mut y = None;
@@ -9501,6 +9761,7 @@ fn parse_drawing(
                                     host_break_after: false,
                                     children: Vec::new(),
                                     body_wrap_none: text_wrap_none,
+                                    children_on_line: false,
                                 });
                             }
                             if (stroke.is_some() || fill.is_some()) && (is_line || is_rect)
@@ -9617,6 +9878,7 @@ fn parse_drawing(
                                     host_break_after: false,
                                     children: Vec::new(),
                                     body_wrap_none: false,
+                                    children_on_line: false,
                                 });
                             }
                         }
@@ -9917,6 +10179,28 @@ fn parse_drawing(
     // textbox and suppresses the legacy whole-extent outline (border came from
     // the group members' a:ln via the generic last-win extraction). Text-
     // bearing groups (framework cover pages) attach nothing → byte-identical.
+    // OXI_SMARTART (2026-11-01, default ON, opt-out _DISABLE): a SmartArt is
+    // drawn from the laid-out shapes Word saved with it, as the shapes and
+    // text members of a group (see parser::smartart).
+    let smartart = smartart_dm
+        .as_ref()
+        .filter(|_| std::env::var_os("OXI_SMARTART_DISABLE").is_none())
+        .and_then(|id| ctx.graphic_parts.get(id))
+        .and_then(|xml| super::smartart::from_drawing(xml, &ctx.theme));
+    // OXI_CHART (2026-11-01, default ON, opt-out _DISABLE): a chart is drawn
+    // from the values its part caches, as the shapes and text members of a
+    // group (see parser::chart).
+    let chart = chart_rel
+        .as_ref()
+        .filter(|_| std::env::var_os("OXI_CHART_DISABLE").is_none())
+        .and_then(|id| ctx.graphic_parts.get(id))
+        .and_then(|xml| super::chart::from_chart(xml, &ctx.theme, width, height));
+    let group = smartart.or(chart);
+    let group_drawn = group.is_some();
+    if let Some(art) = group {
+        s839_vector_shapes = art.shapes;
+        s839_text_children = art.texts;
+    }
     let s839_attach = !s839_vector_shapes.is_empty()
         && shape_text_blocks.is_empty()
         && std::env::var("OXI_S839_DISABLE").is_err();
@@ -9925,7 +10209,7 @@ fn parse_drawing(
             font_ref_color, shape_fill, shape_text_blocks.len(), is_outline_shape, has_visual);
     }
     let text_box = if !is_outline_shape
-        && (!shape_text_blocks.is_empty() || has_visual || !s839_text_children.is_empty())
+        && (!shape_text_blocks.is_empty() || has_visual || !s839_text_children.is_empty() || group_drawn)
     {
         Some(TextBox {
             wrap_polygon: wrapping_points.clone(),
@@ -9994,6 +10278,7 @@ fn parse_drawing(
             host_break_after: false,
             children: std::mem::take(&mut s839_text_children),
             body_wrap_none: text_wrap_none,
+            children_on_line: group_drawn,
         })
     } else {
         None
@@ -10031,9 +10316,13 @@ fn parse_drawing(
     // No text_box requirement: creative's specimen is a noFill/noStroke rect
     // (an INVISIBLE inline object, descr="Inline image") — Word reserves the
     // wp:extent regardless of visibility.
+    // A SmartArt or chart stays in its paragraph as an inline object, drawn
+    // by the line like any inline vector group: a placeholder would take the
+    // paragraph's place and leave the group nowhere to be drawn.
     let s1182_visual = image.is_none()
         && inline_tb
         && !is_canvas
+        && !group_drawn
         && !s741_has_txbx_text
         && width > 0.0
         && height > 0.0
@@ -10200,6 +10489,7 @@ fn vml_shape_text_box(sh: &Shape) -> TextBox {
         host_break_after: false,
         children: Vec::new(),
         body_wrap_none: false,
+        children_on_line: false,
     }
 }
 
@@ -11064,6 +11354,7 @@ fn parse_vml_pict(
             host_break_after: false,
             children: Vec::new(),
             body_wrap_none: false,
+            children_on_line: false,
         });
         return Ok(DrawingResult {
             symbol_text: None,
@@ -11136,6 +11427,7 @@ fn parse_vml_pict(
             host_break_after: false,
             children: Vec::new(),
             body_wrap_none: false,
+            children_on_line: false,
         });
         let placeholder = Some(Image {
             rotation: 0.0,
@@ -12462,6 +12754,9 @@ fn parse_table(
                 if style.bottom_border.is_none() {
                     style.bottom_border = tbl_style.bottom_border.clone();
                 }
+                if style.left_border.is_none() {
+                    style.left_border = tbl_style.left_border.clone();
+                }
             }
         }
     }
@@ -12968,7 +13263,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                     }
                                 }
                                 "sz" => {
-                                    border_sz_val = val.parse::<f32>().ok().map(|v| v / 8.0);
+                                    border_sz_val = val.parse::<f32>().ok().map(|v| crate::ir::table_border_twips(v / 8.0));
                                 }
                                 _ => {}
                             }
@@ -13013,7 +13308,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                         // border_width/_style cannot tell a sz4 top from a sz24
                         // bottom, and the row-0 pad and the below-table advance
                         // each need their own edge.
-                        if matches!(local.as_str(), "insideH" | "insideV" | "top" | "bottom") {
+                        if matches!(local.as_str(), "insideH" | "insideV" | "top" | "bottom" | "left" | "start") {
                             let border = BorderDef {
                                 style: if is_none {
                                     "none".to_string()
@@ -13030,6 +13325,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 "insideH" => style.inside_horizontal_border = Some(border),
                                 "insideV" => style.inside_vertical_border = Some(border),
                                 "top" => style.top_border = Some(border),
+                                "left" | "start" => style.left_border = Some(border),
                                 _ => style.bottom_border = Some(border),
                             }
                         }
@@ -13377,7 +13673,9 @@ fn parse_table_row(
                                             match reader.read_event() {
                                                 Ok(Event::Empty(be)) => {
                                                     let bl = local_name(be.name().as_ref());
-                                                    let bdr = parse_border_attrs(&be).or_else(|| {
+                                                    let bdr = parse_border_attrs(&be).map(|mut b| {
+                                                        b.width = crate::ir::table_border_twips(b.width); b
+                                                    }).or_else(|| {
                                                         let explicit_none = be.attributes().flatten().any(|a| {
                                                             local_name(a.key.as_ref()) == "val" && {
                                                                 let v = String::from_utf8_lossy(&a.value);
@@ -13649,7 +13947,19 @@ fn parse_table_cell(
                         // to its text height — 3a4f p34's 321.75pt calendar EMF
                         // cell rendered ~28pt, the Phase-1 sole-FAIL root cause.
                         if std::env::var("OXI_S331_DISABLE").is_err() {
-                            for mb in pr.math_blocks {
+                            // OXI_CELL_MATH_HOST: an equation-only cell paragraph lends
+                            // its style to its display equations, as S1613 does in the
+                            // body (size, indents).
+                            let cell_math_host = (std::env::var_os("OXI_CELL_MATH_HOST_DISABLE").is_none()
+                                && s971_cell_host.runs.is_empty() && pr.inline_images.is_empty()
+                                && pr.floating_images.is_empty())
+                                .then(|| Box::new(s971_cell_host.style.clone()));
+                            for mut mb in pr.math_blocks {
+                                if let crate::ir::MathBlock::Display { host, .. } = &mut mb {
+                                    if host.is_none() {
+                                        *host = cell_math_host.clone();
+                                    }
+                                }
                                 blocks.push(Block::Math(mb));
                             }
                             // S971: an image-only CELL paragraph is dropped by S536
@@ -14013,7 +14323,9 @@ fn parse_cell_borders(reader: &mut Reader<&[u8]>) -> Result<CellBorders, ParseEr
         match reader.read_event()? {
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
-                let bdr = parse_border_attrs(&e);
+                let bdr = parse_border_attrs(&e).map(|mut b| {
+                    b.width = crate::ir::table_border_twips(b.width); b
+                });
                 // S482: a cell's EXPLICIT w:val="nil"/"none" edge SUPPRESSES the
                 // table-level border on that edge — it is NOT the same as an absent
                 // edge (which inherits the table border). parse_border_attrs returns
@@ -15599,6 +15911,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
         endnotes: HashMap::new(),
         comments: HashMap::new(),
         theme: ThemeColors::default(),
+        graphic_parts: HashMap::new(),
     };
     let empty_styles = StyleSheet::default();
 
@@ -15925,6 +16238,32 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
     // family x pitch x name; the signature is the discriminator, the family
     // the only second term. policies__00602e8a's NTPreCursivef (script, sig)
     // renders in Calibri 14; Oxi's Cambria fallback was ~4% wider.
+    // OXI_SIG_SYLFAEN (2026-11-01, default ON, opt-out _DISABLE): a missing face whose
+    // signature declares Armenian (usb0 bit 10) or Georgian (bit 26) is drawn in
+    // Sylfaen, before the S1444 Calibri / Cambria split. `_pb_missing_sig_script_gen.py`
+    // (an invented face, charset 00, family auto, one Word process per arm): usb0
+    // E50002FF / E50000FF / 040000FF / 000004FF -> Sylfaen, E10002FF / 010000FF (Thai)
+    // / 000000FF -> Calibri; the real name «Helvetica Neue» with E50002FF -> Sylfaen, «Menlo» too.
+    // en/creative__04374e00's body (Helvetica Neue, E50002FF) is Sylfaen in Word.
+    if std::env::var_os("OXI_SIG_SYLFAEN_DISABLE").is_none() {
+        for (name, info) in &document.styles.font_table {
+            // (registry aliases such as S846's Helvetica Neue -> Arial do not count:
+            // the face itself is what is missing)
+            // Names Windows' FontSubstitutes maps (Helvetica -> Arial, Times -> Times
+            // New Roman) and Arial Unicode MS (its own charset law) keep their route:
+            // the same probe with those names and E50002FF draws Helvetica / Times /
+            // ArialMT, and «Menlo» draws Sylfaen.
+            if info.unicode_range0.map_or(false, |u| u & ((1 << 10) | (1 << 26)) != 0)
+                && !matches!(name.as_str(), "Helvetica" | "Helv" | "Times" | "Tms Rmn" | "Courier" | "Arial Unicode MS")
+                && crate::font::runtime::resolve(name, false, false).is_none()
+                && crate::font::runtime::resolve("Sylfaen", false, false).is_some()
+                && !registry.get(name).is_cjk_83_64_font()
+                && !alias.contains_key(name)
+            {
+                alias.insert(name.clone(), "Sylfaen".to_string());
+            }
+        }
+    }
     if std::env::var_os("OXI_S1444_DISABLE").is_none() {
         for (name, info) in &document.styles.font_table {
             let cambria_family = matches!(
@@ -16356,7 +16695,7 @@ mod tests {
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
-            comments: HashMap::new(), theme: ThemeColors::default(),
+            comments: HashMap::new(), theme: ThemeColors::default(), graphic_parts: HashMap::new(),
         };
         ctx.media.insert("rId1".into(), vec![1, 2, 3]);
         for (picture, painted, expect_shape) in [(true, false, false), (true, true, true), (false, false, true)] {
@@ -16381,7 +16720,7 @@ mod tests {
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
-            comments: HashMap::new(), theme: ThemeColors::default(),
+            comments: HashMap::new(), theme: ThemeColors::default(), graphic_parts: HashMap::new(),
         };
         ctx.media.insert("rId1".into(), vec![1, 2, 3]);
         for (value, expected) in [("0", true), ("false", true), ("1", false), ("true", false)] {
@@ -16411,7 +16750,7 @@ mod tests {
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
-            comments: HashMap::new(), theme: ThemeColors::default(),
+            comments: HashMap::new(), theme: ThemeColors::default(), graphic_parts: HashMap::new(),
         };
         ctx.media.insert("rId1".into(), vec![1, 2, 3]);
         for (kind, expected) in [("square", WrapType::Square), ("tight", WrapType::Tight),
@@ -16443,7 +16782,7 @@ mod tests {
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
-            comments: HashMap::new(), theme: ThemeColors::default(),
+            comments: HashMap::new(), theme: ThemeColors::default(), graphic_parts: HashMap::new(),
         };
         let para = |text: &str| format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>");
         for root in ["hdr", "ftr"] {
@@ -16767,6 +17106,7 @@ mod tests {
             endnotes: HashMap::new(),
             comments: HashMap::new(),
             theme: ThemeColors::default(),
+            graphic_parts: HashMap::new(),
         };
         let styles = StyleSheet::default();
         let mut reader = Reader::from_str(xml);
@@ -16807,6 +17147,7 @@ mod tests {
             endnotes: HashMap::new(),
             comments: HashMap::new(),
             theme: ThemeColors::default(),
+            graphic_parts: HashMap::new(),
         };
         let styles = StyleSheet::default();
         let mut reader = Reader::from_str(xml);
@@ -16842,6 +17183,7 @@ mod tests {
             endnotes: HashMap::new(),
             comments: HashMap::new(),
             theme: ThemeColors::default(),
+            graphic_parts: HashMap::new(),
         };
         let styles = StyleSheet::default();
         let mut reader = Reader::from_str(xml);
@@ -17213,7 +17555,7 @@ fn s1598_val_off(e: &quick_xml::events::BytesStart) -> bool {
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
-            comments: HashMap::new(), theme: ThemeColors::default(),
+            comments: HashMap::new(), theme: ThemeColors::default(), graphic_parts: HashMap::new(),
         };
         ctx.media.insert("rId1".into(), vec![1,2,3]);
         let drawing = r#"<w:drawing><wp:anchor><wp:extent cx="127000" cy="127000"/><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:wrapSquare/><a:blip r:embed="rId1"/></wp:anchor></w:drawing>"#;
@@ -17246,7 +17588,7 @@ fn s1598_val_off(e: &quick_xml::events::BytesStart) -> bool {
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
-            comments: HashMap::new(), theme: ThemeColors::default(),
+            comments: HashMap::new(), theme: ThemeColors::default(), graphic_parts: HashMap::new(),
         };
         ctx.media.insert("rId1".into(), vec![1,2,3]);
         let drawing = r#"<w:drawing><wp:anchor><wp:extent cx="127000" cy="127000"/><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:wrapSquare/><a:blip r:embed="rId1"/></wp:anchor></w:drawing>"#;
@@ -17276,7 +17618,7 @@ fn floating_source_point_survives_text_and_run_transformations(){
         _rels:HashMap::new(),media:HashMap::new(),media_types:HashMap::new(),hyperlinks:HashMap::new(),
         numbering:NumberingDefinitions::default(),list_counters:std::cell::RefCell::new(HashMap::new()),
         fields:std::cell::RefCell::new(Vec::new()),paragraph_base:std::cell::RefCell::new(RunStyle::default()),
-        footnotes:HashMap::new(),endnotes:HashMap::new(),comments:HashMap::new(),theme:ThemeColors::default(),
+        footnotes:HashMap::new(),endnotes:HashMap::new(),comments:HashMap::new(),theme:ThemeColors::default(),graphic_parts:HashMap::new(),
     };
     ctx.media.insert("rId1".into(),vec![1,2,3]);
     let draw=r#"<w:drawing><wp:anchor><wp:extent cx="127000" cy="127000"/><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:wrapSquare/><a:blip r:embed="rId1"/></wp:anchor></w:drawing>"#;
@@ -17320,7 +17662,7 @@ fn math_run_properties_use_the_package_font_and_style_context() {
             font_family_east_asia:Some("Inherited EA face".into()),
             font_hint_east_asia:Some(true),font_size:Some(10.5), ..RunStyle::default()
         }),
-        footnotes:HashMap::new(),endnotes:HashMap::new(),comments:HashMap::new(),theme:ThemeColors::default(),
+        footnotes:HashMap::new(),endnotes:HashMap::new(),comments:HashMap::new(),theme:ThemeColors::default(),graphic_parts:HashMap::new(),
     };
     let styles=StyleSheet::default();
     for prefix in ["w", "ns7"] {
@@ -17355,7 +17697,7 @@ fn math_operator_control_color_uses_package_context_without_coloring_leaves() {
         numbering: NumberingDefinitions::default(), list_counters: std::cell::RefCell::new(HashMap::new()),
         fields: std::cell::RefCell::new(Vec::new()), paragraph_base: std::cell::RefCell::new(RunStyle {
             color: Some("00FF00".into()), ..RunStyle::default()
-        }), footnotes: HashMap::new(), endnotes: HashMap::new(), comments: HashMap::new(), theme: ThemeColors::default(),
+        }), footnotes: HashMap::new(), endnotes: HashMap::new(), comments: HashMap::new(), theme: ThemeColors::default(), graphic_parts: HashMap::new(),
     };
     for prefix in ["w", "ns7"] {
         for (control, expected) in [(format!(r#"<m:ctrlPr><{prefix}:rPr><{prefix}:color {prefix}:val="FF0000"/></{prefix}:rPr></m:ctrlPr>"#), Some("FF0000")),

@@ -419,9 +419,25 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             let mut cy = glyph_y;
                             for ch in text.chars() {
                                 if !ch.is_whitespace() {
-                                    let cw: Vec<u16> = ch.to_string()
-                                        .encode_utf16().collect();
-                                    TextOutW(mem_dc, cx, cy, &cw);
+                                    // OXI_VERT_FORMS: vertical presentation forms;
+                                    // the long-vowel mark and dashes turn a quarter.
+                                    if oxidocs_core::font::vertical_rotated_char(ch) {
+                                        let rfont = CreateFontW(
+                                            -fs, lf_width, -900, -900, weight,
+                                            ital, 0, 0, 1, 0, 0, 5, 0,
+                                            PCWSTR(family_wide.as_ptr()),
+                                        );
+                                        let prev = SelectObject(mem_dc, rfont);
+                                        let cw: Vec<u16> = ch.to_string().encode_utf16().collect();
+                                        TextOutW(mem_dc, cx + fs, cy, &cw);
+                                        SelectObject(mem_dc, prev);
+                                        let _ = DeleteObject(rfont);
+                                    } else {
+                                        let v = oxidocs_core::font::vertical_presentation_form(ch).unwrap_or(ch);
+                                        let cw: Vec<u16> = v.to_string()
+                                            .encode_utf16().collect();
+                                        TextOutW(mem_dc, cx, cy, &cw);
+                                    }
                                 }
                                 cy += fs;
                             }

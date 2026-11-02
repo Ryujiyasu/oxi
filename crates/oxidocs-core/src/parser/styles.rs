@@ -2176,6 +2176,7 @@ fn resolve_table_style_inheritance(styles: &mut StyleSheet) {
                     if std::env::var("OXI_TABLE_STYLE_OUTER_EDGES_DISABLE").is_err() {
                         if child.top_border.is_none() { child.top_border = parent.top_border.clone(); }
                         if child.bottom_border.is_none() { child.bottom_border = parent.bottom_border.clone(); }
+                        if child.left_border.is_none() { child.left_border = parent.left_border.clone(); }
                     }
                     if child.inside_horizontal_border.is_none() {
                         child.has_inside_h = parent.has_inside_h;
@@ -2457,7 +2458,7 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>, theme: &ThemeColors)
                             match key.as_str() {
                                 "val" => { edge_style = val.to_string(); if val == "none" || val == "nil" { is_none = true; } }
                                 "color" => { border_color = Some(if val == "auto" { "000000".to_string() } else { val.to_string() }); }
-                                "sz" => { border_sz = val.parse::<f32>().ok().map(|v| v / 8.0); }
+                                "sz" => { border_sz = val.parse::<f32>().ok().map(|v| crate::ir::table_border_twips(v / 8.0)); }
                                 _ => {}
                             }
                         }
@@ -2470,7 +2471,7 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>, theme: &ThemeColors)
                             style.border_style = Some("single".to_string());
                         }
                         if std::env::var("OXI_TABLE_STYLE_OUTER_EDGES_DISABLE").is_err()
-                            && (local == "top" || local == "bottom") {
+                            && (local == "top" || local == "bottom" || local == "left" || local == "start") {
                             let border = BorderDef {
                                 style: edge_style,
                                 width: border_sz.unwrap_or(0.5),
@@ -2478,6 +2479,7 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>, theme: &ThemeColors)
                                 space: 0.0,
                             };
                             if local == "top" { style.top_border = Some(border); }
+                            else if local == "left" || local == "start" { style.left_border = Some(border); }
                             else { style.bottom_border = Some(border); }
                         }
                         if local == "insideH" || local == "insideV" {
@@ -2541,7 +2543,9 @@ fn parse_tbl_style_pr_contents(reader: &mut Reader<&[u8]>) -> Result<TableCondit
                 if in_tc_borders {
                     match local.as_str() {
                         "top" | "bottom" | "left" | "right" | "start" | "end" => {
-                            let bdef = parse_border_def_from_attrs(&e);
+                            let bdef = parse_border_def_from_attrs(&e).map(|mut b| {
+                                b.width = crate::ir::table_border_twips(b.width); b
+                            });
                             if bdef.is_some() { has_borders = true; }
                             match local.as_str() {
                                 "top" => borders.top = bdef,

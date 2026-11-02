@@ -3,12 +3,16 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub(crate) mod numbering;
+mod chart;
+mod dml;
 mod ooxml;
 mod xml_space;
 pub mod omml;
 pub mod relationships;
+mod smartart;
 mod styles;
 pub mod theme;
+mod unsupported;
 
 use crate::ir::Document;
 use thiserror::Error;

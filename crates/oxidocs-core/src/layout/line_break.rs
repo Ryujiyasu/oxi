@@ -25,7 +25,7 @@ impl<'a> LineBreaker<'a> {
     // PDF measures the same 2.52pt leading gap in all three arms.
     fn autospace_after_style(&self, ch: char, style: &RunStyle, para: &ParagraphStyle) -> f32 {
         let size = self.resolve_font_size(style, para);
-        let size = if std::env::var("OXI_S899_DISABLE").is_err()
+        let size = if !crate::env_flag!("OXI_S899_DISABLE")
             && style.font_size.is_some()
             && matches!(style.vertical_align,
                 Some(VerticalAlign::Superscript) | Some(VerticalAlign::Subscript))
@@ -76,10 +76,10 @@ impl<'a> LineBreaker<'a> {
         // said 8303; 4-font repro, unitH/mini3). Opt-out OXI_IMPLICIT_COMPAT_EXACT_DISABLE.
         let legacy_latin_exact = ((self.compat_mode == 14 && self.compat_mode_explicit)
             || (!self.compat_mode_explicit
-                && std::env::var_os("OXI_IMPLICIT_COMPAT_EXACT_DISABLE").is_none()))
+                && !crate::env_flag!("OXI_IMPLICIT_COMPAT_EXACT_DISABLE")))
             && !is_justified
             && !vertical
-            && std::env::var_os("OXI_LEGACY_EXACT_DISABLE").is_none()
+            && !crate::env_flag!("OXI_LEGACY_EXACT_DISABLE")
             && fragments.iter().all(|f| !f.0.chars().any(kinsoku::is_cjk));
         // S1446 (2026-09-17, default ON, opt-out OXI_S1446_DISABLE): a vertical
         // character set at a PROPORTIONAL advance (ＭＳ Ｐ明朝 kana / 、。) breaks
@@ -88,15 +88,15 @@ impl<'a> LineBreaker<'a> {
         // column in every arm, while ＭＳ 明朝's full-width 。 hangs under compat
         // 14). The explicit OXI_VERTICAL_NATURAL_BOUNDARY keeps the checkpoint's
         // unscoped form (every character with a table advance).
-        let s1446_natural_boundary_explicit = std::env::var_os("OXI_VERTICAL_NATURAL_BOUNDARY").is_some();
+        let s1446_natural_boundary_explicit = crate::env_flag!("OXI_VERTICAL_NATURAL_BOUNDARY");
         let vertical_natural_boundary_enabled = vertical
             && crate::font::vertical_font_advance_on()
-            && (s1446_natural_boundary_explicit || std::env::var_os("OXI_S1446_DISABLE").is_none());
+            && (s1446_natural_boundary_explicit || !crate::env_flag!("OXI_S1446_DISABLE"));
         let dbg_frags = std::env::var("OXI_DBG_FRAGS").ok().filter(|pre| {
             let head: String = fragments.iter().flat_map(|f| f.0.chars()).take(pre.chars().count()).collect();
             head == *pre
         });
-        if (std::env::var("OXI_DBG1318").is_ok() && fragments.first().map_or(false, |f| f.0.starts_with('\u{203B}'))) || dbg_frags.is_some() {
+        if (crate::env_flag!("OXI_DBG1318") && fragments.first().map_or(false, |f| f.0.starts_with('\u{203B}'))) || dbg_frags.is_some() {
             eprintln!("[FRAGS] avail={:.2} first_indent={:.2} left_tw={:?} left_chars={:?} hang_chars={:?} {:?}", available_width, first_line_indent,
                 para_style.indent_left, para_style.indent_left_chars, para_style.indent_hanging_chars,
                 fragments.iter().take(6).map(|f| (f.0.chars().take(6).collect::<String>(), f.1.character_spacing, f.1.font_size, f.3)).collect::<Vec<_>>());
@@ -121,7 +121,7 @@ impl<'a> LineBreaker<'a> {
             // OXI_WORDWRAP0_IDEOSPACE: under wordWrap 0 a paragraph of ideographic
             // spaces wraps like text (Word: 38 spaces in a 36.6em column = 2 lines).
             && !(!para_style.word_wrap
-                && std::env::var_os("OXI_WORDWRAP0_IDEOSPACE_DISABLE").is_none()
+                && !crate::env_flag!("OXI_WORDWRAP0_IDEOSPACE_DISABLE")
                 && fragments.iter().any(|(text, _, _, _, _)| text.contains('\u{3000}')));
 
         let mut lines = Vec::new();
@@ -190,7 +190,7 @@ impl<'a> LineBreaker<'a> {
             .as_ref()
             .and_then(|b| b.right.as_ref())
             .map_or(false, |d| d.style != "none")
-            && std::env::var("OXI_S929_DISABLE").is_err();
+            && !crate::env_flag!("OXI_S929_DISABLE");
         // S1262 (2026-08-30, default ON, opt-out OXI_S1262_DISABLE): the hang
         // also applies at compatibilityMode 15 when the paragraph is JUSTIFIED,
         // and the mark set includes the closing quotes.
@@ -228,13 +228,13 @@ impl<'a> LineBreaker<'a> {
         // witnesses split on it: administrative__003f0741 hangs «January 15-17,»
         // (Normal eastAsia ja-JP) and not «…vehicle refueling.» (run en-US);
         // reference__00acfeb3 (docDefaults eastAsia en-US) hangs nothing.
-        let s1262 = std::env::var("OXI_S1262_DISABLE").is_err();
+        let s1262 = !crate::env_flag!("OXI_S1262_DISABLE");
         let s809_legacy = self.compat_mode < 15 || !self.compat_mode_explicit;
         let s809_hang = !self.doc_body_has_real_cjk
             && (s809_legacy || (s1262 && is_justified))
             && !s929_right_fence
-            && std::env::var("OXI_S809_DISABLE").is_err();
-        if std::env::var("OXI_DBG_HANG").is_ok() {
+            && !crate::env_flag!("OXI_S809_DISABLE");
+        if crate::env_flag!("OXI_DBG_HANG") {
             eprintln!("[HANG] s809={} legacy={} just={} cm={} expl={} cjk={} fence={}",
                 s809_hang, s809_legacy, is_justified, self.compat_mode,
                 self.compat_mode_explicit, self.doc_body_has_real_cjk, s929_right_fence);
@@ -274,10 +274,10 @@ impl<'a> LineBreaker<'a> {
         // 0.9746→0.9753 (+1 para), full corpus 81/84 unchanged (only tokyoshugyo's
         // pagination moves), SSIM 0 regressed (all previously-changed word_png docs
         // byte-identical via the seg-meta + kinsoku gate). See [[char_budget_wall]].
-        let latin_wordwrap = std::env::var("OXI_LATIN_WORDWRAP_DISABLE").is_err();
+        let latin_wordwrap = !crate::env_flag!("OXI_LATIN_WORDWRAP_DISABLE");
         // A Latin-only paragraph can break a compound at its hyphen even
         // when other paragraphs contain CJK text. Keep URL tokens together.
-        let legacy_latin_hyphen = std::env::var_os("OXI_LEGACY_LATIN_HYPHEN").is_some()
+        let legacy_latin_hyphen = crate::env_flag!("OXI_LEGACY_LATIN_HYPHEN")
             && self.compat_mode_explicit
             && self.compat_mode <= 14
             && self.doc_body_has_real_cjk
@@ -308,7 +308,7 @@ impl<'a> LineBreaker<'a> {
         // the whole thing wrapped; Word ends line 1 at «…1300 mm —» (x1 474.10 <=
         // content right 475.05). Latin-doc scope, shared with S801's own
         // classification of these dashes → JP byte-identical by construction.
-        let s1100_dash_break = std::env::var("OXI_S1100_DISABLE").is_err();
+        let s1100_dash_break = !crate::env_flag!("OXI_S1100_DISABLE");
         // KERNBREAK space-compression credit (2026-07-07, ★default ON,
         // opt-out OXI_KERNBREAK_DISABLE):
         // Word's JUSTIFIED Latin fit test allows squeezing word spaces below
@@ -318,7 +318,7 @@ impl<'a> LineBreaker<'a> {
         // extend `available` by the accumulated per-space credit
         // (cap × space_width, OXI_KERNBREAK_CAP default 0.25); reset with the
         // line. The Latin analog of the CJK 約物 oikomi capacity credit.
-        let kernbreak_para = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
+        let kernbreak_para = !crate::env_flag!("OXI_KERNBREAK_DISABLE")
             // Explicit legacy compatibility uses its own proportional/monospace
             // capacity rules; enabling kerning does not enable modern space shrink.
             && !(self.compat_mode_explicit && self.compat_mode <= 14)
@@ -342,7 +342,7 @@ impl<'a> LineBreaker<'a> {
         // 6.8tw/space, well under the 25% cap). This extends the KERNBREAK
         // space-compression credit (kern-active-only) to the no-kern justified
         // case. Scope: !doc_body_has_real_cjk → JP byte-identical by construction.
-        let s799_space_shrink = std::env::var("OXI_S799_DISABLE").is_err()
+        let s799_space_shrink = !crate::env_flag!("OXI_S799_DISABLE")
             && is_justified
             && !self.doc_body_has_real_cjk;
         // S953 (2026-07-20, default ON, opt-out OXI_S953_DISABLE): a COMPAT-15 JUSTIFIED
@@ -370,7 +370,7 @@ impl<'a> LineBreaker<'a> {
         // over-hang is removed. Census (compat15 + justified + resolved decimal-
         // close-paren marker): golden 0 / real_en 45-paras-in-target / JP 0.
         // The legacy compat<15 s809_hang arm is a separate rule — untouched.
-        let s1018_decimal_paren_list = std::env::var("OXI_S1018_DISABLE").is_err()
+        let s1018_decimal_paren_list = !crate::env_flag!("OXI_S1018_DISABLE")
             && para_style.list_marker.as_deref().map_or(false, |m| {
                 m.trim().strip_suffix(')').map_or(false, |digits| {
                     !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
@@ -385,7 +385,7 @@ impl<'a> LineBreaker<'a> {
                 && s799_space_shrink
                 && !s929_right_fence
                 && !s1018_decimal_paren_list
-                && std::env::var("OXI_S953_DISABLE").is_err());
+                && !crate::env_flag!("OXI_S953_DISABLE"));
         let s809_hang = s953_hang;
         // S1630 (2026-10-01, OPT-IN OXI_S1630=1 -- held, see the end): in the
         // compat-15 justified arm only the '.' hangs; S953 measured a period
@@ -409,12 +409,12 @@ impl<'a> LineBreaker<'a> {
         // (a blanket 0.25 over-fits — framework {−1:20}→{−1:31}); sweep knob.
         // S1475: the last-word ceiling applies to the S825 (compat-15 explicit)
         // arm only — the c14 / S933 / S1046 classes keep their own allowances.
-        let s1475_on = std::env::var("OXI_S1475_DISABLE").is_err()
+        let s1475_on = !crate::env_flag!("OXI_S1475_DISABLE")
             && s799_space_shrink
             && self.compat_mode >= 15
             && self.compat_mode_explicit;
         let mut s1475_space_tw: i32 = 0;
-        let s1475_token = std::env::var_os("OXI_JSHRINK_TOKEN_DISABLE").is_none();
+        let s1475_token = !crate::env_flag!("OXI_JSHRINK_TOKEN_DISABLE");
         let s799_cap: f32 = std::env::var("OXI_S799_CAP")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -430,7 +430,7 @@ impl<'a> LineBreaker<'a> {
         // post-indent alternative. The matching render inter-word compression is at
         // the justify site.
         let wpj_active =
-            self.wp_justification && is_justified && std::env::var("OXI_S994_DISABLE").is_err();
+            self.wp_justification && is_justified && !crate::env_flag!("OXI_S994_DISABLE");
         let wpj_model_a = std::env::var("OXI_WPJ_MODEL")
             .map(|v| v != "B")
             .unwrap_or(true);
@@ -477,7 +477,7 @@ impl<'a> LineBreaker<'a> {
         // natural-fit control and the G=4/6/9/12 x indent sweep in
         // `_pb_c14wpj_gen.py`).  C14JUST and S1028* stay as opt-ins for the old
         // Word's truth.
-        let c14_active = std::env::var("OXI_C14JUST").is_ok()
+        let c14_active = crate::env_flag!("OXI_C14JUST")
             && self.compat_mode == 14
             && self.compat_mode_explicit
             && is_justified
@@ -543,7 +543,7 @@ impl<'a> LineBreaker<'a> {
         // actual geometry (REPORT_S1026_sequential_replay_dataset §6/§9). Read ONCE
         // before the macro (definition-site hygiene). Only body calls carry a para
         // index; the pass (0=first, 1=S721 retry) lets the join pick the final pass.
-        let s1026_replay: bool = std::env::var("OXI_DBG_REPLAY").is_ok();
+        let s1026_replay: bool = crate::env_flag!("OXI_DBG_REPLAY");
         let s1026_replay_para: Option<usize> = S1026_REPLAY_PARA.with(|c| c.get());
         let s1026_replay_pass: u8 = if S721_ORPHAN_RETRY.with(|f| f.get()) {
             1
@@ -565,11 +565,11 @@ impl<'a> LineBreaker<'a> {
         // space) → ONE interval β ∈ [0.6375, 1.175) fits every measured specimen.
         // Pairs with OXI_S1026_W (width penalty) on the corrected runtime tuples.
         // Scope: c14 monospace (the 2 Courier twins; JP CJK-gated out).
-        let s1027_on = std::env::var("OXI_S1027_DISABLE").is_err();
+        let s1027_on = !crate::env_flag!("OXI_S1027_DISABLE");
         // Word does not break at a space whose next character is closing
         // punctuation (. , : ; ? ! % ) ] } ’ ”): the word before the space goes
         // to the next line with it (default ON, opt-out OXI_LATIN_LEADPUNCT_CARRY_DISABLE).
-        let leadpunct_on = std::env::var_os("OXI_LATIN_LEADPUNCT_CARRY_DISABLE").is_none();
+        let leadpunct_on = !crate::env_flag!("OXI_LATIN_LEADPUNCT_CARRY_DISABLE");
         // OXI_LEADPUNCT_EA_LANG (2026-10-21, default ON, opt-out _DISABLE): the carry is
         // Japanese line breaking -- Word applies it only when the run's east-Asian
         // language is ja/zh/ko. `_pb_lead_punct_gen.py` with a real styles part: docDefaults
@@ -578,7 +578,7 @@ impl<'a> LineBreaker<'a> {
         // __0010437a (en-US): «affidavit of / .......» -- Oxi carried «of» down, the
         // paragraph took 3 lines and the next rule moved a page.
         let leadpunct_lang = |ea_lang: Option<&str>| -> bool {
-            std::env::var_os("OXI_LEADPUNCT_EA_LANG_DISABLE").is_some()
+            crate::env_flag!("OXI_LEADPUNCT_EA_LANG_DISABLE")
                 || ea_lang.or(self.default_east_asia_lang.as_deref()).map_or(true, |lang| {
                     let l = lang.to_ascii_lowercase();
                     ["ja", "zh", "ko"].iter().any(|p| l == *p || l.starts_with(&format!("{p}-")))
@@ -591,7 +591,7 @@ impl<'a> LineBreaker<'a> {
                     // ° (2026-10-19): `_pb_lead_punct_gen.py` -- Word never starts a line
                     // with «␠°» either; $ ( - – — / do start one.
                     let proh = |c: char| matches!(c, '.' | ',' | ':' | ';' | '?' | '!' | '%' | ')' | ']' | '}' | '\u{2019}' | '\u{201D}')
-                        || (c == '\u{B0}' && std::env::var_os("OXI_CELL_LEADPUNCT_DISABLE").is_none());
+                        || (c == '\u{B0}' && !crate::env_flag!("OXI_CELL_LEADPUNCT_DISABLE"));
                     let is_sp = |f: &LineFragment| !f.text.is_empty() && f.text.chars().all(|c| c == ' ');
                     let is_wd = |f: &LineFragment| f.tab_position.is_none() && f.field_type.is_none()
                         && !f.text.is_empty() && !f.text.chars().any(|c| c == ' ' || c == '\t');
@@ -639,7 +639,7 @@ impl<'a> LineBreaker<'a> {
         }
         macro_rules! wrap_and_seed {
             ($sty:expr) => {{
-                if std::env::var("OXI_DBGWRAP").is_ok() {
+                if crate::env_flag!("OXI_DBGWRAP") {
                     let tail: Vec<String> = current_line.fragments.iter().rev().take(3).map(|f| f.text.clone()).collect();
                     eprintln!("[WRAP-SEED] tail={:?} nfrag={} cw_tw={} lines={}", tail, current_line.fragments.len(), current_width_tw, lines.len());
                 }
@@ -658,7 +658,7 @@ impl<'a> LineBreaker<'a> {
                     .count();
                 let (n_trail, lead_sp_w) = if n_trail_run >= 2
                     && self.wrap_trail_spaces
-                    && std::env::var_os("OXI_WRAP_TRAIL_SPACES_DISABLE").is_none()
+                    && !crate::env_flag!("OXI_WRAP_TRAIL_SPACES_DISABLE")
                 {
                     let sp_w = current_line.fragments.last().map_or(0.0, |f| f.width);
                     let sp_tw = pt_to_tw(sp_w);
@@ -684,7 +684,7 @@ impl<'a> LineBreaker<'a> {
                 // 項目）」 wrapped their digit tokens through another flush and left
                 // the 「（」 at the line end (Word: 「…事務所等」 / 「（33･299㌻）、…」).
                 let mut s1342_carried: Vec<LineFragment> = Vec::new();
-                if std::env::var("OXI_S1342_DISABLE").is_err() {
+                if !crate::env_flag!("OXI_S1342_DISABLE") {
                     while current_line.fragments.len() > 1
                         && current_line
                             .fragments
@@ -744,7 +744,7 @@ impl<'a> LineBreaker<'a> {
         // overflowing 。 / 、 (`_pb_ea_breakrules_gen.py` PB_TEXT with «LCD» / spaces:
         // en-US 行頭 21, ja-JP ぶら下げ 21; pure CJK text keeps the push in both).
         // ja/technical__c6d7cdb1's «…ディスプレイに が表示されます» + «。».
-        let ea_nokinsoku = std::env::var_os("OXI_EA_LANG_NOKINSOKU_DISABLE").is_none() && {
+        let ea_nokinsoku = !crate::env_flag!("OXI_EA_LANG_NOKINSOKU_DISABLE") && {
             let is_ea_lang = |st: &RunStyle| {
                 st.east_asia_lang
                     .as_deref()
@@ -789,7 +789,7 @@ impl<'a> LineBreaker<'a> {
         //   pure CJK                        0.0
         // policies__1411889624's address line 「…西堀6番館ビル5F」 (natural 426.55,
         // Word keeps it at 421.75) is the second row.
-        let s1585_on = std::env::var_os("OXI_S1585_DISABLE").is_none()
+        let s1585_on = !crate::env_flag!("OXI_S1585_DISABLE")
             && self.doc_body_has_real_cjk
             && is_justified
             && s476_body
@@ -836,7 +836,7 @@ impl<'a> LineBreaker<'a> {
         //   (12 gaps with ')': 10.08; 10.5pt: 8.76 = 5.25 + 3.47).
         // doNotCompress (flip at natural) and compat 15 jc=left (flip at
         // natural) do not squeeze; compat-15 justified lines are S1585's.
-        let legacy_gap_on = std::env::var_os("OXI_LEGACY_GAP_SQUEEZE_DISABLE").is_none()
+        let legacy_gap_on = !crate::env_flag!("OXI_LEGACY_GAP_SQUEEZE_DISABLE")
             && self.compress_punctuation
             && self.compat_mode <= 14
             && s476_body
@@ -965,7 +965,7 @@ impl<'a> LineBreaker<'a> {
                         // gives 3.40 / 3.85 and the mid line 4.15 / 5.05: the word's OWN gap
                         // (half on the last line, whole on a mid line) on top of the CJK-unit
                         // series taken over the OTHER gaps -- G=1 last stays S1585's 1.31.
-                        let gap_part = if std::env::var_os("OXI_JSHRINK_MID_OWN_GAP_DISABLE").is_none() {
+                        let gap_part = if !crate::env_flag!("OXI_JSHRINK_MID_OWN_GAP_DISABLE") {
                             s1585_gap_part(g0, fs)
                                 + if gap_before { if final_flush.get() { fs / 8.0 } else { fs / 4.0 } } else { 0.0 }
                         } else {
@@ -1046,8 +1046,8 @@ impl<'a> LineBreaker<'a> {
                     // Non-justified Latin lines fit on the unrounded sum too.
                     let s1061b = (((self.compat_mode >= 15 && self.compat_mode_explicit)
                         || legacy_latin_exact)
-                        && std::env::var("OXI_S1061_DISABLE").is_err())
-                        || std::env::var("OXI_S1061").is_ok();
+                        && !crate::env_flag!("OXI_S1061_DISABLE"))
+                        || crate::env_flag!("OXI_S1061");
                     let word_width_tw = if s1061b {
                         ((current_width + word_width) * 20.0 - 0.01).ceil() as i32
                             - current_width_tw
@@ -1058,7 +1058,7 @@ impl<'a> LineBreaker<'a> {
                     // emitted glyph advance independent of that fit-only credit.
                     let word_fit_width_tw = if s1061b {
                         ((current_width + word_width - latin_space_credit_remainder) * 20.0
-                            - if std::env::var("OXI_SPACE_CREDIT_FIXED_DISABLE").is_err() { 0.0 } else { 0.01 }).ceil() as i32
+                            - if !crate::env_flag!("OXI_SPACE_CREDIT_FIXED_DISABLE") { 0.0 } else { 0.01 }).ceil() as i32
                             - current_width_tw
                     } else { word_width_tw };
                     // S1022 (2026-07-27, char-budget badness breaker) — SHARED decision.
@@ -1097,7 +1097,7 @@ impl<'a> LineBreaker<'a> {
                     let s1026_final_token = s1026_total_nonws > 0
                         && s1026_nonws_consumed == s1026_total_nonws;
                     let s1022_badness_wrap = c14_active && c14_space_tw > 0
-                        && std::env::var("OXI_S1022_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S1022_DISABLE")
                         && !current_line.fragments.is_empty()
                         && {
                             let comp =
@@ -1113,7 +1113,7 @@ impl<'a> LineBreaker<'a> {
                                 // BOTH Origin A parts (does the candidate still fit?).
                                 let cap_fits = current_width_tw + word_fit_width_tw
                                     <= available_tw + latin_space_credit_tw;
-                                if std::env::var("OXI_S1028").is_ok() {
+                                if crate::env_flag!("OXI_S1028") {
                                     // ★S1028 UNIFIED SLACK-WINDOW rule (2026-07-28, OPT-IN,
                                     // pairs with OXI_S1027 leading-space correction). The
                                     // full-doc Word-truth census (scratchpad/s1028_census.py:
@@ -1233,7 +1233,7 @@ impl<'a> LineBreaker<'a> {
                     // needed to retain the next word, in addition to the capacity limit.
                     let justified_word_choice = s799_space_shrink
                         && self.compat_mode >= 15 && self.compat_mode_explicit
-                        && std::env::var("OXI_JUSTIFIED_WORD_CHOICE").is_ok()
+                        && crate::env_flag!("OXI_JUSTIFIED_WORD_CHOICE")
                         && right_tab_slack_tw == 0 && center_tab_stop_tw.is_none()
                         && !current_line.fragments.is_empty()
                         && {
@@ -1282,13 +1282,13 @@ impl<'a> LineBreaker<'a> {
                         && word_breaks.is_empty()
                         && word_width_tw > available_tw
                         && word_char_ws.len() >= word.chars().count()
-                        && std::env::var("OXI_S1157_DISABLE").is_err();
+                        && !crate::env_flag!("OXI_S1157_DISABLE");
                     // Terminal punctuation is part of a lexical word, not an
                     // internal break opportunity. Let automatic hyphenation see
                     // these words while preserving long-token and mixed-run paths.
                     let automatic_lexical_word = self.auto_hyphenation
                         && !self.doc_body_has_real_cjk
-                        && std::env::var("OXI_S1128_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S1128_DISABLE")
                         && word_seg_styles.is_empty()
                         && word_width_tw <= available_tw
                         && hyphen::is_lexical_word(&word);
@@ -1312,7 +1312,7 @@ impl<'a> LineBreaker<'a> {
                         let preceded_by_open = current_line.fragments.last()
                             .and_then(|f| f.text.chars().last())
                             .map_or(false, kinsoku::is_line_end_prohibited);
-                        if std::env::var("OXI_DBGOPEN").is_ok() && (preceded_by_open || word.starts_with('3')) {
+                        if crate::env_flag!("OXI_DBGOPEN") && (preceded_by_open || word.starts_with('3')) {
                             eprintln!("[OPENWRAP] word={:?} nfrag={} last_frag={:?} cw={} ww={} avail={}",
                                 word, current_line.fragments.len(),
                                 current_line.fragments.last().map(|f| f.text.clone()),
@@ -1322,14 +1322,14 @@ impl<'a> LineBreaker<'a> {
                         // per-char opportunities recorded above make the segment
                         // loop below pack the line to the last fitting char.
                         let s745_char_wrap = !para_style.word_wrap
-                            && std::env::var("OXI_S745_DISABLE").is_err();
+                            && !crate::env_flag!("OXI_S745_DISABLE");
                         // ★Origin B: OR the SHARED S1022 badness into the whole-token
                         // wrap — a c14 token with an internal Latin break (e.g. «for:»)
                         // must not bypass the badness. false for non-c14 → byte-identical.
                         if s1026_replay_on && c14_active {
                             let cn = word.chars().filter(|c| !c.is_whitespace()).count();
                             let cr = if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) };
-                            let hg = (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG").is_ok() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) });
+                            let hg = (if c14_active && c14_space_tw > 0 { if !s1026_final_token && crate::env_flag!("OXI_S1028_HG") { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) });
                             let ts = right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw);
                             let cap = current_width_tw + word_fit_width_tw > available_tw + cr + ts + hg;
                             let wr = !preceded_by_open && !s745_char_wrap && (cap || s1022_badness_wrap) && !current_line.fragments.is_empty() && !para_all_whitespace;
@@ -1359,9 +1359,9 @@ impl<'a> LineBreaker<'a> {
                         // tokyoshugyo 2087 -> 2090, uklocalspending / usnyserda / d77a
                         // unchanged, Phase 1 95/96 with every per-document score
                         // identical. Opt-out OXI_OPENWRAP_DISABLE.
-                        if std::env::var("OXI_OPENWRAP_DISABLE").is_err()
+                        if !crate::env_flag!("OXI_OPENWRAP_DISABLE")
                             && preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, word.chars().next()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG").is_ok() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, word.chars().next()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && crate::env_flag!("OXI_S1028_HG") { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && current_line.fragments.len() > 1 && !para_all_whitespace {
                             let mut carried: Vec<LineFragment> = Vec::new();
                             while current_line.fragments.len() > 1 {
@@ -1388,7 +1388,7 @@ impl<'a> LineBreaker<'a> {
                             }
                         }
                         if !preceded_by_open && !s745_char_wrap
-                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, word.chars().next()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG").is_ok() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, word.chars().next()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && crate::env_flag!("OXI_S1028_HG") { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
                             let lp_carry = leadpunct_take!(word, word_fit_width_tw, available_tw, leadpunct_lang(ws.east_asia_lang.as_deref()));
                             wrap_and_seed!(ws);
@@ -1441,11 +1441,11 @@ impl<'a> LineBreaker<'a> {
                         // (the probe's `plain` arms) never reaches this branch --
                         // word_breaks is empty -- so Oxi still runs it 130pt past
                         // the margin where Word packs 97 chars.
-                        let s1156_cjk = std::env::var("OXI_S1156_DISABLE").is_err();
+                        let s1156_cjk = !crate::env_flag!("OXI_S1156_DISABLE");
                         let s1059_overlong = (!self.doc_body_has_real_cjk || s1156_cjk)
                             && word_char_ws.len() >= total_chars
                             && word_width_tw > available_tw
-                            && std::env::var("OXI_S1059_DISABLE").is_err();
+                            && !crate::env_flag!("OXI_S1059_DISABLE");
                         for &(cc, cw) in bounds.iter() {
                             if cc <= seg_start || cc > total_chars { continue; }
                             let segment_style = word_seg_styles.iter().rev()
@@ -1457,7 +1457,7 @@ impl<'a> LineBreaker<'a> {
                             // allowance as the whole-token fit decision.
                             let segment_hang_tw = if cc == total_chars {
                                 if c14_active && c14_space_tw > 0 {
-                                    if !s1026_final_token && std::env::var("OXI_S1028_HG").is_ok() {
+                                    if !s1026_final_token && crate::env_flag!("OXI_S1028_HG") {
                                         (pt_to_tw(word_trail_hang_w) - 1).max(0)
                                     } else { 0 }
                                 } else { pt_to_tw(word_trail_hang_w) }
@@ -1494,14 +1494,14 @@ impl<'a> LineBreaker<'a> {
                             // Segments that fit are untouched → byte-identical.
                             let s1059 = (!self.doc_body_has_real_cjk || s1156_cjk)
                                 && word_char_ws.len() >= total_chars
-                                && std::env::var("OXI_S1059_DISABLE").is_err();
+                                && !crate::env_flag!("OXI_S1059_DISABLE");
                             let mut piece_start = seg_start;
                             let mut piece_start_w = seg_start_w;
                             loop {
                                 let piece_w = cw - piece_start_w;
                                 let piece_w_tw = pt_to_tw(piece_w);
                                 let limit = available_tw
-                                    + if std::env::var("OXI_SEGMENT_CREDIT_DISABLE").is_err() { s1346_credit_tw } else { 0 }
+                                    + if !crate::env_flag!("OXI_SEGMENT_CREDIT_DISABLE") { s1346_credit_tw } else { 0 }
                                     + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), piece_w_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, None) })
                                     + right_tab_slack_tw
                                     + s958_center_slack(center_tab_stop_tw, current_width_tw)
@@ -1570,7 +1570,7 @@ impl<'a> LineBreaker<'a> {
                     if s1026_replay_on && c14_active {
                         let cn = word.chars().filter(|c| !c.is_whitespace()).count();
                         let cr = if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) };
-                        let hg = (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG").is_ok() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) });
+                        let hg = (if c14_active && c14_space_tw > 0 { if !s1026_final_token && crate::env_flag!("OXI_S1028_HG") { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) });
                         let ts = right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw);
                         let cap = current_width_tw + word_fit_width_tw > available_tw + cr + ts + hg;
                         let wr = (cap || s1022_badness_wrap) && !current_line.fragments.is_empty() && !para_all_whitespace;
@@ -1578,7 +1578,7 @@ impl<'a> LineBreaker<'a> {
                             s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
                     }
                     let mut hyphenated = false;
-                    if (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, word.chars().next()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG").is_ok() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
+                    if (current_width_tw + word_fit_width_tw > available_tw + s1346_credit_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { s1475_token_cap(latin_space_credit_tw + wpj_credit_at(lines.len()), word_fit_width_tw, s1475_space_tw, s1475_on, &current_line.fragments, s1475_token, word.chars().next()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && crate::env_flag!("OXI_S1028_HG") { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         // S1128 (2026-08-15, SHIPPED default-ON, opt-out
                         // OXI_S1128_DISABLE): `<w:autoHyphenation/>`.
@@ -1594,7 +1594,7 @@ impl<'a> LineBreaker<'a> {
                         // (declared above the wrap block — the advance below needs it)
                         if self.auto_hyphenation
                             && !self.doc_body_has_real_cjk
-                            && std::env::var("OXI_S1128_DISABLE").is_err()
+                            && !crate::env_flag!("OXI_S1128_DISABLE")
                         {
                             let gap = (available_tw - current_width_tw) as f32 / 20.0;
                             if gap > self.hyphenation_zone {
@@ -1667,7 +1667,7 @@ impl<'a> LineBreaker<'a> {
                     } else {
                         word_width_tw
                     };
-                    if std::env::var("OXI_DBGWRAP").is_ok() && word.starts_with("33") {
+                    if crate::env_flag!("OXI_DBGWRAP") && word.starts_with("33") {
                         eprintln!("[FRAG-WORD] word={:?} ww={:.2} cw_tw={} avail={} nfrag={} lines={}", word, word_width, current_width_tw, available_tw, current_line.fragments.len(), lines.len());
                     }
                     current_line.fragments.push(LineFragment {
@@ -1708,7 +1708,7 @@ impl<'a> LineBreaker<'a> {
                 .as_ref()
                 .and_then(|rs| rs.kern)
                 .map_or(false, |k| k > 0.0);
-        let s547_kern_gate = std::env::var("OXI_S547_DISABLE").is_err();
+        let s547_kern_gate = !crate::env_flag!("OXI_S547_DISABLE");
         // S466 (2026-05-31, SHIPPED default-ON, opt-out OXI_S466_DISABLE):
         // hoisted once — see h8_trigger comment below. (a) compute positive grid
         // expansion for fs>=default, AND (b) apply it to char_width so the WRAP
@@ -1716,7 +1716,7 @@ impl<'a> LineBreaker<'a> {
         // raw_pitch change (ooxml.rs). Gate (drift-free OFF-vs-ON same binary):
         // charGrid family +0.0019, bottom-N floor up (tokumei p4/p5), only
         // tokumei p7 ×4 regress (above the floor); Phase-1 54/55 preserved.
-        let s466_grid_expand = std::env::var("OXI_S466_DISABLE").is_err();
+        let s466_grid_expand = !crate::env_flag!("OXI_S466_DISABLE");
         // ORPHAN-OIKOMI experiment config, hoisted once (default OFF = byte-identical,
         // zero hot-path cost — the per-fragment char-count precompute below only runs
         // when enabled). Validated mechanism (fixes nedo para 333 «…規定する子» 2→1
@@ -1755,7 +1755,7 @@ impl<'a> LineBreaker<'a> {
             // NARROW: fires only when adjacent runs differ in position; every
             // non-position doc has None==None → no flush → byte-identical.
             // Opt-out OXI_S655_DISABLE.
-            if std::env::var("OXI_S655_DISABLE").is_err()
+            if !crate::env_flag!("OXI_S655_DISABLE")
                 && frag_outer_idx > 0
                 && fragments[frag_outer_idx - 1].1.position != style.position
             {
@@ -1784,10 +1784,10 @@ impl<'a> LineBreaker<'a> {
             // none, 8 widths each) and carries all three down together; the flush
             // let Oxi wrap «.» alone (en/legal__00081e80 p2 last line, so footnote
             // 18 went to p4 instead of p3).
-            let sup_word_unit = std::env::var_os("OXI_SUP_WORD_UNIT_DISABLE").is_none()
+            let sup_word_unit = !crate::env_flag!("OXI_SUP_WORD_UNIT_DISABLE")
                 && latin_wordwrap
                 && !word.is_empty();
-            if std::env::var("OXI_S899_DISABLE").is_err()
+            if !crate::env_flag!("OXI_S899_DISABLE")
                 && frag_outer_idx > 0
                 && fragments[frag_outer_idx - 1].1.vertical_align != style.vertical_align
                 && !sup_word_unit
@@ -1800,7 +1800,7 @@ impl<'a> LineBreaker<'a> {
             if latin_wordwrap && frag_outer_idx > 0 && !word.is_empty() {
                 let (previous_text, previous_style, ..) = fragments[frag_outer_idx - 1];
                 let has_private_glyph = |value: &str| value.chars().any(|c| matches!(c as u32, 0xE000..=0xF8FF));
-                let script_size_boundary = std::env::var("OXI_SCRIPT_SIZE_SEGMENTS_DISABLE").is_err()
+                let script_size_boundary = !crate::env_flag!("OXI_SCRIPT_SIZE_SEGMENTS_DISABLE")
                     && previous_style.vertical_align == style.vertical_align
                     && matches!(style.vertical_align, Some(VerticalAlign::Superscript | VerticalAlign::Subscript))
                     && previous_style.font_size != style.font_size;
@@ -1815,14 +1815,14 @@ impl<'a> LineBreaker<'a> {
                 // -- a Cambria Math NON-BREAKING HYPHEN (U+2011) inside an Arial
                 // word must not open the word at the seam (en/legal__003ac6a4:
                 // 7 such hyphens, the page's lines re-broke at them).
-                let legacy_fallback_pair = (std::env::var_os("OXI_LEGACY_WRAP_FALLBACK_DISABLE").is_none()
+                let legacy_fallback_pair = (!crate::env_flag!("OXI_LEGACY_WRAP_FALLBACK_DISABLE")
                     && (self.compat_mode <= 12 || !self.compat_mode_explicit)
                     && (previous_style.fallback_declared_latin == Some(true)
                         || style.fallback_declared_latin == Some(true)))
-                    || (std::env::var_os("OXI_FALLBACK_SEAM_DISABLE").is_none()
+                    || (!crate::env_flag!("OXI_FALLBACK_SEAM_DISABLE")
                         && (previous_style.fallback_declared_latin.is_some()
                             || style.fallback_declared_latin.is_some()));
-                let metric_style_boundary = std::env::var_os("OXI_RUN_STYLE_SEGMENTS_DISABLE").is_none()
+                let metric_style_boundary = !crate::env_flag!("OXI_RUN_STYLE_SEGMENTS_DISABLE")
                     && (previous_style.font_size != style.font_size
                         || (!legacy_fallback_pair
                             && (previous_style.font_family != style.font_family
@@ -1844,7 +1844,7 @@ impl<'a> LineBreaker<'a> {
                     word_seg_styles.push((offset, style.clone()));
                     word_seg_meta.push((offset, frag_run_index, frag_char_start));
                 } else if legacy_fallback_pair
-                    && std::env::var_os("OXI_RUN_STYLE_SEGMENTS_DISABLE").is_none()
+                    && !crate::env_flag!("OXI_RUN_STYLE_SEGMENTS_DISABLE")
                     && (previous_style.font_family != style.font_family
                         || previous_style.font_family_east_asia != style.font_family_east_asia
                         || previous_style.font_family_cs != style.font_family_cs)
@@ -1872,7 +1872,7 @@ impl<'a> LineBreaker<'a> {
             // digit measured at FULL width 6.67 vs Word's rendered 8.04pt →
             // 4.47 advance; 81e80 L9 carried 4 refs = +13.2pt phantom →
             // «Job v. Potton18.» wrapped where Word ends the para on L9).
-            let font_size = if std::env::var("OXI_S899_DISABLE").is_err()
+            let font_size = if !crate::env_flag!("OXI_S899_DISABLE")
                 && style.font_size.is_some()
                 && matches!(
                     style.vertical_align,
@@ -1890,7 +1890,7 @@ impl<'a> LineBreaker<'a> {
             // is_vertical column and the line-height fns grow the line to fit it.
             // Gated on the parsed flag (false for the whole corpus → byte-identical;
             // verified 0/corpus uses eastAsianLayout w:vert). Opt-out OXI_S700_DISABLE.
-            if style.vert_in_horz && !text.is_empty() && std::env::var("OXI_S700_DISABLE").is_err()
+            if style.vert_in_horz && !text.is_empty() && !crate::env_flag!("OXI_S700_DISABLE")
             {
                 flush_word!(style);
                 let vw_tw = pt_to_tw(font_size);
@@ -1942,7 +1942,7 @@ impl<'a> LineBreaker<'a> {
             // included), exempt from the char grid like a kumimoji unit.
             if style.ruby_field
                 && !text.is_empty()
-                && std::env::var("OXI_S1314_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S1314_DISABLE")
             {
                 flush_word!(style);
                 let cs_field = style.character_spacing.unwrap_or(0.0);
@@ -1986,7 +1986,7 @@ impl<'a> LineBreaker<'a> {
             if style.combine
                 && !text.is_empty()
                 && s476_body
-                && std::env::var("OXI_S703_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S703_DISABLE")
             {
                 flush_word!(style);
                 let n = text.chars().count();
@@ -2046,7 +2046,7 @@ impl<'a> LineBreaker<'a> {
                     let fs = self.resolve_font_size(style, para_style);
                     (1.15 * fs - 2.28).max(1.0) + 2.0
                 } else { ow };
-                if std::env::var("OXI_S839_DISABLE").is_err() {
+                if !crate::env_flag!("OXI_S839_DISABLE") {
                     flush_word!(style);
                     // S852: a horizontal rule (o:hr) occupies its OWN line —
                     // flush the current line (e.g. the title text) so the rule
@@ -2088,7 +2088,7 @@ impl<'a> LineBreaker<'a> {
                     // (`line right up to 𝑓(𝑥) = 4 cos(3𝑥)`, adv 23.30 = two
                     // lines) — it is an atom in the normal wrap, not an
                     // overflow.
-                    if std::env::var("OXI_S1040_DISABLE").is_err()
+                    if !crate::env_flag!("OXI_S1040_DISABLE")
                         && (style.inline_object_image.is_some()
                             || style.inline_math.is_some())
                         && !current_line.fragments.is_empty()
@@ -2177,8 +2177,8 @@ impl<'a> LineBreaker<'a> {
             let cjk_metric_owner = self.metrics_for_cjk(style, para_style);
             let cjk_metrics = cjk_metric_owner.as_deref();
             // Break widths follow the substituted face used to draw CJK glyphs.
-            let substitute_metric_owner = if (std::env::var_os("OXI_CJK_SUBSTITUTE_METRICS_DISABLE").is_none()
-                    || std::env::var_os("OXI_CJK_SUBSTITUTE_METRICS").is_some()) {
+            let substitute_metric_owner = if (!crate::env_flag!("OXI_CJK_SUBSTITUTE_METRICS_DISABLE")
+                    || crate::env_flag!("OXI_CJK_SUBSTITUTE_METRICS")) {
                 self.metrics_for_cjk_script(style, para_style, true)
             } else {
                 cjk_metric_owner.clone()
@@ -2208,13 +2208,13 @@ impl<'a> LineBreaker<'a> {
                 .as_deref()
                 .or(para_style.default_run_style.as_ref().and_then(|d| d.font_family_east_asia.as_deref()))
                 .or(self.default_font_family_east_asia.as_deref());
-            let tnr_ea_wrap = std::env::var_os("OXI_TNR_EA_WORDWRAP_DISABLE").is_none()
+            let tnr_ea_wrap = !crate::env_flag!("OXI_TNR_EA_WORDWRAP_DISABLE")
                 && declared_ea_face == Some("Times New Roman");
             let cjk_latin_wrap = tnr_ea_wrap
-                || (std::env::var_os("OXI_CJK_LEGACY_WORDWRAP_DISABLE").is_none()
+                || (!crate::env_flag!("OXI_CJK_LEGACY_WORDWRAP_DISABLE")
                 && (self.compat_mode <= 12 || !self.compat_mode_explicit)
                 && style.fallback_declared_latin
-                    .filter(|_| std::env::var_os("OXI_LEGACY_WRAP_FALLBACK_DISABLE").is_none())
+                    .filter(|_| !crate::env_flag!("OXI_LEGACY_WRAP_FALLBACK_DISABLE"))
                     .unwrap_or_else(|| cjk_metrics.is_some_and(|m| !m.is_cjk_83_64_font())));
             let substitute_gdi_map = substitute_metrics
                 .and_then(|m| self.registry.get_gdi_char_widths(&m.family, font_size));
@@ -2354,7 +2354,7 @@ impl<'a> LineBreaker<'a> {
             // b837 jc=left grid-line break needs its own investigation before
             // widening (OXI_S492_JCNATURAL still forces the full scope).
             // Opt-out: OXI_S492_DISABLE restores capacity-break for all paras.
-            let s492_full = std::env::var("OXI_S492_JCNATURAL").is_ok();
+            let s492_full = crate::env_flag!("OXI_S492_JCNATURAL");
             // S572 (2026-06-14): extend the S568 LEGACY jc=left 約物 OIKOMI to
             // NO-TYPE docGrid docs (S568 covered only linesAndChars). ikujidetail
             // (compat=11, no-type docGrid linePitch=286, jc=left, compressPunctuation)
@@ -2368,7 +2368,7 @@ impl<'a> LineBreaker<'a> {
             // linesAndChars. SCOPE: the ONLY compat<15 compressPunctuation no-type
             // docGrid doc in the corpus is ikujidetail (single-doc-scoped, like
             // S568). Opt-out OXI_S572_DISABLE.
-            let s572_legacy_notype_oikomi = std::env::var("OXI_S572_DISABLE").is_err()
+            let s572_legacy_notype_oikomi = !crate::env_flag!("OXI_S572_DISABLE")
                 && doc_grid_no_type
                 && s476_body
                 && !is_justified
@@ -2392,7 +2392,7 @@ impl<'a> LineBreaker<'a> {
             // linesAndChars bodies (1ec/tokumei = MS Mincho/Gothic, on-grid) are
             // UNAFFECTED (they keep the grid capacity break). Only kojin + parttime
             // (HGPGothicM) match in the corpus. Opt-out OXI_S592_DISABLE.
-            let para_off_grid = std::env::var("OXI_S592_DISABLE").is_err()
+            let para_off_grid = !crate::env_flag!("OXI_S592_DISABLE")
                 && lines_and_chars
                 && fragments
                     .iter()
@@ -2429,12 +2429,12 @@ impl<'a> LineBreaker<'a> {
                 && self.compress_punctuation
                 && style.east_asia_lang.as_deref().map_or(false, |lang|
                     lang.eq_ignore_ascii_case("ja") || lang.to_ascii_lowercase().starts_with("ja-"));
-            let natural_break_jc = std::env::var("OXI_S492_DISABLE").is_err()
+            let natural_break_jc = !crate::env_flag!("OXI_S492_DISABLE")
                 && !is_justified
                 && (!lines_and_chars || s492_full || para_off_grid)
                 && !s572_legacy_notype_oikomi
                 && !japanese_language_oikomi;
-            let s474_natural = std::env::var("OXI_S474_NATURAL").is_ok() || natural_break_jc || english_ea_natural || narrow_punctuation_natural;
+            let s474_natural = crate::env_flag!("OXI_S474_NATURAL") || natural_break_jc || english_ea_natural || narrow_punctuation_natural;
             // S589 (2026-06-16, opt-IN OXI_S589=1, default OFF = byte-identical):
             // LEGACY (compat<15) JUSTIFIED body paras break standalone 、。，． at
             // NATURAL width instead of the flat ×0.6667 pre-compress (mod.rs:6764)
@@ -2458,7 +2458,7 @@ impl<'a> LineBreaker<'a> {
             // 、）、; Oxi's legacy ×0.6667 pre-compress baked −4/punct into
             // width AND natural_width, blinding the pack tier's need (7.0 vs
             // Word's 14.5 for the 39th char) and its all-natural guard).
-            let s557_natural_just15 = std::env::var("OXI_S556_JUST15").is_ok()
+            let s557_natural_just15 = crate::env_flag!("OXI_S556_JUST15")
                 && is_justified
                 && self.compress_punctuation
                 && self.compat_mode >= 15
@@ -2500,7 +2500,7 @@ impl<'a> LineBreaker<'a> {
             // linesAndChars compressPunctuation doc in the corpus is harassmanual
             // (compat=14 docs are type=lines, not linesAndChars), so this is a
             // single-doc-scoped change. Cap = full half-em (6.0). Opt-out OXI_S568_DISABLE.
-            let s568_legacy_oikomi = std::env::var("OXI_S568_DISABLE").is_err()
+            let s568_legacy_oikomi = !crate::env_flag!("OXI_S568_DISABLE")
                 && lines_and_chars
                 && s476_body
                 && self.compress_punctuation
@@ -2558,7 +2558,7 @@ impl<'a> LineBreaker<'a> {
             // next target rather than bought back with a fourth cut. It is a
             // 25-page doc moving by one page — the +-1 knife-edge the pcd-first
             // rule calls a sub-pt noise floor.
-            let s1269_derived_regime_only = std::env::var("OXI_S1269_DISABLE").is_err();
+            let s1269_derived_regime_only = !crate::env_flag!("OXI_S1269_DISABLE");
             // S1318 (2026-09-05, default ON, opt-out OXI_S1318_DISABLE): the
             // at-default refusal holds at compat 14 as well. MEASURED with
             // `_pb_oikomi_default_gen.py` (03ca64d7's first body line rebuilt:
@@ -2629,7 +2629,7 @@ impl<'a> LineBreaker<'a> {
             // 0.9957 -> 0.9983, 167853 0.9967 -> 0.9989); Phase 1 96/96; the five
             // faithful-slice probes (unitcap 660 lines, unitcap18 631, unitcap5
             // 436, trackedge 84, kinsokufinal 51) agree on every break.
-            let s1318_v2 = std::env::var("OXI_S1318_DISABLE").is_err()
+            let s1318_v2 = !crate::env_flag!("OXI_S1318_DISABLE")
                 && std::env::var("OXI_S1318").ok().as_deref() != Some("0");
             // S1490 (2026-09-19, default ON, opt-out OXI_S1490_DISABLE): a compat-15
             // compressPunctuation body without a linesAndChars grid (the 大野 /
@@ -2643,7 +2643,7 @@ impl<'a> LineBreaker<'a> {
             // A non-justified paragraph breaks at natural width (S492):
             // technical__978ec9c102290205 (jc=left x176) wraps at 0.06 cell
             // with five marks on the line.
-            let s1490_regime = std::env::var_os("OXI_S1490_DISABLE").is_none()
+            let s1490_regime = !crate::env_flag!("OXI_S1490_DISABLE")
                 && !narrow_punctuation_natural
                 && !natural_break_jc
                 && !vertical
@@ -2681,14 +2681,14 @@ impl<'a> LineBreaker<'a> {
                 s1346_regime_credit.set(pt_to_tw(font_size * 0.5));
             }
             let s1237_at_default_refuse = !s1318_v2
-                && std::env::var("OXI_S1237_DISABLE").is_err()
+                && !crate::env_flag!("OXI_S1237_DISABLE")
                 && s568_legacy_oikomi
                 && (!s1269_derived_regime_only
                     || self.compat_mode < 14
                     || (s1318_c14_refuse && self.compat_mode == 14))
                 && s1236_regime_delta.map_or(false, |d| d.abs() < 1.5);
             let s568_legacy_oikomi = s568_legacy_oikomi && !s1237_at_default_refuse;
-            let s1234_offdefault_light = std::env::var("OXI_S1234_DISABLE").is_err()
+            let s1234_offdefault_light = !crate::env_flag!("OXI_S1234_DISABLE")
                 && s568_legacy_oikomi
                 && fragments
                     .iter()
@@ -2715,7 +2715,7 @@ impl<'a> LineBreaker<'a> {
             // 約物 compression to fit a trailing こ Word WRAPS (OXI_DBG_KOJIN:
             // over_tw=−26 capacity vs +78tw actual). Excluding para_off_grid drops
             // s475_break → natural break → こ wraps → para i297 4 lines = Word.
-            let s476_grid = (std::env::var("OXI_S476_DISABLE").is_err()
+            let s476_grid = (!crate::env_flag!("OXI_S476_DISABLE")
                 && lines_and_chars
                 && s476_body
                 && self.compress_punctuation
@@ -2750,12 +2750,12 @@ impl<'a> LineBreaker<'a> {
             // corpus; verified byte-identical for gen/gen2/test + all others). The CELL
             // under-compression (the regulation boxes' jc=left wrapper does ZERO 約物
             // compression) is the SEPARATE joint-solve piece, still pending.
-            let s590_legacy_just_cap = std::env::var("OXI_S590_DISABLE").is_err()
+            let s590_legacy_just_cap = !crate::env_flag!("OXI_S590_DISABLE")
                 && is_justified
                 && self.compress_punctuation
                 && self.compat_mode < 15
                 && !lines_and_chars;
-            let s475_break = ((std::env::var("OXI_S475_DISABLE").is_err()
+            let s475_break = ((!crate::env_flag!("OXI_S475_DISABLE")
                 && self.compress_punctuation
                 && self.compat_mode >= 15
                 && !lines_and_chars)
@@ -2871,14 +2871,14 @@ impl<'a> LineBreaker<'a> {
             // +0.0000 while nedo stays 0.9979 + kyodoken05 +0.0140. Scoped to the
             // body-oikomi context (solo=3.4): non-body/LRPB/grid/legacy paras keep
             // opening = s475_solo (unchanged). OXI_S575_CAP / OXI_S475_OPEN override.
-            let s639 = std::env::var("OXI_S639_DISABLE").is_err();
+            let s639 = !crate::env_flag!("OXI_S639_DISABLE");
             let s575_body_cap: f32 = std::env::var("OXI_S575_CAP")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(if s639 { 3.4 } else { 3.1 });
             let s475_solo_default = if s590_legacy_just_cap {
                 1.5
-            } else if s476_body && !para_has_lrpb && std::env::var("OXI_S575_DISABLE").is_err() {
+            } else if s476_body && !para_has_lrpb && !crate::env_flag!("OXI_S575_DISABLE") {
                 s575_body_cap
             } else {
                 2.5
@@ -2915,7 +2915,7 @@ impl<'a> LineBreaker<'a> {
                 && !para_has_lrpb
                 && !s476_grid
                 && !s590_legacy_just_cap
-                && std::env::var("OXI_S575_DISABLE").is_err();
+                && !crate::env_flag!("OXI_S575_DISABLE");
             let s475_open: f32 = std::env::var("OXI_S475_OPEN")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -2938,7 +2938,7 @@ impl<'a> LineBreaker<'a> {
             // (the closing cap is canary-load-bearing for b837's footnote/linesAndChars).
             // Combined with n_period (openings), still no clean nedo fix → the caps are
             // inter-doc-coupled; nedo needs Word's reflow, not a cap model. See [[char_budget_wall]].
-            let s473_locomp = std::env::var("OXI_S473_LOCOMP").is_ok();
+            let s473_locomp = crate::env_flag!("OXI_S473_LOCOMP");
             let s473_cap: f32 = std::env::var("OXI_S473_CAP")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -2950,7 +2950,7 @@ impl<'a> LineBreaker<'a> {
             // tunable for the sweep): comma/opening-bracket = light, period/closing-
             // bracket = heavy. Defaults from render data (1.5 / 6.0). Used only when
             // OXI_S473_ASYM is set (else the uniform s473_cap path runs).
-            let s473_asym = std::env::var("OXI_S473_ASYM").is_ok();
+            let s473_asym = crate::env_flag!("OXI_S473_ASYM");
             let s473_cc: f32 = std::env::var("OXI_S473_CC")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -2967,7 +2967,7 @@ impl<'a> LineBreaker<'a> {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1.5); // opening brackets
-            let s472_demand = std::env::var("OXI_S472_DEMAND").is_ok() || s473_locomp;
+            let s472_demand = crate::env_flag!("OXI_S472_DEMAND") || s473_locomp;
             let chars_vec: Vec<char> = text.chars().collect();
             // Complex-script (Devanagari) width: the per-codepoint sum this loop
             // uses is wrong for virama conjuncts / reordered matras (MEASURED
@@ -2986,14 +2986,14 @@ impl<'a> LineBreaker<'a> {
                 let emit_fam = self
                     .resolve_font_family_for_text(text, style, para_style)
                     .map(|s| s.to_string());
-                let emit_fam = if std::env::var_os("OXI_INDIA_CS_SHAPE_DISABLE").is_none() {
+                let emit_fam = if !crate::env_flag!("OXI_INDIA_CS_SHAPE_DISABLE") {
                     style.font_family_cs.clone()
                         .or_else(|| para_style.default_run_style.as_ref().and_then(|s| s.font_family_cs.clone()))
                         .or(emit_fam)
                 } else { emit_fam };
                 let shape_fam = match emit_fam {
                     Some(f) if crate::font::shape::family_covers(&f, '\u{0915}') => f,
-                    Some(f) if std::env::var_os("OXI_INDIA_CS_SHAPE_DISABLE").is_none()
+                    Some(f) if !crate::env_flag!("OXI_INDIA_CS_SHAPE_DISABLE")
                         && !self.registry.supports_family(&f)
                         && crate::font::runtime::resolve(&f, false, false).is_none()
                         && crate::font::shape::family_covers("Mangal", '\u{0915}') => "Mangal".to_string(),
@@ -3016,7 +3016,7 @@ impl<'a> LineBreaker<'a> {
             // doNotCompress): BIZ UDPGothic 、「 = 10.80 / 9.00, MS PGothic 11.95 /
             // 9.00, while BIZ UDGothic / MS Gothic / Meiryo / Yu Gothic halve the first
             // mark to 9.00 of 18. ja/educational__08709ff2 (BIZ UDPGothic «、「重ねる»).
-            let prop_pair_off = std::env::var_os("OXI_PROP_PAIR_DISABLE").is_none()
+            let prop_pair_off = !crate::env_flag!("OXI_PROP_PAIR_DISABLE")
                 && cjk_metrics.is_some_and(|m| {
                     ['\u{3001}', '\u{3002}'].iter().all(|&mark| {
                         let width = m.char_width_em(mark);
@@ -3034,7 +3034,7 @@ impl<'a> LineBreaker<'a> {
                 // two lines became three. Minimal repro (pair_1run/pair_2run):
                 // the same text in one run halves 」、。, split into runs only 」
                 // (its partner stayed in-run) does.
-                let s1494 = std::env::var_os("OXI_S1494_DISABLE").is_none();
+                let s1494 = !crate::env_flag!("OXI_S1494_DISABLE");
                 let next_frag_first: Option<char> = if s1494 {
                     fragments[frag_outer_idx + 1..].iter().flat_map(|f| f.0.chars()).next()
                 } else { None };
@@ -3063,7 +3063,7 @@ impl<'a> LineBreaker<'a> {
                         // brackets at 106.22 and 111.39 -- a 5.164pt advance on the
                         // first, half of the 10.56 every solitary mark gets. The same
                         // reading at 9pt under charSpace=-2714 gives 4.077 of 8.337.
-                        if std::env::var("OXI_S1217_DISABLE").is_err()
+                        if !crate::env_flag!("OXI_S1217_DISABLE")
                             && next_of(i).map_or(false, kinsoku::is_yakumono_opening)
                         {
                             v[i] = true;
@@ -3095,7 +3095,7 @@ impl<'a> LineBreaker<'a> {
                 // neither consume a grid cell nor create a new break/gap. Keep
                 // source text and character offsets, including across runs.
                 if crate::font::is_nonspacing_kana_mark(ch)
-                    && std::env::var_os("OXI_KANA_COMBINING_DISABLE").is_none()
+                    && !crate::env_flag!("OXI_KANA_COMBINING_DISABLE")
                 {
                     flush_word!(style);
                     if let Some(last) = current_line.fragments.last_mut().filter(|last|
@@ -3126,11 +3126,11 @@ impl<'a> LineBreaker<'a> {
                     && !word.is_empty()
                     && frag_field_type != word_field_type
                     && (frag_field_type.is_some() || word_field_type.is_some())
-                    && std::env::var_os("OXI_FIELD_WORD_SPLIT_DISABLE").is_none()
+                    && !crate::env_flag!("OXI_FIELD_WORD_SPLIT_DISABLE")
                 {
                     flush_word!(style);
                 }
-                if s1488_after_hang && std::env::var_os("OXI_S1488_DISABLE").is_none() {
+                if s1488_after_hang && !crate::env_flag!("OXI_S1488_DISABLE") {
                     if ch == ' ' && current_line.fragments.is_empty() {
                         if let Some(prev) = lines.last_mut() {
                             if let Some(last) = prev.fragments.last().cloned() {
@@ -3156,7 +3156,7 @@ impl<'a> LineBreaker<'a> {
                 // lines above the title and the page's last row fell over.
                 if ch == '\x0C'
                     && IN_TABLE_LAYOUT.with(|c| c.get()) > 0
-                    && std::env::var_os("OXI_S1443_DISABLE").is_none()
+                    && !crate::env_flag!("OXI_S1443_DISABLE")
                 {
                     continue;
                 }
@@ -3180,7 +3180,7 @@ impl<'a> LineBreaker<'a> {
                 // gate = !doc_body_has_real_cjk → JP byte-identical.
                 let s801_latin_dash = matches!(ch, '\u{2013}' | '\u{2014}')
                     && !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_S801_DISABLE").is_err();
+                    && !crate::env_flag!("OXI_S801_DISABLE");
                 // S888: U+2011 NON-BREAKING HYPHEN (S747's noBreakHyphen) +
                 // U+2010 HYPHEN join the ambiguous class — is_cjk routed them
                 // to the eastAsia metrics, where S634's Latin-only
@@ -3191,7 +3191,7 @@ impl<'a> LineBreaker<'a> {
                 // S801 → JP byte-identical by construction.
                 let s888_latin_hyphen = matches!(ch, '\u{2011}' | '\u{2010}')
                     && !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_S888_DISABLE").is_err();
+                    && !crate::env_flag!("OXI_S888_DISABLE");
                 // S951 (2026-07-20): Arrows + Mathematical Operators
                 // (U+2190..U+22FF, East-Asian-Width Ambiguous) join the class —
                 // reference__0029c1c's «AHI ≥ 30» lines: is_cjk routed ≥ to the
@@ -3202,10 +3202,10 @@ impl<'a> LineBreaker<'a> {
                 // (golden census: 0 Latin docs carry these chars).
                 let s951_latin_mathop = matches!(ch, '\u{2190}'..='\u{22FF}')
                     && !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_S951_DISABLE").is_err();
+                    && !crate::env_flag!("OXI_S951_DISABLE");
                 let s966_latin_bullet = ch == '\u{2022}'
                     && !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_S966_DISABLE").is_err();
+                    && !crate::env_flag!("OXI_S966_DISABLE");
                 // S1103 (2026-08-08): U+2015 HORIZONTAL BAR joins the ambiguous
                 // class — see resolve_font_family_for_text_g.  Deliberately NOT
                 // added to `s1100_dash_break`: this only fixes the LINE HEIGHT,
@@ -3214,7 +3214,7 @@ impl<'a> LineBreaker<'a> {
                 // introducing a new break opportunity could only move them.
                 let s1103_latin_hbar = ch == '\u{2015}'
                     && !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_S1103_DISABLE").is_err();
+                    && !crate::env_flag!("OXI_S1103_DISABLE");
                 // S1178 (2026-08-20): U+00D7 × / U+00F7 ÷ join the ambiguous
                 // class — Latin-1's two EAW-Ambiguous math signs. is_cjk claims
                 // them unconditionally, splitting the fragment and pricing the
@@ -3225,7 +3225,7 @@ impl<'a> LineBreaker<'a> {
                 // siblings → JP byte-identical by construction.
                 let s1178_latin_muldiv = matches!(ch, '\u{00D7}' | '\u{00F7}')
                     && !self.doc_body_has_real_cjk
-                    && std::env::var("OXI_S1178_DISABLE").is_err();
+                    && !crate::env_flag!("OXI_S1178_DISABLE");
                 // S1442 (2026-09-16, default ON, opt-out OXI_S1442_DISABLE): the
                 // ellipsis U+2026 / U+2025 in a Latin body is Latin text — a run of
                 // them wraps as an unbreakable word that fills the line (Word: 36
@@ -3233,7 +3233,7 @@ impl<'a> LineBreaker<'a> {
                 // may never open a line (Oxi: one per line until the tail fits).
                 let s1442_latin_ellipsis = matches!(ch, '\u{2026}' | '\u{2025}')
                     && !self.doc_body_has_real_cjk
-                    && std::env::var_os("OXI_S1442_DISABLE").is_none();
+                    && !crate::env_flag!("OXI_S1442_DISABLE");
                 let latin_ctx_quote = s801_latin_dash
                     || s888_latin_hyphen
                     || s951_latin_mathop
@@ -3242,7 +3242,7 @@ impl<'a> LineBreaker<'a> {
                     || s1103_latin_hbar
                     || s1178_latin_muldiv
                     || matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
-                        && std::env::var("OXI_LATINQUOTE_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_LATINQUOTE_DISABLE")
                         && {
                             // neighbors ACROSS fragment boundaries (db9ca's quotes
                             // sit at run boundaries: «…as “» | «This…» | «”). …»);
@@ -3315,13 +3315,13 @@ impl<'a> LineBreaker<'a> {
                 // Word's PDF kerns «LV» -0.83 / «BY» -0.28 on the 11pt Calibri Bold
                 // caps line, which then holds «COUNCIL:» (design widths 442.97 on a
                 // 441.90 line, kerned 440.3).
-                let kern_active = std::env::var("OXI_KERNBREAK_DISABLE").is_err()
+                let kern_active = !crate::env_flag!("OXI_KERNBREAK_DISABLE")
                     && style
                         .kern
                         .or_else(|| para_style.default_run_style.as_ref().and_then(|rs| rs.kern))
-                        .or(if std::env::var_os("OXI_DEFAULT_KERN_DISABLE").is_none() { self.default_kern } else { None })
+                        .or(if !crate::env_flag!("OXI_DEFAULT_KERN_DISABLE") { self.default_kern } else { None })
                         .map_or(false, |k| k > 0.0 && font_size >= k);
-                if std::env::var("OXI_DBG_KERN").is_ok() && char_index == 0 {
+                if crate::env_flag!("OXI_DBG_KERN") && char_index == 0 {
                     eprintln!("[DBG_KERN] fs={} ch={:?} style.kern={:?} drs.kern={:?} active={} widths_has={} fam={}",
                         font_size, ch, style.kern,
                         para_style.default_run_style.as_ref().and_then(|rs| rs.kern),
@@ -3334,7 +3334,7 @@ impl<'a> LineBreaker<'a> {
                 // original character for kerning and break opportunities.
                 let space_metric_char = if ch == '\u{00a0}'
                     && crate::font::s892_nbsp_as_space()
-                    && std::env::var_os("OXI_NBSP_EM_DISABLE").is_none()
+                    && !crate::env_flag!("OXI_NBSP_EM_DISABLE")
                     && !char_metrics.char_widths.contains_key(&ch)
                 { ' ' } else { ch };
                 if kern_active
@@ -3368,11 +3368,11 @@ impl<'a> LineBreaker<'a> {
                 // 5 improved / 0 regressed / 0 page-count shifts; real_en mean +0.0002;
                 // fixes nyserda pagination (57→56=Word, Exhibit boundaries aligned).
                 let no_break_hyphen_em = ch == '\u{2011}' && s888_latin_hyphen
-                    && std::env::var("OXI_NOBREAK_HYPHEN_EM_DISABLE").is_err();
+                    && !crate::env_flag!("OXI_NOBREAK_HYPHEN_EM_DISABLE");
                 let latin_metric_char = if no_break_hyphen_em
                     && !char_metrics.char_widths.contains_key(&ch) { '-' } else { space_metric_char };
                 if !kern_active
-                    && std::env::var("OXI_LATINEM_DISABLE").is_err()
+                    && !crate::env_flag!("OXI_LATINEM_DISABLE")
                     && latinem_in_scope(self.doc_body_has_real_cjk)
                     && (!kinsoku::is_cjk(ch) || no_break_hyphen_em)
                     && char_metrics.char_widths.contains_key(&latin_metric_char)
@@ -3444,12 +3444,23 @@ impl<'a> LineBreaker<'a> {
                 // Day 37 (2026-05-14): EXCLUDE fitText runs — resolve_fit_text_runs
                 // already produces the FINAL effective cs (post-balance-doubling) so
                 // adding here would over-pump by another factor.
+                // OXI_BALANCE_PROP_ONCE (2026-11-01, default ON, opt-out _DISABLE): the
+                // double goes to FULL-WIDTH glyphs only -- a proportional face's kana
+                // (advance under the em) takes the spacing once. `_pb_balance_propkana_gen.py`
+                // (HGP創英角ﾎﾟｯﾌﾟ体 / ＭＳ Ｐゴシック / ＭＳ ゴシック 10.5, w:spacing 22 / 44,
+                // grid and none): kanji and ＭＳ ゴシック kana +2s, P-face kana +1s
+                // (に 9.60 -> 10.67 / 11.75). ja/correspondence__17884aa3's
+                // HGP創英角ﾎﾟｯﾌﾟ体 lines held one character fewer than Word.
+                let balance_prop_once = !crate::env_flag!("OXI_BALANCE_PROP_ONCE_DISABLE")
+                    && !vertical
+                    && width_before_tracking < 0.98 * font_size;
                 if self.balance_single_byte_double_byte_width
                     && if vertical && crate::font::vertical_font_advance_on() {
                         LayoutEngine::vertical_balance_spacing_char(ch)
                     } else {
                         crate::font::is_fullwidth(ch) && !yakumono_compressed[char_index]
                     }
+                    && !balance_prop_once
                     && style.fit_text.is_none() && !style.ruby_spread
                 {
                     char_width += cs;
@@ -3464,7 +3475,7 @@ impl<'a> LineBreaker<'a> {
                 // under s <= -0.12pt read as narrower than 0.98em, took S1510's
                 // «own advance + half the charSpace» and then S1340's 2s again: s = -0.2
                 // stepped 10.46 (Word 11.52) and held 22 characters where Word holds 20.
-                let grid_tracking = if std::env::var_os("OXI_GRID_BARE_WIDTH_DISABLE").is_none() {
+                let grid_tracking = if !crate::env_flag!("OXI_GRID_BARE_WIDTH_DISABLE") {
                     char_width - width_before_tracking
                 } else {
                     0.0
@@ -3493,12 +3504,12 @@ impl<'a> LineBreaker<'a> {
                 // 111.39) put the first bracket's ink in the second bracket's left
                 // half, and the second's ink follows it. So the carve-out is lifted
                 // for exactly that pair.
-                let s1217_next_open = std::env::var("OXI_S1217_DISABLE").is_err()
+                let s1217_next_open = !crate::env_flag!("OXI_S1217_DISABLE")
                     && chars_vec
                         .get(char_index + 1)
                         .copied()
                         // S1494: the pair may continue in the next run
-                        .or_else(|| if std::env::var_os("OXI_S1494_DISABLE").is_none() {
+                        .or_else(|| if !crate::env_flag!("OXI_S1494_DISABLE") {
                             fragments[frag_outer_idx + 1..].iter().flat_map(|f| f.0.chars()).next()
                         } else { None })
                         .map_or(false, kinsoku::is_yakumono_opening);
@@ -3616,7 +3627,7 @@ impl<'a> LineBreaker<'a> {
                 // run boundaries do not change this setting. Neighbours may
                 // belong to the preceding or following text fragment.
                 let s1333_balance = self.balance_single_byte_double_byte_width
-                    && std::env::var("OXI_S1333_DISABLE").is_err();
+                    && !crate::env_flag!("OXI_S1333_DISABLE");
                 // NBSP keeps its non-breaking semantics and Latin font slot,
                 // but shares the balanced space advance next to CJK. Saved
                 // Word controls measure 6pt at 12pt for both space characters;
@@ -3651,7 +3662,7 @@ impl<'a> LineBreaker<'a> {
                     // lone space between Latin words keeps its natural advance.
                     let is_sp = |c: char| c == ' ' || c == '\u{00a0}';
                     let bal_space_run = grid_char_pitch.is_none()
-                        && std::env::var_os("OXI_BAL_SPACE_RUN_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_BAL_SPACE_RUN_DISABLE")
                         && (chars_vec.get(char_index.wrapping_sub(1)).copied()
                             .or_else(|| if char_index == 0 {
                                 fragments.get(frag_outer_idx.wrapping_sub(1)).and_then(|f| f.0.chars().last())
@@ -3678,7 +3689,7 @@ impl<'a> LineBreaker<'a> {
                                 if ratio > 0.0
                                     && pitch > 0.0
                                     && (std::env::var("OXI_S1337S").ok().as_deref() == Some("1")
-                                        || std::env::var("OXI_GRID_SPACE_DISABLE").is_err()) =>
+                                        || !crate::env_flag!("OXI_GRID_SPACE_DISABLE")) =>
                             {
                                 let default_fs = pitch / ratio;
                                 let char_space_pt = pitch - default_fs;
@@ -3687,7 +3698,7 @@ impl<'a> LineBreaker<'a> {
                                 } else {
                                     font_size + char_space_pt
                                 };
-                                0.5 * base + if std::env::var("OXI_GRID_SPACE_DISABLE").is_err() {
+                                0.5 * base + if !crate::env_flag!("OXI_GRID_SPACE_DISABLE") {
                                     2.0 * style.character_spacing.unwrap_or(0.0)
                                 } else { 0.0 }
                             }
@@ -3728,9 +3739,9 @@ impl<'a> LineBreaker<'a> {
                 let fit_text_expand = style.fit_text.is_some()
                     && (style.character_spacing.map_or(false, |cs| cs > 0.01)
                         || (style.text_scale.is_none()
-                            && std::env::var_os("OXI_FIT_EXPAND_LAST_DISABLE").is_none()));
+                            && !crate::env_flag!("OXI_FIT_EXPAND_LAST_DISABLE")));
                 // S1347: the run's w:w scale factor for the grid cell (see below).
-                let s1347_scale = if std::env::var("OXI_S1347_DISABLE").is_err()
+                let s1347_scale = if !crate::env_flag!("OXI_S1347_DISABLE")
                     && style.fit_text.is_none()
                 {
                     style.text_scale.map_or(1.0, |sc| if (sc - 100.0).abs() > 0.01 && sc > 0.0 { sc / 100.0 } else { 1.0 })
@@ -3759,7 +3770,7 @@ impl<'a> LineBreaker<'a> {
                         && (crate::font::is_fullwidth(ch)
                             || (use_east_asia
                                 && char_width >= 0.98 * font_size
-                                && std::env::var_os("OXI_S1449_DISABLE").is_none()))
+                                && !crate::env_flag!("OXI_S1449_DISABLE")))
                         && !yakumono_compressed[char_index]
                     {
                         let default_fs = pitch / ratio;
@@ -3783,8 +3794,8 @@ impl<'a> LineBreaker<'a> {
                         //   cell in a1d6/d4d126/de6e/6514f all render 1 line in Word
                         //   (33 chars × 10pt = 330pt natural fits 345pt cell) but Oxi
                         //   wraps to 2 (33 × 10.555 expansion = 348.3pt overflows).
-                        let h6_gate_enabled = std::env::var("OXI_H6_GRID_GATE").is_ok();
-                        let h7_gate_enabled = std::env::var("OXI_H7_GRID_GATE_LE").is_ok();
+                        let h6_gate_enabled = crate::env_flag!("OXI_H6_GRID_GATE");
+                        let h7_gate_enabled = crate::env_flag!("OXI_H7_GRID_GATE_LE");
                         // S145 H8 (2026-05-21): per LibreOffice ww8par.cxx ImportDop,
                         // MS_WORD_COMP_GRID_METRICS is SET unconditionally for all Word
                         // imported docs. LibreOffice itrform2.cxx then SKIPS grid kern
@@ -3837,7 +3848,7 @@ impl<'a> LineBreaker<'a> {
                         // column: 8 chars at the natural 9.00 fit where Word breaks
                         // after 7, and the 9th line that follows pushes the ※2 note
                         // onto the next page in Word but not in Oxi.
-                        let s1210 = std::env::var("OXI_S1210_DISABLE").is_err();
+                        let s1210 = !crate::env_flag!("OXI_S1210_DISABLE");
                         let h8_trigger = char_space_pt > 0.0
                             && (!s466_grid_expand || (font_size < default_fs && !s1210));
                         let h7_trigger =
@@ -3861,7 +3872,7 @@ impl<'a> LineBreaker<'a> {
                         // natural advance (41), the 7% that put reference__0cf9c879
                         // on two pages.
                         let s466_no_grid = s466_grid_expand
-                            && if std::env::var("OXI_S1315_DISABLE").is_err() {
+                            && if !crate::env_flag!("OXI_S1315_DISABLE") {
                                 char_space_pt.abs() < 0.01
                             } else {
                                 char_space_pt < 0.01
@@ -3884,20 +3895,30 @@ impl<'a> LineBreaker<'a> {
                             // (11.20) nor twips-floored (11.30).
                             let expected_w = if char_space_pt >= 0.0 && !s1210 {
                                 font_size * pitch / default_fs
-                            } else if std::env::var_os("OXI_S1510_DISABLE").is_none()
-                                && std::env::var_os("OXI_S1592_DISABLE").is_none()
+                            } else if !crate::env_flag!("OXI_S1510_DISABLE")
+                                && !crate::env_flag!("OXI_S1592_DISABLE")
                                 && face_has_proportional_kana(&char_metrics, &self.registry, font_size)
                             {
                                 // S1592: on a proportional face the increment is by CLASS
                                 // (see grid_half_increment_class): half for kana / U+30FC /
                                 // U+3001-3002, the whole charSpace for everything else, each
                                 // on top of the glyph's own advance.
-                                char_width - grid_tracking + if grid_half_increment_class(ch) {
+                                // OXI_GRID_HALF_NEEDS_BALANCE (2026-11-01, default ON, opt-out
+                                // _DISABLE): the half increment is a balanceSingleByteDoubleByteWidth
+                                // effect -- without it a proportional glyph takes the whole
+                                // charSpace. `_pb_balance_propkana_gen.py` (charSpace 9011 = 2.2):
+                                // HGP創英角ﾎﾟｯﾌﾟ体 に 9.60 -> 10.68 with balance, 11.76 without;
+                                // ＭＳ Ｐゴシック に 9.96 -> 11.04 / 12.12. S1510's reports__393aa9 and
+                                // its kana probe carry balance.
+                                char_width - grid_tracking + if grid_half_increment_class(ch)
+                                    && (self.balance_single_byte_double_byte_width
+                                        || crate::env_flag!("OXI_GRID_HALF_NEEDS_BALANCE_DISABLE"))
+                                {
                                     0.5 * char_space_pt
                                 } else {
                                     char_space_pt
                                 }
-                            } else if std::env::var_os("OXI_S1510_DISABLE").is_none()
+                            } else if !crate::env_flag!("OXI_S1510_DISABLE")
                                 // S1539 (2026-09-25): judge "proportional" on the UNSCALED
                                 // width. A w:w-scaled full-width glyph (66%: 7.26 of 11)
                                 // passed this test, took the half-charSpace expected width
@@ -3925,7 +3946,13 @@ impl<'a> LineBreaker<'a> {
                                 // -0.27 -- exactly HALF. A proportional glyph takes
                                 // half the charSpace, the way a single-byte glyph
                                 // takes half the cell increment under balance.
-                                char_width - grid_tracking + 0.5 * char_space_pt
+                                char_width - grid_tracking + if self.balance_single_byte_double_byte_width
+                                    || crate::env_flag!("OXI_GRID_HALF_NEEDS_BALANCE_DISABLE")
+                                {
+                                    0.5 * char_space_pt
+                                } else {
+                                    char_space_pt
+                                }
                             } else {
                                 // S1210: additive for BOTH signs (see above).
                                 font_size + char_space_pt
@@ -3964,11 +3991,14 @@ impl<'a> LineBreaker<'a> {
                             // 11.5, wrapped 「う。」 and pushed a line onto every page
                             // after. (-12 reads 10.56 there, not the 10.32 of a strict
                             // doubling -- one witness, kept as the doubling.)
-                            let s1340_track = if std::env::var("OXI_S1340_DISABLE").is_err()
+                            let s1340_track = if !crate::env_flag!("OXI_S1340_DISABLE")
                                 && style.fit_text.is_none()
                                 && !style.ruby_spread
                             {
-                                cs * if self.balance_single_byte_double_byte_width { 2.0 } else { 1.0 }
+                                // OXI_BALANCE_PROP_ONCE: a proportional glyph's tracking
+                                // is not doubled on the grid either (HGP創英角ﾎﾟｯﾌﾟ体 grid
+                                // + balance + spacing 22: に 11.75 = 9.60 + 1.1 + 1.07)
+                                cs * if self.balance_single_byte_double_byte_width && !balance_prop_once { 2.0 } else { 1.0 }
                             } else {
                                 0.0
                             };
@@ -3979,7 +4009,7 @@ impl<'a> LineBreaker<'a> {
                         && char_width > 0.0
                         && ch.is_ascii_graphic()
                         && (char_width - 0.5 * font_size).abs() < 0.06 * font_size
-                        && std::env::var("OXI_S1337_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S1337_DISABLE")
                         && (self.balance_single_byte_double_byte_width
                             || std::env::var("OXI_S1337B").ok().as_deref() == Some("1"))
                     {
@@ -4011,8 +4041,8 @@ impl<'a> LineBreaker<'a> {
                             // / 18.48 put «)» past the floored edge and wrapped it, 40pt down
                             // the page and three paragraphs onto p2.
                             let cell = if char_space_pt >= 0.0
-                                && (std::env::var_os("OXI_HALF_CELL_ADDITIVE_DISABLE").is_some()
-                                    || std::env::var("OXI_S1210_DISABLE").is_ok())
+                                && (crate::env_flag!("OXI_HALF_CELL_ADDITIVE_DISABLE")
+                                    || crate::env_flag!("OXI_S1210_DISABLE"))
                             {
                                 font_size * pitch / default_fs
                             } else if char_space_pt >= 0.0 {
@@ -4020,7 +4050,7 @@ impl<'a> LineBreaker<'a> {
                             } else {
                                 font_size + char_space_pt
                             };
-                            if std::env::var("OXI_DBG1337").is_ok() {
+                            if crate::env_flag!("OXI_DBG1337") {
                                 eprintln!("[S1337] ch={:?} fs={:.2} pitch={:.3} ratio={:.4} default_fs={:.2} cs={:.3} cell={:.2} natural={:.2}",
                                     ch, font_size, pitch, ratio, default_fs, char_space_pt, cell, char_width);
                             }
@@ -4034,8 +4064,8 @@ impl<'a> LineBreaker<'a> {
                             // p9's -8 run draws 「(20」 at 5.40 / 5.28 / 5.40 (half of
                             // 10.69), the faithful slice the same; 5.75 put the line's
                             // 「る。」 on a second line and a page onto the rest.
-                            let s1350_track = if std::env::var("OXI_S1340_DISABLE").is_err()
-                                && std::env::var("OXI_S1350_DISABLE").is_err()
+                            let s1350_track = if !crate::env_flag!("OXI_S1340_DISABLE")
+                                && !crate::env_flag!("OXI_S1350_DISABLE")
                                 && style.fit_text.is_none()
                                 && !style.ruby_spread
                             {
@@ -4058,7 +4088,7 @@ impl<'a> LineBreaker<'a> {
                         && !ch.is_whitespace()
                         && style.fit_text.is_none()
                         && !style.ruby_spread
-                        && std::env::var_os("OXI_S1449_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_S1449_DISABLE")
                     {
                         // S1449 (2026-09-17, default ON, opt-out OXI_S1449_DISABLE): on a
                         // `linesAndChars` grid a PROPORTIONAL half-width character carries
@@ -4105,7 +4135,7 @@ impl<'a> LineBreaker<'a> {
                     // (capw += 240 per character where the fragment advances 227), so
                     // every full paragraph took one line too many and the form ran to 4
                     // pages against Word's 3.
-                    if std::env::var_os("OXI_S1492_DISABLE").is_none() {
+                    if !crate::env_flag!("OXI_S1492_DISABLE") {
                         pre_yakumono_width += char_grid_extra;
                     }
                 } else if s466_grid_expand && char_grid_extra > 0.0 {
@@ -4122,7 +4152,7 @@ impl<'a> LineBreaker<'a> {
                     // Scoped to explicit compat 15 (the probe's mode): reference__13e1b7fc
                     // (compat 14, charSpace 3194) packs its bracket-heavy lines at the bare
                     // em in Word, and this fold broke them a character early.
-                    if std::env::var_os("OXI_S1584_DISABLE").is_none()
+                    if !crate::env_flag!("OXI_S1584_DISABLE")
                         && self.compat_mode >= 15
                         && self.compat_mode_explicit
                     {
@@ -4144,7 +4174,7 @@ impl<'a> LineBreaker<'a> {
                 // retain that precision across the line as well.
                 let s1317_grid_char = ((char_grid_extra < 0.0
                     || (s466_grid_expand && char_grid_extra > 0.0))
-                    && std::env::var("OXI_S1317_DISABLE").is_err())
+                    && !crate::env_flag!("OXI_S1317_DISABLE"))
                     || char_metrics.synthetic_bold_advance > 0.0;
                 let s1317_inc = |cum: f32, cw: f32| -> i32 { pt_to_tw(cum + cw) - pt_to_tw(cum) };
                 // OXI_NBSP_SPACE_BIND (2026-10-11, default ON, opt-out _DISABLE): a
@@ -4155,7 +4185,7 @@ impl<'a> LineBreaker<'a> {
                 // that space would put it ~75tw before). en/correspondence__00aee476
                 // lost a line there and moved the page's tail up 17.3pt.
                 let nbsp_bound_space = ch == ' '
-                    && std::env::var_os("OXI_NBSP_SPACE_BIND_DISABLE").is_none()
+                    && !crate::env_flag!("OXI_NBSP_SPACE_BIND_DISABLE")
                     && if char_index > 0 {
                         chars_vec[char_index - 1] == '\u{00A0}'
                     } else {
@@ -4210,7 +4240,7 @@ impl<'a> LineBreaker<'a> {
                             {
                                 if njump == lines.len()
                                     && !self.doc_body_has_real_cjk
-                                    && std::env::var("OXI_S885_DISABLE").is_err()
+                                    && !crate::env_flag!("OXI_S885_DISABLE")
                                 {
                                     let w_content = current_width - cw_after;
                                     if w_content >= 0.0 {
@@ -4269,9 +4299,9 @@ impl<'a> LineBreaker<'a> {
                             // 62.4 + 15.5, one line per entry); Oxi jumped the first tab
                             // to the right stop, drew the leader after 「1.」 and wrapped
                             // the title to a second line.
-                            let s881 = std::env::var("OXI_S881_DISABLE").is_err()
+                            let s881 = !crate::env_flag!("OXI_S881_DISABLE")
                                 && (!self.doc_body_has_real_cjk
-                                    || std::env::var_os("OXI_S1560_DISABLE").is_none())
+                                    || !crate::env_flag!("OXI_S1560_DISABLE"))
                                 && first_line_indent < -0.01;
                             // S1636 (2026-10-02, default ON, opt-out OXI_S1636_DISABLE): a
                             // line set in a lane beside a float starts `lane_shift` right
@@ -4282,7 +4312,7 @@ impl<'a> LineBreaker<'a> {
                             // room, moves the whole line below the box; Oxi added the
                             // stop to the lane start and set the text at x 618).
                             let line_start_abs = indent_left
-                                + if std::env::var_os("OXI_S1636_DISABLE").is_none() {
+                                + if !crate::env_flag!("OXI_S1636_DISABLE") {
                                     self.s1636_lane_shift.get()
                                 } else {
                                     0.0
@@ -4357,7 +4387,7 @@ impl<'a> LineBreaker<'a> {
                             let cjk_aligned_tab_boundary = self.doc_body_has_real_cjk
                                 && self.compat_mode_explicit
                                 && self.compat_mode >= 15
-                                && std::env::var("OXI_S1401_DISABLE").is_err()
+                                && !crate::env_flag!("OXI_S1401_DISABLE")
                                 && matches!(tab_align, TabStopAlignment::Right | TabStopAlignment::Center)
                                 && next_relative > s1401_target - 0.01;
                             let tab_align = if cjk_aligned_tab_boundary {
@@ -4367,7 +4397,7 @@ impl<'a> LineBreaker<'a> {
                             };
                             let mut s883_nowrap = false;
                             if tab_align == TabStopAlignment::Right
-                                && std::env::var("OXI_S883_DISABLE").is_err()
+                                && !crate::env_flag!("OXI_S883_DISABLE")
                                 && (!self.doc_body_has_real_cjk || cjk_aligned_tab_boundary)
                             {
                                 let avail_rel = if cjk_aligned_tab_boundary {
@@ -4443,20 +4473,23 @@ impl<'a> LineBreaker<'a> {
                             // fixpoint. Only a space and a tab count as "nothing follows":
                             // U+00A0 renders, so `char::is_whitespace` is too broad.
                             let s1251_trailing_tab =
-                                std::env::var("OXI_S1251_DISABLE").is_err()
+                                !crate::env_flag!("OXI_S1251_DISABLE")
                                     && s1251_rest_blank
                                     && s1251_last_content
                                         .map_or(true, |i| i <= char_index);
-                            if std::env::var("OXI_S1044_DISABLE").is_err()
+                            if !crate::env_flag!("OXI_S1044_DISABLE")
                                 && !self.doc_body_has_real_cjk
                                 && !s883_nowrap
                                 && tab_align == TabStopAlignment::Left
                                 && !current_line.fragments.is_empty()
                                 && next_relative > available_tw as f32 / 20.0 + 0.01
                                 && (current_width >= available_tw as f32 / 20.0 - 0.01
-                                    || s1251_trailing_tab)
+                                    || s1251_trailing_tab
+                                    || (self.twoseg_left_strip.get()
+                                        && explicit_stop.is_none()
+                                        && implied_stop.is_none()))
                             {
-                                if std::env::var("OXI_DBG1044").is_ok() {
+                                if crate::env_flag!("OXI_DBG1044") {
                                     let head: String = current_line
                                         .fragments
                                         .iter()
@@ -4561,7 +4594,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // (the char-budget wall); until then JP keeps the
                             // compensating pair, byte-identical by construction.
                             if (!self.doc_body_has_real_cjk || cjk_aligned_tab_boundary)
-                                && std::env::var("OXI_TABTW_DISABLE").is_err()
+                                && !crate::env_flag!("OXI_TABTW_DISABLE")
                             {
                                 current_width_tw = pt_to_tw(current_width);
                                 current_capw_tw = current_width_tw;
@@ -4569,7 +4602,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 // segment consumes leftward (see the declaration).
                                 // A new tab of any kind resets the prior slack.
                                 center_tab_stop_tw = if tab_align == TabStopAlignment::Center
-                                    && std::env::var("OXI_S958_DISABLE").is_err()
+                                    && !crate::env_flag!("OXI_S958_DISABLE")
                                 {
                                     // A centered segment cannot consume the separating space
                                     // after preceding text when it is clamped leftward.
@@ -4586,15 +4619,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     // left from the boundary).
                                     i32::MAX / 4
                                 } else if tab_align == TabStopAlignment::Right
-                                    && std::env::var("OXI_S774_DISABLE").is_err()
+                                    && !crate::env_flag!("OXI_S774_DISABLE")
                                 {
                                     pt_to_tw(w)
                                 } else {
                                     0
                                 };
                             } else if tab_align == TabStopAlignment::Right
-                                && std::env::var_os("OXI_S1567_DISABLE").is_none()
-                                && std::env::var("OXI_S774_DISABLE").is_err()
+                                && !crate::env_flag!("OXI_S1567_DISABLE")
+                                && !crate::env_flag!("OXI_S774_DISABLE")
                             {
                                 // S1567 (2026-09-26, default ON, opt-out OXI_S1567_DISABLE):
                                 // the CJK side keeps TABTW's compensating pair (the tw
@@ -4645,7 +4678,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             }
                             // Leading whitespace retains its natural width; only spaces
                             // after visible content can contribute justification fit credit.
-                            let shrinkable_space = std::env::var_os("OXI_LEADING_SPACE_CREDIT_DISABLE").is_some()
+                            let shrinkable_space = crate::env_flag!("OXI_LEADING_SPACE_CREDIT_DISABLE")
                                 || current_line.fragments.iter().any(|f| {
                                     f.text.chars().any(|c| !c.is_whitespace())
                                 });
@@ -4704,10 +4737,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     c14_space_tw = pt_to_tw(char_width);
                                 } else if self.compat_mode >= 15
                                     && self.compat_mode_explicit
-                                    && std::env::var("OXI_S825_DISABLE").is_err()
+                                    && !crate::env_flag!("OXI_S825_DISABLE")
                                 {
                                     let em_part = char_width - cs;
-                                    let em_credit = if std::env::var("OXI_SPACE_CREDIT_FIXED_DISABLE").is_err() {
+                                    let em_credit = if !crate::env_flag!("OXI_SPACE_CREDIT_FIXED_DISABLE") {
                                         (em_part * 0.25 * 4096.0).round() / 4096.0
                                     } else { em_part * 0.25 };
                                     let credit = em_credit + cs.max(0.0) * 0.24 + latin_space_credit_remainder;
@@ -4716,7 +4749,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     latin_space_credit_remainder = credit - credit_tw as f32 / 20.0;
                                 } else if self.compat_mode_explicit
                                     && self.compat_mode <= 14
-                                    && std::env::var("OXI_S1046_DISABLE").is_err()
+                                    && !crate::env_flag!("OXI_S1046_DISABLE")
                                 {
                                     // S1046 (2026-07-30, default ON, opt-out
                                     // OXI_S1046_DISABLE): a doc that EXPLICITLY declares
@@ -4746,7 +4779,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     // credit: none.
                                 } else if self.settings_part_exists
                                     && !self.compat_mode_explicit
-                                    && std::env::var("OXI_S933_DISABLE").is_err()
+                                    && !crate::env_flag!("OXI_S933_DISABLE")
                                 {
                                     // S933b (2026-07-18): a doc whose settings.xml
                                     // EXISTS but declares NO compatibilityMode gets
@@ -4763,7 +4796,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     // (the S825 booster-hunt cs3 hosts had no
                                     // settings.xml at all).
                                     // credit: none.
-                                } else if std::env::var("OXI_S933_DISABLE").is_err() {
+                                } else if !crate::env_flag!("OXI_S933_DISABLE") {
                                     // S933 (2026-07-18, default ON, opt-out
                                     // OXI_S933_DISABLE): the NON-explicit-compat15
                                     // class's per-LINE justify-shrink allowance is
@@ -4839,13 +4872,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // language law inherited Normal.dotm's CJK face. en/educational
                         // __004cf6e9 (dd eastAsia Calibri, style eastAsia SimSun + zh-CN):
                         // Word wraps «program,», Oxi hung the comma.
-                        let dd_ea_cjk = std::env::var_os("OXI_HANG_DD_EA_DISABLE").is_some()
+                        let dd_ea_cjk = crate::env_flag!("OXI_HANG_DD_EA_DISABLE")
                             || self.default_font_family_east_asia.as_deref().is_some_and(|f|
                                 crate::font::shape::family_covers(f, '本')
                                     || self.registry.get(f).is_cjk_83_64_font());
                         let lang_hang = !s809_hang
                             || (east_asian_lang && dd_ea_cjk)
-                            || std::env::var_os("OXI_HANG_LANG_DISABLE").is_some();
+                            || crate::env_flag!("OXI_HANG_LANG_DISABLE");
                         // OXI_KINSOKU_OFF: a kinsoku=0 / non-east-Asian-language paragraph at
                         // compat 15 hangs no Latin mark either (`_pb_halfwidth_kinsoku_gen.py`
                         // c15 jc=both run en-US: Word starts the line with «.», Oxi hung it).
@@ -4885,18 +4918,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // wrap WHOLE and margin-break (the tokyoshugyo URL model,
                     // which S783 mistook for a hyphen rule). technical__b80f6caa:
                     // the URL took 3 lines instead of 2, +18pt, one paragraph over.
-                    let s1399 = std::env::var("OXI_S1399_DISABLE").is_err();
+                    let s1399 = !crate::env_flag!("OXI_S1399_DISABLE");
                     let s783_hyphen_flush = ch == '-'
                         && (s1399 || !self.doc_body_has_real_cjk
                             || (legacy_latin_hyphen
                                 && !word.contains(':')
                                 && !word.contains('/'))
                             || (self.compat_mode >= 15 && self.compat_mode_explicit
-                                && std::env::var_os("OXI_CJK_HYPHEN_BREAK").is_some()))
-                        && std::env::var("OXI_S783_DISABLE").is_err()
+                                && crate::env_flag!("OXI_CJK_HYPHEN_BREAK")))
+                        && !crate::env_flag!("OXI_S783_DISABLE")
                         && !(c14_active
                             && c14_space_tw > 0
-                            && std::env::var("OXI_S1028_HY_DISABLE").is_err());
+                            && !crate::env_flag!("OXI_S1028_HY_DISABLE"));
                     // S1100: an EM/EN DASH is a REAL word boundary (Word fills a
                     // partial line up to it), exactly like S783's hyphen — the
                     // opportunity model below is the URL model («the whole token
@@ -4936,7 +4969,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // stays one word («「|·MON»). ja/technical__c6d7cdb1 p18 «…または「·» / «MONO」».
                     || (ch == '\u{00B7}'
                         && (style.east_asia_hint || style.font_hint_east_asia == Some(true))
-                        && std::env::var_os("OXI_HINT_MIDDOT_CJK_BREAK_DISABLE").is_none())
+                        && !crate::env_flag!("OXI_HINT_MIDDOT_CJK_BREAK_DISABLE"))
                 {
                     // CJK characters always break at char boundaries (subject to kinsoku).
                     // ECMA-376 §17.3.1.40: wordWrap controls LATIN word-break only.
@@ -4982,7 +5015,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // neither +2.52/+2.57, both -0.12/+0.05, left only 0/+2.57, right
                     // only +2.52/+0.17. correspondence__04a3e3e1's '(資料代50円)' cell
                     // line carries two ruby fields around '50': Word 0, Oxi +5.
-                    let s1316_ruby_adjacent = std::env::var("OXI_S1316_DISABLE").is_err()
+                    let s1316_ruby_adjacent = !crate::env_flag!("OXI_S1316_DISABLE")
                         && (style.ruby_field
                             || current_line.fragments.last().map_or(false, |f| f.style.ruby_field));
                     if cur_is_cjk
@@ -4997,12 +5030,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         if let Some(last) = current_line.fragments.last_mut() {
                             last.width += extra;
                             last.natural_width += extra;
-                            if legacy_gap_on || std::env::var_os("OXI_CJK_AUTOSPACE_COMPRESSION").is_some() {
+                            if legacy_gap_on || crate::env_flag!("OXI_CJK_AUTOSPACE_COMPRESSION") {
                                 last.auto_space_shrink += extra * 0.5;
                             }
                         }
                         // Keep quarter-em gaps fractional until the cumulative twip conversion.
-                        let extra_tw = if std::env::var_os("OXI_CJK_AUTOSPACE_CUMULATIVE").is_some() {
+                        let extra_tw = if crate::env_flag!("OXI_CJK_AUTOSPACE_CUMULATIVE") {
                             pt_to_tw(current_width + extra) - pt_to_tw(current_width)
                         } else {
                             pt_to_tw(extra)
@@ -5033,7 +5066,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // only needs the OPENINGS gate (this) + TRAILBR. b837-SAFE (s475_break =
                     // type=lines only; b837 = linesAndChars). HI=3.4 fixes 333, LO=0 wraps W1.
                     let s475_open_eff =
-                        if s475_break && std::env::var("OXI_NPERIOD_DISABLE").is_err() {
+                        if s475_break && !crate::env_flag!("OXI_NPERIOD_DISABLE") {
                             // n_period DISCRIMINATOR (2026-06-23, OXI_NPERIOD, default OFF):
                             // Word credits OPENING-bracket demand compression only when the line
                             // lacks cheap PERIOD (。．) half-em compression. MEASURED (nedo Word
@@ -5091,7 +5124,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // measurement — comma 3.4 / period 6.0 (half-em) / closing-solo
                         // 0.84 (light). b837-safe (s475_break = type=lines). Tunable.
                         let (period_pt, close_solo_pt, comma_pt) =
-                            if std::env::var("OXI_PERTYPE").is_ok() {
+                            if crate::env_flag!("OXI_PERTYPE") {
                                 (
                                     std::env::var("OXI_PT_PERIOD")
                                         .ok()
@@ -5141,13 +5174,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let s757_open_eff = if kinsoku::is_yakumono_opening(ch)
                             && current_line.fragments.is_empty()
                             && word.is_empty()
-                            && std::env::var("OXI_S757_DISABLE").is_err()
+                            && !crate::env_flag!("OXI_S757_DISABLE")
                         {
                             s475_open_eff.min(s475_open)
                         } else {
                             s475_open_eff
                         };
-                        if std::env::var("OXI_DBG757").is_ok() && kinsoku::is_yakumono_opening(ch) {
+                        if crate::env_flag!("OXI_DBG757") && kinsoku::is_yakumono_opening(ch) {
                             eprintln!("[DBG757] ch={:?} cw_tw={} nfrag={} word_len={} capw_tw={} open_eff={:.2}",
                                 ch, current_width_tw, current_line.fragments.len(), word.chars().count(), current_capw_tw, s757_open_eff);
                         }
@@ -5175,7 +5208,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 &char_metrics,
                                 gdi_map,
                             );
-                            if std::env::var("OXI_DBG1167").is_ok()
+                            if crate::env_flag!("OXI_DBG1167")
                                 && pre_yakumono_width < em - 0.01
                             {
                                 eprintln!(
@@ -5217,7 +5250,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             s1167_cap
                         };
                         let capacity = pt_to_tw(pre_yakumono_width - s1167_cap);
-                        if vertical && std::env::var("OXI_VERTICAL_PAIR_DISABLE").is_err() {
+                        if vertical && !crate::env_flag!("OXI_VERTICAL_PAIR_DISABLE") {
                             capacity.min(pt_to_tw(char_width))
                         } else {
                             capacity
@@ -5244,7 +5277,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // and absent-compat docs lay out as legacy (S545). s476_grid
                     // (linesAndChars, b837) and s590 (legacy justified) keep
                     // their calibrated behavior.
-                    let modern_cjk_line_end = std::env::var_os("OXI_CJK_MODERN_LINE_END").is_some()
+                    let modern_cjk_line_end = crate::env_flag!("OXI_CJK_MODERN_LINE_END")
                         && s476_body && !vertical && !lines_and_chars
                         && self.compat_mode_explicit && self.compat_mode >= 15
                         // Justified text may hang a mark when its preceding text
@@ -5260,7 +5293,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // more after the mark hangs it (drawn from the edge); MS Gothic hangs
                     // the final 。 too; c15 jc=both hangs. ja/educational__08709ff2 «⑤…
                     // ダブルタップします。» wraps «す。».
-                    let prop_final_nohang = std::env::var_os("OXI_PROP_FINAL_NOHANG_DISABLE").is_none()
+                    let prop_final_nohang = !crate::env_flag!("OXI_PROP_FINAL_NOHANG_DISABLE")
                         && (self.compat_mode <= 14 || !self.compat_mode_explicit)
                         && matches!(ch, '。' | '、' | '，' | '．')
                         && s725_chars_after == 0
@@ -5278,12 +5311,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // blank half is spent; c15 jc=both hangs 」 with the flag. The
                     // faithful slice of ja/educational__08709ff2 «…押し「バツ印」を…»
                     // never hangs its 」; without the document's settings it does.
-                    let alt_closing_nohang = std::env::var_os("OXI_ALT_KINSOKU_NOHANG_DISABLE").is_none()
+                    let alt_closing_nohang = !crate::env_flag!("OXI_ALT_KINSOKU_NOHANG_DISABLE")
                         && self.alt_kinsoku
                         && (self.compat_mode <= 14 || !self.compat_mode_explicit)
                         && kinsoku::is_yakumono_closing(ch)
                         && !matches!(ch, '、' | '。' | '，' | '．');
-                    let s725_final_char = std::env::var("OXI_S725_DISABLE").is_err()
+                    let s725_final_char = !crate::env_flag!("OXI_S725_DISABLE")
                         && !vertical
                         && self.compat_mode >= 15
                         && self.compat_mode_explicit
@@ -5452,7 +5485,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // 0.463 / 0.412 / 0.343 cell for n = 40 / 50 / 64; at n <= 26 the
                             // table already gives 0.50, so the floor only over-packed long lines.
                             ((japanese_language_oikomi && !unit
-                                && std::env::var_os("OXI_COMPCAP_NOFLOOR_DISABLE").is_some()) || (unit
+                                && crate::env_flag!("OXI_COMPCAP_NOFLOOR_DISABLE")) || (unit
                                 && following_punctuation.iter().take_while(|&&nc|
                                     matches!(nc as u32, 0x3001 | 0x3002 | 0xFF0C | 0xFF0E | 0xFF1A | 0xFF1B | 0x30FB)
                                         || kinsoku::is_yakumono_closing(nc)).count() >= 2
@@ -5481,8 +5514,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let s1318_next_mark = following_punctuation.first().map_or(false, |&nc| {
                         matches!(nc, '、' | '。' | '，' | '．' | '：' | '；' | '・') || kinsoku::is_yakumono_closing(nc)
                     });
+                    // OXI_QMARK_FINAL (2026-11-02, default ON, opt-out _DISABLE): a line-final
+                    // full-width ？ / ！ (line-start prohibited) spends the line's capacity like
+                    // 、。 do -- it gives none itself. ja/reference__2296511c «…なりますか？»:
+                    // Word keeps the ？ (10.46) on the line by squeezing «　「» and «」»
+                    // (`_pb_yahei_latin_gen.py`, every arm one line); Oxi refused it as a
+                    // plain character and pushed «か？» down.
                     let s1318_ch_mark = matches!(ch, '、' | '。' | '，' | '．' | '：' | '；' | '・')
-                        || kinsoku::is_yakumono_closing(ch);
+                        || kinsoku::is_yakumono_closing(ch)
+                        || (matches!(ch, '？' | '！') && !crate::env_flag!("OXI_QMARK_FINAL_DISABLE"));
                     let s1318_prev_open = char_index > 0
                         && chars_vec
                             .get(char_index - 1)
@@ -5577,7 +5617,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // / «う» + the dots that fit at the half-width floor / the rest (a line
                             // STARTING with ・). Oxi broke at 59 and then emitted one-dot lines.
                             // blind-G ja/reports__58dca3b2: 65 × 4.44 in a 283.5 column (1.8%).
-                            let middot_run = std::env::var_os("OXI_MIDDOT_RUN_SQUEEZE_DISABLE").is_none()
+                            let middot_run = !crate::env_flag!("OXI_MIDDOT_RUN_SQUEEZE_DISABLE")
                                 && (following_punctuation.first() == Some(&'・')
                                     || current_line.fragments.last().map_or(false, |f| f.text.ends_with('・')));
                             if middot_run {
@@ -5714,7 +5754,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         s1318_refuse_here = false;
                         ideographic_closing_lines.insert(lines.len());
                     }
-                    if s1318_regime && std::env::var("OXI_DBG1318").is_ok() {
+                    if s1318_regime && crate::env_flag!("OXI_DBG1318") {
                         eprintln!("[S1318] ch={:?} idx={} cur_tw={} cw_tw={} avail_tw={} over_tw={} cap_tw={} half_tw={} n_elect={} prev_latin={} next_mark={} ch_mark={} force_fit={} refuse={} s475={} r1490={} cap90={}/{} joined={:?} prev_open={} line={:?}",
                             ch, char_index, current_width_tw, s1317_cw_tw, s1318_avail_tw, s1318_natural_over_tw, s1318_cap_tw, s1318_half_cell_tw, s1318_n_solo, s1318_prev_latin, s1318_next_mark, s1318_ch_mark, s1318_force_fit, s1318_refuse_here, s475_break,
                             s1490_regime, s1490_cap(s1318_n_solo, false), s1490_cap(s1318_n_solo, true), s1318_next_joined, s1318_prev_open,
@@ -5733,7 +5773,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // (render-width) break + a small oikomi tolerance: keep the char
                         // only if it overflows by ≤ TOL (light 約物 compression absorbs it).
                         // Opt-out OXI_S595_DISABLE; tune OXI_S595_TOL.
-                        if s572_legacy_notype_oikomi && std::env::var("OXI_S595_DISABLE").is_err() {
+                        if s572_legacy_notype_oikomi && !crate::env_flag!("OXI_S595_DISABLE") {
                             let tol = std::env::var("OXI_S595_TOL")
                                 .ok()
                                 .and_then(|v| v.parse::<f32>().ok())
@@ -5744,7 +5784,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // none. ikujidetail p1 「３ 配偶者が…」 line 1 (no mark):
                             // Word wraps at 42 chars, Oxi kept a 43rd 1.6pt past the
                             // margin; its lines 2-3 carry 、 and squeeze 42 in.
-                            let tol = if std::env::var_os("OXI_S1487_DISABLE").is_none() {
+                            let tol = if !crate::env_flag!("OXI_S1487_DISABLE") {
                                 let marks = current_line
                                     .fragments
                                     .iter()
@@ -5760,12 +5800,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 tol
                             };
                             current_width_tw + pt_to_tw(char_width) - available_tw - pt_to_tw(tol)
-                        } else if std::env::var("OXI_S601_DISABLE").is_err()
+                        } else if !crate::env_flag!("OXI_S601_DISABLE")
                             // S1429 (2026-09-16, default ON, opt-out OXI_S1429_DISABLE):
                             // no hang inside a table cell (policies__07543a6b p28
                             // 「服用した / 後、横紋筋」; see IN_TABLE_LAYOUT).
                             && !(IN_TABLE_LAYOUT.with(|c| c.get()) > 0
-                                && std::env::var_os("OXI_S1429_DISABLE").is_none())
+                                && !crate::env_flag!("OXI_S1429_DISABLE"))
                             // S1334 (2026-09-06, default ON, opt-out OXI_S1334_DISABLE): the
                             // hang is granted at compat <= 14 whatever the alignment, and at
                             // compat 15 ONLY to a justified paragraph. DERIVED
@@ -5780,7 +5820,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             && (self.compat_mode <= 14
                                 || !self.compat_mode_explicit
                                 || is_justified
-                                || std::env::var("OXI_S1334_DISABLE").is_ok())
+                                || crate::env_flag!("OXI_S1334_DISABLE"))
                             && !prop_final_nohang
                             && !alt_closing_nohang
                             // OXI_KINSOKU_OFF: a compat-15 kinsoku=0 paragraph hangs nothing
@@ -5800,14 +5840,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 //   including a closing bracket (kojin p1 keeps
                                 //   「含む。）」 with the ） 10.4pt past the margin,
                                 //   compat 15)...
-                                || (std::env::var("OXI_S1220_DISABLE").is_err()
+                                || (!crate::env_flag!("OXI_S1220_DISABLE")
                                     && self.compat_mode >= 15
                                     && kinsoku::is_yakumono_closing(ch)))
                             // ...EXCEPT at compat 11, where a line-final PAIR cannot
                             // hang (明朝 c11: 。） at 372.95 in a 377.95 budget is
                             // still pushed, kinsoku dragging the 亜 before it;
                             // Ｐ明朝 c11 TRAIL=0 arms read the same).
-                            && !(std::env::var("OXI_S1220_DISABLE").is_err()
+                            && !(!crate::env_flag!("OXI_S1220_DISABLE")
                                 && self.compat_mode < 15
                                 && char_index > 0
                                 && chars_vec
@@ -5890,7 +5930,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // line was the 18pt Oxi lost on page 7, which let the
                             // page's last paragraph keep both of its lines and
                             // shifted every page from 8 to 13.
-                            let tol = if std::env::var("OXI_S1462_DISABLE").is_err() {
+                            let tol = if !crate::env_flag!("OXI_S1462_DISABLE") {
                                 let marks = current_line
                                     .fragments
                                     .iter()
@@ -5956,7 +5996,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // in Oxi and Word keeps it; the pure-CJK arm refuses 22 tw.
                     if overflow_tw > 0
                         && !s475_break
-                        && std::env::var_os("OXI_S1499_DISABLE").is_none()
+                        && !crate::env_flag!("OXI_S1499_DISABLE")
                         && !self.compress_punctuation
                         && is_justified
                         && self.compat_mode >= 15
@@ -5997,7 +6037,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let credit_tw = pt_to_tw(font_size / 14.0)
                             .saturating_mul(gaps as i32)
                             .min(pt_to_tw(font_size / 4.0));
-                        if std::env::var_os("OXI_DBG1499").is_some() {
+                        if crate::env_flag!("OXI_DBG1499") {
                             eprintln!("[S1499] ch={:?} over_tw={} gaps={} credit_tw={}", ch, overflow_tw, gaps, credit_tw);
                         }
                         overflow_tw -= credit_tw;
@@ -6027,7 +6067,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     if overflow_tw > 0 && s476_body && is_justified
                         && !vertical && !lines_and_chars
                         && kinsoku::is_line_start_prohibited(ch)
-                        && std::env::var_os("OXI_CJK_AUTOSPACE_COMPRESSION").is_some()
+                        && crate::env_flag!("OXI_CJK_AUTOSPACE_COMPRESSION")
                     {
                         let capacity: f32 = current_line.fragments.iter()
                             .map(|fragment| fragment.auto_space_shrink).sum();
@@ -6046,7 +6086,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             overflow_tw = 0;
                         }
                     }
-                    if std::env::var("OXI_DBG721").is_ok()
+                    if crate::env_flag!("OXI_DBG721")
                         && text.contains("三六協定で定める時間数")
                     {
                         eprintln!("[DBG721] ch={:?} idx={} cw_tw={} capw_tw={} avail={} ovf={} s475={} s590={} lrpb={}",
@@ -6138,7 +6178,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // With a nonpositive measure, leading fullwidth spaces can
                     // overhang before the first visible glyph. A negative measure
                     // limits each such row to six spaces; zero permits the run.
-                    let degenerate_space_overhang = std::env::var("OXI_DEGENERATE_CJK_SPACES").is_ok()
+                    let degenerate_space_overhang = crate::env_flag!("OXI_DEGENERATE_CJK_SPACES")
                         && available_tw <= 0
                         && ch == '\u{3000}'
                         && current_line.fragments.iter().all(|f| f.text.chars().all(|c| c == '\u{3000}'))
@@ -6152,14 +6192,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // spaces on line 1), Oxi 35. reports__28abf02c p2 「　×26 調査
                     // 平成30年７月」 overflowed a page (+1 x14).
                     let s1436_space_hang = ch == '\u{3000}'
-                        && std::env::var_os("OXI_S1436_DISABLE").is_none();
+                        && !crate::env_flag!("OXI_S1436_DISABLE");
                     // S1488 (2026-09-19, default ON, opt-out OXI_S1488_DISABLE): an
                     // ASCII space reaching this loop (after a CJK character) hangs
                     // the same way -- ikujidetail p9 「…はない。」 + two U+0020: Word's
                     // line ends at x=549.6 with the 。 hung and the spaces past it,
                     // Oxi put the spaces on a 5th line.
                     let s1488_ascii_space_hang = ch == ' '
-                        && std::env::var_os("OXI_S1488_DISABLE").is_none();
+                        && !crate::env_flag!("OXI_S1488_DISABLE");
                     // OXI_WORDWRAP0_IDEOSPACE (2026-10-31, default ON, opt-out _DISABLE):
                     // under w:wordWrap="0" an ideographic space is an ordinary
                     // character -- it neither hangs nor holds the line.
@@ -6169,7 +6209,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // alike); `_pb_ideospace_bisect.py` pins ja/creative__8af31dea's
                     // 2-line 45-space paragraph on its 一太郎 style's wordWrap 0.
                     let ideo_ordinary = ch == '\u{3000}' && !para_style.word_wrap
-                        && std::env::var_os("OXI_WORDWRAP0_IDEOSPACE_DISABLE").is_none();
+                        && !crate::env_flag!("OXI_WORDWRAP0_IDEOSPACE_DISABLE");
                     let is_immune_space = !ideo_ordinary && ((trailing_u3000 && line_near_full) || degenerate_space_overhang || s1436_space_hang)
                         || s1488_ascii_space_hang;
                     let line_compress_count = current_line
@@ -6256,7 +6296,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // explicit flag. ed025c (explicit 15) is correctly excluded.
                     // Default ON (spec complete); opt-out OXI_S543_DISABLE.
                     let s543_oikomi = natural_break_jc
-                        && std::env::var("OXI_S543_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S543_DISABLE")
                         && self.compress_punctuation
                         && (self.compat_mode <= 14 || !self.compat_mode_explicit);
                     // S556 scaffold (opt-IN OXI_S556_JUST15; default OFF =
@@ -6265,7 +6305,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // S551-S555 (T={1:6.5,2:4.15,3:3.3,4:2.65,5+:2.15}).
                     // OXI_S556_DEBUG=1 prints each candidate decision.
                     let s556_just15 = is_justified
-                        && std::env::var("OXI_S556_JUST15").is_ok()
+                        && crate::env_flag!("OXI_S556_JUST15")
                         && self.compress_punctuation
                         && self.compat_mode >= 15 && self.compat_mode_explicit
                         && !lines_and_chars
@@ -6388,7 +6428,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             let need = overflow_tw as f32 / 20.0;
                             let slack = char_width - need;
                             let fire = need > 0.0 && slack >= t_n;
-                            if std::env::var("OXI_S556_DEBUG").is_ok() {
+                            if crate::env_flag!("OXI_S556_DEBUG") {
                                 // S557 (2026-06-13): the width components expose that
                                 // `overflow_tw` in the s475_break (justified c15)
                                 // regime is a CAPACITY overflow (capw + capinc −
@@ -6630,7 +6670,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // OXI_LEGACY_HANG_NO_S228_GATE=1 disables.
                         let next_ch = chars_vec.get(char_index + 1).copied();
                         let next_is_proh = next_ch.map_or(false, kinsoku::is_line_start_prohibited);
-                        let legacy_s228 = std::env::var("OXI_LEGACY_HANG_NO_S228_GATE").is_ok();
+                        let legacy_s228 = crate::env_flag!("OXI_LEGACY_HANG_NO_S228_GATE");
                         let is_para_last_char =
                             frag_outer_idx + 1 == n_fragments && char_index + 1 == chars_vec.len();
                         let is_sentence_terminator = matches!(ch, '。' | '．');
@@ -6694,7 +6734,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // coverage-track fix that §6 found SSIM-swamped by their structural /
                         // weight-AA errors. The burasagari/oidashi gate (S506) is for the
                         // hang-overflow case (b837 footnote), which these docs don't hit.
-                        let s506_oidashi = std::env::var("OXI_S506_OIDASHI").is_ok()
+                        let s506_oidashi = crate::env_flag!("OXI_S506_OIDASHI")
                             && !is_justified
                             && self.compat_mode >= 15
                             && !s476_body;
@@ -6718,7 +6758,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // CELL/textbox paragraphs regressed ed025c p4 −0.0685 (its
                         // narrow fitText cells re-wrapped); Word's in-cell hang
                         // behavior is unmeasured — body is the COM-pinned scope.
-                        let s548_oidashi = std::env::var("OXI_S548_DISABLE").is_err()
+                        let s548_oidashi = !crate::env_flag!("OXI_S548_DISABLE")
                             && !is_justified
                             && s476_body
                             && self.compat_mode >= 15
@@ -6741,7 +6781,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             && crate::font::vertical_char_grid_on()
                             && current_width_tw <= available_tw;
                         let s1429_cell_oidashi = IN_TABLE_LAYOUT.with(|c| c.get()) > 0
-                            && std::env::var_os("OXI_S1429_DISABLE").is_none();
+                            && !crate::env_flag!("OXI_S1429_DISABLE");
                         let can_hang = kinsoku::is_hangable_punct(ch)
                             && !ea_nokinsoku
                             && !prop_final_nohang
@@ -6786,7 +6826,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // both conditions are satisfied:
                         //   - first char of next line is NOT line-start-prohibited
                         //   - last char of current line is NOT line-end-prohibited
-                        if std::env::var("OXI_DBGWRAP").is_ok() && text.contains("区市は福祉事務所等") {
+                        if crate::env_flag!("OXI_DBGWRAP") && text.contains("区市は福祉事務所等") {
                             let tail: Vec<String> = current_line.fragments.iter().rev().take(3).map(|f| f.text.clone()).collect();
                             eprintln!("[WRAP-CJK] at ch={:?} tail={:?} nfrag={}", ch, tail, current_line.fragments.len());
                         }
@@ -6811,10 +6851,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 // OXI_MIDDOT_RUN_SQUEEZE: a run of ・ longer than the line has no
                                 // legal boundary; Word keeps the fitted line and starts the next
                                 // one with a dot (the N=115 arm's third line).
-                                let middot_run_retain = std::env::var_os("OXI_MIDDOT_RUN_SQUEEZE_DISABLE").is_none()
+                                let middot_run_retain = !crate::env_flag!("OXI_MIDDOT_RUN_SQUEEZE_DISABLE")
                                     && popped.len() >= 2
                                     && popped.iter().all(|f| !f.text.is_empty() && f.text.chars().all(|c| c == '・'));
-                                if middot_run_retain || std::env::var("OXI_KINSOKU_EMERGENCY_BREAK").is_ok() {
+                                if middot_run_retain || crate::env_flag!("OXI_KINSOKU_EMERGENCY_BREAK") {
                                     // When the entire prefix has no legal boundary,
                                     // retain the fitted line for an emergency break.
                                     current_line.fragments.extend(popped.drain(..).rev());
@@ -6907,7 +6947,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let s95_dn_fires = ch_is_digit && (para_style.auto_space_dn && self.doc_autospace());
                     if word_style.is_none() && (s95_de_fires || s95_dn_fires) {
                         // S1316: a ruby field on either side suppresses the auto-space.
-                        let s1316_adj = std::env::var("OXI_S1316_DISABLE").is_err()
+                        let s1316_adj = !crate::env_flag!("OXI_S1316_DISABLE")
                             && (style.ruby_field
                                 || current_line.fragments.last().map_or(false, |f| f.style.ruby_field));
                         let prev_is_cjk_ideo = !s1316_adj && current_line.fragments.last().map_or(false, |f| {
@@ -6924,12 +6964,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             if let Some(last) = current_line.fragments.last_mut() {
                                 last.width += extra;
                                 last.natural_width += extra;
-                            if legacy_gap_on || std::env::var_os("OXI_CJK_AUTOSPACE_COMPRESSION").is_some() {
+                            if legacy_gap_on || crate::env_flag!("OXI_CJK_AUTOSPACE_COMPRESSION") {
                                 last.auto_space_shrink += extra * 0.5;
                             }
                             }
                             // Keep quarter-em gaps fractional until the cumulative twip conversion.
-                            let extra_tw = if std::env::var_os("OXI_CJK_AUTOSPACE_CUMULATIVE").is_some() {
+                            let extra_tw = if crate::env_flag!("OXI_CJK_AUTOSPACE_CUMULATIVE") {
                                 pt_to_tw(current_width + extra) - pt_to_tw(current_width)
                             } else {
                                 pt_to_tw(extra)
@@ -6971,7 +7011,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         && c14_active
                         && (char_metrics.char_width_em('i') - char_metrics.char_width_em('M')).abs()
                             < 0.001
-                        && std::env::var("OXI_S1022_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S1022_DISABLE")
                     {
                         latin_space_credit_tw += pt_to_tw(char_width * 0.5);
                         if c14_space_tw == 0 {
@@ -7002,13 +7042,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // language law inherited Normal.dotm's CJK face. en/educational
                         // __004cf6e9 (dd eastAsia Calibri, style eastAsia SimSun + zh-CN):
                         // Word wraps «program,», Oxi hung the comma.
-                        let dd_ea_cjk = std::env::var_os("OXI_HANG_DD_EA_DISABLE").is_some()
+                        let dd_ea_cjk = crate::env_flag!("OXI_HANG_DD_EA_DISABLE")
                             || self.default_font_family_east_asia.as_deref().is_some_and(|f|
                                 crate::font::shape::family_covers(f, '本')
                                     || self.registry.get(f).is_cjk_83_64_font());
                         let lang_hang = !s809_hang
                             || (east_asian_lang && dd_ea_cjk)
-                            || std::env::var_os("OXI_HANG_LANG_DISABLE").is_some();
+                            || crate::env_flag!("OXI_HANG_LANG_DISABLE");
                         // OXI_KINSOKU_OFF: a kinsoku=0 / non-east-Asian-language paragraph at
                         // compat 15 hangs no Latin mark either (`_pb_halfwidth_kinsoku_gen.py`
                         // c15 jc=both run en-US: Word starts the line with «.», Oxi hung it).
@@ -7035,7 +7075,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // unaffected (opportunities only matter on overflow).
                     if latin_wordwrap
                         && !para_style.word_wrap
-                        && std::env::var("OXI_S745_DISABLE").is_err()
+                        && !crate::env_flag!("OXI_S745_DISABLE")
                     {
                         word_breaks.push((word.chars().count(), word_width));
                         seg_pending = true;
@@ -7058,7 +7098,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // Flush last line
         if !current_line.fragments.is_empty() {
             lines.push(current_line);
-        } else if std::env::var("OXI_TRAILBR_DISABLE").is_err()
+        } else if !crate::env_flag!("OXI_TRAILBR_DISABLE")
             && lines
                 .last()
                 .map_or(false, |l| l.break_type == LineBreakType::SoftBreak)
@@ -7142,7 +7182,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // before an opener would be wrongly protected from the loose-line
         // revert (Word keeps it natural — kern0 sweep had zero halved pairs).
         let s532_keep_pairs =
-            std::env::var("OXI_S532_DISABLE").is_err() && (!s547_kern_gate || para_kern_on);
+            !crate::env_flag!("OXI_S532_DISABLE") && (!s547_kern_gate || para_kern_on);
         for line in &mut lines {
             if !line.was_compressed {
                 continue;
@@ -7165,7 +7205,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else if kinsoku::is_yakumono_opening(c) {
                         // S1217: mirror of the break-side rule -- an opening bracket
                         // followed by another opening bracket compresses ITSELF.
-                        if std::env::var("OXI_S1217_DISABLE").is_err()
+                        if !crate::env_flag!("OXI_S1217_DISABLE")
                             && k + 1 < n
                             && kinsoku::is_yakumono_opening(line_chars[k + 1].1)
                         {
@@ -7191,7 +7231,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // S1217: an opening bracket that gave up its half em to a
                     // following opening bracket needs the same revert protection as
                     // a closing one.
-                    let s1217_next_open = std::env::var("OXI_S1217_DISABLE").is_err()
+                    let s1217_next_open = !crate::env_flag!("OXI_S1217_DISABLE")
                         && k + 1 < n
                         && kinsoku::is_yakumono_opening(line_chars[k + 1].1);
                     if v[k] && (!is_opening || s1217_next_open) {
@@ -7289,7 +7329,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // B: tab2's strip centered at 361.7 instead of the 413.85 stop =
         // Word x330.5 vs Oxi 278.3). Track the cumulative shrink and restore
         // it on each subsequent tab before applying its own alignment.
-        let s841_on = std::env::var("OXI_S841_DISABLE").is_err();
+        let s841_on = !crate::env_flag!("OXI_S841_DISABLE");
         for line in &mut lines {
             let frag_count = line.fragments.len();
             let mut s841_cum_delta: f32 = 0.0;
@@ -7358,7 +7398,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // 31%). Render unchanged (decides COUNTS only; render water-fill re-justifies).
         // Scope: justified + linesAndChars + all-Normal-break + no tab/field fragments;
         // re-derive scope before extending. See docs/spec/cjk_break_optimizer_design.md.
-        let s492_opt = std::env::var("OXI_S492_OPT").is_ok();
+        let s492_opt = crate::env_flag!("OXI_S492_OPT");
         if s492_opt
             && is_justified
             && lines_and_chars
@@ -7503,7 +7543,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // rather than at any one flush -- an instrument that covers three of the
         // document's lines invites reading one line's breaker width against
         // another line's rendered width.
-        if std::env::var("OXI_DUMP_LINEW").is_ok() {
+        if crate::env_flag!("OXI_DUMP_LINEW") {
             for line in &lines {
                 let fw: f32 = line.fragments.iter().map(|f| f.width).sum();
                 let nw: f32 = line.fragments.iter().map(|f| f.natural_width).sum();
@@ -7523,7 +7563,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
 
         // OXI_MIDDOT_RUN_SQUEEZE: a line that kept a run of ・ past the edge draws
         // them uniformly compressed, each no narrower than half its natural width.
-        if std::env::var_os("OXI_MIDDOT_RUN_SQUEEZE_DISABLE").is_none() {
+        if !crate::env_flag!("OXI_MIDDOT_RUN_SQUEEZE_DISABLE") {
             let avail = available_tw as f32 / 20.0;
             for line in &mut lines {
                 let total: f32 = line.fragments.iter().map(|f| f.width).sum();
