@@ -2437,6 +2437,23 @@ impl<'a> WorkbookHost<'a> {
         let chart = self.chart(id)?.clone();
         Ok(match lower {
             "charttype" => Some(Value::Integer(chart.chart_type)),
+            "type" => match chart.chart_type {
+                51..=53 => Some(Value::Integer(3)),
+                54..=56 => Some(Value::Integer(-4100)),
+                57..=59 => Some(Value::Integer(2)),
+                60..=62 => Some(Value::Integer(-4099)),
+                63..=67 => Some(Value::Integer(4)),
+                68..=69 | 71 => Some(Value::Integer(5)),
+                70 => Some(Value::Integer(-4102)),
+                72..=75 | 87 => Some(Value::Integer(-4169)),
+                76..=77 => Some(Value::Integer(1)),
+                78..=79 => Some(Value::Integer(-4098)),
+                80 => Some(Value::Integer(-4120)),
+                81..=82 => Some(Value::Integer(-4151)),
+                83..=86 => Some(Value::Integer(-4103)),
+                legacy @ (1..=5 | -4169 | -4151 | -4120 | -4103..=-4098) => Some(Value::Integer(legacy)),
+                _ => None,
+            },
             "hastitle" => Some(Value::Boolean(chart.has_title)),
             // Measured: `ChartTitle.Text` reads the one series' name on a
             // chart whose HasTitle is False.

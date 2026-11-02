@@ -231,6 +231,8 @@ pub enum SheetKind {
     #[default]
     Worksheet,
     Chart,
+    MacroSheet,
+    InternationalMacroSheet,
 }
 
 impl SheetKind {

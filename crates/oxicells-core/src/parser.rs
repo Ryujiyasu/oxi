@@ -5563,7 +5563,11 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
 
     // Build rId -> target path map
     let sheet_kinds: HashMap<String, crate::ir::SheetKind> = rels.iter().map(|(id,rel)| {
-        (id.clone(), if rel.rel_type.ends_with("/chartsheet") { crate::ir::SheetKind::Chart } else { crate::ir::SheetKind::Worksheet })
+        let kind = if rel.rel_type.ends_with("/chartsheet") { crate::ir::SheetKind::Chart }
+            else if rel.rel_type.ends_with("/xlIntlMacrosheet") { crate::ir::SheetKind::InternationalMacroSheet }
+            else if rel.rel_type.ends_with("/xlMacrosheet") { crate::ir::SheetKind::MacroSheet }
+            else { crate::ir::SheetKind::Worksheet };
+        (id.clone(), kind)
     }).collect();
     let rid_to_path: HashMap<String, String> = rels
         .into_iter()

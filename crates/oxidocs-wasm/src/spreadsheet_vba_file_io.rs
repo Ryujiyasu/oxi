@@ -75,6 +75,76 @@ enum CopyFailure {
 }
 
 impl WorkbookFiles {
+
+    /// A fresh package gives a created workbook the same differential save
+    /// path as an opened workbook, including unsupported-part preservation.
+    pub(super) fn blank_package(
+        kind: oxicells_core::ir::SheetKind,
+        count: usize,
+        font: (&str, f32),
+        dimensions: (f32, f32),
+    ) -> Result<Vec<u8>, String> {
+        use std::io::Write;
+        use oxicells_core::ir::SheetKind;
+        let main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let xlm = "http://schemas.microsoft.com/office/excel/2006/main";
+        let escape = |text: &str| quick_xml::escape::escape(text).into_owned();
+        let (folder, relationship, content_type, root, name) = match kind {
+            SheetKind::Worksheet => ("worksheets", format!("{rel}/worksheet"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml", "worksheet", "Sheet"),
+            SheetKind::Chart => ("chartsheets", format!("{rel}/chartsheet"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml", "chartsheet", "Chart"),
+            SheetKind::MacroSheet => ("macrosheets", "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet".into(),
+                "application/vnd.ms-excel.macrosheet+xml", "xm:macrosheet", "Macro"),
+            SheetKind::InternationalMacroSheet => ("macrosheets", "http://schemas.microsoft.com/office/2006/relationships/xlIntlMacrosheet".into(),
+                "application/vnd.ms-excel.intlmacrosheet+xml", "xm:macrosheet", "Macro"),
+        };
+        let mut parts = Vec::new();
+        let mut sheets = String::new();
+        let mut relationships = format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="styles" Type="{rel}/styles" Target="styles.xml"/>"#);
+        let mut types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>"#.to_string();
+        if matches!(kind, SheetKind::MacroSheet | SheetKind::InternationalMacroSheet) {
+            types = types.replace("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml", "application/vnd.ms-excel.sheet.macroEnabled.main+xml");
+        }
+        for index in 1..=count {
+            sheets.push_str(&format!(r#"<sheet name="{name}{index}" sheetId="{index}" r:id="sheet{index}"/>"#));
+            relationships.push_str(&format!(r#"<Relationship Id="sheet{index}" Type="{relationship}" Target="{folder}/sheet{index}.xml"/>"#));
+            types.push_str(&format!(r#"<Override PartName="/xl/{folder}/sheet{index}.xml" ContentType="{content_type}"/>"#));
+            let body = if kind == SheetKind::Chart {
+                format!(r#"<sheetPr codeName="Chart{index}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><drawing r:id="drawing"/>"#)
+            } else {
+                format!(r#"<sheetPr codeName="{name}{index}"/><dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultColWidth="{}" defaultRowHeight="{}"/><sheetData/>"#, dimensions.0, dimensions.1)
+            };
+            parts.push((format!("xl/{folder}/sheet{index}.xml"),
+                format!(r#"<{root} xmlns="{main}" xmlns:xm="{xlm}" xmlns:r="{rel}">{body}</{root}>"#)));
+            if kind == SheetKind::Chart {
+                parts.push((format!("xl/{folder}/_rels/sheet{index}.xml.rels"),
+                    format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="drawing" Type="{rel}/drawing" Target="../drawings/drawing{index}.xml"/></Relationships>"#)));
+                parts.push((format!("xl/drawings/drawing{index}.xml"),
+                    format!(r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="{rel}"><xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="9144000" cy="6858000"/><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="1" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="9144000" cy="6858000"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="chart"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>"#)));
+                parts.push((format!("xl/drawings/_rels/drawing{index}.xml.rels"),
+                    format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="chart" Type="{rel}/chart" Target="../charts/chart{index}.xml"/></Relationships>"#)));
+                parts.push((format!("xl/charts/chart{index}.xml"),
+                    r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:axId val="10"/><c:axId val="20"/></c:barChart><c:catAx><c:axId val="10"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:crossAx val="20"/></c:catAx><c:valAx><c:axId val="20"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="l"/><c:crossAx val="10"/></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend><c:plotVisOnly val="1"/></c:chart></c:chartSpace>"#.into()));
+                types.push_str(&format!(r#"<Override PartName="/xl/drawings/drawing{index}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart{index}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>"#));
+            }
+        }
+        relationships.push_str("</Relationships>");
+        types.push_str("</Types>");
+        parts.push(("[Content_Types].xml".into(), types));
+        parts.push(("_rels/.rels".into(), format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="workbook" Type="{rel}/officeDocument" Target="xl/workbook.xml"/></Relationships>"#)));
+        parts.push(("xl/workbook.xml".into(), format!(r#"<workbook xmlns="{main}" xmlns:r="{rel}"><workbookPr codeName="ThisWorkbook"/><bookViews><workbookView/></bookViews><sheets>{sheets}</sheets><calcPr calcId="0" fullCalcOnLoad="1"/></workbook>"#)));
+        parts.push(("xl/_rels/workbook.xml.rels".into(), relationships));
+        parts.push(("xl/styles.xml".into(), format!(r#"<styleSheet xmlns="{main}"><fonts count="1"><font><sz val="{}"/><name val="{}"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"#, font.1, escape(font.0))));
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, xml) in parts {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated)).map_err(|error| error.to_string())?;
+            zip.write_all(xml.as_bytes()).map_err(|error| error.to_string())?;
+        }
+        zip.finish().map(|cursor| cursor.into_inner()).map_err(|error| error.to_string())
+    }
     pub(super) fn snapshot(&self) -> FileSystemState {
         let state=self.files.closed_snapshot();
         FileSystemState {folders:state.folders,files:state.files.into_iter().map(|(path,bytes)|ProducedFile {path,bytes}).collect(),

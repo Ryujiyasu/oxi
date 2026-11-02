@@ -4522,6 +4522,13 @@ impl<'a> WorkbookHost<'a> {
         )
     }
 
+    fn sheet_collection(&self, object: &ObjectRef) -> Option<HostObject> {
+        match self.objects.get(host_object_index(object.handle)).copied() {
+            Some(collection @ (HostObject::Worksheets | HostObject::Sheets | HostObject::Charts)) => Some(collection),
+            _ => None,
+        }
+    }
+
     fn is_worksheets(&self, object: &ObjectRef) -> bool {
         matches!(
             self.objects.get(host_object_index(object.handle)),
@@ -14592,12 +14599,12 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn require_grid_sheet(&self,sheet:usize)->Result<(),String> {
-        if self.workbook.sheets[sheet].kind.is_worksheet() {Ok(())}
+        if self.workbook.sheets[sheet].kind != oxicells_core::ir::SheetKind::Chart {Ok(())}
         else {Err(host_error(1004,"the active sheet does not contain cells"))}
     }
 
     fn active_cell_object(&mut self)->Value {
-        if self.workbook.sheets[self.active_sheet].kind.is_worksheet() {
+        if self.workbook.sheets[self.active_sheet].kind != oxicells_core::ir::SheetKind::Chart {
             self.object(HostObject::Range(CellRange::single(self.active_cell)))
         } else {Value::Nothing}
     }
@@ -25312,6 +25319,64 @@ fn same_application_setting(left: Option<&Value>, right: Option<&Value>) -> bool
 
 // The registry owns real hosts. Project views only borrow it for one native
 // operation, so VBA callbacks can re-enter another view after that borrow ends.
+
+enum WorkbookTemplate {
+    Default,
+    Sheet(oxicells_core::ir::SheetKind),
+    File(String),
+    Invalid,
+}
+
+fn workbook_templates(value: Option<&Value>) -> Result<Vec<WorkbookTemplate>, String> {
+    use oxicells_core::ir::SheetKind;
+    let mut pending = vec![(value.cloned().unwrap_or(Value::Missing), false)];
+    let mut templates = Vec::new();
+    while let Some((value, in_array)) = pending.pop() {
+        let template = match value {
+            Value::Array(array) => {
+                if array.values.is_empty() { return Err(host_error(13, "Empty workbook template array")); }
+                pending.extend(array.values.into_iter().rev().map(|value| (value, true)));
+                continue;
+            }
+            Value::Null if in_array => return Err(host_error(13, "Null in workbook template array")),
+            Value::Null | Value::Missing => WorkbookTemplate::Default,
+            Value::Nothing => return Err(host_error(5, "Workbook template is a null object reference")),
+            Value::Boolean(true) => WorkbookTemplate::Sheet(SheetKind::Worksheet),
+            Value::Boolean(false) | Value::Empty | Value::Error(_) | Value::Object(_) | Value::Record(_) =>
+                WorkbookTemplate::Invalid,
+            value if value.is_string() => {
+                let units = value.string_units().expect("template text");
+                if units.is_empty() { WorkbookTemplate::Default }
+                else {
+                    match String::from_utf16(&units) {
+                        Ok(path) => WorkbookTemplate::File(path),
+                        Err(_) => WorkbookTemplate::Invalid,
+                    }
+                }
+            }
+            value => {
+                let number = match &value {
+                    Value::Decimal(value) => Some(value.to_f64()),
+                    value => any_number(value),
+                };
+                match number {
+                    Some(-4167.0) => WorkbookTemplate::Sheet(SheetKind::Worksheet),
+                    Some(-4109.0) => WorkbookTemplate::Sheet(SheetKind::Chart),
+                    Some(number) if (1.0..5.0).contains(&number) => WorkbookTemplate::Sheet(match number as i64 {
+                        1 => SheetKind::Worksheet,
+                        2 => SheetKind::Chart,
+                        3 => SheetKind::MacroSheet,
+                        _ => SheetKind::InternationalMacroSheet,
+                    }),
+                    _ => WorkbookTemplate::Invalid,
+                }
+            }
+        };
+        templates.push(template);
+    }
+    Ok(templates)
+}
+
 struct WorkbookApplication<'a> {
     hosts: BTreeMap<u64, WorkbookHost<'a>>,
     application_owner: Option<u64>,
@@ -25322,6 +25387,7 @@ struct WorkbookApplication<'a> {
     applications: BTreeMap<u64, ObjectRef>,
     workbooks: ObjectRef,
     next_workbook: u64,
+    workbook_names: BTreeMap<String, u64>,
     code: BTreeMap<u64, ApplicationCode>,
     pending_projects: Vec<u64>,
     debug_output: Vec<String>,
@@ -25355,6 +25421,7 @@ impl<'a> WorkbookApplication<'a> {
             applications: BTreeMap::new(),
             workbooks,
             next_workbook: owner.saturating_add(1).max(1),
+            workbook_names: BTreeMap::new(),
             code: BTreeMap::new(),
             pending_projects: Vec::new(),
             debug_output: Vec::new(),
@@ -25465,6 +25532,139 @@ impl<'a> WorkbookApplication<'a> {
         }.ok_or_else(|| host_error(9, "there is no such workbook open"))?;
         Ok(self.hosts.get_mut(&owner).expect("selected workbook")
             .object(HostObject::Workbook))
+    }
+
+
+    fn new_workbook_name(&self, prefix: &str) -> Result<(String, u64, String), String> {
+        let key = self.workbook_names.keys().find(|key| {
+            crate::vba_automation::workbook_name_matches(key, &prefix.encode_utf16().collect::<Vec<_>>())
+        }).cloned().unwrap_or_else(|| prefix.to_string());
+        let mut next = self.workbook_names.get(&key).copied().unwrap_or(1);
+        loop {
+            let name = format!("{prefix}{next}");
+            let units: Vec<_> = name.encode_utf16().collect();
+            if !self.hosts.values().any(|host| crate::vba_automation::workbook_name_matches(
+                host.file_name.as_deref().unwrap_or("Book1"), &units)) {
+                return Ok((name, next, key));
+            }
+            next = next.checked_add(1).ok_or_else(|| host_error(7, "No workbook names remain"))?;
+        }
+    }
+
+    fn add_workbooks(
+        &mut self,
+        code_owner: u64,
+        args: &[Value],
+        files: Option<&oxivba_core::files::Files>,
+    ) -> Result<Value, String> {
+        if args.len() > 1 { return Err(host_error(450, "Workbooks.Add takes Template")); }
+        // Validate the complete array before publishing any workbook. A Null
+        // nested in an array is a type error, unlike a scalar Null.
+        let templates = workbook_templates(args.first())?;
+        let mut result = Value::Empty;
+        let mut failure = None;
+        for template in templates {
+            match self.add_workbook(code_owner, template, files) {
+                Ok(book) => result = book,
+                Err(error) => { failure.get_or_insert(error); }
+            }
+        }
+        failure.map_or(Ok(result), Err)
+    }
+
+    fn add_workbook(
+        &mut self,
+        code_owner: u64,
+        template: WorkbookTemplate,
+        files: Option<&oxivba_core::files::Files>,
+    ) -> Result<Value, String> {
+        use oxicells_core::ir::SheetKind;
+        if matches!(template, WorkbookTemplate::Invalid) {
+            return Err(host_error(1004, "Invalid workbook template"));
+        }
+        self.ensure_application_owner(self.active);
+        let settings = self.hosts.get(&self.active).expect("active workbook");
+        let (package, prefix, chart, empty_source) = match template {
+            WorkbookTemplate::File(path) => {
+                let files = files.ok_or_else(|| host_error(1004, "Workbook template requires the application filesystem"))?;
+                let absolute = files.absolute_path(&path);
+                if self.hosts.values().any(|host| host.file_io.full_name.as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(&absolute))) {
+                    return Err(host_error(1004, "The template workbook is already open"));
+                }
+                let package = files.bytes(&absolute)
+                    .map_err(|_| host_error(1004, "Cannot read workbook template"))?.to_vec();
+                let leaf = absolute.rsplit(['\\', '/']).next().unwrap_or(&absolute);
+                let prefix = leaf.rsplit_once('.').map_or(leaf, |(stem, _)| stem).to_string();
+                (package, prefix, false, false)
+            }
+            template => {
+                let (kind, count, prefix) = match template {
+                    WorkbookTemplate::Default => {
+                        let count = settings.application_setting("SheetsInNewWorkbook")
+                            .and_then(|value| any_whole_number(&value)).unwrap_or(1);
+                        (SheetKind::Worksheet, count as usize, "Book".to_string())
+                    }
+                    WorkbookTemplate::Sheet(kind) => (kind, 1, match kind {
+                        SheetKind::Worksheet => "Sheet".into(),
+                        SheetKind::Chart => if settings.error_language == ErrorLanguage::Japanese { "グラフ" } else { "Chart" }.into(),
+                        SheetKind::MacroSheet | SheetKind::InternationalMacroSheet => "Macro".into(),
+                    }),
+                    _ => unreachable!("validated template"),
+                };
+                let font = settings.normal_font();
+                let base = &settings.workbook.sheets[0];
+                let dimensions = (
+                    if base.default_col_width > 0.0 { base.default_col_width } else { 8.43 },
+                    base.default_row_height,
+                );
+                let package = file_io::WorkbookFiles::blank_package(kind, count, (&font.0, font.1), dimensions)?;
+                (package, prefix, kind == SheetKind::Chart, true)
+            }
+        };
+        let mut workbook = oxicells_core::parse_xlsx_preserving_values(&package)
+            .map_err(|error| host_error(1004, error.to_string()))?;
+        if chart {
+            workbook.sheets[0].name = format!("{prefix}1");
+        }
+        let source = if empty_source { String::new() } else {
+            crate::vba_project::read_project_source_with_code_page(&package, None)
+                .map_err(|error| host_error(1004, error))?.unwrap_or_default()
+        };
+        let project_name = if empty_source { "VBAProject".into() } else {
+            crate::vba_project::read_project_name(&package, None)
+                .map_err(|error| host_error(1004, error))?.unwrap_or_else(|| "VBAProject".into())
+        };
+        let documents = crate::vba_project::read_document_modules(&package)
+            .map_err(|error| host_error(1004, error))?;
+        oxivba_core::parse_project(&source).map_err(|error| host_error(1004, error.to_string()))?;
+        let (name, serial, key) = self.new_workbook_name(&prefix)?;
+        let next_name = serial.checked_add(if chart { 2 } else { 1 })
+            .ok_or_else(|| host_error(7, "No workbook names remain"))?;
+        let owner = self.next_workbook;
+        let next = owner.checked_add(1).ok_or_else(|| host_error(7, "No workbook identities remain"))?;
+        let mut host = WorkbookHost::new_owned_in(workbook, 0, owner, self.arena.clone())?;
+        let caller = self.hosts.get(&code_owner).expect("creating code owner");
+        host.error_language = caller.error_language;
+        host.automation_code_page = caller.automation_code_page;
+        host.now = caller.now;
+        host.file_name = Some(name);
+        host.file_io.set_package(package)?;
+        // Excel reports the default save format for a newly created book,
+        // including a macro sheet. Its backing package must still declare
+        // macro-enabled content to retain that sheet on export.
+        if empty_source { host.file_io.format = Some(51.0); }
+        host.file_io.source = source.clone();
+        host.configure_documents(&documents)?;
+        host.saved = !chart;
+        let book = host.object(HostObject::Workbook);
+        self.insert(host).map_err(|rejected| host_error(1004, rejected.1))?;
+        self.code.insert(owner, ApplicationCode { source, project_name, documents });
+        self.pending_projects.push(owner);
+        self.next_workbook = next;
+        self.workbook_names.insert(key, next_name);
+        self.active = owner;
+        Ok(book)
     }
 
     fn open_workbook(
@@ -25635,6 +25835,10 @@ impl<'a> ApplicationHost<'a> {
         }
         if name.eq_ignore_ascii_case("Count") && args.is_empty() {
             return Some(Ok(Some(Value::Integer(application.hosts.len() as i64))));
+        }
+        if name.eq_ignore_ascii_case("Add") {
+            return Some(normalize(&["Template"], "Workbooks.Add")
+                .and_then(|args| application.add_workbooks(self.code_owner, &args, files).map(Some)));
         }
         if name.eq_ignore_ascii_case("Open") {
             return Some(normalize(
@@ -30363,10 +30567,13 @@ impl Host for WorkbookHost<'_> {
                     self.workbook.sheets[sheet].name.clone(),
                 )));
             }
-            // A worksheet is the only kind this build holds, and Excel names
-            // that kind -4167.
             if name.eq_ignore_ascii_case("type") {
-                return Ok(Some(Value::Integer(-4167)));
+                use oxicells_core::ir::SheetKind;
+                return Ok(Some(Value::Integer(match self.workbook.sheets[sheet].kind {
+                    SheetKind::Worksheet => -4167,
+                    SheetKind::Chart | SheetKind::MacroSheet => 3,
+                    SheetKind::InternationalMacroSheet => 4,
+                })));
             }
             // What holds the sheet is the workbook, as `Range("A1").Parent`
             // is the sheet.
@@ -32139,6 +32346,21 @@ impl Host for WorkbookHost<'_> {
                 self.app_settings.insert(name.to_ascii_lowercase(), Value::Boolean(flag));
                 return Ok(true);
             }
+            if name.eq_ignore_ascii_case("SheetsInNewWorkbook") {
+                use oxivba_core::runtime::{coerce_automation_scalar, AutomationScalarType};
+                let Value::Double(number) = coerce_automation_scalar(&value, AutomationScalarType::Double)? else {
+                    unreachable!("numeric automation conversion");
+                };
+                let number = number.round_ties_even();
+                if number < f64::from(i32::MIN) || number > f64::from(i32::MAX) {
+                    return Err(host_error(6, "SheetsInNewWorkbook overflows a Long"));
+                }
+                if !(1.0..=255.0).contains(&number) {
+                    return Err(host_error(1004, "SheetsInNewWorkbook must be in 1..255"));
+                }
+                self.app_settings.insert("sheetsinnewworkbook".into(), Value::Integer(number as i64));
+                return Ok(true);
+            }
             if APPLICATION_SETTINGS.iter().any(|(held, _, settable)| *settable && held.eq_ignore_ascii_case(name)) {
                 if name.eq_ignore_ascii_case("DecimalSeparator") || name.eq_ignore_ascii_case("ThousandsSeparator") {
                     let previous = self.application_setting(&name.to_ascii_lowercase());
@@ -33012,7 +33234,7 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn enumeration_item_is_live(&self, receiver: &ObjectRef, value: &Value) -> bool {
-        !(self.is_worksheets(receiver) && matches!(value, Value::Object(object) if self.gone(object)))
+        !(self.sheet_collection(receiver).is_some() && matches!(value, Value::Object(object) if self.gone(object)))
     }
 
     fn enumerate(&mut self, receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
@@ -33058,9 +33280,9 @@ impl Host for WorkbookHost<'_> {
                 .collect();
             return Ok(Some(items));
         }
-        if self.is_worksheets(receiver) {
+        if let Some(collection) = self.sheet_collection(receiver) {
             let mut worksheets = Vec::with_capacity(self.workbook.sheets.len());
-            for sheet in self.collection_sheet_indices(*self.objects.get(host_object_index(receiver.handle)).unwrap()) {
+            for sheet in self.collection_sheet_indices(collection) {
                 worksheets.push(self.object(HostObject::Worksheet(sheet)));
             }
             return Ok(Some(worksheets));
@@ -40114,7 +40336,7 @@ const APPLICATION_SETTINGS: &[(&str, fn() -> Value, bool)] = &[
     ("ready", || Value::Boolean(true), false),
     ("recordrelative", || Value::Boolean(false), true),
     ("rollzoom", || Value::Boolean(false), true),
-    ("sheetsinnewworkbook", || Value::Double(1.0), true),
+    ("sheetsinnewworkbook", || Value::Integer(1), true),
     ("showcharttipnames", || Value::Boolean(true), true),
     ("showcharttipvalues", || Value::Boolean(true), true),
     ("showdevtools", || Value::Boolean(false), true),
@@ -41800,6 +42022,364 @@ fn execute_workbook_invocation(
 mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
+
+
+
+
+
+    #[test]
+    fn legacy_chart_types_match_native_families() {
+        const CODE: &str = r####"Attribute VB_Name = "Driver"
+Private kept As Object
+Public Sub Seed()
+ Dim rowIndex As Long, columnIndex As Long
+ For rowIndex = 1 To 6
+  For columnIndex = 1 To 5
+   ThisWorkbook.Worksheets(1).Cells(rowIndex, columnIndex).Value = rowIndex * columnIndex
+  Next columnIndex
+ Next rowIndex
+ Set kept = ThisWorkbook.Worksheets(1).ChartObjects.Add(0, 0, 400, 300).Chart
+ kept.SetSourceData ThisWorkbook.Worksheets(1).Range("A1:E6")
+End Sub
+Public Function ReadType(ByVal kind As Long) As String
+ On Error GoTo failed
+ kept.ChartType = kind
+ ReadType = CStr(kept.ChartType) & "|" & CStr(kept.Type)
+ Exit Function
+failed:
+ ReadType = "E|" & CStr(Err.Number)
+End Function
+"####;
+        let expected = [(51, 3), (52, 3), (53, 3), (54, -4100), (55, -4100), (56, -4100), (57, 2), (58, 2), (59, 2), (60, -4099), (61, -4099), (62, -4099), (4, 4), (63, 4), (64, 4), (65, 4), (66, 4), (67, 4), (5, 5), (68, 5), (69, 5), (70, -4102), (71, 5), (72, -4169), (73, -4169), (74, -4169), (75, -4169), (76, 1), (77, 1), (1, 1), (78, -4098), (79, -4098), (80, -4120), (81, -4151), (82, -4151), (83, -4103), (84, -4103), (85, -4103), (86, -4103), (87, -4169), (-4169, -4169), (-4151, -4151), (-4102, -4102), (-4101, -4101), (-4100, -4100), (-4098, -4098)];
+        let mut context = failure_context();
+        context.file_name = Some("A.xlsm".into());
+        let mut session = None;
+        let initial = execute_workbook_action_in_session(workbook(), CODE, Some("Driver.Seed"), vec![],
+            0, context, &mut session).unwrap();
+        assert!(initial.error.is_none());
+        let mut book = initial.workbook;
+        for (modern, legacy) in expected {
+            let mut context = failure_context();
+            context.file_name = Some("A.xlsm".into());
+            let outcome = execute_workbook_action_in_session(book, CODE, Some("Driver.ReadType"),
+                vec![Value::Integer(modern)], 0, context, &mut session).unwrap();
+            assert!(outcome.error.is_none(), "{modern}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], format!("{modern}|{legacy}"));
+            book = outcome.workbook;
+        }
+    }
+
+    #[test]
+    fn blank_added_packages_preserve_sheet_kinds_and_tab_reordering() {
+        use oxicells_core::ir::SheetKind;
+        for kind in [SheetKind::Worksheet, SheetKind::Chart, SheetKind::MacroSheet, SheetKind::InternationalMacroSheet] {
+            let bytes = file_io::WorkbookFiles::blank_package(kind, 2, ("Calibri", 11.0), (8.43, 15.0)).unwrap();
+            let mut book = oxicells_core::parse_xlsx_preserving_values(&bytes).unwrap();
+            assert_eq!(book.sheets.len(), 2);
+            assert!(book.sheets.iter().all(|sheet| sheet.kind == kind));
+            book.sheets.swap(0, 1);
+            book.sheets[0].name = "Moved & second".into();
+            let mut editor = oxicells_core::XlsxEditor::new(&bytes).unwrap();
+            editor.apply_workbook(&book).unwrap();
+            let saved = editor.save().unwrap();
+            let round_trip = oxicells_core::parse_xlsx_preserving_values(&saved).unwrap();
+            assert_eq!(round_trip.sheets.len(), 2);
+            assert!(round_trip.sheets.iter().all(|sheet| sheet.kind == kind));
+            assert_eq!(round_trip.sheets[0].name, "Moved & second");
+            let mut archive = oxidocs_common::archive::OoxmlArchive::new(&saved).unwrap();
+            let relationships = archive.read_part("xl/_rels/workbook.xml.rels").unwrap();
+            let content_types = archive.read_part("[Content_Types].xml").unwrap();
+            assert_eq!(relationships.matches("Id=\"rIdSheet1\"").count(), 1);
+            assert_eq!(relationships.matches("Id=\"rIdSheet2\"").count(), 1);
+            let part = match kind {
+                SheetKind::Worksheet => "/xl/worksheets/sheet1.xml",
+                SheetKind::Chart => "/xl/chartsheets/sheet1.xml",
+                SheetKind::MacroSheet | SheetKind::InternationalMacroSheet => "/xl/macrosheets/sheet1.xml",
+            };
+            assert_eq!(content_types.matches(&format!("PartName=\"{part}\"")).count(), 1);
+            if std::env::var_os("OXI_VBA_CAPTURE_NEW_PACKAGES").is_some() {
+                println!("OXI_VBA_NEW_PACKAGE {}", serde_json::json!({"kind":kind,"bytes":saved}));
+            }
+        }
+    }
+
+    #[test]
+    fn added_workbook_keeps_native_reference_and_can_save_a_new_package() {
+        const CODE: &str = r#"Attribute VB_Name = "Driver"
+Private created As Workbook
+Public Sub Seed()
+ Application.SheetsInNewWorkbook = 2
+ Set created = Workbooks.Add
+ Debug.Print "assigned", created.Name, TypeName(created), created.Path
+ Debug.Print "description", Describe(created)
+ created.Worksheets(1).Range("A1").Value = 42
+ created.SaveCopyAs "C:\created.xlsx"
+End Sub
+Public Function Probe() As String
+ created.Worksheets(1).Range("A1").Value = created.Worksheets(1).Range("A1").Value + 1
+ Probe = created.Name & "|" & CStr(created.Worksheets.Count) & "|" & CStr(created.Worksheets(1).Range("A1").Value) & "|" & CStr(created Is Workbooks("Book1")) & "|" & CStr(created.Saved)
+End Function
+Private Function Describe(ByVal book As Workbook) As String
+ Dim oneSheet As Object, sheetNames As String
+ For Each oneSheet In book.Sheets
+  sheetNames = sheetNames & "|" & oneSheet.Name & ":" & TypeName(oneSheet)
+ Next oneSheet
+ Describe = book.Name & "|" & CStr(Workbooks.Count) & "|" & CStr(book.Sheets.Count) & "|" & CStr(book.Saved) & "|" & CStr(book.ReadOnly) & "|" & CStr(book.FileFormat) & "|" & book.Path & "|" & ActiveWorkbook.Name & "|" & CStr(ThisWorkbook.Saved) & sheetNames
+End Function
+"#;
+        let mut context = failure_context();
+        context.file_name = Some("A.xlsm".into());
+        context.file_context = Some(file_io::FileContext { folders: vec![r"C:\".into()], ..Default::default() });
+        let mut session = None;
+        let seeded = execute_workbook_action_in_session(workbook(), CODE, Some("Driver.Seed"),
+            vec![], 0, context, &mut session).unwrap();
+        assert!(seeded.error.is_none(), "{:?}; debug={:?}", seeded.error.as_ref().map(|error| &error.message), seeded.debug_output);
+        let file = seeded.files.iter().find(|file| file.path == r"C:\created.xlsx").expect("created package");
+        let saved = oxicells_core::parse_xlsx_preserving_values(&file.bytes).unwrap();
+        assert_eq!(saved.sheets.len(), 2);
+        assert!(matches!(saved.sheets[0].rows.iter().find(|row| row.index == 1).unwrap().cells[0].value, CellValue::Number(42.0)));
+        let mut context = failure_context();
+        context.file_name = Some("A.xlsm".into());
+        let outcome = execute_workbook_action_in_session(seeded.workbook, CODE, Some("Driver.Probe"),
+            vec![], 0, context, &mut session).unwrap();
+        assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
+        assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], "Book1|2|43|True|False");
+        assert_eq!(outcome.other_workbooks.len(), 1);
+    }
+
+    #[test]
+    fn native_workbooks_add_contracts_and_sheet_settings_match_excel() {
+        const SOURCE: &str = r####"Attribute VB_Name = "Driver"
+Public Function SetCount(ByVal value As Variant) As String
+ On Error Resume Next
+ Err.Clear
+ Application.SheetsInNewWorkbook = value
+ SetCount = CStr(Err.Number) & "|" & CStr(VarType(Application.SheetsInNewWorkbook)) & "|" & CStr(Application.SheetsInNewWorkbook)
+End Function
+Private Function Describe(ByVal book As Workbook) As String
+ Dim oneSheet As Object, sheetNames As String
+ For Each oneSheet In book.Sheets
+  sheetNames = sheetNames & "|" & oneSheet.Name & ":" & TypeName(oneSheet)
+ Next oneSheet
+ Describe = book.Name & "|" & CStr(Workbooks.Count) & "|" & CStr(book.Sheets.Count) & "|" & CStr(book.Worksheets.Count) & "|" & CStr(book.Sheets(1).Type) & "|" & CStr(book.Saved) & "|" & CStr(book.ReadOnly) & "|" & CStr(book.FileFormat) & "|" & book.Path & "|" & ActiveWorkbook.Name & "|" & CStr(ThisWorkbook.Saved) & sheetNames
+End Function
+Public Function AddCase(ByVal mode As Long) As String
+ Dim book As Workbook, value As Variant
+ On Error GoTo failed
+ Select Case mode
+ Case 0: Set book = Workbooks.Add
+ Case 1: Set book = Workbooks.Add(Empty)
+ Case 2: Set book = Workbooks.Add(Null)
+ Case 3: Set book = Workbooks.Add(False)
+ Case 4: Set book = Workbooks.Add(True)
+ Case 5: Set book = Workbooks.Add(-4167)
+ Case 6: Set book = Workbooks.Add(-4109)
+ Case 7: Set book = Workbooks.Add(-4167.4)
+ Case 8: Set book = Workbooks.Add("-4167")
+ Case 9: Set book = Workbooks.Add(CVErr(2007))
+ Case 10: Set book = Workbooks.Add(Array(1))
+ Case 11: Set book = Workbooks.Add("")
+ Case 12
+  Set value = Nothing
+  Set book = Workbooks.Add(value)
+ Case 13: Set book = Workbooks.Add(1)
+ Case 14: Set book = Workbooks.Add(2)
+ Case 15: Set book = Workbooks.Add(3)
+ Case 16: Set book = Workbooks.Add(4)
+ Case 17: Set book = Workbooks.Add(-1)
+ Case 18: Set book = Workbooks.Add(-2)
+ Case 19: Set book = Workbooks.Add(1.5)
+ Case 20: Set book = Workbooks.Add(2.5)
+ Case 21: Set book = Workbooks.Add("1")
+ Case 22: Set book = Workbooks.Add(Array())
+ Case 23: Set book = Workbooks.Add(Array(2))
+ Case 24: Set book = Workbooks.Add(Array("x"))
+ Case 25: Set book = Workbooks.Add(Array(1, 2))
+ Case 26: Set book = Workbooks.Add(" ")
+ Case 27: Set book = Workbooks.Add(-4116)
+ Case 28: Set book = Workbooks.Add(Array(1, "x", 2))
+ Case 29: Set book = Workbooks.Add(Array("x", 1))
+ Case 30: Set book = Workbooks.Add(Array(1, Null, 2))
+ Case 31: Set book = Workbooks.Add(Array(1, CVErr(2007), 2))
+ Case 32: Set book = Workbooks.Add(Array(Array(1, 2)))
+ Case 33: Set book = Workbooks.Add(Array(True, False, 1))
+ Case 34: Set book = Workbooks.Add(0.5)
+ Case 35: Set book = Workbooks.Add(0.9)
+ Case 36: Set book = Workbooks.Add(1.9)
+ Case 37: Set book = Workbooks.Add(2.9)
+ Case 38: Set book = Workbooks.Add(4.5)
+ End Select
+ AddCase = "OK|" & Describe(book)
+ Exit Function
+failed:
+ AddCase = "E|" & CStr(Err.Number) & "|" & CStr(Workbooks.Count) & "|" & ActiveWorkbook.Name
+End Function
+Public Function AddTemplate(ByVal path As String) As String
+ On Error GoTo failed
+ Dim book As Workbook
+ Set book = Workbooks.Add(Template:=path)
+ AddTemplate = "OK|" & Describe(book)
+ Exit Function
+failed:
+ AddTemplate = "E|" & CStr(Err.Number) & "|" & CStr(Workbooks.Count) & "|" & ActiveWorkbook.Name
+End Function
+Public Function AddMissing(Optional ByVal value As Variant) As String
+ On Error GoTo failed
+ Dim book As Workbook
+ Set book = Workbooks.Add(value)
+ AddMissing = "OK|" & Describe(book)
+ Exit Function
+failed:
+ AddMissing = "E|" & CStr(Err.Number)
+End Function
+"####;
+        let controls = [
+(2u8, vec![
+("Driver.SetCount", vec![Value::Integer(2)], "0|3|2"),
+("Driver.SetCount", vec![Value::Double(1.5)], "0|3|2"),
+("Driver.SetCount", vec![Value::Double(2.5)], "0|3|2"),
+("Driver.SetCount", vec![Value::Integer(0)], "1004|3|2"),
+("Driver.SetCount", vec![Value::Integer(-1)], "1004|3|2"),
+("Driver.SetCount", vec![Value::Integer(256)], "1004|3|2"),
+("Driver.SetCount", vec![Value::Boolean(true)], "1004|3|2"),
+("Driver.SetCount", vec![Value::Boolean(false)], "1004|3|2"),
+("Driver.SetCount", vec![Value::String("3".into())], "0|3|3"),
+("Driver.SetCount", vec![Value::String("bad".into())], "13|3|3"),
+("Driver.SetCount", vec![Value::Null], "94|3|3"),
+("Driver.AddCase", vec![Value::Integer(0)], "OK|Book1|3|2|True|False|51||Book1|True|Sheet1:Worksheet|Sheet2:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(1)], "E|1004|3|Book1"),
+("Driver.AddCase", vec![Value::Integer(2)], "OK|Book2|4|2|True|False|51||Book2|True|Sheet1:Worksheet|Sheet2:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(3)], "E|1004|4|Book2"),
+("Driver.AddCase", vec![Value::Integer(4)], "OK|Sheet1|5|1|True|False|51||Sheet1|True|Sheet1:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(5)], "OK|Sheet2|6|1|True|False|51||Sheet2|True|Sheet1:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(6)], "OK|グラフ1|7|1|False|False|51||グラフ1|True|グラフ1:Chart"),
+("Driver.AddCase", vec![Value::Integer(7)], "E|1004|7|グラフ1"),
+("Driver.AddCase", vec![Value::Integer(8)], "E|1004|7|グラフ1"),
+("Driver.AddCase", vec![Value::Integer(9)], "E|1004|7|グラフ1"),
+("Driver.AddCase", vec![Value::Integer(10)], "OK|Sheet3|8|1|True|False|51||Sheet3|True|Sheet1:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(11)], "OK|Book3|9|2|True|False|51||Book3|True|Sheet1:Worksheet|Sheet2:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(12)], "E|5|9|Book3"),
+("Driver.AddMissing", vec![], "OK|Book4|10|2|True|False|51||Book4|True|Sheet1:Worksheet|Sheet2:Worksheet"),
+("Driver.AddTemplate", vec![Value::String(r"C:\B.xlsm".into())], "E|1004|10|Book4")
+]),
+(3u8, vec![
+("Driver.SetCount", vec![Value::Integer(2)], "0|3|2"),
+("Driver.SetCount", vec![Value::Double(1.5)], "0|3|2"),
+("Driver.SetCount", vec![Value::Double(2.5)], "0|3|2"),
+("Driver.SetCount", vec![Value::Integer(0)], "1004|3|2"),
+("Driver.SetCount", vec![Value::Integer(-1)], "1004|3|2"),
+("Driver.SetCount", vec![Value::Integer(256)], "1004|3|2"),
+("Driver.SetCount", vec![Value::Boolean(true)], "1004|3|2"),
+("Driver.SetCount", vec![Value::Boolean(false)], "1004|3|2"),
+("Driver.SetCount", vec![Value::String("3".into())], "0|3|3"),
+("Driver.SetCount", vec![Value::String("bad".into())], "13|3|3"),
+("Driver.SetCount", vec![Value::Null], "94|3|3"),
+("Driver.AddCase", vec![Value::Integer(13)], "OK|Sheet1|2|1|True|False|51||Sheet1|True|Sheet1:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(14)], "OK|グラフ1|3|1|False|False|51||グラフ1|True|グラフ1:Chart"),
+("Driver.AddCase", vec![Value::Integer(15)], "OK|Macro1|4|1|True|False|51||Macro1|True|Macro1:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(16)], "OK|Macro2|5|1|True|False|51||Macro2|True|Macro1:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(17)], "E|1004|5|Macro2"),
+("Driver.AddCase", vec![Value::Integer(18)], "E|1004|5|Macro2"),
+("Driver.AddCase", vec![Value::Integer(19)], "OK|Sheet2|6|1|True|False|51||Sheet2|True|Sheet1:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(20)], "OK|グラフ3|7|1|False|False|51||グラフ3|True|グラフ1:Chart"),
+("Driver.AddCase", vec![Value::Integer(21)], "E|1004|7|グラフ3"),
+("Driver.AddCase", vec![Value::Integer(22)], "E|13|7|グラフ3"),
+("Driver.AddCase", vec![Value::Integer(23)], "OK|グラフ5|8|1|False|False|51||グラフ5|True|グラフ1:Chart"),
+("Driver.AddCase", vec![Value::Integer(24)], "E|1004|8|グラフ5"),
+("Driver.AddCase", vec![Value::Integer(25)], "OK|グラフ7|10|1|False|False|51||グラフ7|True|グラフ1:Chart"),
+("Driver.AddCase", vec![Value::Integer(26)], "E|1004|10|グラフ7"),
+("Driver.AddCase", vec![Value::Integer(27)], "E|1004|10|グラフ7"),
+("Driver.AddCase", vec![Value::Integer(6)], "OK|グラフ9|11|1|False|False|51||グラフ9|True|グラフ1:Chart"),
+("Driver.AddCase", vec![Value::Integer(6)], "OK|グラフ11|12|1|False|False|51||グラフ11|True|グラフ1:Chart"),
+("Driver.AddCase", vec![Value::Integer(0)], "OK|Book1|13|2|True|False|51||Book1|True|Sheet1:Worksheet|Sheet2:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(5)], "OK|Sheet4|14|1|True|False|51||Sheet4|True|Sheet1:Worksheet"),
+("Driver.AddMissing", vec![], "OK|Book2|15|2|True|False|51||Book2|True|Sheet1:Worksheet|Sheet2:Worksheet"),
+("Driver.AddTemplate", vec![Value::String(r"C:\B.xlsm".into())], "OK|B1|16|1|True|False|52||B1|True|Sheet1:Worksheet"),
+("Driver.AddTemplate", vec![Value::String(r"C:\B.xlsm".into())], "OK|B2|17|1|True|False|52||B2|True|Sheet1:Worksheet")
+]),
+(4u8, vec![
+("Driver.SetCount", vec![Value::Integer(2)], "0|3|2"),
+("Driver.SetCount", vec![Value::Double(1.5)], "0|3|2"),
+("Driver.SetCount", vec![Value::Double(2.5)], "0|3|2"),
+("Driver.SetCount", vec![Value::Integer(0)], "1004|3|2"),
+("Driver.SetCount", vec![Value::Integer(-1)], "1004|3|2"),
+("Driver.SetCount", vec![Value::Integer(256)], "1004|3|2"),
+("Driver.SetCount", vec![Value::Boolean(true)], "1004|3|2"),
+("Driver.SetCount", vec![Value::Boolean(false)], "1004|3|2"),
+("Driver.SetCount", vec![Value::String("3".into())], "0|3|3"),
+("Driver.SetCount", vec![Value::String("bad".into())], "13|3|3"),
+("Driver.SetCount", vec![Value::Null], "94|3|3"),
+("Driver.AddCase", vec![Value::Integer(15)], "OK|Macro1|2|1|0|3|True|False|51||Macro1|True|Macro1:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(16)], "OK|Macro2|3|1|0|4|True|False|51||Macro2|True|Macro1:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(28)], "E|1004|5|グラフ1"),
+("Driver.AddCase", vec![Value::Integer(29)], "E|1004|6|Sheet2"),
+("Driver.AddCase", vec![Value::Integer(30)], "E|13|6|Sheet2"),
+("Driver.AddCase", vec![Value::Integer(31)], "E|1004|8|グラフ3"),
+("Driver.AddCase", vec![Value::Integer(32)], "OK|グラフ5|10|1|0|3|False|False|51||グラフ5|True|グラフ1:Chart"),
+("Driver.AddCase", vec![Value::Integer(33)], "E|1004|12|Sheet6"),
+("Driver.AddCase", vec![Value::Integer(34)], "E|1004|12|Sheet6"),
+("Driver.AddCase", vec![Value::Integer(35)], "E|1004|12|Sheet6"),
+("Driver.AddCase", vec![Value::Integer(36)], "OK|Sheet7|13|1|1|-4167|True|False|51||Sheet7|True|Sheet1:Worksheet"),
+("Driver.AddCase", vec![Value::Integer(37)], "OK|グラフ7|14|1|0|3|False|False|51||グラフ7|True|グラフ1:Chart"),
+("Driver.AddCase", vec![Value::Integer(38)], "OK|Macro3|15|1|0|4|True|False|51||Macro3|True|Macro1:Worksheet"),
+("Driver.AddMissing", vec![], "OK|Book1|16|2|2|-4167|True|False|51||Book1|True|Sheet1:Worksheet|Sheet2:Worksheet"),
+("Driver.AddTemplate", vec![Value::String(r"C:\B.xlsm".into())], "OK|B1|17|1|1|-4167|True|False|52||B1|True|Sheet1:Worksheet"),
+("Driver.AddTemplate", vec![Value::String(r"C:\B.xlsm".into())], "OK|B2|18|1|1|-4167|True|False|52||B2|True|Sheet1:Worksheet")
+])
+        ];
+        let mut mismatches = Vec::new();
+        for (version, cases) in controls {
+            let driver = if version == 4 { SOURCE.to_string() } else {
+                SOURCE.replace(r#" & "|" & CStr(book.Worksheets.Count) & "|" & CStr(book.Sheets(1).Type)"#, "")
+            };
+            let source = format!(r####"{driver}
+Attribute VB_Name = "Setup"
+Public Sub Begin(ByVal openOther As Boolean)
+ If openOther Then
+  Dim peer As Workbook
+  Set peer = Workbooks.Open("C:\B.xlsm", , True)
+ End If
+End Sub
+Public Sub ResetCount()
+ Application.SheetsInNewWorkbook = 2
+ ThisWorkbook.Saved = True
+End Sub
+"####);
+            let seed = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+            let package = crate::vba_project::write_project_source(seed, &driver, None).unwrap();
+            let mut context = failure_context();
+            context.file_name = Some("A.xlsm".into());
+            context.file_context = Some(file_io::FileContext {
+                files: vec![file_io::ProducedFile { path: r"C:\B.xlsm".into(), bytes: package }],
+                ..Default::default()
+            });
+            let mut session = None;
+            let initial = execute_workbook_action_in_session(workbook(), &source, Some("Setup.Begin"),
+                vec![Value::Boolean(version == 2)], 0, context, &mut session).unwrap();
+            assert!(initial.error.is_none(), "{:?}", initial.error.as_ref().map(|error| &error.message));
+            let mut book = initial.workbook;
+            for (index, (procedure, args, expected)) in cases.into_iter().enumerate() {
+                if index == 11 {
+                    let mut context = failure_context();
+                    context.file_name = Some("A.xlsm".into());
+                    let reset = execute_workbook_action_in_session(book, &source, Some("Setup.ResetCount"),
+                        vec![], 0, context, &mut session).unwrap();
+                    assert!(reset.error.is_none());
+                    book = reset.workbook;
+                }
+                let mut context = failure_context();
+                context.file_name = Some("A.xlsm".into());
+                let outcome = execute_workbook_action_in_session(book, &source, Some(procedure),
+                    args, 0, context, &mut session).unwrap();
+                let actual = if let Some(error) = &outcome.error { format!("ERROR: {}", error.message) } else {
+                    serde_json::to_value(&outcome.result).unwrap()["value"].as_str().unwrap_or("<non-string>").to_string()
+                };
+                if actual != expected { mismatches.push(format!("v{version} case{index} {procedure}: expected {expected}, got {actual}")); }
+                book = outcome.workbook;
+            }
+        }
+        assert!(mismatches.is_empty(), "{} mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+    }
 
     #[test]
     fn opened_workbooks_keep_vba_objects_files_and_cells_across_session_calls() {

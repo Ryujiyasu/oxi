@@ -9790,7 +9790,8 @@ fn patch_workbook_rels(xml: &str, targets: &[String]) -> Result<String, XlsxErro
     }
 
     for piece in rest.split_inclusive("/>") {
-        if piece.contains("/worksheet\"") || piece.contains("/chartsheet\"") {
+        if piece.contains("/worksheet\"") || piece.contains("/chartsheet\"")
+            || piece.contains("/xlMacrosheet\"") || piece.contains("/xlIntlMacrosheet\"") {
             continue;
         }
         kept.push_str(piece);
@@ -9834,7 +9835,8 @@ fn patch_content_types(xml: &str, parts: &[String]) -> Result<String, XlsxError>
 
     let mut kept = String::new();
     for piece in body.split_inclusive("/>") {
-        if piece.contains("spreadsheetml.worksheet+xml") || piece.contains("spreadsheetml.chartsheet+xml") {
+        if piece.contains("spreadsheetml.worksheet+xml") || piece.contains("spreadsheetml.chartsheet+xml")
+            || piece.contains("vnd.ms-excel.macrosheet+xml") || piece.contains("vnd.ms-excel.intlmacrosheet+xml") {
             continue;
         }
         kept.push_str(piece);
