@@ -15,7 +15,7 @@ use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 use oxivba_core::execute_with_host;
 use oxivba_core::{
     host_error, host_error_described, parse_module, vba_date_text, vba_number_text, ArrayDimension, ArrayValue, Host,
-    ErrorEnvironment, ErrorLanguage, ModuleItem, ObjectRef, Runtime, Value,
+    ErrorEnvironment, ErrorLanguage, HostEventCall, HostEventDelivery, HostEventResult, ModuleItem, ObjectRef, Runtime, Value,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -25377,6 +25377,37 @@ fn workbook_templates(value: Option<&Value>) -> Result<Vec<WorkbookTemplate>, St
     Ok(templates)
 }
 
+#[derive(Clone)]
+enum CloseSaveOutcome {
+    Saved,
+    Cancelled,
+    Failed(String),
+}
+
+#[derive(Clone)]
+enum WorkbookClosePhase {
+    BeforeClose,
+    WaitingClose(u64),
+    DecideSave { prefix: bool },
+    WaitingSave { event: u64, prefix: bool, previous_active: u64 },
+    Write { prefix: bool, previous_active: u64 },
+    WaitingAfterSave { event: u64, prefix: bool, outcome: CloseSaveOutcome },
+    Finish,
+}
+
+struct WorkbookCloseOperation {
+    phase: WorkbookClosePhase,
+    activation_attempted: bool,
+}
+
+#[derive(Clone, Copy)]
+struct WorkbookEventContext {
+    frame: usize,
+    owner: u64,
+    lock_activation: bool,
+    saving: bool,
+}
+
 struct WorkbookApplication<'a> {
     hosts: BTreeMap<u64, WorkbookHost<'a>>,
     application_owner: Option<u64>,
@@ -25391,6 +25422,12 @@ struct WorkbookApplication<'a> {
     pending_projects: Vec<u64>,
     closed: std::collections::BTreeSet<u64>,
     pending_closed: Vec<u64>,
+    close_operations: BTreeMap<usize, WorkbookCloseOperation>,
+    pending_events: std::collections::VecDeque<HostEventCall>,
+    event_contexts: BTreeMap<u64, WorkbookEventContext>,
+    running_events: Vec<(u64, WorkbookEventContext)>,
+    event_answers: BTreeMap<u64, Result<HostEventResult, String>>,
+    next_event: u64,
     activation_order: Vec<u64>,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
@@ -25424,6 +25461,12 @@ impl<'a> WorkbookApplication<'a> {
             pending_projects: Vec::new(),
             closed: Default::default(),
             pending_closed: Vec::new(),
+            close_operations: BTreeMap::new(),
+            pending_events: std::collections::VecDeque::new(),
+            event_contexts: BTreeMap::new(),
+            running_events: Vec::new(),
+            event_answers: BTreeMap::new(),
+            next_event: 0,
             activation_order: vec![owner],
             debug_output: Vec::new(),
             messages: Vec::new(),
@@ -25509,6 +25552,20 @@ impl<'a> WorkbookApplication<'a> {
     }
 
     fn activate(&mut self, owner: u64) {
+        if let Some((_, context)) = self.running_events.last().copied() {
+            if context.lock_activation && context.owner != owner {
+                if context.saving {
+                    if let Some(operation) = self.close_operations.get_mut(&context.frame) {
+                        operation.activation_attempted = true;
+                    }
+                }
+                return;
+            }
+        }
+        self.force_activate(owner);
+    }
+
+    fn force_activate(&mut self, owner: u64) {
         self.active=owner;
         self.activation_order.retain(|held|*held!=owner);
         self.activation_order.push(owner);
@@ -25527,11 +25584,56 @@ impl<'a> WorkbookApplication<'a> {
         Some(host_error(number,"The native workbook object is no longer available"))
     }
 
+    fn close_failure(&self, owner: u64) -> String {
+        let description = match self.hosts[&owner].error_language {
+            ErrorLanguage::Japanese => "'Close' メソッドは失敗しました: '_Workbook' オブジェクト",
+            ErrorLanguage::English => "Method 'Close' of object '_Workbook' failed",
+        };
+        host_error_described(1004, description)
+    }
+
+    fn queue_workbook_event(&mut self, context: WorkbookEventContext, name: &str,
+        args: Vec<Value>, by_ref: Vec<usize>) -> u64 {
+        let event = self.next_event;
+        self.next_event = event.checked_add(1).expect("native event identity overflow");
+        let Value::Object(receiver) = self.hosts.get_mut(&context.owner).expect("event workbook").object(HostObject::Workbook)
+            else { unreachable!("Workbook has a native identity"); };
+        let mut shared_args = vec![Value::Object(receiver.clone())];
+        shared_args.extend(args);
+        let deliveries = vec![
+            HostEventDelivery {
+                project: context.owner, receiver, name: name.into(),
+                document_handler: Some(format!("Workbook_{name}")),
+                arguments: (1..shared_args.len()).collect(), require_enabled: false,
+            },
+            HostEventDelivery {
+                project: context.owner, receiver: self.application.clone(), name: format!("Workbook{name}"),
+                document_handler: None, arguments: (0..shared_args.len()).collect(), require_enabled: true,
+            },
+        ];
+        self.pending_events.push_back(HostEventCall {
+            key: event, deliveries, args: shared_args, by_ref: by_ref.into_iter().map(|index| index + 1).collect(),
+        });
+        self.event_contexts.insert(event, context);
+        event
+    }
+
+    fn discard_close_operation(&mut self, frame: usize) {
+        self.close_operations.remove(&frame);
+        let events: Vec<_> = self.event_contexts.iter()
+            .filter_map(|(key, context)| (context.frame == frame).then_some(*key)).collect();
+        for key in events {
+            self.event_contexts.remove(&key);
+            self.event_answers.remove(&key);
+            self.pending_events.retain(|event| event.key != key);
+        }
+    }
+
     fn close_workbook(
         &mut self,
         owner: u64,
         args: &[Value],
-        files: Option<&mut oxivba_core::files::Files>,
+        mut files: Option<&mut oxivba_core::files::Files>,
     ) -> Result<Value, String> {
         if args.len() > 3 {
             return Err(host_error(450, "Workbook.Close takes SaveChanges, Filename, RouteWorkbook"));
@@ -25539,8 +25641,6 @@ impl<'a> WorkbookApplication<'a> {
         if self.closed.contains(&owner) {
             return Err(host_error(-2147221080, "Workbook is already closed"));
         }
-        // Automation rejects Error/Nothing arguments even when the workbook
-        // is already saved or the corresponding option would be ignored.
         for value in args {
             match value {
                 Value::Error(_) => return Err(host_error(13, "Workbook.Close argument is an Error value")),
@@ -25549,14 +25649,7 @@ impl<'a> WorkbookApplication<'a> {
             }
         }
         self.ensure_application_owner(owner);
-        let host = self.hosts.get_mut(&owner).expect("registered closing workbook");
-        let omitted = args.first().is_none_or(|value| matches!(value, Value::Missing));
-        if !host.saved && omitted && host.display_alerts {
-            return Err(host_error(1004, "Workbook.Close requires a response to the save prompt"));
-        }
-        // This optional Variant accepts Byte/Integer/Long and Boolean flags.
-        // Other subtypes (including floating point, LongLong and text) close
-        // without saving; they do not use the usual VBA Boolean conversion.
+        let frame = self.member_owners.len();
         let save = match args.first() {
             Some(Value::Boolean(value)) => *value,
             Some(Value::Byte(value)) => *value != 0,
@@ -25564,14 +25657,138 @@ impl<'a> WorkbookApplication<'a> {
             Some(Value::Integer(value)) => *value != 0,
             _ => false,
         };
-        if !host.saved && save && !matches!(args.get(1), Some(Value::Array(_))) {
-            let files = files.ok_or_else(|| host_error(1004, "Workbook.Close requires the application filesystem"))?;
-            if !host.save_for_close(args.get(1), files)? {
-                // Calculation may request project UDFs. Keep the workbook and
-                // source alive until Runtime completes them and retries Close.
-                return Ok(Value::Empty);
-            }
+        let save_name = args.get(1).is_some_and(|value|
+            !matches!(value, Value::Missing | Value::Null | Value::Array(_)));
+        let initial = if save && save_name && !self.hosts[&owner].saved {
+            WorkbookClosePhase::DecideSave { prefix: true }
+        } else { WorkbookClosePhase::BeforeClose };
+        self.close_operations.entry(frame).or_insert(WorkbookCloseOperation {
+            phase: initial, activation_attempted: false,
+        });
+        loop {
+            self.ensure_application_owner(owner);
+            let phase = self.close_operations[&frame].phase.clone();
+            let next = match phase {
+                WorkbookClosePhase::BeforeClose => {
+                    self.force_activate(owner);
+                    if self.hosts[&owner].enable_events {
+                        let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, lock_activation: true, saving: false },
+                            "BeforeClose", vec![Value::Boolean(false)], vec![0]);
+                        self.close_operations.get_mut(&frame).unwrap().phase = WorkbookClosePhase::WaitingClose(event);
+                        return Ok(Value::Empty);
+                    }
+                    WorkbookClosePhase::DecideSave { prefix: false }
+                }
+                WorkbookClosePhase::WaitingClose(event) => {
+                    let Some(answer) = self.event_answers.remove(&event) else { return Ok(Value::Empty); };
+                    self.event_contexts.remove(&event);
+                    self.force_activate(owner);
+                    if answer?.args.last().is_some_and(|value| matches!(value, Value::Boolean(true))) {
+                        self.discard_close_operation(frame);
+                        return Ok(Value::Empty);
+                    }
+                    WorkbookClosePhase::DecideSave { prefix: false }
+                }
+                WorkbookClosePhase::DecideSave { prefix } => {
+                    let host = &self.hosts[&owner];
+                    let omitted = args.first().is_none_or(|value| matches!(value, Value::Missing));
+                    if !prefix && !host.saved && omitted && host.display_alerts {
+                        return Err(host_error(1004, "Workbook.Close requires a response to the save prompt"));
+                    }
+                    if host.saved || !save || matches!(args.get(1), Some(Value::Array(_))) {
+                        if prefix { WorkbookClosePhase::BeforeClose } else { WorkbookClosePhase::Finish }
+                    } else {
+                        let previous_active = self.active;
+                        self.force_activate(owner);
+                        self.close_operations.get_mut(&frame).unwrap().activation_attempted = false;
+                        if self.hosts[&owner].enable_events {
+                            let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, lock_activation: !prefix, saving: true },
+                                "BeforeSave", vec![Value::Boolean(false), Value::Boolean(false)], vec![1]);
+                            self.close_operations.get_mut(&frame).unwrap().phase = WorkbookClosePhase::WaitingSave {
+                                event, prefix, previous_active,
+                            };
+                            return Ok(Value::Empty);
+                        }
+                        WorkbookClosePhase::Write { prefix, previous_active }
+                    }
+                }
+                WorkbookClosePhase::WaitingSave { event, prefix, previous_active } => {
+                    let Some(answer) = self.event_answers.remove(&event) else { return Ok(Value::Empty); };
+                    self.event_contexts.remove(&event);
+                    let cancelled = answer?.args.last().is_some_and(|value| matches!(value, Value::Boolean(true)));
+                    let activation_attempted = self.close_operations[&frame].activation_attempted
+                        || self.active != owner;
+                    if activation_attempted && !cancelled {
+                        if prefix {
+                            return Err(self.close_failure(owner));
+                        }
+                        self.force_activate(owner);
+                        self.discard_close_operation(frame);
+                        return Ok(Value::Empty);
+                    }
+                    if cancelled {
+                        if prefix { self.force_activate(previous_active); }
+                        if self.hosts[&owner].enable_events {
+                            let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, lock_activation: !prefix, saving: false },
+                                "AfterSave", vec![Value::Boolean(false)], vec![]);
+                            self.close_operations.get_mut(&frame).unwrap().phase = WorkbookClosePhase::WaitingAfterSave {
+                                event, prefix, outcome: CloseSaveOutcome::Cancelled,
+                            };
+                            return Ok(Value::Empty);
+                        }
+                        if prefix { return Err(self.close_failure(owner)); }
+                        self.discard_close_operation(frame);
+                        return Ok(Value::Empty);
+                    }
+                    WorkbookClosePhase::Write { prefix, previous_active }
+                }
+                WorkbookClosePhase::Write { prefix, previous_active } => {
+                    let files = files.as_deref_mut()
+                        .ok_or_else(|| host_error(1004, "Workbook.Close requires the application filesystem"))?;
+                    let result = self.hosts.get_mut(&owner).expect("saving workbook").save_for_close(args.get(1), files);
+                    let outcome = match result {
+                        Ok(false) => return Ok(Value::Empty),
+                        Ok(true) => CloseSaveOutcome::Saved,
+                        Err(error) => {
+                            if prefix { self.force_activate(previous_active); }
+                            CloseSaveOutcome::Failed(error)
+                        }
+                    };
+                    if self.hosts[&owner].enable_events {
+                        let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, lock_activation: !prefix, saving: false },
+                            "AfterSave", vec![Value::Boolean(matches!(outcome, CloseSaveOutcome::Saved))], vec![]);
+                        self.close_operations.get_mut(&frame).unwrap().phase = WorkbookClosePhase::WaitingAfterSave {
+                            event, prefix, outcome,
+                        };
+                        return Ok(Value::Empty);
+                    }
+                    match outcome {
+                        CloseSaveOutcome::Saved => if prefix { WorkbookClosePhase::BeforeClose } else { WorkbookClosePhase::Finish },
+                        CloseSaveOutcome::Failed(error) => return Err(error),
+                        CloseSaveOutcome::Cancelled => unreachable!(),
+                    }
+                }
+                WorkbookClosePhase::WaitingAfterSave { event, prefix, outcome } => {
+                    let Some(answer) = self.event_answers.remove(&event) else { return Ok(Value::Empty); };
+                    self.event_contexts.remove(&event);
+                    let answer = answer?;
+                    match outcome {
+                        CloseSaveOutcome::Saved => if prefix { WorkbookClosePhase::BeforeClose } else { WorkbookClosePhase::Finish },
+                        CloseSaveOutcome::Cancelled => {
+                            if prefix { return Err(self.close_failure(owner)); }
+                            self.discard_close_operation(frame);
+                            return Ok(Value::Empty);
+                        }
+                        CloseSaveOutcome::Failed(error) => {
+                            return Err(if prefix && answer.handlers > 0 { self.close_failure(owner) } else { error });
+                        }
+                    }
+                }
+                WorkbookClosePhase::Finish => break,
+            };
+            self.close_operations.get_mut(&frame).unwrap().phase = next;
         }
+        self.discard_close_operation(frame);
         self.closed.insert(owner);
         self.pending_closed.push(owner);
         *self.hosts.get_mut(&owner).expect("registered closed workbook").user_functions.borrow_mut()=UserFunctions::default();
@@ -26091,6 +26308,8 @@ impl<'a> ApplicationHost<'a> {
 
     fn end_member(&mut self, receiver: Option<&ObjectRef>, name: &str, kind: u8) {
         let mut application = self.application.borrow_mut();
+        let frame = application.member_owners.len();
+        application.discard_close_operation(frame);
         let owner = application
             .member_owners
             .pop()
@@ -26111,6 +26330,29 @@ impl<'a> ApplicationHost<'a> {
 }
 
 impl Host for ApplicationHost<'_> {
+    fn take_host_event_calls(&mut self) -> Vec<HostEventCall> {
+        let mut application = self.application.borrow_mut();
+        let Some(event) = application.pending_events.pop_front() else { return Vec::new(); };
+        if let Some(context) = application.event_contexts.get(&event.key).copied() {
+            application.running_events.push((event.key, context));
+        }
+        vec![event]
+    }
+
+    fn host_events_enabled(&self) -> bool {
+        let application = self.application.borrow();
+        application.application_owner.and_then(|owner| application.hosts.get(&owner))
+            .map(|host| host.enable_events).unwrap_or(true)
+    }
+
+    fn answer_host_event(&mut self, key: u64, result: Result<HostEventResult, String>) {
+        let mut application = self.application.borrow_mut();
+        if application.running_events.last().is_some_and(|(running, _)| *running == key) {
+            application.running_events.pop();
+        }
+        application.event_answers.insert(key, result);
+    }
+
     fn begin_member_call(&mut self, receiver: Option<&ObjectRef>, name: &str) {
         self.begin_member(receiver, name, 1);
     }
@@ -42343,6 +42585,7 @@ mod tests {
         let package_a=crate::vba_project::write_project_source(seed,&a,None).unwrap();
         let package_b=crate::vba_project::write_project_source(seed,b,None).unwrap();
         let mut context=failure_context();context.file_name=Some(a_name.into());
+        context.document_modules = Some(crate::vba_project::read_document_modules(&package_a).unwrap());
         context.file_context=Some(file_io::FileContext {
             package_bytes:Some(package_a),full_name:Some(format!(r"C:\{a_name}")),
             files:vec![file_io::ProducedFile {path:format!(r"C:\{b_name}"),bytes:package_b}],
@@ -42725,6 +42968,304 @@ End Function
             // Error results leave A open; successful calls remove A from the
             // live list even when its unsaved changes were discarded.
             assert_eq!(outcome.other_workbooks.len(), usize::from(expected.starts_with("error|")), "case {kind}");
+            drop(opened);
+        }
+    }
+
+    #[test]
+    fn closing_events_share_cancel_with_foreign_workbook_and_application_sinks() {
+        const A: &str = r#"Attribute VB_Name = "Driver"
+Public Function ReadEventState() As String
+ ReadEventState = ThisWorkbook.EventState()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "ThisWorkbook"
+Private closes As Long
+Private saves As Long
+Private Sub Record(ByVal label As String, ByVal flag As Boolean)
+ Dim book As Workbook
+ Set book = Workbooks("close-save-B.xlsm")
+ book.Worksheets(1).Range("Z1").Value = book.Worksheets(1).Range("Z1").Value & label & "(" & CStr(flag) & ")|" & ActiveWorkbook.Name & ";"
+End Sub
+Private Sub Workbook_BeforeClose(Cancel As Boolean)
+ closes = closes + 1
+ Record "doc-close", Cancel
+ If CStr(ThisWorkbook.Worksheets(1).Range("A1").Value) = "cancel-doc" Then Cancel = True
+ If CStr(ThisWorkbook.Worksheets(1).Range("A1").Value) = "disable-doc" Then Application.EnableEvents = False
+End Sub
+Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)
+ saves = saves + 1
+ Record "doc-save", Cancel
+End Sub
+Private Sub Workbook_AfterSave(ByVal Success As Boolean)
+ Record "doc-after", Success
+End Sub
+Public Function EventState() As String
+ EventState = CStr(closes) & "|" & CStr(saves)
+End Function
+"#;
+        const B: &str = r#"Attribute VB_Name = "Driver"
+Public mode As Long
+Private bookEvents As BookWatcher
+Private appEvents As AppWatcher
+Public Sub Record(ByVal label As String, ByVal flag As Boolean)
+ ThisWorkbook.Worksheets(1).Range("Z1").Value = ThisWorkbook.Worksheets(1).Range("Z1").Value & label & "(" & CStr(flag) & ")|" & ActiveWorkbook.Name & ";"
+End Sub
+Public Function Probe(ByVal name As String, ByVal kind As Long, ByVal destination As String) As String
+ On Error GoTo failed
+ Dim target As Workbook
+ Set target = Workbooks(name)
+ Application.EnableEvents = True
+ mode = kind
+ Set bookEvents = New BookWatcher
+ bookEvents.Attach target
+ Set appEvents = New AppWatcher
+ appEvents.Attach Application
+ If kind = 2 Or kind = 5 Then target.Worksheets(1).Range("A1").Value = "cancel-doc"
+ If kind = 8 Then target.Worksheets(1).Range("A1").Value = "disable-doc"
+ If kind = 1 Or kind = 6 Or kind = 7 Then
+  target.Close True
+ Else
+  target.Close False
+ End If
+ Probe = "ok|" & CStr(Workbooks.Count)
+ Exit Function
+failed:
+ Probe = "error|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & CStr(Workbooks.Count)
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "BookWatcher"
+Private WithEvents held As Workbook
+Public Sub Attach(ByVal value As Workbook)
+ Set held = value
+End Sub
+Private Sub held_BeforeClose(Cancel As Boolean)
+ Driver.Record "book-close", Cancel
+ If Driver.mode = 3 Then Cancel = True
+ If Driver.mode = 5 Then Cancel = False
+ If Driver.mode = 9 Then Application.EnableEvents = False
+End Sub
+Private Sub held_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)
+ Driver.Record "book-save", Cancel
+ If Driver.mode = 6 Then Cancel = True
+End Sub
+Private Sub held_AfterSave(ByVal Success As Boolean)
+ Driver.Record "book-after", Success
+End Sub
+VERSION 1.0 CLASS
+Attribute VB_Name = "AppWatcher"
+Private WithEvents held As Application
+Public Sub Attach(ByVal value As Application)
+ Set held = value
+End Sub
+Private Sub held_WorkbookBeforeClose(ByVal book As Workbook, Cancel As Boolean)
+ Driver.Record "app-close", Cancel
+ If Driver.mode = 4 Then Cancel = True
+End Sub
+Private Sub held_WorkbookBeforeSave(ByVal book As Workbook, ByVal SaveAsUI As Boolean, Cancel As Boolean)
+ Driver.Record "app-save", Cancel
+ If Driver.mode = 7 Then Cancel = True
+End Sub
+Private Sub held_WorkbookAfterSave(ByVal book As Workbook, ByVal Success As Boolean)
+ Driver.Record "app-after", Success
+End Sub
+"#;
+        for (kind, log, expected, count, state) in [
+            (0, "book-close(False)|close-save-A.xlsm;doc-close(False)|close-save-A.xlsm;app-close(False)|close-save-A.xlsm;", "ok|1", 1, ""),
+            (1, "book-close(False)|close-save-A.xlsm;doc-close(False)|close-save-A.xlsm;app-close(False)|close-save-A.xlsm;book-save(False)|close-save-A.xlsm;doc-save(False)|close-save-A.xlsm;app-save(False)|close-save-A.xlsm;book-after(True)|close-save-A.xlsm;doc-after(True)|close-save-A.xlsm;app-after(True)|close-save-A.xlsm;", "ok|1", 1, ""),
+            (2, "book-close(False)|close-save-A.xlsm;doc-close(False)|close-save-A.xlsm;app-close(True)|close-save-A.xlsm;", "ok|2", 2, "1|0"),
+            (3, "book-close(False)|close-save-A.xlsm;doc-close(True)|close-save-A.xlsm;app-close(True)|close-save-A.xlsm;", "ok|2", 2, "1|0"),
+            (4, "book-close(False)|close-save-A.xlsm;doc-close(False)|close-save-A.xlsm;app-close(False)|close-save-A.xlsm;", "ok|2", 2, "1|0"),
+            (5, "book-close(False)|close-save-A.xlsm;doc-close(False)|close-save-A.xlsm;app-close(True)|close-save-A.xlsm;", "ok|2", 2, "1|0"),
+            (6, "book-close(False)|close-save-A.xlsm;doc-close(False)|close-save-A.xlsm;app-close(False)|close-save-A.xlsm;book-save(False)|close-save-A.xlsm;doc-save(True)|close-save-A.xlsm;app-save(True)|close-save-A.xlsm;book-after(False)|close-save-A.xlsm;doc-after(False)|close-save-A.xlsm;app-after(False)|close-save-A.xlsm;", "ok|2", 2, "1|1"),
+            (7, "book-close(False)|close-save-A.xlsm;doc-close(False)|close-save-A.xlsm;app-close(False)|close-save-A.xlsm;book-save(False)|close-save-A.xlsm;doc-save(False)|close-save-A.xlsm;app-save(False)|close-save-A.xlsm;book-after(False)|close-save-A.xlsm;doc-after(False)|close-save-A.xlsm;app-after(False)|close-save-A.xlsm;", "ok|2", 2, "1|1"),
+            (8, "book-close(False)|close-save-A.xlsm;doc-close(False)|close-save-A.xlsm;", "ok|1", 1, ""),
+            (9, "book-close(False)|close-save-A.xlsm;doc-close(False)|close-save-A.xlsm;", "ok|1", 1, "")
+        ] {
+            let (opened, mut session, _) = close_fixture_session(A, B, "close-save-A.xlsm", "close-save-B.xlsm",
+                "Application.DisplayAlerts = False\nThisWorkbook.Worksheets(1).Range(\"A1\").Value = 321");
+            let view = select_session_workbook(&mut session, "1").unwrap();
+            let outcome = close_fixture_run(view.selected.workbook, &view.selected.source,
+                "Driver.Probe", vec![Value::String("close-save-A.xlsm".into()), Value::Integer(kind),
+                    Value::String(r"C:\close-save-result.xlsm".into())], "close-save-B.xlsm", &mut session);
+            assert!(outcome.error.is_none(), "case {kind}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected, "case {kind}");
+            let cell = outcome.workbook.sheets[0].rows.iter().find(|row| row.index == 1).unwrap().cells.iter().find(|cell| cell.col == 25).unwrap();
+            assert!(matches!(&cell.value, CellValue::String(value) if value == log), "case {kind}: {:?}", cell.value);
+            assert_eq!(outcome.other_workbooks.len() + 1, count, "case {kind}");
+            if !state.is_empty() {
+                let current = select_session_workbook(&mut session, "0").unwrap();
+                let read = close_fixture_run(current.selected.workbook, &current.selected.source,
+                    "Driver.ReadEventState", vec![], &current.selected.name, &mut session);
+                assert!(read.error.is_none(), "case {kind} document state");
+                assert_eq!(serde_json::to_value(&read.result).unwrap()["value"], state, "case {kind}");
+            }
+            drop(opened);
+        }
+    }
+
+    #[test]
+    fn closing_document_events_match_native_order_cancellation_and_saved_bytes() {
+        const A: &str = r#"Attribute VB_Name = "Driver"
+Public Function ReadEventState() As String
+ ReadEventState = ThisWorkbook.EventState()
+End Function
+Public Sub SelfClose(ByVal saveChanges As Boolean)
+ Workbooks("close-save-B.xlsm").Worksheets(1).Range("Z2").Value = "before"
+ ThisWorkbook.Close SaveChanges:=saveChanges
+ Workbooks("close-save-B.xlsm").Worksheets(1).Range("Z3").Value = "after"
+End Sub
+VERSION 1.0 CLASS
+Attribute VB_Name = "ThisWorkbook"
+Private closes As Long
+Private saves As Long
+Private Sub RecordEvent(ByVal label As String)
+ Dim peer As Workbook
+ Set peer = Workbooks("close-save-B.xlsm")
+ peer.Worksheets(1).Range("Z1").Value = peer.Worksheets(1).Range("Z1").Value & label & "|" & ThisWorkbook.Name & "|" & ActiveWorkbook.Name & "/" & Application.ActiveWorkbook.Name & "|" & CStr(Workbooks.Count) & ";"
+End Sub
+Private Sub Workbook_BeforeClose(Cancel As Boolean)
+ closes = closes + 1
+ RecordEvent "close"
+ Dim flag As String
+ flag = CStr(ThisWorkbook.Worksheets(1).Range("A1").Value)
+ If flag = "activate-and-cancel-close" Then Cancel = True
+ If flag = "activate-and-cancel-close" Or flag = "activate-peer" Then Workbooks("close-save-B.xlsm").Activate
+ If flag = "mark-clean" Then ThisWorkbook.Saved = True
+ If flag = "mark-dirty" Then ThisWorkbook.Saved = False
+ If flag = "cancel-close" Then Cancel = True
+End Sub
+Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)
+ saves = saves + 1
+ RecordEvent "save(" & CStr(SaveAsUI) & ")"
+ Dim flag As String
+ flag = CStr(ThisWorkbook.Worksheets(1).Range("A1").Value)
+ If flag = "save-mark-clean" Then ThisWorkbook.Saved = True
+ If flag = "save-activate-peer" Then Workbooks("close-save-B.xlsm").Activate
+ If flag = "disable-events" Then Application.EnableEvents = False
+ If flag = "cancel-save" Then Cancel = True
+End Sub
+Private Sub Workbook_AfterSave(ByVal Success As Boolean)
+ RecordEvent "after(" & CStr(Success) & ")"
+ If CStr(ThisWorkbook.Worksheets(1).Range("A1").Value) = "modify-after-save" Then ThisWorkbook.Worksheets(1).Range("A1").Value = "after-save"
+End Sub
+Public Function EventState() As String
+ EventState = CStr(closes) & "|" & CStr(saves)
+End Function
+"#;
+        const B: &str = r#"Attribute VB_Name = "Driver"
+Public Function Probe(ByVal name As String, ByVal kind As Long, ByVal destination As String) As String
+ On Error GoTo failed
+ Dim target As Workbook
+ Set target = Workbooks(name)
+ Application.EnableEvents = True
+ If kind = 2 Or kind = 3 Or kind = 10 Or kind = 11 Then target.Worksheets(1).Range("A1").Value = "cancel-close"
+ If kind = 7 Or kind = 12 Then target.Worksheets(1).Range("A1").Value = "cancel-save"
+ Select Case kind
+ Case 0: target.Close False
+ Case 1: target.Close True
+ Case 2: target.Close False
+ Case 3: target.Close True
+ Case 4: Application.EnableEvents = False: target.Close False
+ Case 5: Application.EnableEvents = False: target.Close True
+ Case 6: target.Saved = True: target.Close False
+ Case 7: target.Close True
+ Case 8: Application.Run "'" & target.Name & "'!Driver.SelfClose", False
+ Case 9: Application.Run "'" & target.Name & "'!Driver.SelfClose", True
+ Case 10: Application.Run "'" & target.Name & "'!Driver.SelfClose", False
+ Case 11: Application.Run "'" & target.Name & "'!Driver.SelfClose", True
+ Case 12: Application.Run "'" & target.Name & "'!Driver.SelfClose", True
+ Case 13: target.Saved = True: target.Close True
+ Case 14: target.Worksheets(1).Range("A1").Value = "activate-peer": target.Close True
+ Case 15: target.Worksheets(1).Range("A1").Value = "mark-clean": target.Close True
+ Case 16: target.Worksheets(1).Range("A1").Value = "mark-dirty": target.Saved = True: target.Close True
+ Case 17: target.Close True, destination
+ Case 18: target.Close True, Empty
+ Case 19: target.Worksheets(1).Range("A1").Value = "cancel-close": target.Close True, destination
+ Case 20: target.Worksheets(1).Range("A1").Value = "cancel-save": target.Close True, destination
+ Case 21: target.Worksheets(1).Range("A1").Value = "mark-dirty": target.Close True, destination
+ Case 22: target.Worksheets(1).Range("A1").Value = "save-mark-clean": target.Close True
+ Case 23: target.Worksheets(1).Range("A1").Value = "save-activate-peer": target.Close True
+ Case 24: target.Worksheets(1).Range("A1").Value = "disable-events": target.Close True
+ Case 25: target.Worksheets(1).Range("A1").Value = "modify-after-save": target.Close True
+ Case 26: target.Worksheets(1).Range("A1").Value = "activate-and-cancel-close": target.Close False
+ End Select
+ Probe = "ok|" & CStr(Workbooks.Count)
+ Exit Function
+failed:
+ Probe = "error|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & CStr(Workbooks.Count)
+End Function
+"#;
+        for (kind, log, expected, state, count, active, original, destination) in [
+            (0, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|1", "", 1, "close-save-B.xlsm", "a😀b", ""),
+            (1, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(True)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|1", "", 1, "close-save-B.xlsm", "321.0", ""),
+            (2, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|2", "1|0", 2, "close-save-A.xlsm", "a😀b", ""),
+            (3, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|2", "1|0", 2, "close-save-A.xlsm", "a😀b", ""),
+            (4, "", "ok|1", "", 1, "close-save-B.xlsm", "a😀b", ""),
+            (5, "", "ok|1", "", 1, "close-save-B.xlsm", "321.0", ""),
+            (6, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|1", "", 1, "close-save-B.xlsm", "a😀b", ""),
+            (7, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|2", "1|1", 2, "close-save-A.xlsm", "a😀b", ""),
+            (8, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "terminated", "", 1, "close-save-B.xlsm", "a😀b", ""),
+            (9, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(True)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "terminated", "", 1, "close-save-B.xlsm", "321.0", ""),
+            (10, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|2", "1|0", 2, "close-save-A.xlsm", "a😀b", ""),
+            (11, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|2", "1|0", 2, "close-save-A.xlsm", "a😀b", ""),
+            (12, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|2", "1|1", 2, "close-save-A.xlsm", "a😀b", ""),
+            (13, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|1", "", 1, "close-save-B.xlsm", "a😀b", ""),
+            (14, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(True)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|1", "", 1, "close-save-B.xlsm", "activate-peer", ""),
+            (15, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|1", "", 1, "close-save-B.xlsm", "a😀b", ""),
+            (16, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(True)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|1", "", 1, "close-save-B.xlsm", "mark-dirty", ""),
+            (17, "save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(True)|close-save-result.xlsm|close-save-result.xlsm/close-save-result.xlsm|2;close|close-save-result.xlsm|close-save-result.xlsm/close-save-result.xlsm|2;", "ok|1", "", 1, "close-save-B.xlsm", "a😀b", "321.0"),
+            (18, "save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(False)|close-save-A.xlsm|close-save-B.xlsm/close-save-B.xlsm|2;", "error|1004|VBAProject|'Close' メソッドは失敗しました: '_Workbook' オブジェクト|2", "0|1", 2, "close-save-B.xlsm", "a😀b", ""),
+            (19, "save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(True)|close-save-result.xlsm|close-save-result.xlsm/close-save-result.xlsm|2;close|close-save-result.xlsm|close-save-result.xlsm/close-save-result.xlsm|2;", "ok|2", "1|1", 2, "close-save-result.xlsm", "a😀b", "cancel-close"),
+            (20, "save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(False)|close-save-A.xlsm|close-save-B.xlsm/close-save-B.xlsm|2;", "error|1004|VBAProject|'Close' メソッドは失敗しました: '_Workbook' オブジェクト|2", "0|1", 2, "close-save-B.xlsm", "a😀b", ""),
+            (21, "save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(True)|close-save-result.xlsm|close-save-result.xlsm/close-save-result.xlsm|2;close|close-save-result.xlsm|close-save-result.xlsm/close-save-result.xlsm|2;save(False)|close-save-result.xlsm|close-save-result.xlsm/close-save-result.xlsm|2;after(True)|close-save-result.xlsm|close-save-result.xlsm/close-save-result.xlsm|2;", "ok|1", "", 1, "close-save-B.xlsm", "a😀b", "mark-dirty"),
+            (22, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(True)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|1", "", 1, "close-save-B.xlsm", "save-mark-clean", ""),
+            (23, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|2", "1|1", 2, "close-save-A.xlsm", "a😀b", ""),
+            (24, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|1", "", 1, "close-save-B.xlsm", "disable-events", ""),
+            (25, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;save(False)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;after(True)|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|1", "", 1, "close-save-B.xlsm", "modify-after-save", ""),
+            (26, "close|close-save-A.xlsm|close-save-A.xlsm/close-save-A.xlsm|2;", "ok|2", "1|0", 2, "close-save-A.xlsm", "a😀b", "")
+        ] {
+            let (opened, mut session, _) = close_fixture_session(A, B, "close-save-A.xlsm", "close-save-B.xlsm",
+                "Application.DisplayAlerts = False\nThisWorkbook.Worksheets(1).Range(\"A1\").Value = 321");
+            let view = select_session_workbook(&mut session, "1").unwrap();
+            let outcome = close_fixture_run(view.selected.workbook, &view.selected.source,
+                "Driver.Probe", vec![Value::String("close-save-A.xlsm".into()), Value::Integer(kind),
+                    Value::String(r"C:\close-save-result.xlsm".into())], "close-save-B.xlsm", &mut session);
+            if expected == "terminated" {
+                assert_eq!(outcome.error.as_ref().map(|error| error.kind), Some("terminated"), "case {kind}");
+            } else {
+                assert!(outcome.error.is_none(), "case {kind}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected, "case {kind}");
+            }
+            let z = |row: u32| outcome.workbook.sheets[0].rows.iter().find(|item| item.index == row)
+                .and_then(|item| item.cells.iter().find(|cell| cell.col == 25)).map(|cell| &cell.value);
+            let actual_log = match z(1) { Some(CellValue::String(text)) => text.as_str(), _ => "" };
+            assert_eq!(actual_log, log, "case {kind} event order");
+            if (8..=12).contains(&kind) {
+                assert!(matches!(z(2), Some(CellValue::String(text)) if text == "before"), "case {kind}");
+                assert_eq!(matches!(z(3), Some(CellValue::String(text)) if text == "after"), count == 2, "case {kind}");
+            }
+            assert_eq!(outcome.other_workbooks.len() + 1, count, "case {kind} live books");
+            let selected_name = if outcome.active_workbook.as_deref() == Some("1") { "close-save-B.xlsm" }
+                else { outcome.other_workbooks.iter().find(|book| Some(book.identity.as_str()) == outcome.active_workbook.as_deref()).unwrap().name.as_str() };
+            assert_eq!(selected_name, active, "case {kind} active workbook");
+            let snapshot = serde_json::to_value(&outcome.file_system_state).unwrap();
+            let files: Vec<file_io::ProducedFile> = serde_json::from_value(snapshot["files"].clone()).unwrap();
+            for (path, expected_value) in [(r"C:\close-save-A.xlsm", original), (r"C:\close-save-result.xlsm", destination)] {
+                let file = files.iter().find(|file| file.path.eq_ignore_ascii_case(path));
+                if expected_value.is_empty() { assert!(file.is_none(), "case {kind} unexpected destination"); continue; }
+                let parsed = oxicells_core::parse_xlsx_preserving_values(&file.unwrap().bytes).unwrap();
+                let cell = parsed.sheets[0].rows.iter().find(|row| row.index == 1).unwrap().cells.iter().find(|cell| cell.col == 0).unwrap();
+                let value = match &cell.value { CellValue::String(text) => text.clone(), CellValue::Number(value) => value.to_string(), value => format!("{value:?}") };
+                assert_eq!(value, expected_value.trim_end_matches(".0"), "case {kind} {path}");
+            }
+            if !state.is_empty() {
+                let current = select_session_workbook(&mut session, "0").unwrap();
+                let read = close_fixture_run(current.selected.workbook, &current.selected.source,
+                    "Driver.ReadEventState", vec![], &current.selected.name, &mut session);
+                assert!(read.error.is_none(), "case {kind} read document state");
+                assert_eq!(serde_json::to_value(&read.result).unwrap()["value"], state, "case {kind} document fields");
+            }
             drop(opened);
         }
     }

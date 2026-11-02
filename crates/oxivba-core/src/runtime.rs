@@ -213,6 +213,32 @@ impl PartialEq for ObjectRef {
 
 impl Eq for ObjectRef {}
 
+/// One native notification, delivered between host-call attempts. ByRef
+/// arguments share physical slots across the document and its subscribers.
+#[derive(Debug, Clone)]
+pub struct HostEventCall {
+    pub key: u64,
+    pub deliveries: Vec<HostEventDelivery>,
+    pub args: Vec<Value>,
+    pub by_ref: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostEventDelivery {
+    pub project: u64,
+    pub receiver: ObjectRef,
+    pub name: String,
+    pub document_handler: Option<String>,
+    pub arguments: Vec<usize>,
+    pub require_enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostEventResult {
+    pub args: Vec<Value>,
+    pub handlers: usize,
+}
+
 pub trait Host {
     /// Resolve an Automation name using the target host's encoding and name
     /// comparison. `candidates` contains public members of a source class;
@@ -306,6 +332,13 @@ pub trait Host {
     /// Closed documents whose source instances must be disconnected. Closing
     /// a project on the current call stack also cancels those active callers.
     fn take_closed_application_projects(&mut self) -> Vec<u64> { Vec::new() }
+
+    /// Native events can call private document handlers and WithEvents sinks,
+    /// then resume the same host operation with the updated ByRef arguments.
+    fn take_host_event_calls(&mut self) -> Vec<HostEventCall> { Vec::new() }
+    fn host_events_enabled(&self) -> bool { true }
+    fn answer_host_event(&mut self, _key: u64, _result: Result<HostEventResult, String>) {}
+
 
     /// A native document can become unavailable before its code-behind
     /// dispatch is attempted; intrinsic application objects may remain live.
@@ -2807,64 +2840,102 @@ impl<'a> Runtime<'a> {
     /// `RaiseEvent Name(args)` from the instance running now: every
     /// instance holding it in a `WithEvents` variable hears it, through its
     /// `variable_Name` procedure, in the order the instances were made.
-    fn raise_event(&mut self, name: &str, args: Vec<Value>, references: Vec<Option<ValueSlot>>, line: u32) -> Result<(), RuntimeError> {
-        let Some(source) = self.me.clone() else {
-            return Ok(());
-        };
-        let mut listeners: Vec<(ObjectRef, String)> = Vec::new();
-        let handles: Vec<(u64, String)> = self
-            .internal_objects
-            .iter()
-            .filter_map(|(handle, object)| match object {
-                InternalObject::Instance(instance) => Some((*handle, instance.class.clone())),
-                _ => None,
-            })
-            .collect();
-        for (handle, class) in handles {
-            let Some(module) = self.classes.get(&class.to_ascii_lowercase()).copied() else {
-                continue;
-            };
+    fn event_listeners(&self, source: &ObjectRef, name: &str) -> Vec<(u64, ObjectRef, String)> {
+        let mut listeners = Vec::new();
+        for (handle, object) in &self.internal_objects {
+            let InternalObject::Instance(instance) = object else { continue; };
+            let project = self.object_projects.get(handle).copied().unwrap_or(self.project_identity);
+            let context = if project == self.project_identity { self }
+                else if let Some(context) = self.projects.get(&project) { context }
+                else { continue; };
+            let Some(module) = context.classes.get(&instance.class.to_ascii_lowercase()).copied()
+                else { continue; };
             for item in &module.items {
-                let ModuleItem::Variables(decl) = item else {
-                    continue;
-                };
-                for variable in decl.items.iter().filter(|variable| variable.with_events) {
+                let ModuleItem::Variables(declaration) = item else { continue; };
+                for variable in declaration.items.iter().filter(|variable| variable.with_events) {
                     let procedure = format!("{}_{}", variable.name, name);
-                    if !self.has_procedure_of(module, &procedure, &[ProcKind::Sub]) {
-                        continue;
-                    }
-                    // The live instance keeps its variables out on the
-                    // runtime; the rest keep them with themselves.
-                    let held = if self.owner == Some(handle) {
-                        self.module_values.get(&key(&variable.name)).map(|slot| slot.borrow().clone())
+                    if !context.has_procedure_of(module, &procedure, &[ProcKind::Sub]) { continue; }
+                    let slot = if context.owner == Some(*handle) {
+                        context.module_values.get(&key(&variable.name))
                     } else {
-                        match self.internal_objects.get(&handle) {
-                            Some(InternalObject::Instance(instance)) => instance
-                                .state
-                                .as_ref()
-                                .and_then(|state| state.values.get(&key(&variable.name)))
-                                .map(|slot| slot.borrow().clone()),
-                            _ => None,
-                        }
+                        instance.state.as_ref().and_then(|state| state.values.get(&key(&variable.name)))
                     };
-                    if matches!(held, Some(Value::Object(ref object)) if object.handle == source.handle) {
-                        listeners.push((ObjectRef::new(handle, class.clone()), procedure));
+                    if slot.is_some_and(|slot| matches!(&*slot.borrow(),
+                        Value::Object(object) if object.handle == source.handle)) {
+                        listeners.push((project, ObjectRef::new(*handle, instance.class.clone()), procedure));
                     }
                 }
             }
         }
-        for (listener, procedure) in listeners {
-            let values = args.clone();
-            let references = references.clone();
-            self.as_instance(&listener, |this| {
-                // A ByRef parameter of the handler is the raiser's variable:
-                // measured, a handler setting Cancel = True is seen by the
-                // procedure that raised the event.
-                this.pending_references = Some(references);
-                this.call_kind(&procedure, &[ProcKind::Sub], values, Some(line)).map(|_| ())
-            })?;
+        listeners
+    }
+
+    fn call_event_handler(&mut self, receiver: &ObjectRef, name: &str,
+        args: &[Value], references: &[Option<ValueSlot>], line: u32) -> Result<bool, RuntimeError> {
+        self.as_instance(receiver, |runtime| {
+            if !runtime.has_procedure_of(runtime.module, name, &[ProcKind::Sub]) { return Ok(false); }
+            let previous = runtime.pending_references.replace(references.to_vec());
+            let result = runtime.call_kind(name, &[ProcKind::Sub], args.to_vec(), Some(line));
+            runtime.pending_references = previous;
+            result.map(|_| true)
+        })
+    }
+
+    fn raise_event(&mut self, name: &str, args: Vec<Value>, references: Vec<Option<ValueSlot>>, line: u32) -> Result<(), RuntimeError> {
+        let Some(source) = self.me.clone() else { return Ok(()); };
+        for (project, listener, procedure) in self.event_listeners(&source, name) {
+            self.in_application_project(project, |runtime|
+                runtime.call_event_handler(&listener, &procedure, &args, &references, line))?;
         }
         Ok(())
+    }
+
+    fn dispatch_host_event(&mut self, event: &HostEventCall) -> Result<HostEventResult, RuntimeError> {
+        let slots: Vec<_> = event.args.iter().cloned().map(VariableSlot::new).collect();
+        let references: Vec<_> = slots.iter().enumerate().map(|(index, slot)| {
+            event.by_ref.contains(&index).then(|| {
+                if matches!(&*slot.borrow(), Value::Boolean(_)) {
+                    *slot.declared.borrow_mut() = Some("boolean".into());
+                }
+                slot.clone()
+            })
+        }).collect();
+        let mut handlers = 0;
+        for delivery in &event.deliveries {
+            if delivery.require_enabled && self.host.as_deref().is_some_and(|host| !host.host_events_enabled()) {
+                continue;
+            }
+            let values = || delivery.arguments.iter().map(|index| slots[*index].borrow().clone()).collect::<Vec<_>>();
+            let references: Vec<_> = delivery.arguments.iter().map(|index| references[*index].clone()).collect();
+            // Native connection-point sinks precede the document's own handler.
+            // The shared Cancel slot retains each sink's writes for the next.
+            for (project, listener, procedure) in self.event_listeners(&delivery.receiver, &delivery.name) {
+                self.in_application_project(project, |runtime|
+                    runtime.call_event_handler(&listener, &procedure, &values(), &references, 0))?;
+                handlers += 1;
+            }
+            if let Some(procedure) = &delivery.document_handler {
+                let handled = self.in_application_project(delivery.project, |runtime| {
+                    if !runtime.document_instances.contains(&delivery.receiver.handle) { return Ok(false); }
+                    runtime.call_event_handler(&delivery.receiver, procedure, &values(), &references, 0)
+                })?;
+                handlers += usize::from(handled);
+            }
+        }
+        Ok(HostEventResult { args: slots.iter().map(|slot| slot.borrow().clone()).collect(), handlers })
+    }
+
+    fn work_out_host_events(&mut self) -> Result<bool, RuntimeError> {
+        let events = self.host.as_deref_mut().map(|host| host.take_host_event_calls()).unwrap_or_default();
+        let had_events = !events.is_empty();
+        for event in events {
+            let result = self.dispatch_host_event(&event);
+            if let Some(host) = self.host.as_deref_mut() {
+                host.answer_host_event(event.key, result.as_ref().cloned().map_err(ToString::to_string));
+            }
+            result?;
+        }
+        Ok(had_events)
     }
 
     /// `obj.Name(args) = value` on an instance: a Property Let (Set for an
@@ -10026,12 +10097,13 @@ impl<'a> Runtime<'a> {
     /// taking a Double is #VALUE!.
     fn work_out_user_functions(&mut self) -> Result<bool, RuntimeError> {
         self.load_host_application_projects()?;
+        let had_events = self.work_out_host_events()?;
         let Some(host) = self.host.as_deref_mut() else {
-            return Ok(false);
+            return Ok(had_events);
         };
         let calls = host.take_user_function_calls();
         if calls.is_empty() {
-            return Ok(false);
+            return Ok(had_events);
         }
         let mut calls: std::collections::VecDeque<_> = calls.into();
         let mut pending: std::collections::BTreeSet<_> = calls.iter().map(|(key, _, _)| *key).collect();
