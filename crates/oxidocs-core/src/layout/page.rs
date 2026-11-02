@@ -11048,7 +11048,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 }
             };
             let (hf_hv, hf_fv) = (hf_variant(0), hf_variant(3));
-            let hf_paint = |this: &Self, code: u8, tops: &[f32], fallback_y: f32| -> Vec<LayoutElement> {
+            let hf_paint = |this: &Self, code: u8, tops: &[f32], fallback_y: f32, blocks: &[Block]| -> Vec<LayoutElement> {
                 let tops: Vec<f32> = if tops.is_empty() { vec![fallback_y] } else { tops.to_vec() };
                 let col_x = vec![page.margin.left; tops.len()];
                 let mut out = Vec::new();
@@ -11056,7 +11056,32 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 for (_, tb) in page.hf_text_boxes.iter().filter(|(c, _)| *c == code) {
                     let mut tb = tb.clone();
                     tb.anchor_block_index = tb.anchor_block_index.min(tops.len() - 1);
-                    out.extend(this.layout_text_box(&tb, page, &tops, &col_x));
+                    // OXI_HDR_IMG_JC: an INLINE header text box sits where its
+                    // paragraph's jc puts it, like the inline picture. en/
+                    // administrative__0074fa45 (jc center, 447.6pt banner box on a
+                    // 540pt column): Word's banner 82.2..529.8, Oxi from the margin.
+                    let mut tb_col_x = col_x.clone();
+                    if tb.inline && !crate::env_flag!("OXI_HDR_IMG_JC_DISABLE") {
+                        // A drawing-only paragraph is parsed as its Image block,
+                        // which keeps the paragraph as host_paragraph.
+                        let host = match blocks.get(tb.anchor_block_index) {
+                            Some(Block::Paragraph(p)) => Some(p),
+                            Some(Block::Image(img)) => img.host_paragraph.as_deref(),
+                            _ => None,
+                        };
+                        if let Some(host) = host {
+                            let column = page.size.width - page.margin.left - page.margin.right
+                                - host.style.indent_left.unwrap_or(0.0) - host.style.indent_right.unwrap_or(0.0);
+                            let spare = (column - tb.width).max(0.0);
+                            let shift = host.style.indent_left.unwrap_or(0.0) + match host.alignment {
+                                Alignment::Center => spare * 0.5,
+                                Alignment::Right => spare,
+                                _ => 0.0,
+                            };
+                            if let Some(x) = tb_col_x.get_mut(tb.anchor_block_index) { *x += shift; }
+                        }
+                    }
+                    out.extend(this.layout_text_box(&tb, page, &tops, &tb_col_x));
                 }
                 super::IN_HF_TEXT_BOX.with(|c| c.set(false));
                 out
@@ -11375,7 +11400,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                 }
                 if hf_draw {
-                    let hf_elems = hf_paint(self, hf_hv, &hf_tops, header_y);
+                    let hf_elems = hf_paint(self, hf_hv, &hf_tops, header_y, hdr_blocks);
                     if !hf_elems.is_empty() {
                         let at = usize::from(page.watermark.is_some()).min(lp.elements.len());
                         lp.elements.splice(at..at, hf_elems);
@@ -11631,7 +11656,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                 }
                 if hf_draw {
-                    let hf_elems = hf_paint(self, hf_fv, &hf_ftr_tops, footer_top);
+                    let hf_elems = hf_paint(self, hf_fv, &hf_ftr_tops, footer_top, ftr_blocks);
                     if !hf_elems.is_empty() {
                         let at = usize::from(page.watermark.is_some()).min(lp.elements.len());
                         lp.elements.splice(at..at, hf_elems);
