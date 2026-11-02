@@ -31333,7 +31333,8 @@ impl Host for WorkbookHost<'_> {
                 "personalviewprintsettings" => Value::Boolean(true),
                 "protectstructure" => Value::Boolean(self.book_protected),
                 "protectwindows" => Value::Boolean(false),
-                "readonlyrecommended" => Value::Boolean(false),
+                "readonlyrecommended" => Value::Boolean(self.file_io.read_only_recommended),
+                "createbackup" => Value::Boolean(self.file_io.create_backup),
                 "removepersonalinformation" => Value::Boolean(false),
                 "savelinkvalues" => Value::Boolean(true),
                 "showconflicthistory" => Value::Boolean(false),
@@ -44004,6 +44005,105 @@ End Sub
         }
     }
 
+
+
+    fn native_workbook_preference_cases() -> serde_json::Value {
+        // Native-generated workbook metadata from self-authored default,
+        // recommendation and backup controls. Only the scratch parent is mapped.
+        serde_json::from_str(r###"[{"native_field":"workbook_save_as_options_state_native_v2","kind":0,"xml":"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"x15 xr xr6 xr10 xr2\" xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\" xmlns:xr6=\"http://schemas.microsoft.com/office/spreadsheetml/2016/revision6\" xmlns:xr10=\"http://schemas.microsoft.com/office/spreadsheetml/2016/revision10\" xmlns:xr2=\"http://schemas.microsoft.com/office/spreadsheetml/2015/revision2\"><fileVersion appName=\"xl\" lastEdited=\"7\" lowestEdited=\"7\" rupBuild=\"30527\" codeName=\"{82680DD9-3F13-7979-5B5F-3D2375947C00}\"/><workbookPr codeName=\"ThisWorkbook\" defaultThemeVersion=\"202300\"/><mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice Requires=\"x15\"><x15ac:absPath url=\"C:\\probe\\\" xmlns:x15ac=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac\"/></mc:Choice></mc:AlternateContent><xr:revisionPtr revIDLastSave=\"0\" documentId=\"8_{180D39B4-A69C-458E-8028-9C0E0342B72C}\" xr6:coauthVersionLast=\"47\" xr6:coauthVersionMax=\"47\" xr10:uidLastSave=\"{00000000-0000-0000-0000-000000000000}\"/><bookViews><workbookView xWindow=\"-120\" yWindow=\"-120\" windowWidth=\"29040\" windowHeight=\"15720\" xr2:uid=\"{9D991D52-38EA-4979-A01D-C0956D481800}\"/></bookViews><sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets><functionGroups builtInGroupCount=\"19\"/><definedNames><definedName name=\"OriginArray\">{\"abc\"}</definedName><definedName name=\"OriginCell\">Sheet1!$A$1</definedName></definedNames><calcPr calcId=\"191029\"/><extLst><ext uri=\"{140A7094-0E35-4892-8432-C4D2E57EDEB5}\" xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\"><x15:workbookPr chartTrackingRefBase=\"1\"/></ext><ext uri=\"{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}\" xmlns:xcalcf=\"http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures\"><xcalcf:calcFeatures><xcalcf:feature name=\"microsoft.com:RD\"/><xcalcf:feature name=\"microsoft.com:Single\"/><xcalcf:feature name=\"microsoft.com:FV\"/><xcalcf:feature name=\"microsoft.com:CNMTM\"/><xcalcf:feature name=\"microsoft.com:LET_WF\"/><xcalcf:feature name=\"microsoft.com:LAMBDA_WF\"/><xcalcf:feature name=\"microsoft.com:ARRAYTEXT_WF\"/></xcalcf:calcFeatures></ext></extLst></workbook>","expected":"False|False|False|True|False"},{"native_field":"workbook_save_as_options_state_native_v2","kind":1,"xml":"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"x15 xr xr6 xr10 xr2\" xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\" xmlns:xr6=\"http://schemas.microsoft.com/office/spreadsheetml/2016/revision6\" xmlns:xr10=\"http://schemas.microsoft.com/office/spreadsheetml/2016/revision10\" xmlns:xr2=\"http://schemas.microsoft.com/office/spreadsheetml/2015/revision2\"><fileVersion appName=\"xl\" lastEdited=\"7\" lowestEdited=\"7\" rupBuild=\"30527\" codeName=\"{82680DD9-3F13-7979-5B5F-3D2375947C00}\"/><fileSharing readOnlyRecommended=\"1\"/><workbookPr codeName=\"ThisWorkbook\" defaultThemeVersion=\"202300\"/><mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice Requires=\"x15\"><x15ac:absPath url=\"C:\\probe\\\" xmlns:x15ac=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac\"/></mc:Choice></mc:AlternateContent><xr:revisionPtr revIDLastSave=\"0\" documentId=\"8_{01A4A26D-F8F3-4422-A23C-702BA9A14D2C}\" xr6:coauthVersionLast=\"47\" xr6:coauthVersionMax=\"47\" xr10:uidLastSave=\"{00000000-0000-0000-0000-000000000000}\"/><bookViews><workbookView xWindow=\"-120\" yWindow=\"-120\" windowWidth=\"29040\" windowHeight=\"15720\" xr2:uid=\"{9D991D52-38EA-4979-A01D-C0956D481800}\"/></bookViews><sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets><functionGroups builtInGroupCount=\"19\"/><definedNames><definedName name=\"OriginArray\">{\"abc\"}</definedName><definedName name=\"OriginCell\">Sheet1!$A$1</definedName></definedNames><calcPr calcId=\"191029\"/><extLst><ext uri=\"{140A7094-0E35-4892-8432-C4D2E57EDEB5}\" xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\"><x15:workbookPr chartTrackingRefBase=\"1\"/></ext><ext uri=\"{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}\" xmlns:xcalcf=\"http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures\"><xcalcf:calcFeatures><xcalcf:feature name=\"microsoft.com:RD\"/><xcalcf:feature name=\"microsoft.com:Single\"/><xcalcf:feature name=\"microsoft.com:FV\"/><xcalcf:feature name=\"microsoft.com:CNMTM\"/><xcalcf:feature name=\"microsoft.com:LET_WF\"/><xcalcf:feature name=\"microsoft.com:LAMBDA_WF\"/><xcalcf:feature name=\"microsoft.com:ARRAYTEXT_WF\"/></xcalcf:calcFeatures></ext></extLst></workbook>","expected":"True|False|False|True|False"},{"native_field":"workbook_save_as_backup_metadata_native_v1","kind":0,"xml":"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"x15 xr xr6 xr10 xr2\" xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\" xmlns:xr6=\"http://schemas.microsoft.com/office/spreadsheetml/2016/revision6\" xmlns:xr10=\"http://schemas.microsoft.com/office/spreadsheetml/2016/revision10\" xmlns:xr2=\"http://schemas.microsoft.com/office/spreadsheetml/2015/revision2\"><fileVersion appName=\"xl\" lastEdited=\"7\" lowestEdited=\"7\" rupBuild=\"30527\" codeName=\"{82680DD9-3F13-7979-5B5F-3D2375947C00}\"/><workbookPr backupFile=\"1\" codeName=\"ThisWorkbook\" defaultThemeVersion=\"202300\"/><mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice Requires=\"x15\"><x15ac:absPath url=\"C:\\probe\\\" xmlns:x15ac=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac\"/></mc:Choice></mc:AlternateContent><xr:revisionPtr revIDLastSave=\"0\" documentId=\"8_{FCF3794D-9B36-4B7E-A8E8-2D063ED2E391}\" xr6:coauthVersionLast=\"47\" xr6:coauthVersionMax=\"47\" xr10:uidLastSave=\"{00000000-0000-0000-0000-000000000000}\"/><bookViews><workbookView xWindow=\"-120\" yWindow=\"-120\" windowWidth=\"29040\" windowHeight=\"15720\" xr2:uid=\"{9D991D52-38EA-4979-A01D-C0956D481800}\"/></bookViews><sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets><functionGroups builtInGroupCount=\"19\"/><definedNames><definedName name=\"OriginArray\">{\"abc\"}</definedName><definedName name=\"OriginCell\">Sheet1!$A$1</definedName></definedNames><calcPr calcId=\"191029\"/><extLst><ext uri=\"{140A7094-0E35-4892-8432-C4D2E57EDEB5}\" xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\"><x15:workbookPr chartTrackingRefBase=\"1\"/></ext><ext uri=\"{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}\" xmlns:xcalcf=\"http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures\"><xcalcf:calcFeatures><xcalcf:feature name=\"microsoft.com:RD\"/><xcalcf:feature name=\"microsoft.com:Single\"/><xcalcf:feature name=\"microsoft.com:FV\"/><xcalcf:feature name=\"microsoft.com:CNMTM\"/><xcalcf:feature name=\"microsoft.com:LET_WF\"/><xcalcf:feature name=\"microsoft.com:LAMBDA_WF\"/><xcalcf:feature name=\"microsoft.com:ARRAYTEXT_WF\"/></xcalcf:calcFeatures></ext></extLst></workbook>","expected":"False|False|False|True|True"}]"###).unwrap()
+    }
+
+    fn native_workbook_preference_fixture(xml: &str, source: &str) -> Vec<u8> {
+        use std::io::{Cursor, Write};
+        let fixture = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let mut original = zip::ZipArchive::new(Cursor::new(fixture)).unwrap();
+        let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for index in 0..original.len() {
+            let part = original.by_index(index).unwrap();
+            if part.name() == "xl/workbook.xml" {
+                output.start_file("xl/workbook.xml", zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated)).unwrap();
+                output.write_all(xml.as_bytes()).unwrap();
+            } else { output.raw_copy_file(part).unwrap(); }
+        }
+        crate::vba_project::write_project_source(&output.finish().unwrap().into_inner(), source, None).unwrap()
+    }
+
+    #[test]
+    fn loaded_workbook_preferences_and_save_copy_match_native_excel() {
+        let cases = native_workbook_preference_cases();
+        const SOURCE: &str = r#"Attribute VB_Name = "Driver"
+Public Function Probe() As String
+ Application.EnableEvents = False
+ Application.DisplayAlerts = False
+ ThisWorkbook.SaveCopyAs ThisWorkbook.Path & "\metadata-copy.xlsm"
+ Dim copy As Workbook
+ Set copy = Workbooks.Open(Filename:=ThisWorkbook.Path & "\metadata-copy.xlsm", IgnoreReadOnlyRecommended:=True)
+ Probe = CStr(copy.ReadOnlyRecommended) & "|" & CStr(copy.ReadOnly) & "|" & CStr(copy.WriteReserved) & "|" & CStr(copy.HasVBProject) & "|" & CStr(copy.CreateBackup)
+End Function
+"#;
+        for case in cases.as_array().unwrap() {
+            let package = native_workbook_preference_fixture(case["xml"].as_str().unwrap(), SOURCE);
+            let mut context = failure_context();
+            context.file_name = Some("metadata-driver.xlsm".into());
+            context.document_modules = Some(crate::vba_project::read_document_modules(&package).unwrap());
+            context.file_context = Some(file_io::FileContext {
+                package_bytes: Some(package.clone()), full_name: Some(r"C:\probe\metadata-driver.xlsm".into()),
+                ..Default::default()
+            });
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(
+                oxicells_core::parse_xlsx_preserving_values(&package).unwrap(), SOURCE,
+                Some("Driver.Probe"), vec![], 0, context, &mut session).unwrap();
+            assert!(outcome.error.is_none(), "{case}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], case["expected"], "{case}");
+        }
+    }
+
+    #[test]
+    fn save_and_save_as_backup_prior_bytes_while_save_copy_only_overwrites() {
+        // Native controls: backups match the exact previous destination bytes;
+        // SaveCopyAs creates none, even while CreateBackup remains True.
+        const SOURCE: &str = r#"Attribute VB_Name = "Driver"
+Public Function Probe(ByVal kind As Long) As String
+ Application.EnableEvents = False
+ Application.DisplayAlerts = False
+ ThisWorkbook.Worksheets(1).Range("A1").Value = "new-backup-content"
+ Select Case kind
+ Case 0: ThisWorkbook.Save
+ Case 1: ThisWorkbook.SaveAs Filename:=ThisWorkbook.FullName, FileFormat:=52
+ Case 2: ThisWorkbook.SaveCopyAs "C:\probe\existing-copy.xlsm"
+ End Select
+ Probe = CStr(ThisWorkbook.CreateBackup) & "|" & CStr(ThisWorkbook.Saved)
+End Function
+"#;
+        let cases = native_workbook_preference_cases();
+        let package = native_workbook_preference_fixture(cases[2]["xml"].as_str().unwrap(), SOURCE);
+        for kind in 0..3 {
+            let mut context = failure_context();
+            context.file_name = Some("backup-driver.xlsm".into());
+            context.document_modules = Some(crate::vba_project::read_document_modules(&package).unwrap());
+            context.file_context = Some(file_io::FileContext {
+                package_bytes: Some(package.clone()), full_name: Some(r"C:\probe\backup-driver.xlsm".into()),
+                files: vec![file_io::ProducedFile {path: r"C:\probe\existing-copy.xlsm".into(), bytes: package.clone()}],
+                ..Default::default()
+            });
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(
+                oxicells_core::parse_xlsx_preserving_values(&package).unwrap(), SOURCE,
+                Some("Driver.Probe"), vec![Value::Integer(kind)], 0, context, &mut session).unwrap();
+            assert!(outcome.error.is_none(), "kind {kind}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], if kind==2 {"True|False"} else {"True|True"});
+            let backups: Vec<_> = outcome.files.iter().filter(|file| file.path.ends_with(".xlk")).collect();
+            if kind==2 {
+                assert!(backups.is_empty());
+            } else {
+                assert_eq!(backups.len(), 1);
+                assert_eq!(backups[0].path, "C:\\probe\\backup-driver のバックアップ.xlk");
+                assert_eq!(backups[0].bytes, package);
+            }
+        }
+    }
 
     #[test]
     fn template_open_add_and_editable_arguments_match_native_excel() {

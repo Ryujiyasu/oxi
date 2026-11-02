@@ -58,6 +58,8 @@ pub(super) struct WorkbookFiles {
     pub full_name: Option<String>,
     pub read_only: bool,
     pub format: Option<f64>,
+    pub read_only_recommended: bool,
+    pub create_backup: bool,
     pub source: String,
     pub files: Files,
     pub exports: BTreeSet<String>,
@@ -203,6 +205,136 @@ impl WorkbookFiles {
         Ok(())
     }
 
+    fn package_preferences(package: &[u8]) -> Result<(bool, bool), String> {
+        use quick_xml::events::Event;
+        use oxidocs_common::xml_utils::get_attr;
+        let mut archive = oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error| error.to_string())?;
+        let xml = archive.read_part("xl/workbook.xml").map_err(|error| error.to_string())?;
+        let mut reader = quick_xml::Reader::from_str(&xml);
+        let (mut recommended, mut backup, mut depth) = (false, false, 0);
+        loop {
+            let event = reader.read_event().map_err(|error| error.to_string())?;
+            if let Event::Start(element) | Event::Empty(element) = &event {
+                if depth == 1 {
+                    match element.local_name().as_ref() {
+                        b"fileSharing" => recommended = get_attr(element, "readOnlyRecommended")
+                            .is_some_and(|value| matches!(value.as_str(), "1" | "true")),
+                        b"workbookPr" => backup = get_attr(element, "backupFile")
+                            .is_some_and(|value| matches!(value.as_str(), "1" | "true")),
+                        _ => {}
+                    }
+                }
+            }
+            match event {
+                Event::Start(_) => depth += 1,
+                Event::End(_) => depth -= 1,
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        Ok((recommended, backup))
+    }
+
+    fn package_with_preferences(package: &[u8], recommended: bool, backup: bool) -> Result<Vec<u8>, String> {
+        use std::io::{Cursor, Write};
+        use quick_xml::events::{BytesStart, Event};
+        fn element(original: Option<&BytesStart<'_>>, name: String, key: &str, value: bool) -> Result<BytesStart<'static>, String> {
+            let mut next = BytesStart::new(name);
+            if let Some(original) = original {
+                for attr in original.attributes() {
+                    let attr = attr.map_err(|error| error.to_string())?;
+                    if attr.key.as_ref() != key.as_bytes() { next.push_attribute(attr); }
+                }
+            }
+            if value { next.push_attribute((key, "1")); }
+            Ok(next.into_owned())
+        }
+        let mut archive = oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error| error.to_string())?;
+        let xml = archive.read_part("xl/workbook.xml").map_err(|error| error.to_string())?;
+        let mut scan = quick_xml::Reader::from_str(&xml);
+        let (mut has_sharing, mut has_properties, mut depth) = (false, false, 0);
+        loop {
+            let event = scan.read_event().map_err(|error| error.to_string())?;
+            if let Event::Start(child) | Event::Empty(child) = &event {
+                if depth == 1 {
+                    has_sharing |= child.local_name().as_ref() == b"fileSharing";
+                    has_properties |= child.local_name().as_ref() == b"workbookPr";
+                }
+            }
+            match event {
+                Event::Start(_) => depth += 1,
+                Event::End(_) => depth -= 1,
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        let mut reader = quick_xml::Reader::from_str(&xml);
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        let (mut sharing_written, mut properties_written, mut prefix, mut depth) = (false, false, String::new(), 0);
+        loop {
+            let event = reader.read_event().map_err(|error| error.to_string())?;
+            if let Event::Start(root) = &event {
+                if depth == 0 {
+                    let name = String::from_utf8(root.name().as_ref().to_vec()).map_err(|error| error.to_string())?;
+                    prefix = name.rsplit_once(':').map_or(String::new(), |(prefix, _)| format!("{prefix}:"));
+                }
+            }
+            let child_name = match &event {
+                Event::Start(child) | Event::Empty(child) if depth == 1 => Some(child.local_name().as_ref().to_vec()),
+                _ => None,
+            };
+            let closing_root = matches!(&event, Event::End(_) if depth == 1);
+            if closing_root || child_name.as_deref().is_some_and(|name| name != b"fileVersion" && name != b"fileSharing") {
+                if !has_sharing && !sharing_written && recommended {
+                    writer.write_event(Event::Empty(element(None, format!("{prefix}fileSharing"), "readOnlyRecommended", true)?))
+                        .map_err(|error| error.to_string())?;
+                    sharing_written = true;
+                }
+                if !has_properties && !properties_written && backup {
+                    writer.write_event(Event::Empty(element(None, format!("{prefix}workbookPr"), "backupFile", true)?))
+                        .map_err(|error| error.to_string())?;
+                    properties_written = true;
+                }
+            }
+            let starts = matches!(&event, Event::Start(_));
+            let event = match event {
+                Event::Start(child) | Event::Empty(child) if matches!(child_name.as_deref(), Some(b"fileSharing" | b"workbookPr")) => {
+                    let sharing = child.local_name().as_ref() == b"fileSharing";
+                    let key = if sharing { "readOnlyRecommended" } else { "backupFile" };
+                    let enabled = if sharing { recommended } else { backup };
+                    let name = String::from_utf8(child.name().as_ref().to_vec()).map_err(|error| error.to_string())?;
+                    let next = element(Some(&child), name, key, enabled)?;
+                    if sharing { sharing_written = true; } else { properties_written = true; }
+                    if sharing && next.attributes().next().is_none() {
+                        if starts { reader.read_to_end(child.name()).map_err(|error| error.to_string())?; }
+                        continue;
+                    }
+                    if starts { depth += 1; Event::Start(next) } else { Event::Empty(next) }
+                }
+                Event::Start(child) => { depth += 1; Event::Start(child.into_owned()) }
+                Event::End(child) => { depth -= 1; Event::End(child.into_owned()) }
+                Event::Eof => break,
+                other => other.into_owned(),
+            };
+            writer.write_event(event).map_err(|error| error.to_string())?;
+        }
+        let replacement = writer.into_inner();
+        let mut original = zip::ZipArchive::new(Cursor::new(package)).map_err(|error| error.to_string())?;
+        let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        output.set_raw_comment(original.comment().into());
+        for index in 0..original.len() {
+            let part = original.by_index(index).map_err(|error| error.to_string())?;
+            if part.name() == "xl/workbook.xml" {
+                let mut options = zip::write::SimpleFileOptions::default().compression_method(part.compression())
+                    .last_modified_time(part.last_modified().unwrap_or_default());
+                if let Some(mode) = part.unix_mode() { options = options.unix_permissions(mode); }
+                output.start_file(part.name(), options).map_err(|error| error.to_string())?;
+                output.write_all(&replacement).map_err(|error| error.to_string())?;
+            } else { output.raw_copy_file(part).map_err(|error| error.to_string())?; }
+        }
+        output.finish().map(|cursor| cursor.into_inner()).map_err(|error| error.to_string())
+    }
+
     pub(super) fn package_format(package: &[u8]) -> Result<i64, String> {
         let mut archive = oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error| error.to_string())?;
         let types = archive.read_part("[Content_Types].xml").map_err(|error| error.to_string())?.to_ascii_lowercase();
@@ -216,6 +348,7 @@ impl WorkbookFiles {
         // Reject invalid packages before replacing a loaded host's source.
         oxicells_core::XlsxEditor::new(&package).map_err(|error| error.to_string())?;
         self.format = Some(Self::package_format(&package)? as f64);
+        (self.read_only_recommended, self.create_backup) = Self::package_preferences(&package)?;
         if let Some(project) = crate::vba_project::retain_workbook_project(&package)? { self.retained_project = Some(project); }
         self.package = Some(package);
         Ok(())
@@ -413,6 +546,11 @@ impl WorkbookHost<'_> {
     }
 
     pub(super) fn save_in_format(&mut self, filename: Option<&Value>, format: Option<i64>, files: &mut Files) -> Result<bool, String> {
+        self.save_in_format_with_preferences(filename, format, None, files)
+    }
+
+    pub(super) fn save_in_format_with_preferences(&mut self, filename: Option<&Value>, format: Option<i64>,
+        preferences: Option<(bool, bool)>, files: &mut Files) -> Result<bool, String> {
         let path = match filename {
             None | Some(Value::Missing | Value::Null) => self.file_io.full_name.clone()
                 .ok_or_else(|| host_error(1004, "Workbook.Close requires a filename for an unsaved workbook"))?,
@@ -434,7 +572,7 @@ impl WorkbookHost<'_> {
             .is_some_and(|current| current.eq_ignore_ascii_case(&normalized)) {
             return Err(host_error(1004, "Workbook.Close requires another filename for a read-only workbook"));
         }
-        self.save_copy_path(&path, format, files).map_err(|error| match error {
+        self.save_copy_path(&path, format, preferences, false, files).map_err(|error| match error {
             CopyFailure::Method(error) | CopyFailure::Excel(error) => error,
         })?;
         if !self.user_functions.borrow().pending.is_empty() { return Ok(false); }
@@ -458,7 +596,7 @@ impl WorkbookHost<'_> {
         let mut excel_failure = None;
         for input in inputs {
             let result = match input {
-                CopyInput::Filename(path) => self.save_copy_path(&path, None, files),
+                CopyInput::Filename(path) => self.save_copy_path(&path, None, None, true, files),
                 CopyInput::Error => Err(CopyFailure::Method(self.copy_method_failure())),
             };
             match result {
@@ -523,7 +661,8 @@ impl WorkbookHost<'_> {
         Ok(inputs)
     }
 
-    fn save_copy_path(&mut self, path: &str, format: Option<i64>, files: &mut Files) -> Result<(), CopyFailure> {
+    fn save_copy_path(&mut self, path: &str, format: Option<i64>,
+        preferences: Option<(bool, bool)>, copy_only: bool, files: &mut Files) -> Result<(), CopyFailure> {
         if path.encode_utf16().count() > 255 { return Err(CopyFailure::Method(self.copy_method_failure())); }
         let invalid = path.chars().enumerate().any(|(index, ch)| {
             matches!(ch, '?' | '*' | '"' | '<' | '>' | '|') || ch == '\0' || ch == ':' && index != 1
@@ -571,10 +710,34 @@ impl WorkbookHost<'_> {
             bytes = crate::vba_project::convert_workbook_format(&bytes, format, retained_project.as_ref())
                 .map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
         }
-        files.replace_bytes(&normalized, bytes).map_err(|error| match error {
+        let (recommended, backup) = preferences.unwrap_or((self.file_io.read_only_recommended, self.file_io.create_backup));
+        bytes = WorkbookFiles::package_with_preferences(&bytes, recommended, backup).map_err(|_| failure())?;
+        // Save/SaveAs back up the previous destination, not the new bytes.
+        // SaveCopyAs preserves the preference but does not create a backup.
+        let backup_file = if backup && !copy_only {
+            files.bytes(&normalized).ok().map(|previous| {
+                let (parent, leaf) = normalized.rsplit_once('\\').unwrap_or(("", &normalized));
+                let stem = leaf.rsplit_once('.').map_or(leaf, |(stem, _)| stem);
+                let name = match self.error_language {
+                    ErrorLanguage::Japanese => format!("{stem} のバックアップ.xlk"),
+                    ErrorLanguage::English => format!("Backup of {stem}.xlk"),
+                };
+                (format!("{parent}\\{name}"), previous.to_vec())
+            })
+        } else { None };
+        let result = if let Some((backup_path, previous)) = &backup_file {
+            let mut next = files.clone();
+            next.replace_bytes(backup_path, previous.clone())
+                .and_then(|()| next.replace_bytes(&normalized, bytes))
+                .map(|()| *files = next)
+        } else { files.replace_bytes(&normalized, bytes) };
+        result.map_err(|error| match error {
             FileError::AlreadyOpen | FileError::PathNotFound => CopyFailure::Excel(self.copy_access_failure(path)),
             _ => CopyFailure::Method(self.copy_method_failure()),
         })?;
+        if let Some((path, _)) = backup_file { self.file_io.exports.insert(path); }
+        self.file_io.read_only_recommended = recommended;
+        self.file_io.create_backup = backup;
         self.file_io.retained_project = retained_project;
         self.file_io.exports.insert(normalized);
         Ok(())
