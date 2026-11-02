@@ -11221,7 +11221,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // paragraph are skipped — S1HDR already folded them
                             // into that paragraph's line height, so drawing them
                             // here would double-count the advance.
-                            let image_x = if std::env::var("OXI_HEADER_IMAGE_LEADING").ok().as_deref() == Some("1") {
+                            // OXI_HDR_IMG_JC (2026-11-02, default ON, opt-out _DISABLE): the
+                            // inline header picture sits where its paragraph's jc puts it
+                            // (formerly only under the OXI_HEADER_IMAGE_LEADING experiment).
+                            // en/administrative__0074fa45 (jc center header, 379pt picture
+                            // on a 540pt column): Word's picture left 116.6, Oxi 36 (the
+                            // margin); the page 0.9281 -> 0.9630.
+                            let image_x = if std::env::var("OXI_HEADER_IMAGE_LEADING").ok().as_deref() == Some("1")
+                                || !crate::env_flag!("OXI_HDR_IMG_JC_DISABLE")
+                            {
                                 img.host_paragraph.as_ref().map_or(hdr_x, |host| {
                                     let left = host.style.indent_left.unwrap_or(0.0)
                                         + host.style.indent_first_line.unwrap_or(0.0);

@@ -252,7 +252,14 @@ fn render_pages_dwrite(
                 0xF900..=0xFAFF | 0xFF66..=0xFF9F))
         } else { false }
     }));
-    let s1352 = std::env::var("OXI_S1352").ok().as_deref() == Some("1");
+    // S1352 default ON since 2026-11-02 (opt-out OXI_S1352_DISABLE): golden ssim_ab
+    // with today's font resolution, CJK documents WITH underlines vs without:
+    // +0.0431 net, 15 better (kojin +0.0245, 1ec1 +0.0067, c7b923 +0.0061,
+    // 2ea81a +0.0047 -- the two that used to lose), 8 worse (worst
+    // kyodokenkyuyoushiki06 -0.0049, tokyoshugyo -0.0041). ja/reports__6ea8e1cc's
+    // underlined hyperlinks were missing.
+    let s1352 = std::env::var("OXI_S1352").ok().as_deref() == Some("1")
+        || std::env::var_os("OXI_S1352_DISABLE").is_none();
     if (!doc_has_cjk || s1352) && std::env::var("OXI_UNDERLINE_DISABLE").is_err() {
         std::env::set_var("OXI_UNDERLINE", "1");
     }
