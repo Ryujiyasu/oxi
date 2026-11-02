@@ -43346,6 +43346,125 @@ End Function
     }
 
 
+
+    #[test]
+    fn closing_events_carry_err_between_projects_and_the_native_caller() {
+        const SOURCE: &str = r##"Attribute VB_Name = "Driver"
+Public Function Probe(ByVal kind As Long) As String
+ Workbooks("close-collection-B.xlsm").Activate
+ Application.EnableEvents = True
+ On Error Resume Next
+ Err.Raise 11, "Caller", "outer"
+ RecordEvent "caller-before(" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & ")"
+ Workbooks.Close
+ RecordEvent "caller-after(" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & ")"
+ Probe = "ok|" & CStr(Workbooks.Count) & "|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description
+End Function
+Public Function ReadErr() As String
+ ReadErr = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description
+End Function
+Public Sub RecordEvent(ByVal label As String)
+ Dim stream As Integer
+ stream = FreeFile
+ Open ThisWorkbook.Path & "\close-collection-events.txt" For Append As #stream
+ Print #stream, label & "|" & ThisWorkbook.Name & "|" & ActiveWorkbook.Name & "|" & CStr(Workbooks.Count)
+ Close #stream
+End Sub
+VERSION 1.0 CLASS
+Attribute VB_Name = "ThisWorkbook"
+Private Sub Workbook_BeforeClose(Cancel As Boolean)
+ Driver.RecordEvent "close(" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & ")"
+ Dim kind As Long
+ kind = CLng(ThisWorkbook.Worksheets(1).Range("A2").Value)
+ Dim target As Boolean
+ target = ThisWorkbook.Name = "close-collection-A.xlsm" And kind <> 4 And kind <> 5
+ If kind = 4 Or kind = 5 Then target = ThisWorkbook.Name = "close-collection-B.xlsm"
+ On Error GoTo caught
+ If target Then
+  If kind = 1 Or kind = 4 Then
+   On Error Resume Next
+   Err.Raise 5, "Handler", "inside"
+   Driver.RecordEvent "resume(" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & ")"
+   Exit Sub
+  End If
+  If kind = 9 Or kind = 10 Or kind = 11 Then
+   On Error Resume Next
+   If kind = 9 Then Cancel = Null
+   If kind = 10 Then Cancel = 2
+   If kind = 11 Then Cancel = "false"
+   Driver.RecordEvent "typed(" & CStr(Err.Number) & "|" & CStr(Cancel) & ")"
+   If kind = 9 Then Cancel = True
+   Exit Sub
+  End If
+  If kind >= 2 And kind <= 8 Then Err.Raise 5, "Handler", "inside"
+ End If
+ If ThisWorkbook.Name = "close-collection-C.xlsm" Then Cancel = True
+ Exit Sub
+caught:
+ Driver.RecordEvent "handled(" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & ")"
+ If kind = 3 Or kind = 5 Or kind = 7 Then Cancel = True
+ If kind = 6 Then
+  Err.Clear
+  Driver.RecordEvent "cleared(" & CStr(Err.Number) & ")"
+ End If
+ If kind = 7 Then Application.EnableEvents = False
+ If kind = 8 Then Driver.RecordEvent "callback(" & CStr(Application.Run("'close-collection-B.xlsm'!Driver.ReadErr")) & ")"
+End Sub
+"##;
+        const SETUP: &str = r##"Public Sub SeedErrors(ByVal kind As Long)
+ Application.DisplayAlerts = False
+ Application.EnableEvents = False
+ Dim item As Workbook
+ Set item = Workbooks.Open("C:\close-collection-B.xlsm")
+ Set item = Workbooks.Open("C:\close-collection-C.xlsm")
+ For Each item In Workbooks
+  item.Worksheets(1).Range("A2").Value = kind
+  item.Saved = True
+ Next
+End Sub
+"##;
+        let cases: serde_json::Value = serde_json::from_str(r##"[{"kind":0,"value":"ok|3|0||","event_log":"caller-before(11|Caller|outer)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(11|Caller|outer)|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-C.xlsm|close-collection-B.xlsm|3\ncaller-after(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":1,"value":"ok|3|0||","event_log":"caller-before(11|Caller|outer)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(11|Caller|outer)|close-collection-A.xlsm|close-collection-B.xlsm|3\nresume(5|Handler|inside)|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose(5|Handler|inside)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-C.xlsm|close-collection-B.xlsm|3\ncaller-after(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":2,"value":"ok|3|0||","event_log":"caller-before(11|Caller|outer)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(11|Caller|outer)|close-collection-A.xlsm|close-collection-B.xlsm|3\nhandled(5|Handler|inside)|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-C.xlsm|close-collection-B.xlsm|3\ncaller-after(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":3,"value":"ok|3|0||","event_log":"caller-before(11|Caller|outer)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(11|Caller|outer)|close-collection-A.xlsm|close-collection-B.xlsm|3\nhandled(5|Handler|inside)|close-collection-A.xlsm|close-collection-B.xlsm|3\ncaller-after(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":4,"value":"ok|3|0||","event_log":"caller-before(11|Caller|outer)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(11|Caller|outer)|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\nresume(5|Handler|inside)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(5|Handler|inside)|close-collection-C.xlsm|close-collection-B.xlsm|3\ncaller-after(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":5,"value":"ok|3|0||","event_log":"caller-before(11|Caller|outer)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(11|Caller|outer)|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\nhandled(5|Handler|inside)|close-collection-B.xlsm|close-collection-B.xlsm|3\ncaller-after(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":6,"value":"ok|3|0||","event_log":"caller-before(11|Caller|outer)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(11|Caller|outer)|close-collection-A.xlsm|close-collection-B.xlsm|3\nhandled(5|Handler|inside)|close-collection-A.xlsm|close-collection-B.xlsm|3\ncleared(0)|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-C.xlsm|close-collection-B.xlsm|3\ncaller-after(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":7,"value":"ok|3|0||","event_log":"caller-before(11|Caller|outer)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(11|Caller|outer)|close-collection-A.xlsm|close-collection-B.xlsm|3\nhandled(5|Handler|inside)|close-collection-A.xlsm|close-collection-B.xlsm|3\ncaller-after(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":8,"value":"ok|3|0||","event_log":"caller-before(11|Caller|outer)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(11|Caller|outer)|close-collection-A.xlsm|close-collection-B.xlsm|3\nhandled(5|Handler|inside)|close-collection-A.xlsm|close-collection-B.xlsm|3\ncallback(5|Handler|inside)|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-C.xlsm|close-collection-B.xlsm|3\ncaller-after(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":9,"value":"ok|3|94|VBAProject|Null \u306e\u4f7f\u3044\u65b9\u304c\u4e0d\u6b63\u3067\u3059\u3002","event_log":"caller-before(11|Caller|outer)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(11|Caller|outer)|close-collection-A.xlsm|close-collection-B.xlsm|3\ntyped(94|False)|close-collection-A.xlsm|close-collection-B.xlsm|3\ncaller-after(94|VBAProject|Null \u306e\u4f7f\u3044\u65b9\u304c\u4e0d\u6b63\u3067\u3059\u3002)|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":10,"value":"ok|3|0||","event_log":"caller-before(11|Caller|outer)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(11|Caller|outer)|close-collection-A.xlsm|close-collection-B.xlsm|3\ntyped(0|True)|close-collection-A.xlsm|close-collection-B.xlsm|3\ncaller-after(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"},{"kind":11,"value":"ok|3|0||","event_log":"caller-before(11|Caller|outer)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(11|Caller|outer)|close-collection-A.xlsm|close-collection-B.xlsm|3\ntyped(0|False)|close-collection-A.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\nclose(0||)|close-collection-C.xlsm|close-collection-B.xlsm|3\ncaller-after(0||)|close-collection-B.xlsm|close-collection-B.xlsm|3\n","count_after":3,"live_books":["close-collection-A.xlsm","close-collection-B.xlsm","close-collection-C.xlsm"],"disk_values":{"A":"a\ud83d\ude00b","B":"a\ud83d\ude00b","C":"a\ud83d\ude00b"},"active_after":"close-collection-B.xlsm"}]"##).unwrap();
+        for (route, close) in [
+            ("direct", " Workbooks.Close"),
+            ("by_name", " Call CallByName(Workbooks, \"Close\", vbMethod)"),
+            ("with", " With Workbooks\n  .Close\n End With"),
+        ] {
+          let routed = SOURCE.replacen(" Workbooks.Close", close, 1);
+          for case in cases.as_array().unwrap() {
+            let kind = case["kind"].as_i64().unwrap();
+            let a = routed.replacen("VERSION 1.0 CLASS", &format!("{SETUP}VERSION 1.0 CLASS"), 1);
+            let seed = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+            let original_a = crate::vba_project::write_project_source(seed, &a, None).unwrap();
+            let peer = crate::vba_project::write_project_source(seed, &routed, None).unwrap();
+            let mut context = failure_context();
+            context.file_name = Some("close-collection-A.xlsm".into());
+            context.document_modules = Some(crate::vba_project::read_document_modules(&original_a).unwrap());
+            context.file_context = Some(file_io::FileContext {
+                package_bytes: Some(original_a.clone()), full_name: Some(r"C:\close-collection-A.xlsm".into()),
+                files: ["B", "C"].into_iter().map(|name| file_io::ProducedFile {
+                    path: format!(r"C:\close-collection-{name}.xlsm"), bytes: peer.clone(),
+                }).collect(), ..Default::default()
+            });
+            let mut session = None;
+            let opened = execute_workbook_action_in_session(
+                oxicells_core::parse_xlsx_preserving_values(&original_a).unwrap(), &a,
+                Some("Driver.SeedErrors"), vec![Value::Integer(kind)], 0, context, &mut session).unwrap();
+            assert!(opened.error.is_none(), "{route} case {kind} setup");
+            let view = select_session_workbook(&mut session, "1").unwrap();
+            let outcome = close_fixture_run(view.selected.workbook, &view.selected.source,
+                "Driver.Probe", vec![Value::Integer(kind)], &view.selected.name, &mut session);
+            assert!(outcome.error.is_none(), "{route} case {kind}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], case["value"], "{route} case {kind} caller Err");
+            assert_eq!(outcome.other_workbooks.len() + 1, 3, "{route} case {kind} cancelled close");
+            let snapshot = serde_json::to_value(&outcome.file_system_state).unwrap();
+            let files: Vec<file_io::ProducedFile> = serde_json::from_value(snapshot["files"].clone()).unwrap();
+            let log = files.iter().find(|file| file.path.eq_ignore_ascii_case(r"C:\close-collection-events.txt")).unwrap();
+            assert_eq!(String::from_utf8_lossy(&log.bytes).replace("\r\n", "\n"), case["event_log"].as_str().unwrap(),
+                "{route} case {kind} Err through native events and nested Application.Run");
+          }
+        }
+    }
+
     #[test]
     fn closing_the_workbooks_collection_preserves_all_books_until_events_accept() {
         const SOURCE: &str = r##"Attribute VB_Name = "Driver"

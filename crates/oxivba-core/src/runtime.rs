@@ -2874,6 +2874,7 @@ impl<'a> Runtime<'a> {
         args: &[Value], references: &[Option<ValueSlot>], line: u32) -> Result<bool, RuntimeError> {
         self.as_instance(receiver, |runtime| {
             if !runtime.has_procedure_of(runtime.module, name, &[ProcKind::Sub]) { return Ok(false); }
+            if let Some(carried) = runtime.err_out.take() { runtime.err_in = Some(carried); }
             let previous = runtime.pending_references.replace(references.to_vec());
             let result = runtime.call_kind(name, &[ProcKind::Sub], args.to_vec(), Some(line));
             runtime.pending_references = previous;
@@ -3651,6 +3652,9 @@ impl<'a> Runtime<'a> {
         let target_depth=target.depth;
         target.steps=self.steps;target.max_steps=self.max_steps;
         target.depth=self.depth;target.max_depth=self.max_depth;
+        // Err follows the executing thread across projects. Suspended frames
+        // retain their handler state, while calls carry the current Err value.
+        target.err_in=self.err_in.take();target.err_out=self.err_out.take();
         target.install_object_heap(self.take_object_heap());
         std::mem::swap(self,&mut target);
         self.projects.insert(caller,target);
@@ -3662,6 +3666,7 @@ impl<'a> Runtime<'a> {
         };
         if ended && suspended.depth>0 {suspended.project_ended=true;}
         self.depth=target_depth;
+        suspended.err_in=self.err_in.take();suspended.err_out=self.err_out.take();
         suspended.install_object_heap(self.take_object_heap());
         std::mem::swap(self,&mut suspended);
         self.steps=completed_steps;
@@ -4925,7 +4930,8 @@ impl<'a> Runtime<'a> {
                             .and_then(|name| self.lookup_slot(frame, name)),
                     );
                 }
-                self.raise_event(&raised.name, values, references, raised.span.line)?;
+                self.with_callback_error_context(frame, |runtime, _|
+                    runtime.raise_event(&raised.name, values, references, raised.span.line))?;
                 Ok(Flow::Continue)
             }
             Statement::Open(open) => {
@@ -7361,7 +7367,7 @@ impl<'a> Runtime<'a> {
                 if !matches!(
                     self.internal_objects.get(&receiver.handle),
                     Some(InternalObject::Instance(_))
-                ) && self.host_set(&receiver, "Value", value.clone(), line)?
+                ) && self.with_callback_error_context(frame, |runtime, _| runtime.host_set(&receiver, "Value", value.clone(), line))?
                 {
                     return Ok(true);
                 }
@@ -7396,11 +7402,11 @@ impl<'a> Runtime<'a> {
             return Ok(());
         }
         self.check_host_object_assignment(&receiver, name, &value, line)?;
-        if self.host_set(&receiver, name, value.clone(), line)? { return Ok(()); }
+        if self.with_callback_error_context(frame, |runtime, _| runtime.host_set(&receiver, name, value.clone(), line))? { return Ok(()); }
         if matches!(value, Value::Object(_) | Value::Nothing) {
             return Err(no_such_member(format!("{}.{} has no Property Set", receiver.kind, name), Some(line)));
         }
-        match self.host_get(&receiver, name, line)? {
+        match self.with_callback_error_context(frame, |runtime, _| runtime.host_get(&receiver, name, line))? {
             Some(destination @ (Value::Object(_) | Value::Nothing)) => self.assign_returned_object(destination, value, frame, line),
             _ => Err(error(RuntimeErrorKind::Unsupported,
                 format!("host property is not writable: {}.{name}", receiver.kind), Some(line))),
@@ -8148,7 +8154,7 @@ impl<'a> Runtime<'a> {
                 {
                     return self.call_named(name, Vec::new(), &[], Some(span.line), frame);
                 }
-                if let Some(value) = self.host_call(None, name, &[], span.line)? {
+                if let Some(value) = self.with_callback_error_context(frame, |runtime, _| runtime.host_call(None, name, &[], span.line))? {
                     return Ok(value);
                 }
                 // Without Option Explicit a name nobody declared is a fresh
@@ -8280,7 +8286,7 @@ impl<'a> Runtime<'a> {
                 }
                 let view=self.source_class_name(object,frame);
                 if let Some(answer)=self.call_instance_source(&receiver,name,&[],false,None,view.as_deref(),frame,span.line)?{return Ok(answer);}
-                if let Some(value) = self.host_get(&receiver, name, span.line)? {
+                if let Some(value) = self.with_callback_error_context(frame, |runtime, _| runtime.host_get(&receiver, name, span.line))? {
                     return Ok(value);
                 }
                 // A METHOD named without brackets is still that method.
@@ -8290,7 +8296,7 @@ impl<'a> Runtime<'a> {
                 // a plain read. Only the property path was tried here, so all
                 // of them answered 438 instead: the member was there, and the
                 // door it was behind was not opened.
-                if let Some(value) = self.host_call(Some(&receiver), name, &[], span.line)? {
+                if let Some(value) = self.with_callback_error_context(frame, |runtime, _| runtime.host_call(Some(&receiver), name, &[], span.line))? {
                     return Ok(value);
                 }
                 Err(no_such_member(
@@ -8305,10 +8311,10 @@ impl<'a> Runtime<'a> {
                 }
                 let view=match frame.with_objects.last(){Some(WithSubject::Object{class,..})=>class.clone(),_=>None};
                 if let Some(answer)=self.call_instance_source(&receiver,name,&[],false,None,view.as_deref(),frame,span.line)?{return Ok(answer);}
-                if let Some(value) = self.host_get(&receiver, name, span.line)? {
+                if let Some(value) = self.with_callback_error_context(frame, |runtime, _| runtime.host_get(&receiver, name, span.line))? {
                     return Ok(value);
                 }
-                if let Some(value) = self.host_call(Some(&receiver), name, &[], span.line)? {
+                if let Some(value) = self.with_callback_error_context(frame, |runtime, _| runtime.host_call(Some(&receiver), name, &[], span.line))? {
                     return Ok(value);
                 }
                 Err(no_such_member(
@@ -8534,13 +8540,13 @@ impl<'a> Runtime<'a> {
                             Some(&receiver), name, &values, &argument_names, span.line, frame,
                             if early_macro { None } else { evaluated.as_deref().map(|values| (args.as_slice(), values, *force_by_value)) },
                         ) { return result; }
-                        self.host_call_named(
+                        self.with_callback_error_context(frame, |runtime, _| runtime.host_call_named(
                             Some(&receiver),
                             name,
                             &values,
                             &argument_names,
                             span.line,
-                        )?
+                        ))?
                         .ok_or_else(|| {
                             no_such_member(format!("host method is not available: {}.{name}", receiver.kind), Some(span.line))
                         })
@@ -8554,13 +8560,13 @@ impl<'a> Runtime<'a> {
                             Some(&receiver), name, &values, &argument_names, span.line, frame,
                             if early_macro { None } else { evaluated.as_deref().map(|values| (args.as_slice(), values, *force_by_value)) },
                         ) { return result; }
-                        self.host_call_named(
+                        self.with_callback_error_context(frame, |runtime, _| runtime.host_call_named(
                             Some(&receiver),
                             name,
                             &values,
                             &argument_names,
                             span.line,
-                        )?
+                        ))?
                         .ok_or_else(|| {
                             no_such_member(format!("host method is not available: {}.{name}", receiver.kind), Some(span.line))
                         })
@@ -8615,7 +8621,7 @@ impl<'a> Runtime<'a> {
                 }
                 let view=self.source_class_name(object,frame);
                 if let Some(answer)=self.call_instance_source(&receiver,name,&[],false,None,view.as_deref(),frame,span.line)?{return Ok(answer);}
-                self.host_call(Some(&receiver), name, &[], span.line)?
+                self.with_callback_error_context(frame, |runtime, _| runtime.host_call(Some(&receiver), name, &[], span.line))?
                     .ok_or_else(|| {
                         no_such_member(format!("host method is not available: {}.{name}", receiver.kind), Some(span.line))
                     })
@@ -8627,10 +8633,10 @@ impl<'a> Runtime<'a> {
                 }
                 let view=match frame.with_objects.last(){Some(WithSubject::Object{class,..})=>class.clone(),_=>None};
                 if let Some(answer)=self.call_instance_source(&receiver,name,&[],false,None,view.as_deref(),frame,span.line)?{return Ok(answer);}
-                if let Some(value) = self.host_call(Some(&receiver), name, &[], span.line)? {
+                if let Some(value) = self.with_callback_error_context(frame, |runtime, _| runtime.host_call(Some(&receiver), name, &[], span.line))? {
                     return Ok(value);
                 }
-                self.host_get(&receiver, name, span.line)?.ok_or_else(|| {
+                self.with_callback_error_context(frame, |runtime, _| runtime.host_get(&receiver, name, span.line))?.ok_or_else(|| {
                     no_such_member(format!("host member is not available: {}.{name}", receiver.kind), Some(span.line))
                 })
             }
@@ -9283,11 +9289,11 @@ impl<'a> Runtime<'a> {
         if let Some(result) = self.host_macro_call_in_frame(None, name, &args, argument_names, line.unwrap_or(0), frame, None) {
             return result;
         }
-        let host_value = if argument_names.is_empty() {
-            self.host_call(None, name, &args, line.unwrap_or(0))?
+        let host_value = self.with_callback_error_context(frame, |runtime, _| if argument_names.is_empty() {
+            runtime.host_call(None, name, &args, line.unwrap_or(0))
         } else {
-            self.host_call_named(None, name, &args, argument_names, line.unwrap_or(0))?
-        };
+            runtime.host_call_named(None, name, &args, argument_names, line.unwrap_or(0))
+        })?;
         if let Some(value) = host_value {
             return Ok(value);
         }
@@ -9374,6 +9380,12 @@ impl<'a> Runtime<'a> {
     /// called (VbMethod 1) or assigned (VbLet 4, VbSet 8), as a dotted name
     /// would be. Measured: CallByName(Range("A1"), "Address", VbGet) $A$1.
     fn call_by_name(&mut self, args: &[Value], frame: &mut Frame, line: Option<u32>,
+        source: Option<(&[Argument], &[EvaluatedArgument], bool)>) -> Result<Value, RuntimeError> {
+        self.with_callback_error_context(frame, |runtime, frame|
+            runtime.call_by_name_inner(args, frame, line, source))
+    }
+
+    fn call_by_name_inner(&mut self, args: &[Value], frame: &mut Frame, line: Option<u32>,
         source: Option<(&[Argument], &[EvaluatedArgument], bool)>) -> Result<Value, RuntimeError> {
         let at = line.unwrap_or(0);
         let [target, member, kind, rest @ ..] = args else {
@@ -9950,6 +9962,17 @@ impl<'a> Runtime<'a> {
             )),
             value => Ok(value),
         }
+    }
+
+    fn with_callback_error_context<T>(&mut self, frame: &mut Frame,
+        operation: impl FnOnce(&mut Self, &mut Frame) -> Result<T, RuntimeError>) -> Result<T, RuntimeError> {
+        let incoming = self.err_out.take().unwrap_or_else(|| frame.error_state.clone());
+        frame.error_state = incoming.clone();
+        let previous = self.err_in.replace(incoming);
+        let result = operation(self, frame);
+        if let Some(carried) = self.err_out.take() { frame.error_state = carried; }
+        self.err_in = previous;
+        result
     }
 
     fn host_macro_call_in_frame(&mut self, receiver: Option<&ObjectRef>, name: &str,
