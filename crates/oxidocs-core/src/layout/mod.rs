@@ -19411,6 +19411,75 @@ cells={} pitch={:.2} text={:?}",
     /// (preferred − content_min) proportionally to the collective deficit, clamped
     /// to content_min; a column hitting content_min freezes and its share
     /// redistributes; a column whose content_min exceeds preferred expands.
+    /// OXI_AUTO_CONTENT_COLS: (min, max) content widths per column of a table
+    /// with no declared widths, then Word's autofit share. None when a row spans.
+    fn auto_content_columns(&self, table: &Table, available: f32) -> Option<Vec<f32>> {
+        let ncols = table.rows.iter().map(|r| r.cells.len()).max()?;
+        // Spans and nested tables keep the old split (a nested table's own content
+        // width is not measured here; the 1-column host of reference__00f2bb61's
+        // nested table must stay the full width).
+        if ncols == 0 || table.rows.iter().any(|r| r.cells.iter().any(|c| c.grid_span > 1
+            || c.blocks.iter().any(|b| matches!(b, Block::Table(_)))))
+        {
+            return None;
+        }
+        let (def_l, def_r) = table.style.default_cell_margins.as_ref()
+            .map(|m| (m.left.unwrap_or(5.4), m.right.unwrap_or(5.4)))
+            .unwrap_or((5.4, 5.4));
+        let mut mins = vec![0.0f32; ncols];
+        let mut maxs = vec![0.0f32; ncols];
+        for row in &table.rows {
+            for (ci, cell) in row.cells.iter().enumerate() {
+                let (ml, mr) = cell.margins.as_ref()
+                    .map(|m| (m.left.unwrap_or(def_l), m.right.unwrap_or(def_r)))
+                    .unwrap_or((def_l, def_r));
+                let (mut cmin, mut cmax) = (0.0f32, 0.0f32);
+                for block in &cell.blocks {
+                    let Block::Paragraph(p) = block else { continue; };
+                    let ind = p.style.indent_left.unwrap_or(0.0).max(0.0)
+                        + p.style.indent_right.unwrap_or(0.0).max(0.0);
+                    let (mut word, mut line) = (0.0f32, 0.0f32);
+                    for run in &p.runs {
+                        let fs = self.resolve_font_size(&run.style, &p.style);
+                        let metrics = &*self.metrics_for_text(&run.text, &run.style, &p.style);
+                        for ch in run.text.chars() {
+                            let w = self.registry.char_width_pt_with_fallback(ch, fs, metrics);
+                            if ch == '\n' || ch == '\u{0b}' {
+                                cmax = cmax.max(line + ind);
+                                cmin = cmin.max(word + ind);
+                                word = 0.0;
+                                line = 0.0;
+                                continue;
+                            }
+                            line += w;
+                            if ch == ' ' || ch == '\t' {
+                                cmin = cmin.max(word + ind);
+                                word = 0.0;
+                            } else {
+                                word += w;
+                            }
+                        }
+                    }
+                    cmin = cmin.max(word + ind);
+                    cmax = cmax.max(line + ind);
+                }
+                mins[ci] = mins[ci].max(cmin + ml + mr);
+                maxs[ci] = maxs[ci].max(cmax.max(cmin) + ml + mr);
+            }
+        }
+        let sum_min: f32 = mins.iter().sum();
+        let sum_max: f32 = maxs.iter().sum();
+        if sum_max <= available {
+            return Some(maxs);
+        }
+        if sum_min >= available {
+            return Some(mins.iter().map(|m| m * available / sum_min).collect());
+        }
+        let extra = available - sum_min;
+        let span = sum_max - sum_min;
+        Some(mins.iter().zip(&maxs).map(|(lo, hi)| lo + (hi - lo) * extra / span).collect())
+    }
+
     fn waterfill_autofit_columns(&self, table: &Table, available: f32) -> Vec<f32> {
         let preferred = table.grid_columns.clone();
         let content_min = self.column_content_mins(table);
@@ -20012,6 +20081,25 @@ cells={} pitch={:.2} text={:?}",
         if let Some(tw) = table.style.width {
             let num_cols = table.rows.first().map_or(1, |r| r.cells.len().max(1));
             return vec![tw / num_cols as f32; num_cols];
+        }
+
+        // OXI_AUTO_CONTENT_COLS (2026-11-02, default ON, opt-out _DISABLE): an AUTO
+        // table with no widths anywhere (empty gridCols, no tcW, tblW auto) is sized
+        // by its content like Word's autofit: every column gets its min-content
+        // (widest word + cell margins), and what is left of the width goes to the
+        // columns in proportion to max-content - min-content (all max when they
+        // fit). en/reference__00f2bb61 (METEOR export, 4 columns «Seq No.» /
+        // «Metadata item» / «Obligation» / «Max occurs»): Word's text starts
+        // 60.86 / 97.82 / 443.71 / 510.58 -- «Seq No.» and «Max occurs» wrap, the
+        // «Obligation» column is exactly «Mandatory»'s width; Oxi split 4 ways.
+        if !crate::env_flag!("OXI_AUTO_CONTENT_COLS_DISABLE")
+            && table.grid_columns.iter().all(|w| *w <= 0.01)
+            && matches!(table.style.width_type.as_deref(), None | Some("auto"))
+            && table.rows.iter().all(|r| r.cells.iter().all(|c| c.width.is_none() && c.width_pct.is_none()))
+        {
+            if let Some(w) = self.auto_content_columns(table, content_width - table.style.indent.unwrap_or(0.0)) {
+                return w;
+            }
         }
 
         // 4. Equal split fallback
