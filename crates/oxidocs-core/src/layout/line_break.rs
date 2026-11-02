@@ -3068,6 +3068,17 @@ impl<'a> LineBreaker<'a> {
                         if next_of(i).map_or(false, kinsoku::is_yakumono_trigger) {
                             v[i] = true;
                         }
+                    } else if c == '\u{30FB}'
+                        && !crate::env_flag!("OXI_DOT_OPEN_PAIR_DISABLE")
+                        && next_of(i).map_or(false, kinsoku::is_yakumono_opening)
+                    {
+                        // OXI_DOT_OPEN_PAIR (2026-11-03, default ON, opt-out _DISABLE): a
+                        // middle dot before an opening bracket gives up its half em, like
+                        // 、「 and 」「 -- on a slack line, jc both or left, compressPunctuation
+                        // or not (`_pb_pair_dot_bracket_gen.py`, ＭＳ ゴシック 12 bold: «・「»
+                        // ・ 6.12, «・あ» 12.12, «、「» / «」「» 6.12). ja/creative__8048e30f's
+                        // «・「働きやすい職場」…・「問題社員」» lines.
+                        v[i] = true;
                     } else if kinsoku::is_yakumono_opening(c) {
                         // S1217 (2026-08-25, opt-out `OXI_S1217_DISABLE`): an opening
                         // bracket followed by ANOTHER opening bracket compresses --
@@ -3629,6 +3640,14 @@ impl<'a> LineBreaker<'a> {
                     && matches!(ch, '・' | '、' | '。' | '，' | '．')
                     && current_line.fragments.is_empty()
                     && word.is_empty()
+                    // OXI_LINESTART_PAIR_ONCE (2026-11-03, default ON, opt-out _DISABLE): a
+                    // mark already halved by its pair (、「 / ・「) takes no line-start
+                    // reduction on top -- the pair is protected from the loose-line revert,
+                    // so the extra 5/24 em was never given back. `_pb_pair_dot_bracket_gen.py`
+                    // (slack lines, compat 15 compressPunctuation): Word «、「» / «・「» 6.12,
+                    // Oxi 3.52.
+                    && !(yakumono_compressed[char_index]
+                        && !crate::env_flag!("OXI_LINESTART_PAIR_ONCE_DISABLE"))
                 {
                     let reduction = font_size * 5.0 / 24.0;
                     let floor = char_width * 0.5;
@@ -7217,6 +7236,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         if k + 1 < n && kinsoku::is_yakumono_trigger(line_chars[k + 1].1) {
                             v[k] = true;
                         }
+                    } else if c == '\u{30FB}'
+                        && !crate::env_flag!("OXI_DOT_OPEN_PAIR_DISABLE")
+                        && k + 1 < n
+                        && kinsoku::is_yakumono_opening(line_chars[k + 1].1)
+                    {
+                        // OXI_DOT_OPEN_PAIR: the revert keeps the ・「 half em too.
+                        v[k] = true;
                     } else if kinsoku::is_yakumono_opening(c) {
                         // S1217: mirror of the break-side rule -- an opening bracket
                         // followed by another opening bracket compresses ITSELF.
