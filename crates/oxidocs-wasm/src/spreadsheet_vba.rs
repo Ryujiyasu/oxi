@@ -40966,6 +40966,7 @@ struct ProjectSessionState {
 
 #[derive(Serialize)]
 struct WorkbookSelection {
+    package_bytes: Option<Vec<u8>>,
     selected: OpenWorkbookOutput,
     other_workbooks: Vec<OpenWorkbookOutput>,
     application_state: VbaApplicationState,
@@ -41011,8 +41012,37 @@ fn selection_snapshot(state: &ProjectSessionState) -> Result<WorkbookSelection, 
         cursor: host.cursor, interactive: host.interactive,
         directory_state: Some(VbaDirectoryState::capture(&host.file_io.files)),
     };
-    Ok(WorkbookSelection { selected, other_workbooks, application_state,
+    Ok(WorkbookSelection { package_bytes: host.file_io.package.clone(), selected, other_workbooks, application_state,
         file_system_state: host.file_io.snapshot() })
+}
+
+/// Keep editor cell/structure changes in the actual host before its view is
+/// detached. This does not run source code or turn activation into a Save.
+fn select_session_workbook_with_edits(
+    session: &mut Option<ProjectSessionState>, identity: &str,
+    workbook: Workbook, active_sheet: usize,
+) -> Result<WorkbookSelection, String> {
+    let owner: u64 = identity.parse().map_err(|_| "invalid workbook identity".to_string())?;
+    if owner.to_string() != identity { return Err("invalid workbook identity".into()); }
+    let previous = session.as_ref().ok_or("no loaded VBA project")?;
+    if owner != previous.host.objects.owner && !previous.application.as_ref()
+        .is_some_and(|application| application.application.hosts.contains_key(&owner)
+            && application.application.code.contains_key(&owner)) {
+        return Err("workbook is not open in this session".into());
+    }
+    if active_sheet >= workbook.sheets.len() { return Err("active sheet is outside this workbook".into()); }
+    let old_workbook: Workbook = serde_json::from_slice(&previous.workbook).map_err(|error| error.to_string())?;
+    let incoming = serde_json::to_vec(&workbook).map_err(|error| error.to_string())?;
+    let mut previous = session.take().expect("validated project");
+    let mut host = WorkbookHost::resume_storage(WorkbookStorage::Owned(Box::new(workbook)), previous.host);
+    remap_workbook_host(&mut host, &old_workbook, &previous.documents, false);
+    if previous.workbook != incoming { host.saved = false; }
+    host.activate_sheet(active_sheet);
+    let (_, host) = host.into_parts();
+    previous.host = host;
+    previous.workbook = incoming;
+    *session = Some(previous);
+    select_session_workbook(session, identity)
 }
 
 fn select_session_workbook(session: &mut Option<ProjectSessionState>, identity: &str) -> Result<WorkbookSelection, String> {
@@ -41213,6 +41243,16 @@ impl SpreadsheetVbaSession {
     /// rebuilding its references. Use the returned source and IR for run/save.
     pub fn select_workbook(&mut self, identity: &str) -> Result<JsValue, JsError> {
         let selection = select_session_workbook(&mut self.state, identity)
+            .map_err(|error| JsError::new(&error))?;
+        serde_wasm_bindgen::to_value(&selection).map_err(|error| JsError::new(&error.to_string()))
+    }
+
+    /// Preserve pending editor changes before selecting another open book.
+    pub fn select_workbook_with_edits(&mut self, identity: &str, workbook: JsValue,
+        active_sheet: usize) -> Result<JsValue, JsError> {
+        let workbook = serde_wasm_bindgen::from_value(workbook)
+            .map_err(|error| JsError::new(&format!("invalid workbook: {error}")))?;
+        let selection = select_session_workbook_with_edits(&mut self.state, identity, workbook, active_sheet)
             .map_err(|error| JsError::new(&error))?;
         serde_wasm_bindgen::to_value(&selection).map_err(|error| JsError::new(&error.to_string()))
     }
@@ -41719,6 +41759,33 @@ fn execute_workbook_action_in_session(
         context, session)
 }
 
+fn remap_workbook_host(host: &mut WorkbookHost<'_>, old_workbook: &Workbook,
+    documents: &[VbaDocumentModule], refreshed_positions: bool) {
+    // Fresh package indexes identify the current positions. A complete
+    // document map also works when an editor omits origin IDs or has
+    // just reparsed a saved package and numbered those IDs anew.
+    let document_order=if refreshed_positions && old_workbook.sheets.len()==host.workbook.sheets.len() {
+        let order:BTreeMap<usize,usize>=documents.iter().filter_map(|document| {
+            let current=document.sheet_index?;
+            let object=host.document_objects.get(&document.name.to_ascii_lowercase())?;
+            match host.objects.get(host_object_index(object.handle))? {
+                HostObject::Worksheet(previous)=>Some((*previous,current)),
+                _=>None,
+            }
+        }).collect();
+        (order.len()==old_workbook.sheets.len()).then_some(order)
+    } else {None};
+    // Loaded-sheet origin IDs remain stable when the editor reorders
+    // tabs between invocations. Reuse the host's existing handle remap.
+    if let Some(order)=document_order {
+        host.sheets_renumbered(&|index|order.get(&index).copied());
+    } else if old_workbook.sheets.iter().all(|sheet|sheet.origin_id.is_some())
+        && host.workbook.sheets.iter().all(|sheet|sheet.origin_id.is_some()) {
+        let order:Vec<_>=old_workbook.sheets.iter().map(|sheet|host.workbook.sheets.iter().position(|current|current.origin_id==sheet.origin_id)).collect();
+        host.sheets_renumbered(&|index|order.get(index).copied().flatten());
+    }
+}
+
 fn execute_workbook_invocation(
     workbook: Workbook, source: &str, invocation: VbaInvocation<'_, Vec<Value>>,
     active_sheet: usize, context: VbaRunContext, session: &mut Option<ProjectSessionState>,
@@ -41841,29 +41908,7 @@ fn execute_workbook_invocation(
             });
             let mut host=WorkbookHost::resume_storage(
                 WorkbookStorage::Owned(Box::new(workbook_slot.take().ok_or("missing workbook input")?)),previous.host);
-            // Fresh package indexes identify the current positions. A complete
-            // document map also works when an editor omits origin IDs or has
-            // just reparsed a saved package and numbered those IDs anew.
-            let document_order=if refreshed_positions && old_workbook.sheets.len()==host.workbook.sheets.len() {
-                let order:BTreeMap<usize,usize>=documents.iter().filter_map(|document| {
-                    let current=document.sheet_index?;
-                    let object=host.document_objects.get(&document.name.to_ascii_lowercase())?;
-                    match host.objects.get(host_object_index(object.handle))? {
-                        HostObject::Worksheet(previous)=>Some((*previous,current)),
-                        _=>None,
-                    }
-                }).collect();
-                (order.len()==old_workbook.sheets.len()).then_some(order)
-            } else {None};
-            // Loaded-sheet origin IDs remain stable when the editor reorders
-            // tabs between invocations. Reuse the host's existing handle remap.
-            if let Some(order)=document_order {
-                host.sheets_renumbered(&|index|order.get(&index).copied());
-            } else if old_workbook.sheets.iter().all(|sheet|sheet.origin_id.is_some())
-                && host.workbook.sheets.iter().all(|sheet|sheet.origin_id.is_some()) {
-                let order:Vec<_>=old_workbook.sheets.iter().map(|sheet|host.workbook.sheets.iter().position(|current|current.origin_id==sheet.origin_id)).collect();
-                host.sheets_renumbered(&|index|order.get(index).copied().flatten());
-            }
+            remap_workbook_host(&mut host, &old_workbook, &documents, refreshed_positions);
             if previous.workbook != incoming { host.saved = false; }
             host.activate_sheet(active_sheet);
             host.application_setting_dirtied = false;
@@ -42144,6 +42189,62 @@ mod tests {
 
 
 
+
+    #[test]
+    fn editor_selection_synchronizes_cells_without_resetting_code_and_exports_own_package() {
+        const CODE: &str = r#"Attribute VB_Name = "Driver"
+Private count As Long
+Public Sub Seed()
+ count = 7
+ ThisWorkbook.Worksheets(1).Range("A1").Value = 1
+ Dim peer As Workbook
+ Set peer = Workbooks.Open("C:\B.xlsm")
+End Sub
+Public Function ReadPeer(ByVal peer As String) As String
+ count = count + 1
+ ReadPeer = CStr(count) & "|" & CStr(Workbooks(peer).Worksheets(1).Range("A1").Value)
+End Function
+"#;
+        let seed = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let package_a = crate::vba_project::write_project_source(seed, CODE, None).unwrap();
+        let child = format!("{CODE}\n' Child package\n");
+        let package_b = crate::vba_project::write_project_source(seed, &child, None).unwrap();
+        assert_ne!(package_a, package_b);
+        let mut context = failure_context();
+        context.file_name = Some("A.xlsm".into());
+        context.file_context = Some(file_io::FileContext {
+            package_bytes: Some(package_a.clone()),
+            files: vec![file_io::ProducedFile { path: r"C:\B.xlsm".into(), bytes: package_b.clone() }],
+            ..Default::default()
+        });
+        let mut session = None;
+        let seeded = execute_workbook_action_in_session(workbook(), CODE, Some("Driver.Seed"),
+            vec![], 0, context, &mut session).unwrap();
+        assert!(seeded.error.is_none());
+        let mut edited_a = seeded.workbook;
+        edited_a.sheets[0].rows.iter_mut().find(|row|row.index == 1).unwrap().cells
+            .iter_mut().find(|cell|cell.col == 0).unwrap().value = CellValue::Number(777.0);
+        let before = session.as_ref().unwrap().workbook.clone();
+        assert!(select_session_workbook_with_edits(&mut session, "999", edited_a.clone(), 0).is_err());
+        assert_eq!(session.as_ref().unwrap().workbook, before);
+        let view = select_session_workbook_with_edits(&mut session, "1", edited_a, 0).unwrap();
+        assert_eq!(view.package_bytes.as_deref(), Some(package_b.as_slice()));
+        assert!(!view.other_workbooks[0].saved);
+        let mut context = failure_context();
+        context.file_name = Some("B.xlsm".into());
+        let outcome = execute_workbook_action_in_session(view.selected.workbook, &child, Some("Driver.ReadPeer"),
+            vec![Value::String("A.xlsm".into())], 0, context, &mut session).unwrap();
+        assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
+        assert_eq!(serde_json::to_value(outcome.result).unwrap()["value"], "1|777");
+        let view = select_session_workbook_with_edits(&mut session, "0", outcome.workbook, 0).unwrap();
+        assert_eq!(view.package_bytes.as_deref(), Some(package_a.as_slice()));
+        let mut context = failure_context();
+        context.file_name = Some("A.xlsm".into());
+        let outcome = execute_workbook_action_in_session(view.selected.workbook, CODE, Some("Driver.ReadPeer"),
+            vec![Value::String("A.xlsm".into())], 0, context, &mut session).unwrap();
+        assert!(outcome.error.is_none());
+        assert_eq!(serde_json::to_value(outcome.result).unwrap()["value"], "8|777");
+    }
 
     #[test]
     fn selecting_workbooks_preserves_code_owners_references_files_and_consumed_mounts() {

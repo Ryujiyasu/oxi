@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { bindVbaEditorSettings } from './vba-editor-settings.js';
-import { closeVbaProject, getVbaSourceForSave, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker } from './vba-runner.js';
+import { closeVbaProject, getVbaSourceForSave, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension } from './vba-runner.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = path.resolve(process.argv[2] || path.join(root, 'crates/oxidocs-wasm/pkg'));
 const wasm = await import('data:text/javascript;base64,' + Buffer.from(await readFile(path.join(pkg, 'oxidocs_wasm.js'))).toString('base64'));
@@ -29,7 +29,7 @@ function lift(name) {
 }
 const functions = ['xlsxEditKey', 'collectXlsxEdits', 'defaultCellStyle', 'cellStringValue', 'cellUtf16Text', 'setWorkbookCellString',
   'syncPendingXlsxEditsToIr', 'workbookCellMap', 'typedXlsxEdit', 'recordVbaWorkbookChanges',
-  'formatVbaResult', 'formatVbaExecution', 'updateVbaReferenceButton', 'applyVbaExecution', 'executeVbaFromDialog', 'releaseVbaResultsFromDialog', 'compileVbaFromDialog', 'downloadEdited'];
+  'captureVbaWorkbookView', 'applyVbaWorkbookView', 'formatVbaResult', 'formatVbaExecution', 'updateVbaReferenceButton', 'applyVbaExecution', 'executeVbaFromDialog', 'releaseVbaResultsFromDialog', 'compileVbaFromDialog', 'downloadEdited'];
 const macroSource = await readFile(path.join(root, 'tests/fixtures/vba/failure_state.bas'), 'utf8');
 const applicationSource = await readFile(path.join(root, 'tests/fixtures/vba/application_state.bas'), 'utf8');
 const applicationFixture = JSON.parse(await readFile(path.join(root, 'tests/fixtures/vba/application_state.json'), 'utf8'));
@@ -41,6 +41,12 @@ globalThis.Worker = class {
   postMessage(data) {
     queueMicrotask(() => {
       try {
+        if (data.action === 'select-workbook') {
+          const selection = data.workbook === undefined ? this.session.select_workbook(data.workbookIdentity)
+            : this.session.select_workbook_with_edits(data.workbookIdentity,data.workbook,data.activeSheet);
+          this.handlers.get('message')({data:{ok:true,selection}});
+          return;
+        }
         if (data.action === 'compile') {
           const compilation = this.session.compile(data.source, { ...data.options,
             documentModules: [...(data.packageBytes ? this.session.document_modules(data.packageBytes) : []),
@@ -48,6 +54,7 @@ globalThis.Worker = class {
           this.handlers.get('message')({ data: { ok: compilation.compiled, compilation, error: compilation.error?.message } });
           return;
         }
+        if (data.packageBytes) data.options = {...data.options, fileContext: {...data.options?.fileContext, packageBytes:data.packageBytes}};
         const execution = data.action === 'release-all'
           ? this.session.release_all_objects(data.workbook, data.activeSheet, data.fileName, data.options)
           : data.action === 'release'
@@ -70,7 +77,9 @@ const node = id => {
   if (!nodes.has(id)) nodes.set(id, { value: '', textContent: '', disabled: false,
     listeners: new Map(),
     addEventListener(type, handler) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(handler); },
-    fire(type) { for (const handler of this.listeners.get(type) || []) handler({ target: this }); },
+    fire(type) { return Promise.all((this.listeners.get(type) || []).map(handler => handler({ target: this }))); },
+    replaceChildren(...children) { this.children = children; },
+    ownerDocument: {createElement: () => ({})},
     classList: {
     values: new Set(), add(name) { this.values.add(name); }, remove(name) { this.values.delete(name); },
     toggle(name, force) { if (force) this.values.add(name); else this.values.delete(name); },
@@ -94,12 +103,12 @@ const context = vm.createContext({
   runVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker,
   prepareVbaSaveInWorker,
   compileVbaInWorker,
-  closeVbaProject, bindVbaEditorSettings,
+  closeVbaProject, bindVbaEditorSettings, bindVbaWorkbookPicker, vbaWorkbookExtension,
   recordVbaSourceChange, getVbaSourceForSave, setTimeout() { return 0; }, clearTimeout() {},
 });
 vm.runInContext(`let currentDocIR, currentFileBytes, currentXlsxSheetIndex = 0, wasmReady = true;
 let currentFileType = 'xlsx', currentFileName = 'Failure.xlsm', currentLang = 'en';
-let xlsxWorkbookChanged = false, currentXlsxVbaSource = '';
+let vbaWorkbookPicker; let xlsxWorkbookChanged = false, currentXlsxVbaSource = '';
 let xlsxVbaSourceBound = false, xlsxVbaSourceBaseline = '', xlsxVbaSourceDirty = false, xlsxVbaSourceRevision = 0;
 let currentXlsxSavedCalculation = { mode: 'auto', on_save: true }; const xlsxVbaEdits = new Map();
 const MIME_TYPES = { xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
@@ -398,4 +407,58 @@ closeVbaProject();
 assert.equal(getVbaObjectReferences().length,0);
 assert.ok(page.includes("document.getElementById('vbaRelease').addEventListener('click', releaseVbaResultsFromDialog)"));
 
-console.log(JSON.stringify({ main_editor_failure_save_cases: 8, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, passed: true }));
+
+// The real main-page picker synchronizes pending DOM cells before moving its
+// invoking owner. Saving B must retain B's original project metadata, not A's.
+await prepare();
+const selectionCode = "Attribute VB_Name = \"Driver\"\nPrivate count As Long\nPublic Sub Seed()\n count = 7\n ThisWorkbook.Worksheets(1).Range(\"A1\").Value = \"before\"\n Dim peer As Workbook\n Set peer = Workbooks.Open(\"C:\\B.xlsm\")\nEnd Sub\nPublic Function ReadPeer(ByVal peer As String) As String\n count = count + 1\n ReadPeer = CStr(count) & \"|\" & CStr(Workbooks(peer).Worksheets(1).Range(\"A1\").Value)\nEnd Function\nPublic Sub AddTemplate()\n Dim created As Workbook\n Set created = Workbooks.Add(\"C:\\T.xlsm\")\nEnd Sub\n";
+const packetA = wasm.save_spreadsheet_vba_source(bytes,selectionCode);
+const mixedSeed = new Uint8Array(await readFile(path.join(root,'tests/fixtures/vba/named_project_mixed.xlsm')));
+const packetB = wasm.save_spreadsheet_vba_source(mixedSeed,selectionCode+"\n' B package\n");
+assert.notEqual(wasm.spreadsheet_vba_project_name(packetA),wasm.spreadsheet_vba_project_name(packetB));
+closeVbaProject();
+const selectedSeed = await runVbaInWorker(wasm.parse_spreadsheet(packetA),selectionCode,'Driver.Seed',[],0,'A.xlsm',
+ {fileContext:{packageBytes:packetA,files:[{path:'C:\\B.xlsm',bytes:packetB},{path:'C:\\T.xlsm',bytes:packetB}]}});
+context.selectedSeed=selectedSeed;context.selectionBytes=packetA;
+vm.runInContext('currentDocIR=selectedSeed.workbook;currentFileBytes=selectionBytes;currentFileName="A.xlsm";currentXlsxSheetIndex=0;xlsxVbaSourceBound=true;xlsxVbaSourceBaseline="";vbaWorkbookPicker.reset(currentFileName);applyVbaExecution(selectedSeed,currentDocIR);',context);
+node('vbaSource').value=selectionCode;
+context.selectionCode=selectionCode;
+vm.runInContext('currentXlsxVbaSource=selectionCode;xlsxVbaSourceBaseline=selectionCode;',context);
+node('vbaProcedure').value='Driver.ReadPeer';node('vbaArguments').value='["A.xlsm"]';
+pending=[{dataset:{sheet:'0',row:'1',col:'0',original:'before'},textContent:'edited-A'}];
+node('vbaWorkbook').value='1';await node('vbaWorkbook').fire('change');
+assert.equal(vm.runInContext('currentFileName',context),'B.xlsm');
+assert.equal(node('vbaWorkbook').value,'1');
+assert.deepEqual(Array.from(vm.runInContext('new Uint8Array(currentFileBytes)',context)),Array.from(packetB),'selected B backing bytes');
+node('vbaProcedure').value='Driver.ReadPeer';node('vbaArguments').value='["A.xlsm"]';
+await vm.runInContext('executeVbaFromDialog()',context);
+assert.match(node('vbaResult').textContent,/1\|edited-A/);
+pending=[{dataset:{sheet:'0',row:'3',col:'0',original:''},textContent:'edited-B'}];
+written.length=0;
+await vm.runInContext('downloadEdited()',context);
+assert.equal(written.length,1);
+const savedB=written[0].parts[0];
+assert.equal(wasm.spreadsheet_vba_project_name(savedB),wasm.spreadsheet_vba_project_name(packetB),'B project metadata survives save');
+assert.equal(wasm.parse_spreadsheet(savedB).sheets[0].rows.find(row=>row.index===3).cells.find(cell=>cell.col===0).value.String,'edited-B');
+node('vbaWorkbook').value='0';await node('vbaWorkbook').fire('change');
+assert.equal(vm.runInContext('currentFileName',context),'A.xlsm');
+assert.equal(savedCell(vm.runInContext('currentDocIR',context),0).value.String,'edited-A');
+await vm.runInContext('executeVbaFromDialog()',context);
+assert.match(node('vbaResult').textContent,/8\|edited-A/,'returning to A preserves its private counter');
+assert.equal(node('vbaWorkbook').disabled,false);
+node('vbaProcedure').value='Driver.AddTemplate';node('vbaArguments').value='[]';
+await vm.runInContext('executeVbaFromDialog()',context);
+assert.ok(!node('vbaResult').classList.values.has('error'),node('vbaResult').textContent);
+node('vbaWorkbook').value='2';await node('vbaWorkbook').fire('change');
+assert.equal(vm.runInContext('currentFileName',context),'T1');
+written.length=0;await vm.runInContext('downloadEdited()',context);
+assert.equal(written.length,1);
+assert.equal(downloads.at(-1),'edited.xlsm','untitled VBA template download preserves macro extension');
+assert.equal(written[0].type,'application/vnd.ms-excel.sheet.macroEnabled.12');
+assert.equal(wasm.spreadsheet_vba_project_name(written[0].parts[0]),wasm.spreadsheet_vba_project_name(packetB));
+assert.equal(vbaWorkbookExtension('Book1',{sheets:[{kind:'macro_sheet'}]},false),'xlsm');
+assert.equal(vbaWorkbookExtension('Book1',{sheets:[{kind:'international_macro_sheet'}]},false),'xlsm');
+assert.equal(vbaWorkbookExtension('Book1',{sheets:[{}]},false),'xlsx');
+closeVbaProject();
+
+console.log(JSON.stringify({ main_editor_failure_save_cases: 8, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));

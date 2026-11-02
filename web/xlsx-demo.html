@@ -288,7 +288,7 @@ header .step { font-size: 15px; line-height: 1; padding: 5px 9px; }
 #macroBox .pad { display: flex; flex-direction: column; gap: 12px; padding: 18px; }
 #macroBox h2 { font-size: 15px; }
 #macroBox label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--dim); }
-#macroBox textarea, #macroBox input {
+#macroBox textarea, #macroBox input, #macroWorkbook {
   width: 100%;
   padding: 7px 8px;
   border: 1px solid var(--rule);
@@ -460,6 +460,8 @@ header #on { margin-right: 4px; }
 <dialog id="macroBox">
   <div class="pad">
     <h2 data-i18n="macroTitle">Macros</h2>
+    <label for="macroWorkbook" data-i18n="macroWorkbook">Workbook</label>
+    <select id="macroWorkbook" disabled></select>
     <div>
 <div class="vba-compatibility">
   <button type="button" id="macroLoadSource" data-i18n="vbaLoadSource">Load workbook source</button>
@@ -518,7 +520,7 @@ import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
                row_height_px, spreadsheet_vba_source } from './oxidocs_wasm.js';
 // A macro runs in a worker: the interpreter is free to take as long as the
 // macro asks for without the grid stopping being drawable meanwhile.
-import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker } from './vba-runner.js';
+import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension } from './vba-runner.js';
 import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-settings.js';
 import * as vbaProjectApi from './oxidocs_wasm.js';
 // The row model is the renderer's own, written out once in JS: what the grid
@@ -572,7 +574,7 @@ const I18N = {
     oneSheet: 'A workbook must keep at least one sheet.',
     badName: 'A sheet name cannot be over 31 characters or contain : \\ / ? * [ ]',
     tooSlow: 'too slow to work out formulas as you type — Excel will do it on open',
-    macroTitle: 'Macros', macroSource: 'VBA source', macroProc: 'Procedure',
+    macroTitle: 'Macros', macroWorkbook: 'Workbook', macroSource: 'VBA source', macroProc: 'Procedure',
     macroArgs: 'Arguments (JSON array)', close: 'Close', run: 'Run',
     macroNeeds: 'A procedure name and some VBA are both needed.',
     macroRunning: 'Running…',
@@ -627,7 +629,7 @@ const I18N = {
     oneSheet: 'ブックにはシートが少なくとも 1 枚必要です。',
     badName: 'シート名は 31 文字以内で、: \\ / ? * [ ] は使えません',
     tooSlow: '入力のたびに数式を計算するには重すぎます — 開いたときに Excel が計算します',
-    macroTitle: 'マクロ', macroSource: 'VBA ソース', macroProc: 'プロシージャ',
+    macroTitle: 'マクロ', macroWorkbook: 'ブック', macroSource: 'VBA ソース', macroProc: 'プロシージャ',
     macroArgs: '引数（JSON 配列）', close: '閉じる', run: '実行',
     macroNeeds: 'プロシージャ名と VBA の両方が必要です。',
     macroRunning: '実行しています…',
@@ -4184,7 +4186,7 @@ async function save() {
     const written = beyondValues
       ? edit_xlsx_from_workbook(sourceData, book)
       : edit_xlsx(sourceData, [...changes.values()]);
-    const extension = /\.xlsm$/i.test(fileName) ? 'xlsm' : 'xlsx';
+    const extension = vbaWorkbookExtension(fileName, book, macroSourceBound);
     const blob = new Blob([written], {
       type: extension === 'xlsm' ? 'application/vnd.ms-excel.sheet.macroEnabled.12' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
@@ -5038,6 +5040,7 @@ async function open(data, name) {
     macroSourceDirty = false;
     macroSourceRevision++;
     closeVbaProject();
+    macroWorkbookPicker?.reset(fileName);
     changes.clear();
     clearMacroFiles();
     pristine.clear();
@@ -5120,6 +5123,7 @@ sheetBox.addEventListener('drop', async (event) => {
 // A macro can touch anything the workbook holds, so running one is treated the
 // way opening a file is: the book is replaced wholesale and the step history
 // starts again, rather than keeping steps that point at cells the macro moved.
+let macroWorkbookPicker;
 const macroBox = document.getElementById('macroBox');
 const macroSource = document.getElementById('macroSource');
 const macroProc = document.getElementById('macroProc');
@@ -5150,9 +5154,54 @@ const macroEditorSettings = bindVbaEditorSettings({
   onProfileChange: () => {
     if (macroProjectSource) macroProjectSource = macroSource.value;
     closeVbaProject();
+    macroWorkbookPicker?.reset(fileName);
   },
   report: sayMacro,
   messages: { noSource: () => t('vbaNoSource'), loaded: () => t('vbaSourceLoaded') },
+});
+
+
+function captureMacroWorkbookView() {
+  document.activeElement?.blur();
+  return {workbook: book, activeSheet: shown, view: {
+    bytes: source, bound: macroSourceBound, baseline: macroSourceBaseline,
+    savedCalculation, cell: {...at}, procedure: macroProc.value, args: macroArgs.value,
+  }};
+}
+
+function applyMacroWorkbookView(selection, previous) {
+  const selected = selection.selected;
+  const bytes = previous?.bytes ?? (selection.package_bytes && new Uint8Array(selection.package_bytes));
+  if (!bytes) throw new Error('This workbook has no save package.');
+  const originalSource = spreadsheet_vba_source(bytes, macroEditorSettings.options().hostAnsiCodePage);
+  source = bytes;
+  fileName = selected.name;
+  book = selected.workbook;
+  shown = selected.active_sheet;
+  macroProjectSource = selected.source;
+  macroSourceBound = previous?.bound ?? typeof originalSource === 'string';
+  macroSourceBaseline = previous?.baseline ?? originalSource ?? '';
+  macroSourceDirty = macroSourceBound && selected.source !== macroSourceBaseline;
+  macroSourceRevision++;
+  savedCalculation = previous?.savedCalculation ?? {
+    mode: book.calculation?.mode ?? 'auto', on_save: book.calculation?.on_save ?? true,
+  };
+  changes.clear(); pristine.clear(); undone.length = 0; redone.length = 0;
+  beyondValues = true;
+  macroSource.value = selected.source;
+  macroProc.value = previous?.procedure ?? '';
+  macroArgs.value = previous?.args ?? '[]';
+  weighCalc(); markConditional(); markFrozen();
+  digitWidth = measureDigit(book.default_style?.font_name, book.default_style?.font_size);
+  draw(); describe(); sayFaces(); markSaved(); markSteps();
+  goTo(previous?.cell?.row ?? 1, previous?.cell?.col ?? 0);
+  listMacroProcedures();
+}
+
+macroWorkbookPicker = bindVbaWorkbookPicker(document.getElementById('macroWorkbook'), {
+  capture: captureMacroWorkbookView, apply: applyMacroWorkbookView,
+  busy: () => macroRun.disabled || macroCompile.disabled,
+  report: sayMacro,
 });
 
 function sayMacro(text, bad) {
@@ -5214,6 +5263,7 @@ function reportMacro(execution) {
 }
 
 function applyMacroExecution(execution) {
+  macroWorkbookPicker?.update(execution, fileName);
   showMacroFiles(execution);
   const changed = execution.workbook_changed !== false;
   const previousSheet = shown;
@@ -5275,6 +5325,7 @@ macroRun.onclick = async () => {
   }
   macroRun.disabled = true;
   macroCompile.disabled = true;
+  macroWorkbookPicker?.refresh();
   const endVbaOperation = macroEditorSettings.beginOperation();
   sayMacro(t('macroRunning'));
   const submittedSource = macroSource.value;
@@ -5300,6 +5351,7 @@ macroRun.onclick = async () => {
   } finally {
     macroRun.disabled = false;
     macroCompile.disabled = false;
+    macroWorkbookPicker?.refresh();
     endVbaOperation();
   }
 };
@@ -5307,13 +5359,14 @@ macroRun.onclick = async () => {
 macroCompile.onclick = async () => {
   if (macroCompile.disabled || macroRun.disabled) return;
   macroCompile.disabled = macroRun.disabled = true;
+  macroWorkbookPicker?.refresh();
   const endVbaOperation = macroEditorSettings.beginOperation();
   sayMacro(t('macroCompiling'));
   try {
     await compileVbaInWorker(macroSource.value, macroEditorSettings.options(), book, source);
     sayMacro(t('macroCompiled'));
   } catch (error) { sayMacro(error?.message || String(error), error?.name !== 'AbortError'); }
-  finally { macroCompile.disabled = macroRun.disabled = false; endVbaOperation(); }
+  finally { macroCompile.disabled = macroRun.disabled = false; macroWorkbookPicker?.refresh(); endVbaOperation(); }
 };
 
 applyLang();

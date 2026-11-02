@@ -10,7 +10,8 @@ self.addEventListener('message', async event => {
         const session = await project;
         if (action === 'select-workbook') {
             if (typeof workbookIdentity !== 'string') throw new Error('Invalid workbook identity.');
-            const selection = session.select_workbook(workbookIdentity);
+            const selection = workbook === undefined ? session.select_workbook(workbookIdentity)
+                : session.select_workbook_with_edits(workbookIdentity, workbook, activeSheet);
             self.postMessage({ ok: true, selection });
             return;
         }

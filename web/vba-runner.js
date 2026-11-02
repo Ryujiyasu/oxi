@@ -276,10 +276,77 @@ export function releaseVbaResultInWorker(workbook, source, result,
 
 // The same worker owns every open workbook. A selection moves the editor's
 // view while preserving unsent source edits and all caller-owned references.
-export function selectVbaWorkbookInWorker(workbookIdentity) {
+export function selectVbaWorkbookInWorker(workbookIdentity, workbook, activeSheet) {
     if (typeof workbookIdentity !== 'string') return Promise.reject(new Error('Invalid workbook identity.'));
-    return startVbaWorker('select-workbook', undefined, undefined, undefined, [], undefined, undefined, {}, undefined,
+    return startVbaWorker('select-workbook', workbook, undefined, undefined, [], activeSheet, undefined, {}, undefined,
         {workbookIdentity});
+}
+
+// Untitled template copies keep their VBA project or legacy macro sheets.
+export function vbaWorkbookExtension(name, workbook, hasProject) {
+    return /\.xlsm$/i.test(name || '') || hasProject
+        || workbook?.sheets?.some(sheet => sheet.kind === 'macro_sheet' || sheet.kind === 'international_macro_sheet')
+        ? 'xlsm' : 'xlsx';
+}
+
+// Both editors use the same application worker and keep only their view
+// bookkeeping here. The worker remains the authority for each workbook IR.
+export function bindVbaWorkbookPicker(control, {capture, apply, busy, report}) {
+    let identity = selectedWorkbookIdentity;
+    let selecting = false;
+    const names = new Map();
+    const views = new Map();
+    const refresh = () => { control.disabled = selecting || busy() || names.size < 2; };
+    const fill = () => {
+        control.replaceChildren(...Array.from(names, ([value, label]) => {
+            const option = control.ownerDocument.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            return option;
+        }));
+        control.value = identity;
+        refresh();
+    };
+    const update = (execution, name) => {
+        if (identity !== selectedWorkbookIdentity) { names.clear(); views.clear(); }
+        identity = selectedWorkbookIdentity;
+        names.clear();
+        names.set(identity, name || 'Book1');
+        for (const book of execution.other_workbooks || []) names.set(book.identity, book.name);
+        fill();
+    };
+    control.addEventListener('change', async () => {
+        const wanted = control.value;
+        if (selecting || busy() || wanted === identity) { control.value = identity; return; }
+        selecting = true;
+        refresh();
+        const previousIdentity = identity;
+        try {
+            const current = capture();
+            views.set(identity, current.view);
+            const selection = await selectVbaWorkbookInWorker(wanted, current.workbook, current.activeSheet);
+            try { apply(selection, views.get(wanted)); }
+            catch (error) {
+                // Restore the actual invoking owner if rendering/preparation
+                // rejects the new view before changing the editor.
+                await selectVbaWorkbookInWorker(previousIdentity);
+                throw error;
+            }
+            identity = wanted;
+            names.clear();
+            names.set(identity, selection.selected.name);
+            for (const book of selection.other_workbooks) names.set(book.identity, book.name);
+        } catch (error) { report(error?.message || String(error), true); }
+        finally { selecting = false; fill(); }
+    });
+    return {
+        update, refresh,
+        reset(name) {
+            identity = '0'; names.clear(); views.clear();
+            if (name) names.set(identity, name);
+            fill();
+        },
+    };
 }
 
 export function prepareVbaSaveInWorker(workbook, source, activeSheet, fileName, options = {}, packageBytes) {

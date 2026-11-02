@@ -38,6 +38,7 @@ const made = [];
 function element(name, id) {
   const node = {
     tagName: (name || 'div').toUpperCase(),
+    ownerDocument: {createElement: name => element(name)},
     id: id || '',
     dataset: {},
     style: {},

@@ -557,7 +557,7 @@ input[type="file"] { display: none; }
 .vba-dialog h2 { margin: 0 0 4px; font-size: 20px; color: var(--oxi-cells); }
 .vba-dialog .vba-note { margin: 0 0 16px; color: var(--text-secondary); font-size: 12px; }
 .vba-dialog label { display: block; margin: 10px 0 5px; font-size: 12px; font-weight: 600; }
-.vba-dialog input, .vba-dialog textarea {
+.vba-dialog input, .vba-dialog textarea, #vbaWorkbook {
     width: 100%;
     box-sizing: border-box;
     border: 1px solid var(--border);
@@ -1103,6 +1103,8 @@ input[type="file"] { display: none; }
     <div class="vba-dialog">
         <h2 id="vbaDialogTitle">Run VBA Macro</h2>
         <p class="vba-note">Runs locally in WebAssembly. Debug.Print and vbOKOnly MsgBox output appears below. File, network, COM, and native system APIs are not available.</p>
+        <label for="vbaWorkbook">Workbook</label>
+        <select id="vbaWorkbook" disabled></select>
         <label for="vbaProcedure">Procedure</label>
         <input id="vbaProcedure" type="text" value="Main" list="vbaProcedureList" autocomplete="off" spellcheck="false">
         <datalist id="vbaProcedureList"></datalist>
@@ -1541,7 +1543,7 @@ document.addEventListener('keydown', (e) => {
 <script type="module">
 import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_xlsx_from_workbook, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, spreadsheet_vba_source, save_spreadsheet_vba_source, format_cell_number } from './oxidocs_wasm.js';
 import { collectAdvances, familyPresent } from './face-metrics.js';
-import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker } from './vba-runner.js';
+import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension } from './vba-runner.js';
 import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-settings.js';
 import * as vbaProjectApi from './oxidocs_wasm.js';
 
@@ -1551,6 +1553,7 @@ let currentFileName = null; // what the file that was opened is called
 let currentFileBytes = null; // original file bytes for editing
 let currentDocIR = null; // parsed IR for edit mode
 let currentXlsxSheetIndex = 0;
+let vbaWorkbookPicker;
 const xlsxVbaEdits = new Map();
 // True once something has changed that a list of cell values cannot
 // carry: a macro's fill, a merge, a hidden row, a filter, a name. The
@@ -2580,6 +2583,7 @@ function formatVbaExecution(execution) {
 }
 
 function updateVbaReferenceButton() {
+    vbaWorkbookPicker?.refresh();
     const count = getVbaObjectReferences().length;
     const button = document.getElementById('vbaRelease');
     button.textContent = count ? 'Release results (' + count + ')' : 'Release results';
@@ -2588,6 +2592,7 @@ function updateVbaReferenceButton() {
 }
 
 function applyVbaExecution(execution, before) {
+    vbaWorkbookPicker?.update(execution, currentFileName);
     updateVbaReferenceButton();
     const changed = execution.workbook_changed !== false;
     const previousSheet = currentXlsxSheetIndex;
@@ -2602,6 +2607,47 @@ function applyVbaExecution(execution, before) {
         currentXlsxSheetIndex = execution.active_sheet;
     }
     if (changed || previousSheet !== currentXlsxSheetIndex) renderEditableXlsx(currentDocIR);
+}
+
+function captureVbaWorkbookView() {
+    syncPendingXlsxEditsToIr();
+    return {workbook: currentDocIR, activeSheet: currentXlsxSheetIndex, view: {
+        bytes: currentFileBytes, bound: xlsxVbaSourceBound, baseline: xlsxVbaSourceBaseline,
+        savedCalculation: currentXlsxSavedCalculation,
+        procedure: document.getElementById('vbaProcedure').value,
+        args: document.getElementById('vbaArguments').value,
+    }};
+}
+
+function applyVbaWorkbookView(selection, previous) {
+    const selected = selection.selected;
+    const bytes = previous?.bytes ?? (selection.package_bytes && new Uint8Array(selection.package_bytes));
+    if (!bytes) throw new Error('This workbook has no save package.');
+    const originalSource = spreadsheet_vba_source(new Uint8Array(bytes), vbaEditorSettings.options().hostAnsiCodePage);
+    currentDocIR = selected.workbook;
+    currentXlsxSheetIndex = selected.active_sheet;
+    currentFileName = selected.name;
+    currentFileBytes = bytes;
+    currentXlsxVbaSource = selected.source;
+    xlsxVbaSourceBound = previous?.bound ?? typeof originalSource === 'string';
+    xlsxVbaSourceBaseline = previous?.baseline ?? originalSource ?? '';
+    xlsxVbaSourceDirty = xlsxVbaSourceBound && selected.source !== xlsxVbaSourceBaseline;
+    xlsxVbaSourceRevision++;
+    currentXlsxSavedCalculation = previous?.savedCalculation ?? {
+        mode: currentDocIR.calculation?.mode ?? 'auto', on_save: currentDocIR.calculation?.on_save ?? true,
+    };
+    // The returned IR already contains pending editor cells and any changes
+    // made from another book. Replaying an old edit list could overwrite them.
+    xlsxVbaEdits.clear();
+    xlsxWorkbookChanged = true;
+    document.getElementById('vbaSource').value = selected.source;
+    document.getElementById('vbaProcedure').value = previous?.procedure ?? '';
+    document.getElementById('vbaArguments').value = previous?.args ?? '[]';
+    document.getElementById('titleText').textContent = currentFileName + ' - Oxi';
+    document.getElementById('btnDownload').textContent = t('download') + ' .' + vbaWorkbookExtension(currentFileName, currentDocIR, xlsxVbaSourceBound);
+    renderEditableXlsx(currentDocIR);
+    refreshVbaProcedures(true);
+    updateVbaReferenceButton();
 }
 
 let vbaProcedureRefreshTimer = null;
@@ -2627,6 +2673,7 @@ const vbaEditorSettings = bindVbaEditorSettings({
     onProfileChange: () => {
         if (currentXlsxVbaSource) currentXlsxVbaSource = document.getElementById('vbaSource').value;
         closeVbaProject();
+        vbaWorkbookPicker?.reset(currentFileName);
         updateVbaReferenceButton();
     },
     report: (message, bad) => {
@@ -2636,6 +2683,16 @@ const vbaEditorSettings = bindVbaEditorSettings({
     },
     messages: { noSource: () => 'No VBA source found in this workbook.',
         loaded: () => 'Workbook source loaded. Choose a procedure to run.' },
+});
+
+
+vbaWorkbookPicker = bindVbaWorkbookPicker(document.getElementById('vbaWorkbook'), {
+    capture: captureVbaWorkbookView, apply: applyVbaWorkbookView,
+    busy: () => document.getElementById('vbaRun').disabled || document.getElementById('vbaCompile').disabled,
+    report: (message, bad) => {
+        document.getElementById('vbaResult').textContent = message;
+        document.getElementById('vbaResult').classList.toggle('error', Boolean(bad));
+    },
 });
 
 function refreshVbaProcedures(selectFallback = false) {
@@ -2905,7 +2962,7 @@ async function downloadEdited() {
         else if (currentFileType === 'xlsx') editedBytes = edit_xlsx(data, edits);
         else if (currentFileType === 'pptx') editedBytes = edit_pptx(data, edits);
 
-        const savedExtension = currentFileType === 'xlsx' && /\.xlsm$/i.test(currentFileName || '') ? 'xlsm' : currentFileType;
+        const savedExtension = currentFileType === 'xlsx' ? vbaWorkbookExtension(currentFileName, currentDocIR, xlsxVbaSourceBound) : currentFileType;
         const mimeType = savedExtension === 'xlsm' ? 'application/vnd.ms-excel.sheet.macroEnabled.12' : MIME_TYPES[currentFileType];
         const blob = new Blob([editedBytes], { type: mimeType });
         const url = URL.createObjectURL(blob);
@@ -4692,6 +4749,7 @@ async function handleFile(file) {
     updateVbaReferenceButton();
     currentFileType = ext;
     currentFileName = file.name;
+    vbaWorkbookPicker?.reset(ext === 'xlsx' ? currentFileName : undefined);
     btnDownload.textContent = `${t('download')} .${fileExtension}`;
 
     toolbar.classList.add('visible');
