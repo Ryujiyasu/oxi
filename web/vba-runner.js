@@ -325,7 +325,12 @@ export function bindVbaWorkbookPicker(control, {capture, apply, busy, report}) {
         if (selection) {
             views.delete(previousIdentity);
             identity = selection.selected.identity;
-            apply(selection, views.get(identity));
+            const previous = identity === previousIdentity ? capture().view : views.get(identity);
+            // A rename keeps the editor's position and invocation, while the
+            // authoritative saved package supplies its new source baseline.
+            const view = identity === previousIdentity && previous
+                ? {procedure: previous.procedure, args: previous.args, cell: previous.cell} : previous;
+            apply(selection, view);
             names.set(identity, selection.selected.name);
             for (const book of selection.other_workbooks) names.set(book.identity, book.name);
         } else if (!execution.workbook_closed) {

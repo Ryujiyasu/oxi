@@ -613,4 +613,51 @@ for(const cancel of [true,false]){
  }finally{closeVbaProject();}
 }
 
-console.log(JSON.stringify({ main_editor_failure_save_cases: 8, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));
+
+const saveAsUiRows=[];
+for(const route of ['main','canvas'])for(const kind of [0,1,2]){
+ closeVbaProject();
+ const name='SaveAsUI-'+route+'-'+kind+'.xlsm',destination=name.replace('.xlsm','-Saved.xlsm');
+ const filename=kind===2?'':'C:\\'+destination;
+ const code='Attribute VB_Name = "Driver"\nPublic Sub SeedSaveAsUI()\nApplication.DisplayAlerts = False\nApplication.EnableEvents = True\nThisWorkbook.Worksheets(1).Range("A2").Value = '+kind+'\nThisWorkbook.Saved = True\nEnd Sub\nPublic Function SaveCurrent() As String\nThisWorkbook.Worksheets(1).Range("A1").Value = "saved from macro"\nOn Error Resume Next\nThisWorkbook.SaveAs Filename:="'+filename+'"\nSaveCurrent = CStr(Err.Number) & "|" & ThisWorkbook.Name\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = "ThisWorkbook"\nPrivate Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)\nCancel = (CLng(ThisWorkbook.Worksheets(1).Range("A2").Value) = 1)\nEnd Sub\n';
+ const packet=wasm.save_spreadsheet_vba_source(bytes,code);
+ const expectedName=kind===0?destination:name;
+ const row={route,kind,expected_name:expectedName};
+ try{
+  const seeded=await runVbaInWorker(wasm.parse_spreadsheet(packet),code,'Driver.SeedSaveAsUI',[],0,name,
+   {applicationState:{},documentModules:wasm.spreadsheet_vba_document_modules(packet),fileSystemState:{folders:['C:\\'],files:[],mountedFolders:[],mountedFiles:[]},fileContext:{fullName:'C:\\'+name,packageBytes:packet}},packet);
+  if(seeded.error)throw Error(JSON.stringify(seeded.error));
+  if(route==='main'){
+   context.saveAsFixture={seeded,packet,code,name};
+   vm.runInContext('currentDocIR=saveAsFixture.seeded.workbook;currentFileBytes=saveAsFixture.packet;currentFileName=saveAsFixture.name;currentXlsxSheetIndex=0;currentXlsxVbaSource=saveAsFixture.code;xlsxVbaSourceBound=true;xlsxVbaSourceBaseline=saveAsFixture.code;xlsxVbaSourceDirty=false;xlsxVbaEdits.clear();vbaWorkbookPicker.reset(currentFileName);applyVbaExecution(saveAsFixture.seeded,currentDocIR);',context);
+   node('vbaSource').value=code;node('vbaProcedure').value='Driver.SaveCurrent';node('vbaArguments').value='[]';
+   node('vbaRun').disabled=node('vbaCompile').disabled=false;
+   await vm.runInContext('executeVbaFromDialog()',context);
+   row.procedure=node('vbaProcedure').value;row.arguments=node('vbaArguments').value;row.actual_name=vm.runInContext('currentFileName',context);row.picker_names=node('vbaWorkbook').children.map(child=>child.textContent);
+   row.macro_result=node('vbaResult').textContent;row.execution_error=node('vbaResult').classList.values.has('error');
+   row.live_value=savedCell(vm.runInContext('currentDocIR',context),0)?.value?.String;
+   row.package_value=savedCell(wasm.parse_spreadsheet(vm.runInContext('new Uint8Array(currentFileBytes)',context)),0)?.value?.String;
+   row.package_unchanged=Buffer.from(vm.runInContext('new Uint8Array(currentFileBytes)',context)).equals(Buffer.from(packet));
+  }else{
+   demo.saveAsFixture={seeded,packet,code,name};
+   vm.runInContext('book=saveAsFixture.seeded.workbook;source=saveAsFixture.packet;fileName=saveAsFixture.name;shown=0;geom={};macroProjectSource=saveAsFixture.code;macroSourceBound=true;macroSourceBaseline=saveAsFixture.code;macroSourceDirty=false;macroWorkbookPicker.reset(fileName);applyMacroExecution(saveAsFixture.seeded);',demo);
+   demoNode('source').value=code;demoNode('proc').value='Driver.SaveCurrent';demoNode('args').value='[]';
+   demoNode('run').disabled=demoNode('compile').disabled=false;
+   await vm.runInContext('macroRun.onclick()',demo);
+   row.procedure=demoNode('proc').value;row.arguments=demoNode('args').value;row.actual_name=vm.runInContext('fileName',demo);row.picker_names=demoNode('picker').children.map(child=>child.textContent);
+   row.macro_result=demoNode('result').textContent;row.execution_error=demoNode('result').classList.values.has('error');
+   row.live_value=savedCell(vm.runInContext('book',demo),0)?.value?.String;
+   row.package_value=savedCell(wasm.parse_spreadsheet(vm.runInContext('new Uint8Array(source)',demo)),0)?.value?.String;
+   row.package_unchanged=Buffer.from(vm.runInContext('new Uint8Array(source)',demo)).equals(Buffer.from(packet));
+  }
+  row.macro_name_matches=row.macro_result.includes((kind===2?'1004':'0')+'|'+expectedName);
+  row.passed=row.procedure==='Driver.SaveCurrent' && row.arguments==='[]' && !row.execution_error && row.macro_name_matches && row.actual_name===expectedName && row.picker_names.length===1 && row.picker_names[0]===expectedName && row.live_value==='saved from macro' && (kind===0?row.package_value==='saved from macro':row.package_unchanged);
+ }catch(error){row.failure=error.stack||String(error);row.passed=false;}
+ finally{closeVbaProject();}
+ saveAsUiRows.push(row);
+}
+
+assert.equal(saveAsUiRows.length,6);
+assert.deepEqual(saveAsUiRows.filter(row=>!row.passed),[], 'SaveAs updates both editors without replacing cancelled packages or losing the selected procedure');
+
+console.log(JSON.stringify({ main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));
