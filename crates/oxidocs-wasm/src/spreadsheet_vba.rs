@@ -32715,6 +32715,31 @@ impl Host for WorkbookHost<'_> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
         }
+        // Excel leaves Copy mode before these setters validate their input.
+        // Colors, themes and dimensions keep the copied cells live instead.
+        if self.clipboard.is_some() || matches!(&value,Value::Null) {
+            let member=name.to_ascii_lowercase();
+            let font=self.range_font(receiver).is_some();
+            let range=self.range(receiver).is_some();
+            if self.clipboard.is_some() &&
+                (((font || self.characters_font_of(receiver).is_some())
+                    && matches!(member.as_str(),"name"|"size"|"bold"|"italic"|"underline"|
+                        "strikethrough"|"superscript"|"subscript"|"fontstyle"))
+                || (self.range_borders(receiver).is_some() && matches!(member.as_str(),"linestyle"|"weight"))
+                || (range && matches!(member.as_str(),"style"|"numberformat"|"numberformatlocal"|
+                    "locked"|"formulahidden"|"horizontalalignment"|"verticalalignment"|"wraptext"|
+                    "shrinktofit"|"indentlevel"|"orientation"|"readingorder"|"addindent"))) {
+                self.clipboard=None;
+            }
+            if font && member=="themefont" && matches!(&value,Value::Null) {
+                return Err(host_error(13,"Type mismatch"));
+            }
+            if matches!(&value,Value::Null)
+                && ((font && matches!(member.as_str(),"name"|"size"|"color"|"colorindex"|"underline"))
+                    || (range && matches!(member.as_str(),"numberformat"|"numberformatlocal"))) {
+                return Ok(true);
+            }
+        }
         if self.blocks(receiver).is_some()
             && (name.eq_ignore_ascii_case("hasspill")
                 || name.eq_ignore_ascii_case("spillingtorange")
@@ -45898,6 +45923,193 @@ End Sub"#;
                     assert_eq!(cell.style.font_charset,initial.font_charset);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn copied_cells_follow_native_format_edit_cancellation() {
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        const CODE:&str=r#"Public Function Driver(ByVal kind As Long) As String
+ On Error Resume Next
+ Dim source As Workbook, peer As Workbook, changed As Long, status As Long, before As String
+ Set source = ThisWorkbook
+ Set peer = Workbooks.Add
+ source.Worksheets(1).Range("B99").Copy
+ Err.Clear
+ Select Case kind
+ Case 0: source.Worksheets(1).Range("B99").Font.Name = "Arial"
+ Case 1: source.Worksheets(1).Range("B99").Font.Name = "Aptos Narrow"
+ Case 2: source.Worksheets(1).Columns("B").Font.Name = "Arial"
+ Case 3: source.Worksheets(1).Columns("B").Font.Size = 11
+ Case 4: source.Worksheets(1).Columns("D").Font.Name = "Arial"
+ Case 5: source.Worksheets(1).Range("A1").Font.Name = "Arial"
+ Case 6: peer.Worksheets(1).Range("A1").Font.Name = "Arial"
+ Case 7: source.Worksheets(1).Range("B99").Value = 1
+ Case 8: source.Worksheets(1).Range("B99").NumberFormat = "0.00"
+ Case 9: source.Worksheets(1).Range("B99").Interior.Color = 65280
+ Case 10: source.Worksheets(1).Range("B99").Locked = False
+ Case 11: source.Worksheets(1).Rows(99).RowHeight = 20
+ Case 12: source.Worksheets(1).Columns("B").ColumnWidth = 20
+ Case 13: source.Worksheets(1).Range("B99").ClearFormats
+ Case 14: source.Worksheets(1).Range("B99").Font.Size = -1
+ Case 15: source.Worksheets(1).Range("B99").Style = "Normal"
+ Case 16: source.Worksheets(1).Range("B99").Font.Bold = True
+ Case 17: source.Worksheets(1).Range("B99").Font.Bold = Null
+ Case 18: source.Worksheets(1).Range("B99").Font.Size = Null
+ Case 19: source.Worksheets(1).Range("B99").Font.Name = Null
+ Case 20: source.Worksheets(1).Range("B99").Font.Color = 255
+ Case 21: source.Worksheets(1).Range("B99").Font.ThemeFont = 0
+ Case 22: source.Worksheets(1).Range("B99").Font.Italic = False
+ Case 23: source.Worksheets(1).Range("B99").Font.Underline = -4142
+ Case 24: source.Worksheets(1).Range("B99").Borders.LineStyle = 1
+ Case 25: source.Worksheets(1).Range("B99").HorizontalAlignment = -4131
+ Case 26: source.Worksheets(1).Range("B99").VerticalAlignment = -4107
+ Case 27: source.Worksheets(1).Range("B99").WrapText = False
+ Case 28: source.Worksheets(1).Range("B99").FormulaHidden = False
+ Case 29: source.Worksheets(1).Range("B99").Interior.Pattern = 1
+ Case 30: source.Worksheets(1).Range("B99").NumberFormat = Null
+ Case 31: source.Worksheets(1).Range("B99").Characters(1,1).Font.Bold = False
+ Case 32: source.Worksheets(1).Range("B99").Font.Strikethrough = True
+ Case 33: source.Worksheets(1).Range("B99").Font.Superscript = True
+ Case 34: source.Worksheets(1).Range("B99").Font.Subscript = True
+ Case 35: source.Worksheets(1).Range("B99").Font.FontStyle = "Bold"
+ Case 36: source.Worksheets(1).Range("B99").Font.ColorIndex = 3
+ Case 37: source.Worksheets(1).Range("B99").Font.ThemeColor = 5
+ Case 38: source.Worksheets(1).Range("B99").Font.TintAndShade = 0.2
+ Case 39: source.Worksheets(1).Range("B99").Borders.Weight = 4
+ Case 40: source.Worksheets(1).Range("B99").Borders.Color = 255
+ Case 41: source.Worksheets(1).Range("B99").Borders.ColorIndex = 3
+ Case 42: source.Worksheets(1).Range("B99").Interior.ColorIndex = 3
+ Case 43: source.Worksheets(1).Range("B99").ShrinkToFit = False
+ Case 44: source.Worksheets(1).Range("B99").IndentLevel = 0
+ Case 45: source.Worksheets(1).Range("B99").Orientation = 0
+ Case 46: source.Worksheets(1).Range("B99").ReadingOrder = 1
+ Case 47: source.Worksheets(1).Range("B99").AddIndent = False
+ End Select
+ changed = Err.Number
+ before = CStr(Application.CutCopyMode)
+ Err.Clear
+ source.Worksheets(1).Range("A1").PasteSpecial
+ status = Err.Number
+ Driver = "ok|set:" & CStr(changed) & "|paste:" & CStr(status) & "|mode:" & before & ":" & CStr(Application.CutCopyMode) & _
+  "|value:" & TypeName(source.Worksheets(1).Range("A1").Value) & ":" & CStr(source.Worksheets(1).Range("A1").Value)
+End Function"#;
+        // Forty-eight actions repeated in independent Excel instances. Fill and
+        // dimensions keep the copy live; even a rejected Font.Size cancels it.
+        let mut mismatches=Vec::new();
+        for kind in 0..48 {
+            let expected=match kind {
+                7=>"ok|set:0|paste:0|mode:1:1|value:Double:1",
+                9|11|12|20|21|29|36|37|38|40|41|42=>"ok|set:0|paste:0|mode:1:1|value:Empty:",
+                14=>"ok|set:1004|paste:1004|mode:0:0|value:String:a😀b",
+                _=>"ok|set:0|paste:1004|mode:0:0|value:String:a😀b",
+            };
+            let mut context=failure_context();
+            context.file_name=Some("clipboard-format-source.xlsm".into());
+            context.file_context=Some(file_io::FileContext {
+                full_name:Some(r"C:\probe\clipboard-format-source.xlsm".into()),
+                package_bytes:Some(original.to_vec()),folders:vec![r"C:\probe".into()],
+                ..Default::default()
+            });
+            let out=execute_workbook_action_in_session(
+                oxicells_core::parse_xlsx_preserving_values(original).unwrap(),CODE,
+                Some("Driver"),vec![Value::Integer(kind)],0,context,&mut None).unwrap();
+            assert!(out.error.is_none(),"{kind}: {:?}",out.error.as_ref().map(|e|&e.message));
+            let actual=serde_json::to_value(&out.result).unwrap()["value"].clone();
+            if actual!=expected {mismatches.push((kind,actual,expected));}
+        }
+        assert!(mismatches.is_empty(),"{mismatches:?}");
+    }
+
+    #[test]
+    fn null_format_assignments_preserve_custom_styles() {
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        const CODE:&str=r#"Public Function Probe(ByVal kind As Long) As String
+ On Error Resume Next
+ Application.EnableEvents = False
+ Application.DisplayAlerts = False
+ Dim source As Workbook, target As Workbook, changed As Long, status As Long, before As String
+ Set source = ThisWorkbook
+ Set target = source
+ source.Worksheets(1).Range("B99").Font.Name = "Arial"
+ source.Worksheets(1).Range("B99").Font.Size = 16
+ source.Worksheets(1).Range("B99").Font.Bold = True
+ source.Worksheets(1).Range("B99").Font.Underline = 2
+ source.Worksheets(1).Range("B99").Font.Color = 255
+ source.Worksheets(1).Range("B99").NumberFormat = "0.00"
+ If kind = 4 Then source.Worksheets(1).Range("B99").Font.ThemeFont = 2
+ Dim initial As String
+ initial = FontState(source, "B99")
+ source.Worksheets(1).Range("B99").Copy
+ Err.Clear
+ Select Case kind
+ Case 0: source.Worksheets(1).Range("B99").Font.Name = Null
+ Case 1: source.Worksheets(1).Range("B99").Font.Size = Null
+ Case 2: source.Worksheets(1).Range("B99").Font.Bold = Null
+ Case 3: source.Worksheets(1).Range("B99").Font.Color = Null
+ Case 4: source.Worksheets(1).Range("B99").Font.ThemeFont = Null
+ Case 5: source.Worksheets(1).Range("B99").Font.Underline = Null
+ Case 6: source.Worksheets(1).Range("B99").NumberFormat = Null
+ Case 7: source.Worksheets(1).Range("B99").Font.ColorIndex = Null
+ End Select
+ changed = Err.Number
+ before = CStr(Application.CutCopyMode)
+ Err.Clear
+ target.Worksheets(1).Range("A1").PasteSpecial
+ status = Err.Number
+ Dim report As String, destination As String
+ report = "ok|set:" & CStr(changed) & "|paste:" & CStr(status) & "|mode:" & before & ":" & CStr(Application.CutCopyMode) & _
+  "|value:" & TypeName(target.Worksheets(1).Range("A1").Value) & ":" & CStr(target.Worksheets(1).Range("A1").Value) & _
+  "|font:" & FontState(target, "A1")
+ report = report & "|initialfont:" & initial & "|sourcefont:" & FontState(source, "B99") & "|format:" & CStr(source.Worksheets(1).Range("B99").NumberFormat)
+ destination = ThisWorkbook.Path & "\save-options-clipboard-format-cancel-v4-result.xlsm"
+ Err.Clear
+ target.SaveAs Filename:=destination, FileFormat:=52, AccessMode:=1
+ Probe = report & "|save:" & CStr(Err.Number)
+End Function
+Public Function FontState(ByVal target As Workbook, ByVal address As String) As String
+ On Error Resume Next
+ Dim member As Variant, item As Variant, status As Long, text As String, result As String
+ For Each member In Array("Name", "ThemeFont", "ThemeColor", "TintAndShade", "Size", "Color", "Bold", "Italic", "Strikethrough", "Underline")
+  Err.Clear
+  item = Empty
+  item = CallByName(target.Worksheets(1).Range(address).Font, CStr(member), vbGet)
+  status = Err.Number
+  If IsNull(item) Then
+   text = "<Null>"
+  Else
+   text = CStr(item)
+  End If
+  result = result & CStr(member) & "=" & CStr(status) & ":" & TypeName(item) & ":" & text & ";"
+ Next
+ Err.Clear
+ FontState = result
+End Function"#;
+        // Independent Excel repeats retain Arial 16, bold, red, underline
+        // and 0.00. ThemeFont alone rejects Null with error 13.
+        let expected=[
+            "ok|set:0|paste:1004|mode:0:0|value:String:a😀b|font:Name=0:String:Aptos Narrow;ThemeFont=0:Long:2;ThemeColor=0:Long:2;TintAndShade=0:Double:0;Size=0:Double:11;Color=0:Double:0;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:-4142;|initialfont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|sourcefont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|format:0.00|save:0",
+            "ok|set:0|paste:1004|mode:0:0|value:String:a😀b|font:Name=0:String:Aptos Narrow;ThemeFont=0:Long:2;ThemeColor=0:Long:2;TintAndShade=0:Double:0;Size=0:Double:11;Color=0:Double:0;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:-4142;|initialfont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|sourcefont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|format:0.00|save:0",
+            "ok|set:0|paste:1004|mode:0:0|value:String:a😀b|font:Name=0:String:Aptos Narrow;ThemeFont=0:Long:2;ThemeColor=0:Long:2;TintAndShade=0:Double:0;Size=0:Double:11;Color=0:Double:0;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:-4142;|initialfont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|sourcefont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|format:0.00|save:0",
+            "ok|set:0|paste:0|mode:1:1|value:Empty:|font:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|initialfont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|sourcefont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|format:0.00|save:0",
+            "ok|set:13|paste:0|mode:1:1|value:Empty:|font:Name=0:String:Aptos Narrow;ThemeFont=0:Long:2;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|initialfont:Name=0:String:Aptos Narrow;ThemeFont=0:Long:2;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|sourcefont:Name=0:String:Aptos Narrow;ThemeFont=0:Long:2;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|format:0.00|save:0",
+            "ok|set:0|paste:1004|mode:0:0|value:String:a😀b|font:Name=0:String:Aptos Narrow;ThemeFont=0:Long:2;ThemeColor=0:Long:2;TintAndShade=0:Double:0;Size=0:Double:11;Color=0:Double:0;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:-4142;|initialfont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|sourcefont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|format:0.00|save:0",
+            "ok|set:0|paste:1004|mode:0:0|value:String:a😀b|font:Name=0:String:Aptos Narrow;ThemeFont=0:Long:2;ThemeColor=0:Long:2;TintAndShade=0:Double:0;Size=0:Double:11;Color=0:Double:0;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:-4142;|initialfont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|sourcefont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|format:0.00|save:0",
+            "ok|set:0|paste:0|mode:1:1|value:Empty:|font:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|initialfont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|sourcefont:Name=0:String:Arial;ThemeFont=0:Long:0;ThemeColor=5:Empty:;TintAndShade=0:Double:0;Size=0:Double:16;Color=0:Double:255;Bold=0:Boolean:True;Italic=0:Boolean:False;Strikethrough=0:Boolean:False;Underline=0:Long:2;|format:0.00|save:0",
+        ];
+        for (kind,expected) in expected.into_iter().enumerate() {
+            let mut context=failure_context();
+            context.file_name=Some("null-format-source.xlsm".into());
+            context.file_context=Some(file_io::FileContext {
+                full_name:Some(r"C:\probe\null-format-source.xlsm".into()),
+                package_bytes:Some(original.to_vec()),folders:vec![r"C:\probe".into()],
+                ..Default::default()
+            });
+            let out=execute_workbook_action_in_session(
+                oxicells_core::parse_xlsx_preserving_values(original).unwrap(),CODE,
+                Some("Probe"),vec![Value::Integer(kind as i64)],0,context,&mut None).unwrap();
+            assert!(out.error.is_none(),"{kind}: {:?}",out.error.as_ref().map(|e|&e.message));
+            assert_eq!(serde_json::to_value(&out.result).unwrap()["value"],expected,"{kind}");
         }
     }
 
