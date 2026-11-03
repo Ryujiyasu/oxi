@@ -6670,7 +6670,9 @@ fn edit_for(cell: &crate::ir::Cell, row: u32, multiple: &dyn Fn(&str) -> bool) -
     } else if let Some(formula) = cell.formula.as_ref() {
         return Some(CellEditValue::CachedFormula { formula: saved_formula(formula), reach: None, value: cell.value.clone() });
     }
-    if cell.value.is_text() && !cell.runs.is_empty() {
+    if cell.value.is_text() && cell.formula.is_none() {
+        // Workbook text edits use an inline string. Formula string caches
+        // continue through the scalar path and retain their formula type.
         return Some(CellEditValue::RichText { value: cell.value.clone(), runs: cell.runs.clone() });
     }
     match &cell.value {

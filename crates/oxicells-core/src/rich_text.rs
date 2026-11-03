@@ -30,6 +30,26 @@ fn property(
     }
     writer.write_event(Event::Empty(e)).map_err(failure)
 }
+fn text(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    prefix: &str,
+    units: &[u16],
+) -> Result<(), XlsxError> {
+    let name = format!("{prefix}t");
+    let mut text = BytesStart::new(&name);
+    if units.first().is_some_and(|v|matches!(*v,9|10|13|32)) || units.last().is_some_and(|v|matches!(*v,9|10|13|32)) {
+        text.push_attribute(("xml:space","preserve"));
+    }
+    writer.write_event(Event::Start(text)).map_err(failure)?;
+    let escaped = crate::string_value::encode(units);
+    writer
+        .write_event(Event::Text(BytesText::new(&escaped)))
+        .map_err(failure)?;
+    writer
+        .write_event(Event::End(BytesEnd::new(name)))
+        .map_err(failure)?;
+    Ok(())
+}
 fn run(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     prefix: &str,
@@ -45,48 +65,42 @@ fn run(
         writer
             .write_event(Event::Start(BytesStart::new(&name)))
             .map_err(failure)?;
-        if let Some(font) = &format.font {
-            property(writer, prefix, "rFont", "val", font)?;
+        for (name,set) in [("b",format.bold),("i",format.italic),("u",format.underline)] {
+            if set {property(writer,prefix,name,"","")?;}
         }
-        if let Some(size) = format.size {
-            property(writer, prefix, "sz", "val", &size.to_string())?;
+        if let Some(size)=format.size {property(writer,prefix,"sz","val",&size.to_string())?;}
+        let reference=format.font_reference.as_ref();
+        let theme=reference.and_then(|r|r.theme).map(|v|v.to_string());
+        let indexed=reference.and_then(|r|r.indexed).map(|v|v.to_string());
+        let tint=reference.and_then(|r|r.tint).filter(|v|*v!=0.0).map(|v|v.to_string());
+        let automatic=reference.is_some_and(|r|r.automatic);
+        let rgb=format.color.as_ref().map(|value| {
+            let value=value.trim_start_matches('#');
+            if value.len()==6 {format!("FF{value}")} else {value.to_string()}
+        });
+        if theme.is_some() || indexed.is_some() || automatic || rgb.is_some() {
+            let mut element=BytesStart::new(format!("{prefix}color"));
+            if let Some(value)=theme.as_deref() {element.push_attribute(("theme",value));}
+            else if let Some(value)=indexed.as_deref() {element.push_attribute(("indexed",value));}
+            else if automatic {element.push_attribute(("auto","1"));}
+            else if let Some(value)=rgb.as_deref() {element.push_attribute(("rgb",value));}
+            if let Some(value)=tint.as_deref() {element.push_attribute(("tint",value));}
+            writer.write_event(Event::Empty(element)).map_err(failure)?;
         }
-        for (name, set) in [
-            ("b", format.bold),
-            ("i", format.italic),
-            ("u", format.underline),
-        ] {
-            if set {
-                property(writer, prefix, name, "", "")?;
-            }
+        if let Some(font)=reference.and_then(|r|r.latin_name.as_ref()).or(format.font.as_ref()) {
+            property(writer,prefix,"rFont","val",font)?;
         }
-        if let Some(color) = &format.color {
-            let color = color.trim_start_matches('#');
-            let color = if color.len() == 6 {
-                format!("FF{color}")
-            } else {
-                color.to_owned()
-            };
-            property(writer, prefix, "color", "rgb", &color)?;
+        if let Some(value)=format.font_family {property(writer,prefix,"family","val",&value.to_string())?;}
+        if let Some(value)=format.font_charset.filter(|v|*v!=0) {property(writer,prefix,"charset","val",&value.to_string())?;}
+        if let Some(value)=reference.and_then(|r|r.scheme.as_deref()).filter(|v|*v!="none") {
+            property(writer,prefix,"scheme","val",value)?;
         }
-        if let Some(align) = &format.vert_align {
-            property(writer, prefix, "vertAlign", "val", align)?;
-        }
+        if let Some(align)=&format.vert_align {property(writer,prefix,"vertAlign","val",align)?;}
         writer
             .write_event(Event::End(BytesEnd::new(name)))
             .map_err(failure)?;
     }
-    let name = format!("{prefix}t");
-    let mut text = BytesStart::new(&name);
-    text.push_attribute(("xml:space", "preserve"));
-    writer.write_event(Event::Start(text)).map_err(failure)?;
-    let escaped = crate::string_value::encode(units);
-    writer
-        .write_event(Event::Text(BytesText::new(&escaped)))
-        .map_err(failure)?;
-    writer
-        .write_event(Event::End(BytesEnd::new(name)))
-        .map_err(failure)?;
+    text(writer,prefix,units)?;
     writer
         .write_event(Event::End(BytesEnd::new(r)))
         .map_err(failure)
@@ -104,6 +118,11 @@ fn payload(
     writer
         .write_event(Event::Start(BytesStart::new(&name)))
         .map_err(failure)?;
+    if runs.is_empty() {
+        text(writer,prefix,&units)?;
+        writer.write_event(Event::End(BytesEnd::new(name))).map_err(failure)?;
+        return Ok(());
+    }
     let mut at = 0;
     for format in runs {
         let start = at;
@@ -208,4 +227,50 @@ pub(crate) fn patch(
         writer.write_event(event).map_err(failure)?;
     }
     String::from_utf8(writer.into_inner().into_inner()).map_err(failure)
+}
+
+#[cfg(test)]
+mod font_roundtrip_tests {
+    use crate::{editor::XlsxEditor, ir::TextRun, parse_xlsx_preserving_values};
+
+    #[test]
+    fn run_font_metadata_roundtrip_preserves_split_surrogates() {
+        let seed=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let mut editor=XlsxEditor::new(seed).unwrap();
+        let mut edited=editor.workbook().clone();
+        let cell=edited.sheets[0].rows.iter_mut().find(|r|r.index==1).unwrap()
+            .cells.iter_mut().find(|c|c.col==0).unwrap();
+        let style=cell.style.clone();
+        let original=TextRun {size:style.font_size,font:style.font_name.clone(),
+            bold:style.bold,italic:style.italic,underline:style.underline,color:style.font_color.clone(),
+            dressed:true,font_reference:style.font_reference.clone(),font_family:style.font_family,
+            font_charset:style.font_charset,..Default::default()};
+        let mut painted=original.clone();
+        painted.text="\u{FFFD}".into();painted.color=Some("FF0000".into());
+        let reference=painted.font_reference.get_or_insert_with(Default::default);
+        reference.theme=None;reference.indexed=None;reference.automatic=false;reference.tint=None;
+        let mut tail=original;tail.text="b".into();
+        cell.runs=vec![TextRun {text:"a\u{FFFD}".into(),..Default::default()},painted,tail];
+        editor.apply_workbook(&edited).unwrap();
+        let saved=editor.save().unwrap();
+        let mut archive=oxidocs_common::archive::OoxmlArchive::new(&saved).unwrap();
+        let xml=archive.read_part("xl/worksheets/sheet1.xml").unwrap();
+        assert!(xml.contains("a_xD83D_"));
+        assert!(xml.contains("_xDE00_"));
+        let reloaded=parse_xlsx_preserving_values(&saved).unwrap();
+        let cell=reloaded.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+            .cells.iter().find(|c|c.col==0).unwrap();
+        assert_eq!(cell.value.string_units().unwrap().as_ref(),&[97,0xD83D,0xDE00,98]);
+        assert_eq!(cell.runs.len(),3);
+        assert!(!cell.runs[0].dressed);
+        let low=&cell.runs[1];
+        assert_eq!(low.text,"\u{FFFD}");
+        assert_eq!(low.color.as_deref(),Some("FF0000"));
+        assert_eq!(low.font_family,Some(2));
+        let reference=low.font_reference.as_ref().unwrap();
+        assert_eq!(reference.theme,None);
+        assert_eq!(reference.scheme.as_deref(),Some("minor"));
+        assert_eq!(reference.latin_name.as_deref().or(low.font.as_deref()),Some("Aptos Narrow"));
+        assert_eq!(cell.runs[2].font_reference.as_ref().unwrap().theme,Some(1));
+    }
 }

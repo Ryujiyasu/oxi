@@ -47,6 +47,17 @@ impl ThemeFonts {
     }
 }
 
+/// A workbook-defined cell style, independent of per-cell formatting.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NamedCellStyle {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin_id: Option<u32>,
+    #[serde(default)]
+    pub number_format_id: u32,
+    pub style: CellStyle,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
@@ -72,6 +83,9 @@ pub struct Workbook {
     /// of this font, so drawing a sheet needs it.
     #[serde(default)]
     pub default_style: CellStyle,
+    /// Named styles retain their own format, which can differ from cell XF 0.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub named_styles: Vec<NamedCellStyle>,
     /// The names the workbook gives to things, as `(name, what it refers to)`.
     /// A formula saying `SUM(sales)` means one of these, and without them it
     /// means nothing at all.
@@ -759,6 +773,13 @@ impl Table {
 /// left empty means "as the cell itself says".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TextRun {
+    /// Logical font and color origin retained independently of the render face.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_reference: Option<Box<FontReference>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_charset: Option<i32>,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<f32>,

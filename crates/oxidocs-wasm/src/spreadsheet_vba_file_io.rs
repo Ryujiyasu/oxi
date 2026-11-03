@@ -90,6 +90,7 @@ pub(super) struct SharedInputFormat {
 pub(super) struct SharedFormatEdit {
     sequence: u64,
     range: CellRange,
+    start: u32,
     length: Option<u32>,
     dxf: String,
     automatic: bool,
@@ -99,6 +100,7 @@ pub(super) struct SharedFormatRequest {
     range: CellRange,
     property: &'static str,
     before: CellStyle,
+    span: Option<(u32,u32)>,
 }
 
 #[derive(Clone)]
@@ -759,6 +761,31 @@ impl WorkbookFiles {
         xml.push_str("</border>");xml
     }
 
+    fn normal_style_revision_dxf(style: &CellStyle, number_format_id: u32) -> String {
+        let mut font=String::from("<font>");
+        for (tag,value) in [("b",style.bold),("i",style.italic),("strike",style.strikethrough),
+            ("condense",false),("extend",false),("outline",false),("shadow",false)] {
+            font.push_str(&if value {format!("<{tag}/>")} else {format!("<{tag} val=\"0\"/>")});
+        }
+        font.push_str(&format!("<u val=\"{}\"/><vertAlign val=\"baseline\"/><sz val=\"{}\"/>",
+            if style.underline {"single"} else {"none"},style.font_size.unwrap_or(11.0)));
+        font.push_str(&Self::revision_font_color(style));
+        if let Some(name)=style.latin_font_name() {font.push_str(&format!("<name val=\"{}\"/>",quick_xml::escape::escape(name)));}
+        if let Some(family)=style.font_family {font.push_str(&format!("<family val=\"{family}\"/>"));}
+        if let Some(charset)=style.font_charset.filter(|v|*v!=0) {font.push_str(&format!("<charset val=\"{charset}\"/>"));}
+        let scheme=style.font_reference.as_ref().and_then(|r|r.scheme.as_deref()).unwrap_or("none");
+        font.push_str(&format!("<scheme val=\"{}\"/>",quick_xml::escape::escape(scheme)));
+        font.push_str("</font>");
+        let border=Self::revision_border(style,&["left","right","top","bottom"],true)
+            .replacen("<border outline=\"0\">","<border diagonalUp=\"0\" diagonalDown=\"0\" outline=\"0\">",1);
+        let code=quick_xml::escape::escape(style.number_format.as_deref().unwrap_or("General"));
+        let horizontal=style.horizontal_align.as_deref().unwrap_or("general");
+        let vertical=style.vertical_align.as_deref().unwrap_or("bottom");
+        let wrap=u8::from(style.wrap_text);let shrink=u8::from(style.shrink_to_fit);let indent=style.indent;
+        let rotation=if style.stacked_text {255} else {0};let locked=u8::from(!style.unlocked);
+        format!("{font}<numFmt numFmtId=\"{number_format_id}\" formatCode=\"{code}\"/><fill><patternFill patternType=\"none\"><fgColor indexed=\"64\"/><bgColor indexed=\"65\"/></patternFill></fill><alignment horizontal=\"{horizontal}\" vertical=\"{vertical}\" textRotation=\"{rotation}\" wrapText=\"{wrap}\" indent=\"{indent}\" justifyLastLine=\"0\" shrinkToFit=\"{shrink}\" readingOrder=\"0\"/>{border}<protection locked=\"{locked}\" hidden=\"0\"/>")
+    }
+
     fn revision_number_format(format: &str) -> Option<(u32,&str)> {
         // Revision format identities use Excel's history format table; they
         // are distinct from the built-in IDs written to styles.xml.
@@ -880,7 +907,7 @@ impl WorkbookFiles {
             if edit.automatic && attached.contains(&(edit.sequence,at.sheet,at.row,at.column)) {continue;}
             let Some(sheet_id)=sheet_ids.get(edit.range.sheet) else {continue;};
             let reference=format_range_address(edit.range,false,false);
-            let span=edit.length.map(|length|format!(" start=\"0\" length=\"{length}\"")).unwrap_or_default();
+            let span=edit.length.map(|length|format!(" start=\"{}\" length=\"{length}\"",edit.start)).unwrap_or_default();
             records.push((edit.sequence,format!("<rfmt sheetId=\"{sheet_id}\" sqref=\"{reference}\"{span}><dxf>{}</dxf></rfmt>",edit.dxf)));
         }
         records.sort_by_key(|record|record.0);
@@ -1336,7 +1363,7 @@ impl WorkbookHost<'_> {
         edit.format.after=after.number_format.clone().unwrap_or_else(||"General".into());
         if !old.is_empty() || !new.is_empty() {
             self.file_io.shared_format_edits.push(SharedFormatEdit {
-                sequence:edit.format.sequence,range:CellRange::single(edit.at),length:Some(0),dxf:new.clone(),automatic:true,
+                start:0,sequence:edit.format.sequence,range:CellRange::single(edit.at),length:Some(0),dxf:new.clone(),automatic:true,
             });
             edit.format.style_dxf=Some((old,new));
         }
@@ -1400,15 +1427,33 @@ impl WorkbookHost<'_> {
         if changed {
             let dxf=self.shared_format_dxf(format,true);
             self.file_io.shared_format_edits.push(SharedFormatEdit {
-                sequence,range:CellRange::single(at),length:Some(0),dxf,automatic:true,
+                start:0,sequence,range:CellRange::single(at),length:Some(0),dxf,automatic:true,
             });
             self.file_io.shared_automatic_formats.insert(key);
         }
     }
 
+    fn shared_character_format(&self, at: CellAddress, start: u32) -> CellStyle {
+        let Some(cell)=self.cell_here(at.sheet,at.row,at.column) else {return self.template_style(at);};
+        let mut style=cell.style.clone();
+        if let Some(dress)=dresses_of(&cell).get(start as usize) {dress.write_font(&mut style);}
+        style
+    }
+
     pub(super) fn shared_format_request(&self, receiver: &ObjectRef, name: &str, value: &Value) -> Option<SharedFormatRequest> {
         if !self.file_io.shared || self.gone(receiver) || matches!(value,Value::Null) {return None;}
         let lower=name.to_ascii_lowercase();
+        if let Some((at,start,length))=self.characters_font_of(receiver) {
+            let property=match lower.as_str() {
+                "name"=>"charfontname","size"=>"fontsize","bold"=>"bold","italic"=>"italic",
+                "underline"=>"underline","color"|"colorindex"|"themecolor"|"tintandshade"=>"fontcolor",
+                "themefont"=>"themefont",_=>return None,
+            };
+            let text=self.cell_here(at.sheet,at.row,at.column).map(|cell|cell_text_of(&cell)).unwrap_or_default();
+            let (from,to)=font_character_span(start,length,&text);
+            let before=self.shared_character_format(at,from as u32);
+            return Some(SharedFormatRequest {range:CellRange::single(at),property,before,span:Some((from as u32,(to-from) as u32))});
+        }
         let (range,property)=if let Some(range)=self.range_font(receiver) {
             (range,match lower.as_str() {"bold"=>"bold","italic"=>"italic","color"|"colorindex"|"themecolor"|"tintandshade"=>"fontcolor",
                 "size"=>"fontsize","name"=>"fontname","themefont"=>"themefont","underline"=>"underline","strikethrough"=>"strike",_=>return None})
@@ -1418,23 +1463,31 @@ impl WorkbookHost<'_> {
             (range,match lower.as_str() {"linestyle"|"weight"|"color"|"colorindex"=>"border",_=>return None})
         } else {
             (self.range(receiver)?,match lower.as_str() {
-                "numberformat"|"numberformatlocal"=>"numberformat","horizontalalignment"=>"horizontal",
+                "style"=>"style","numberformat"|"numberformatlocal"=>"numberformat","horizontalalignment"=>"horizontal",
                 "verticalalignment"=>"vertical","wraptext"=>"wrap","shrinktofit"=>"shrink",_=>return None})
         };
         let at=range.first();
         let before=self.cell_here(at.sheet,at.row,at.column).map(|cell|cell.style).unwrap_or_else(||self.template_style(at));
-        Some(SharedFormatRequest {range,property,before})
+        Some(SharedFormatRequest {range,property,before,span:None})
     }
 
     pub(super) fn finish_shared_format(&mut self, request: SharedFormatRequest) {
-        let SharedFormatRequest {range,property,before}=request;
+        let SharedFormatRequest {range,property,before,span}=request;
         let at=range.first();
-        let after=self.cell_here(at.sheet,at.row,at.column).map(|cell|cell.style).unwrap_or_else(||self.template_style(at));
+        let after=span.map_or_else(||self.cell_here(at.sheet,at.row,at.column).map(|cell|cell.style).unwrap_or_else(||self.template_style(at)),
+            |(start,_)|self.shared_character_format(at,start));
         let color=|value: &str| {
             let hex=value.trim_start_matches('#');
             if hex.len()==6 {format!("FF{hex}").to_ascii_uppercase()} else {hex.to_ascii_uppercase()}
         };
         let (length,dxf)=match property {
+            "style" => {
+                // Native's Normal application records the full style even
+                // when only one loaded font attribute visibly changes.
+                if self.styled.contains_key(&at) {return;}
+                (None,WorkbookFiles::normal_style_revision_dxf(&after,self.named_normal_style().map_or(0,|style|style.number_format_id)))
+            },
+
             "numberformat" => {
                 if before.number_format==after.number_format {return;}
                 let code=after.number_format.as_deref().unwrap_or("General");
@@ -1456,7 +1509,7 @@ impl WorkbookHost<'_> {
             "fontsize" => (Some(i32::MAX as u32),if before.font_size==after.font_size {String::new()} else {
                 after.font_size.map_or_else(String::new,|value|format!("<font><sz val=\"{value}\"/></font>"))
             }),
-            "fontname" => (Some(i32::MAX as u32),if before.latin_font_name()==after.latin_font_name()
+            "fontname"|"charfontname" => (Some(i32::MAX as u32),if before.latin_font_name()==after.latin_font_name()
                 && before.font_family==after.font_family && before.font_charset==after.font_charset {String::new()} else {
                 let mut font=String::from("<font>");
                 if let Some(name)=after.latin_font_name() {font.push_str(&format!("<name val=\"{}\"/>",quick_xml::escape::escape(name)));}
@@ -1467,7 +1520,11 @@ impl WorkbookHost<'_> {
                     if let Some(charset)=after.font_charset {font.push_str(&format!("<charset val=\"{charset}\"/>"));}
                 }
                 let scheme=after.font_reference.as_ref().and_then(|r|r.scheme.as_deref()).unwrap_or("none");
-                font.push_str(&format!("<scheme val=\"{}\"/></font>",quick_xml::escape::escape(scheme)));font
+                let old_scheme=before.font_reference.as_ref().and_then(|r|r.scheme.as_deref()).unwrap_or("none");
+                if property!="charfontname" || old_scheme!=scheme {
+                    font.push_str(&format!("<scheme val=\"{}\"/>",quick_xml::escape::escape(scheme)));
+                }
+                font.push_str("</font>");font
             }),
             "themefont" => {
                 let mut font=String::from("<font>");
@@ -1522,7 +1579,8 @@ impl WorkbookHost<'_> {
         }
         self.file_io.shared_revision_sequence=self.file_io.shared_revision_sequence.saturating_add(1);
         self.file_io.shared_format_edits.push(SharedFormatEdit {
-            sequence:self.file_io.shared_revision_sequence,range,length,dxf,automatic:false,
+            start:span.map_or(0,|v|v.0),sequence:self.file_io.shared_revision_sequence,range,
+            length:span.map(|v|v.1).or(length),dxf,automatic:false,
         });
     }
 
@@ -1534,8 +1592,17 @@ impl WorkbookHost<'_> {
         for length in line.then_some(Some(0)).into_iter().chain(colour.then_some(None)) {
             self.file_io.shared_revision_sequence=self.file_io.shared_revision_sequence.saturating_add(1);
             self.file_io.shared_format_edits.push(SharedFormatEdit {
-                sequence:self.file_io.shared_revision_sequence,range,length,dxf:dxf.clone(),automatic:false,
+                start:0,sequence:self.file_io.shared_revision_sequence,range,length,dxf:dxf.clone(),automatic:false,
             });
+        }
+    }
+
+    pub(super) fn finish_shared_replace_paint(&mut self, from: usize) {
+        // Replace's paint record applies to the cell, without a character span.
+        for edit in self.file_io.shared_format_edits.iter_mut().skip(from) {
+            if edit.dxf.starts_with("<font><color ") {
+                edit.start=0;edit.length=None;
+            }
         }
     }
 

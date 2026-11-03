@@ -231,7 +231,22 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
                     "vertAlign" if in_run_props => {
                         current_run.vert_align = get_attr(&e, "val");
                     }
+                    "family" if in_run_props => {
+                        current_run.font_family=get_attr(&e,"val").and_then(|v|v.parse().ok());
+                    }
+                    "charset" if in_run_props => {
+                        current_run.font_charset=get_attr(&e,"val").and_then(|v|v.parse().ok());
+                    }
+                    "scheme" if in_run_props => {
+                        current_run.font_reference.get_or_insert_with(Default::default).scheme=
+                            get_attr(&e,"val").filter(|v|v!="none");
+                    }
                     "color" if in_run_props => {
+                        let reference=current_run.font_reference.get_or_insert_with(Default::default);
+                        reference.theme=get_attr(&e,"theme").and_then(|v|v.parse().ok());
+                        reference.indexed=get_attr(&e,"indexed").and_then(|v|v.parse().ok());
+                        reference.automatic=is_true(get_attr(&e,"auto").as_deref());
+                        reference.tint=get_attr(&e,"tint").and_then(|v|v.parse::<f64>().ok()).filter(|v|v.is_finite());
                         current_run.color = get_attr(&e, "rgb").filter(|rgb| matches!(rgb.len(),6|8)&&rgb.bytes().all(|byte|byte.is_ascii_hexdigit())).map(|rgb| {
                             let rgb = rgb.trim_start_matches('#');
                             if rgb.len()==8 { rgb[2..].to_ascii_uppercase() } else { rgb.to_ascii_uppercase() }
@@ -266,6 +281,9 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
                     "rPr" => in_run_props = false,
                     "r" if in_run => {
                         in_run = false;
+                        if current_run.font_reference.as_deref().is_some_and(crate::ir::FontReference::is_empty) {
+                            current_run.font_reference=None;
+                        }
                         if !current_run.text.is_empty() {
                             current.runs.push(std::mem::take(&mut current_run));
                         }
@@ -635,6 +653,7 @@ struct StyleSheet {
     dxfs: Vec<crate::ir::DiffStyle>,
     cell_xfs: Vec<XfRecord>,
     cell_style_xfs: Vec<XfRecord>,
+    named_styles: Vec<(String,usize,Option<u32>)>,
 }
 
 /// Built-in number format strings for well-known IDs.
@@ -953,6 +972,29 @@ fn indexed_colour(index: usize, theme: &Theme) -> Option<String> {
     PALETTE.get(index).map(|hex| hex.to_string())
 }
 
+fn resolve_run_font_references(runs: &mut [crate::ir::TextRun], theme: &Theme) {
+    for run in runs {
+        let Some(reference)=run.font_reference.as_mut() else {continue;};
+        let mut element=quick_xml::events::BytesStart::new("color");
+        let color=reference.theme.map(|v|v.to_string());
+        let indexed=reference.indexed.map(|v|v.to_string());
+        let tint=reference.tint.map(|v|v.to_string());
+        if let Some(v)=color.as_deref() {element.push_attribute(("theme",v));}
+        if let Some(v)=indexed.as_deref() {element.push_attribute(("indexed",v));}
+        if let Some(v)=tint.as_deref() {element.push_attribute(("tint",v));}
+        if let Some(color)=parse_color_attr(&element,theme) {run.color=Some(color);}
+        let render=match reference.scheme.as_deref() {
+            Some("major")=>theme.major_face.as_ref(),
+            Some("minor")=>theme.minor_face.as_ref(),
+            _=>None,
+        };
+        if let (Some(logical),Some(render))=(run.font.as_ref(),render) {
+            reference.latin_name=(logical!=render).then(||logical.clone());
+            run.font=Some(render.clone());
+        }
+    }
+}
+
 fn parse_color_attr(e: &quick_xml::events::BytesStart, theme: &Theme) -> Option<String> {
     if let Some(rgb) = get_attr(e, "rgb") {
         // Strip leading alpha if 8-char hex
@@ -1132,6 +1174,14 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
             Event::Start(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    "cellStyle" => {
+                        if let Some(name)=get_attr(&e,"name") {
+                            let index=get_attr(&e,"xfId").and_then(|v|v.parse::<usize>().ok()).unwrap_or(0);
+                            let builtin=get_attr(&e,"builtinId").and_then(|v|v.parse::<u32>().ok());
+                            ss.named_styles.push((name,index,builtin));
+                        }
+                    }
+
                     "numFmts" => section = Section::NumFmts,
                     "fonts" => section = Section::Fonts,
                     "fills" => section = Section::Fills,
@@ -1293,6 +1343,14 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
             Event::Empty(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    "cellStyle" => {
+                        if let Some(name)=get_attr(&e,"name") {
+                            let index=get_attr(&e,"xfId").and_then(|v|v.parse::<usize>().ok()).unwrap_or(0);
+                            let builtin=get_attr(&e,"builtinId").and_then(|v|v.parse::<u32>().ok());
+                            ss.named_styles.push((name,index,builtin));
+                        }
+                    }
+
                     "numFmt" if section == Section::NumFmts => {
                         if let (Some(id_str), Some(code)) =
                             (get_attr(&e, "numFmtId"), get_attr(&e, "formatCode"))
@@ -1589,7 +1647,10 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         Some(xf) => xf,
         None => return CellStyle::default(),
     };
+    resolve_xf_style(xf,stylesheet)
+}
 
+fn resolve_xf_style(xf: &XfRecord, stylesheet: &StyleSheet) -> CellStyle {
     // A cell format that does not apply a part of itself wears that part from
     // the named style it is built on. This is how a hyperlink gets its blue
     // underline: the cell's own format names no font at all.
@@ -4720,7 +4781,8 @@ fn parse_worksheet(
                             let through_end=&xml[start..reader.buffer_position() as usize];
                             if let Some(end)=through_end.rfind('<') {
                                 let fragment=format!("<sst><si>{}</si></sst>",&through_end[..end]);
-                                if let Some(held) = parse_shared_strings(&fragment)?.into_iter().next() {
+                                if let Some(mut held) = parse_shared_strings(&fragment)?.into_iter().next() {
+                                    resolve_run_font_references(&mut held.runs,theme);
                                     inline_runs = held.runs;
                                     inline_units = held.units;
                                 }
@@ -5535,7 +5597,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
     let mut archive = OoxmlArchive::new(data)?;
 
     // 1. Parse shared strings (optional 遯ｶ繝ｻsome xlsx files have none)
-    let shared_strings = match archive.try_read_part("xl/sharedStrings.xml")? {
+    let mut shared_strings = match archive.try_read_part("xl/sharedStrings.xml")? {
         Some(xml) => parse_shared_strings(&xml)?,
         None => Vec::new(),
     };
@@ -5557,6 +5619,8 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         }
         None => StyleSheet::default(),
     };
+
+    for string in &mut shared_strings {resolve_run_font_references(&mut string.runs,&theme);}
 
     // 3. Parse workbook.xml to get sheet names and rIds
     let workbook_xml = archive.read_part("xl/workbook.xml")?;
@@ -5908,6 +5972,16 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         recalculation,
         calculation,
         default_style: resolve_cell_style(0, &stylesheet),
+        named_styles: {
+            let records=if stylesheet.named_styles.is_empty() && !stylesheet.cell_style_xfs.is_empty() {
+                vec![("Normal".to_string(),0,Some(0))]
+            } else {stylesheet.named_styles.clone()};
+            records.into_iter().filter_map(|(name,index,builtin_id)| {
+                let mut xf=stylesheet.cell_style_xfs.get(index)?.clone();
+                xf.style_id=None;
+                Some(crate::ir::NamedCellStyle {name,builtin_id,number_format_id:xf.num_fmt_id,style:resolve_xf_style(&xf,&stylesheet)})
+            }).collect()
+        },
         defined_names,
         defined_name_attributes,
         compatibility_names: Default::default(),
