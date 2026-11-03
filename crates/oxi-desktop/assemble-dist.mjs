@@ -24,6 +24,7 @@ mkdirSync(join(web, 'samples'), { recursive: true });
 // The engine and the assets the editors import by relative path.
 for (const name of [
   'vertical-text.js',
+  'font-catalog.js',
   'oxidocs_wasm.js',
   'oxidocs_wasm_bg.wasm',
   'favicon.ico',
@@ -33,7 +34,13 @@ for (const name of [
 }
 // The spreadsheet editor's row model, its VBA worker, and the workbook it
 // opens on start.
-for (const name of ['row-model.js', 'vba-runner.js', 'vba-worker.js']) {
+for (const name of [
+  'row-model.js',
+  'vba-runner.js',
+  'vba-worker.js',
+  'vba-file-downloads.js',
+  'vba-editor-settings.js',
+]) {
   cpSync(join(site, name), join(web, name));
 }
 // The app opens on a workbook of its own rather than on a sales sample, so the
@@ -122,7 +129,7 @@ for (const name of ['oxidocs_wasm.js', 'oxidocs_wasm_bg.wasm']) {
 
 const engine = readFileSync(join(web, 'oxidocs_wasm.js'), 'utf8');
 const exported = new Set(
-  [...engine.matchAll(/export (?:async )?function (\w+)/g)].map((match) => match[1]),
+  [...engine.matchAll(/export (?:(?:async )?function|class) (\w+)/g)].map((match) => match[1]),
 );
 const faults = [];
 for (const name of readdirSync(web).filter((f) => /\.(html|js)$/.test(f))) {
@@ -145,6 +152,9 @@ for (const name of readdirSync(web).filter((f) => /\.(html|js)$/.test(f))) {
     ...[...text.matchAll(/new URL\('(\.\/[^']+)'/g)].map((match) => match[1]),
   ];
   for (const path of new Set(referred)) {
+    // The site's engine fetches its font catalog per face from font_catalog/;
+    // the engine built for the app has the catalog inside it and never asks.
+    if (path === './font_catalog/') continue;
     if (!existsSync(join(web, path))) {
       faults.push(`${name} refers to ${path}, which is not in the bundle`);
     }
