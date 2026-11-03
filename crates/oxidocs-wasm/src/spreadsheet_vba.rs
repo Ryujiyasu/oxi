@@ -3207,8 +3207,12 @@ enum FillEdge {
 
 /// What `Range.Copy` set aside, together with the cells it still refers to.
 struct Clipboard {
+    owner: u64,
     /// Row-major, one entry per cell of the copied block.
     cells: Vec<Option<Cell>>,
+    /// Formatting for copied positions that have no physical cell record.
+    default_style: CellStyle,
+    templates: std::collections::HashMap<FormatScope, CellStyle>,
     /// The note on each of those cells, in the same order.
     notes: Vec<Option<Note>>,
     /// Validation rules resolved for each copied cell.
@@ -3223,6 +3227,15 @@ struct Clipboard {
     columns: u32,
     /// Where it came from, so a formula can be moved by the right offset.
     origin: CellAddress,
+}
+
+impl Clipboard {
+    fn template_style(&self, at: CellAddress) -> &CellStyle {
+        self.templates.get(&FormatScope::Row(at.sheet, at.row))
+            .or_else(|| self.templates.get(&FormatScope::Column(at.sheet, at.column)))
+            .or_else(|| self.templates.get(&FormatScope::Sheet(at.sheet)))
+            .unwrap_or(&self.default_style)
+    }
 }
 
 struct AutoFilter {
@@ -22718,6 +22731,25 @@ impl<'a> WorkbookHost<'a> {
         self.apply_sort(range, &keys, &[], header, match_case, sideways)
     }
 
+    fn refresh_owned_clipboard(&mut self) {
+        if self.clipboard.as_ref().is_some_and(|clipboard|clipboard.owner==self.objects.owner) {
+            let mut clipboard=self.clipboard.take().unwrap();
+            self.refresh_clipboard(&mut clipboard);
+            self.clipboard=Some(clipboard);
+        }
+    }
+
+    fn clipboard_templates(&self, sources: &[CellRange]) -> std::collections::HashMap<FormatScope, CellStyle> {
+        self.templates.iter().filter_map(|(&scope, style)| {
+            let included=sources.iter().any(|range|match scope {
+                FormatScope::Sheet(sheet) => sheet==range.sheet,
+                FormatScope::Row(sheet,row) => sheet==range.sheet && row>=range.start_row && row<=range.end_row,
+                FormatScope::Column(sheet,column) => sheet==range.sheet && column>=range.start_column && column<=range.end_column,
+            });
+            included.then(||(scope,style.clone()))
+        }).collect()
+    }
+
     fn fill_clipboard(&mut self, source: CellRange) -> Result<(), String> {
         Self::range_cell_count(source)?;
         // What is set aside is what the cells show now: a formula written a
@@ -22744,10 +22776,13 @@ impl<'a> WorkbookHost<'a> {
             .map(|address| self.unlocked.contains(&address))
             .collect();
         self.clipboard = Some(Clipboard {
+            owner: self.objects.owner,
             cells,
             notes,
             validations,
             conditions: Vec::new(),
+            default_style: self.workbook.default_style.clone(),
+            templates: self.clipboard_templates(&[source]),
             origins: source.addresses().collect(),
             values_only: false,
             unlocked,
@@ -22764,6 +22799,7 @@ impl<'a> WorkbookHost<'a> {
 
     /// Excel keeps copied cells live until a paste, including their validation.
     fn refresh_clipboard(&mut self, clipboard: &mut Clipboard) {
+        if clipboard.owner!=self.objects.owner {return;}
         if let Some(first) = clipboard.origins.first().copied() {
             let mut bounds = CellRange::single(first);
             for at in &clipboard.origins {
@@ -22773,6 +22809,8 @@ impl<'a> WorkbookHost<'a> {
                 bounds.end_column = bounds.end_column.max(at.column);
             }
             self.settle(bounds);
+            clipboard.default_style=self.workbook.default_style.clone();
+            clipboard.templates=self.clipboard_templates(&[bounds]);
         }
         clipboard.cells = clipboard.origins.iter().map(|address| {
             self.cell_here(address.sheet, address.row, address.column).map(|cell| {
@@ -23117,6 +23155,7 @@ impl<'a> WorkbookHost<'a> {
                         if kind != 6 { self.paste_cell(
                             address,
                             held.and_then(|cell| cell.as_ref()),
+                            clipboard.template_style(came_from),
                             came_from,
                             carries,
                             transpose,
@@ -23164,6 +23203,7 @@ impl<'a> WorkbookHost<'a> {
         &mut self,
         address: CellAddress,
         held: Option<&Cell>,
+        template: &CellStyle,
         came_from: CellAddress,
         carries: PasteWhat,
         transpose: bool,
@@ -23186,6 +23226,7 @@ impl<'a> WorkbookHost<'a> {
         let shared_edit=if carries.values || dressing || carries.number_format {self.begin_shared_cell_input(address)} else {None};
         let before=shared_edit.as_ref().map(|_|self.cell_here(address.sheet,address.row,address.column).map(|cell|cell.style)
             .unwrap_or_else(||self.template_style(address)));
+        let starting=self.template_style(address);
         let mut paste=|| {
         let sheet = &mut self.workbook.sheets[address.sheet];
         sheet.col_count = sheet.col_count.max(address.column as usize + 1);
@@ -23217,7 +23258,7 @@ impl<'a> WorkbookHost<'a> {
                 spill: Default::default(),
                 col: address.column,
                 value: CellValue::Empty,
-                style: CellStyle::default(),
+                style: starting.clone(),
                 formula: None,
                 runs: Vec::new(),
             });
@@ -23230,7 +23271,7 @@ impl<'a> WorkbookHost<'a> {
             .unwrap();
 
         if dressing {
-            let coming = held.map(|held| held.style.clone()).unwrap_or_default();
+            let coming = held.map(|held| held.style.clone()).unwrap_or_else(||template.clone());
             // The edges are part of the dress, and one kind of paste leaves
             // them behind: asked of Excel, `xlPasteAllExceptBorders` carries
             // the fill and the number format but leaves the line under the
@@ -23251,7 +23292,7 @@ impl<'a> WorkbookHost<'a> {
             };
         } else if carries.number_format {
             // The one kind that carries a number format and nothing else.
-            cell.style.number_format = held.and_then(|held| held.style.number_format.clone());
+            cell.style.number_format = held.map(|held|&held.style).unwrap_or(template).number_format.clone();
         }
         if !carries.values {
             return Ok(());
@@ -24488,10 +24529,13 @@ impl<'a> WorkbookHost<'a> {
         let unlocked = addresses.iter().map(|address| self.unlocked.contains(address)).collect();
         let validations = addresses.iter().map(|address| self.validation_at(*address)).collect();
         let packed = Clipboard {
+            owner: self.objects.owner,
             cells,
             notes,
             validations,
             conditions: Vec::new(),
+            default_style: self.workbook.default_style.clone(),
+            templates: self.clipboard_templates(&sorted),
             origins: addresses,
             values_only: true,
             unlocked,
@@ -24951,6 +24995,7 @@ impl<'a> WorkbookHost<'a> {
 // These values have one application lifetime. They move between real hosts
 // when native dispatch changes books; they are never copied per workbook.
 struct ApplicationProperties {
+    clipboard: Option<Clipboard>,
     find_settings: (i64, i64, i64),
     screen_updating: bool,
     enable_events: bool,
@@ -25038,7 +25083,9 @@ struct ApplicationProperties {
 }
 impl ApplicationProperties {
     fn take(host: &mut WorkbookHost<'_>) -> Self {
+        host.refresh_owned_clipboard();
         Self {
+            clipboard: host.clipboard.take(),
             find_settings: std::mem::take(&mut host.find_settings),
             screen_updating: std::mem::take(&mut host.screen_updating),
             enable_events: std::mem::take(&mut host.enable_events),
@@ -25162,6 +25209,7 @@ impl ApplicationProperties {
         }
     }
     fn install(self, host: &mut WorkbookHost<'_>) {
+        host.clipboard = self.clipboard;
         host.find_settings = self.find_settings;
         host.screen_updating = self.screen_updating;
         host.enable_events = self.enable_events;
@@ -25248,6 +25296,9 @@ impl ApplicationProperties {
         host.replace_format_pattern_tint = self.replace_format_pattern_tint;
     }
     fn swap(left: &mut WorkbookHost<'_>, right: &mut WorkbookHost<'_>) {
+        left.refresh_owned_clipboard();
+        right.refresh_owned_clipboard();
+        std::mem::swap(&mut left.clipboard, &mut right.clipboard);
         std::mem::swap(&mut left.find_settings, &mut right.find_settings);
         std::mem::swap(&mut left.screen_updating, &mut right.screen_updating);
         std::mem::swap(&mut left.enable_events, &mut right.enable_events);
@@ -45789,6 +45840,65 @@ End Function"#;
         let out=execute_workbook_vba(book,CODE,"Driver",vec![],0,failure_context()).unwrap();
         assert!(out.error.is_none(),"{:?}",out.error.as_ref().map(|e|&e.message));
         assert_eq!(serde_json::to_value(&out.result).unwrap()["value"],"Long:-4107|-4108|-4108|Null");
+    }
+
+    #[test]
+    fn copying_unwritten_cells_preserves_template_fonts_and_band_formats() {
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let initial=oxicells_core::parse_xlsx_preserving_values(original).unwrap().default_style;
+        const CODE:&str=r#"Public Sub Driver(ByVal custom As Boolean, ByVal otherBook As Boolean)
+ Application.DisplayAlerts = False
+ Application.EnableEvents = False
+ Dim source As Workbook, target As Workbook
+ Set source = ThisWorkbook
+ If custom Then
+  source.Worksheets(1).Columns("B").Font.Name = "Arial"
+  source.Worksheets(1).Columns("B").Font.Size = 16
+  source.Worksheets(1).Columns("B").Interior.Color = 65280
+  source.Worksheets(1).Columns("B").NumberFormat = "0.00"
+ End If
+ If otherBook Then
+  Set target = Workbooks.Add
+ Else
+  Set target = source
+ End If
+ source.Worksheets(1).Range("B99").Copy
+ target.Worksheets(1).Range("A1").PasteSpecial
+ target.SaveAs Filename:="C:\probe\blank-copy-result.xlsm", FileFormat:=52
+ target.SaveCopyAs "C:\probe\blank-copy-copy.xlsm"
+End Sub"#;
+        for (custom,other_book) in [(false,false),(true,false),(true,true)] {
+            let mut context=failure_context();
+            context.file_name=Some("blank-copy-source.xlsm".into());
+            context.file_context=Some(file_io::FileContext {
+                full_name:Some(r"C:\probe\blank-copy-source.xlsm".into()),
+                package_bytes:Some(original.to_vec()),folders:vec![r"C:\probe".into()],
+                ..Default::default()
+            });
+            let out=execute_workbook_action_in_session(
+                oxicells_core::parse_xlsx_preserving_values(original).unwrap(),CODE,
+                Some("Driver"),vec![Value::Boolean(custom),Value::Boolean(other_book)],0,context,&mut None).unwrap();
+            assert!(out.error.is_none(),"{:?}",out.error.as_ref().map(|e|&e.message));
+            let state=serde_json::to_value(&out.file_system_state).unwrap();
+            let files:Vec<file_io::ProducedFile>=serde_json::from_value(state["files"].clone()).unwrap();
+            for name in ["blank-copy-result.xlsm","blank-copy-copy.xlsm"] {
+                let file=files.iter().find(|file|file.path.eq_ignore_ascii_case(&format!(r"C:\probe\{name}"))).unwrap();
+                let restored=oxicells_core::parse_xlsx_preserving_values(&file.bytes).unwrap();
+                let cell=restored.sheets[0].rows.iter().find(|row|row.index==1).unwrap()
+                    .cells.iter().find(|cell|cell.col==0).unwrap();
+                assert!(matches!(cell.value,CellValue::Empty));
+                if custom {
+                    assert_eq!(cell.style.latin_font_name(),Some("Arial"));
+                    assert_eq!(cell.style.font_size,Some(16.0));
+                    assert_eq!(cell.style.bg_color.as_deref(),Some("00FF00"));
+                    assert_eq!(cell.style.number_format.as_deref(),Some("0.00"));
+                } else {
+                    assert_eq!(cell.style.font_reference,initial.font_reference);
+                    assert_eq!(cell.style.font_family,initial.font_family);
+                    assert_eq!(cell.style.font_charset,initial.font_charset);
+                }
+            }
+        }
     }
 
     #[test]
