@@ -153,7 +153,7 @@ impl WorkbookFiles {
     pub(super) fn blank_package(
         kind: oxicells_core::ir::SheetKind,
         count: usize,
-        font: (&str, f32),
+        font: &CellStyle,
         dimensions: (f32, f32),
     ) -> Result<Vec<u8>, String> {
         use std::io::Write;
@@ -161,7 +161,6 @@ impl WorkbookFiles {
         let main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
         let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
         let xlm = "http://schemas.microsoft.com/office/excel/2006/main";
-        let escape = |text: &str| quick_xml::escape::escape(text).into_owned();
         let (folder, relationship, content_type, root, name) = match kind {
             SheetKind::Worksheet => ("worksheets", format!("{rel}/worksheet"),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml", "worksheet", "Sheet"),
@@ -208,7 +207,7 @@ impl WorkbookFiles {
         parts.push(("_rels/.rels".into(), format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="workbook" Type="{rel}/officeDocument" Target="xl/workbook.xml"/></Relationships>"#)));
         parts.push(("xl/workbook.xml".into(), format!(r#"<workbook xmlns="{main}" xmlns:r="{rel}"><workbookPr codeName="ThisWorkbook"/><bookViews><workbookView/></bookViews><sheets>{sheets}</sheets><calcPr calcId="0" fullCalcOnLoad="1"/></workbook>"#)));
         parts.push(("xl/_rels/workbook.xml.rels".into(), relationships));
-        parts.push(("xl/styles.xml".into(), format!(r#"<styleSheet xmlns="{main}"><fonts count="1"><font><sz val="{}"/><name val="{}"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"#, font.1, escape(font.0))));
+        parts.push(("xl/styles.xml".into(), format!(r#"<styleSheet xmlns="{main}"><fonts count="1">{}</fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"#, oxicells_core::editor::serialize_cell_font(font))));
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for (name, xml) in parts {
             zip.start_file(name, zip::write::SimpleFileOptions::default()

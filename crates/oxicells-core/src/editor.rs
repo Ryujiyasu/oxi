@@ -9535,6 +9535,11 @@ fn reconcile_style_edit(before: Option<&CellStyle>, after: &CellStyle) -> CellSt
     style
 }
 
+/// Serialize a cell font, retaining its logical face and color references.
+pub fn serialize_cell_font(style: &CellStyle) -> String {
+    font_xml(style)
+}
+
 fn font_xml(style: &CellStyle) -> String {
     let mut font = String::from("<font>");
     if style.bold {
