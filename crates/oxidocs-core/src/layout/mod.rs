@@ -9138,10 +9138,19 @@ cells={} pitch={:.2} text={:?}",
             } else {
                 text_box.width
             };
+            // OXI_ALIGN_EFFEXT (2026-11-03, default ON, opt-out _DISABLE): an aligned
+            // box is aligned with its wp:effectExtent margins around it -- the file's
+            // values, whether or not an effect is drawn; posOffset boxes ignore them.
+            // `_pb_align_effext_gen.py` (200 x 80 box, extent l2 t9 r5 b3pt, margin):
+            // left 56 = 54 + 2, center 196.15, right 336.3 = edge - 200 - 5, top 81,
+            // center 383.95, bottom 686.9 = edge - 80 - 3; a shadow with a zero extent
+            // aligns the bare box. ja/reports__5373dd8a's masthead (l1.5 t9): Word
+            // (55.5, 81), Oxi (54, 72).
+            let (el, er) = if crate::env_flag!("OXI_ALIGN_EFFEXT_DISABLE") { (0.0, 0.0) } else { (pos.eff_l, pos.eff_r) };
             match align.as_str() {
-                "left" => ref_left,
-                "center" => ref_left + (ref_width - align_w) / 2.0,
-                "right" => ref_left + ref_width - align_w,
+                "left" => ref_left + el,
+                "center" => ref_left + (ref_width - align_w - el - er) / 2.0 + el,
+                "right" => ref_left + ref_width - align_w - er,
                 _ => ref_left,
             }
         } else {
@@ -9178,10 +9187,11 @@ cells={} pitch={:.2} text={:?}",
                     ref_height = page.size.height - page.margin.top - page.margin.bottom;
                 }
             }
+            let (et, eb) = if crate::env_flag!("OXI_ALIGN_EFFEXT_DISABLE") { (0.0, 0.0) } else { (pos.eff_t, pos.eff_b) };
             match align.as_str() {
-                "top" => ref_top,
-                "center" => ref_top + (ref_height - text_box.height) / 2.0,
-                "bottom" => ref_top + ref_height - text_box.height,
+                "top" => ref_top + et,
+                "center" => ref_top + (ref_height - text_box.height - et - eb) / 2.0 + et,
+                "bottom" => ref_top + ref_height - text_box.height - eb,
                 _ => ref_top,
             }
         } else {
@@ -9545,6 +9555,75 @@ cells={} pitch={:.2} text={:?}",
                 }
             });
             let cr = text_box.corner_radius.unwrap_or(0.0);
+            let sw = if has_border { text_box.stroke_width.unwrap_or(1.0) } else { 0.0 };
+            // OXI_TXBX_SHADOW (parser): the silhouette -- outline included -- moved by
+            // the shadow offset, under the box. BoxRect has no alpha, so the colour is
+            // laid over white (the page), as Word's 40% black over paper reads 154.
+            if let Some((dx, dy, ref col, alpha)) = text_box.outer_shadow {
+                let (r, g, b) = {
+                    let h = col.trim_start_matches('#');
+                    let c = |i: usize| u8::from_str_radix(h.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0) as f32;
+                    (c(0), c(2), c(4))
+                };
+                let mix = |v: f32| (255.0 - alpha.clamp(0.0, 1.0) * (255.0 - v)).round() as u8;
+                let grow = sw / 2.0;
+                elements.push(LayoutElement::new(
+                    abs_x - grow + dx,
+                    abs_y - grow + dy,
+                    text_box.width + 2.0 * grow,
+                    text_box.height + 2.0 * grow,
+                    LayoutContent::BoxRect {
+                        fill: Some(format!("#{:02X}{:02X}{:02X}", mix(r), mix(g), mix(b))),
+                        stroke_color: None,
+                        stroke_width: 0.0,
+                        corner_radius: if cr > 0.0 { cr + grow } else { 0.0 },
+                    },
+                ));
+            }
+            // OXI_TXBX_CMPD (2026-11-03, default ON, opt-out _DISABLE): a compound
+            // outline is bands across the line width w, measured from its outer edge
+            // (w/2 outside the box edge). `_pb_shape_cmpd_shadow_gen.py`, w 6 and 3:
+            // dbl 1/3 gap 1/3; thickThin 0.6 gap 0.2 0.2; thinThick 0.2 gap 0.2 0.6;
+            // tri 1/6 gap 1/6 2/6 gap 1/6 1/6. ja/reports__5373dd8a's page frames
+            // (5.25pt thickThin) drew one solid 5.25pt line.
+            let bands: &[(f32, f32)] = match text_box.outline_cmpd.as_deref() {
+                _ if !has_border || crate::env_flag!("OXI_TXBX_CMPD_DISABLE") => &[],
+                Some("dbl") => &[(0.0, 1.0 / 3.0), (2.0 / 3.0, 1.0)],
+                Some("thickThin") => &[(0.0, 0.6), (0.8, 1.0)],
+                Some("thinThick") => &[(0.0, 0.2), (0.4, 1.0)],
+                Some("tri") => &[(0.0, 1.0 / 6.0), (2.0 / 6.0, 4.0 / 6.0), (5.0 / 6.0, 1.0)],
+                _ => &[],
+            };
+            let stroke_hex = text_box
+                .stroke_color
+                .as_ref()
+                .map(|c| if c.starts_with('#') { c.clone() } else { format!("#{}", c) })
+                .or_else(|| Some("#000000".to_string()));
+            if !bands.is_empty() {
+                elements.push(LayoutElement::new(
+                    abs_x,
+                    abs_y,
+                    text_box.width,
+                    text_box.height,
+                    LayoutContent::BoxRect { fill: fill_hex.clone(), stroke_color: None, stroke_width: 0.0, corner_radius: cr },
+                ));
+                for &(a, b) in bands {
+                    // inward distance of the band's centre from the box edge
+                    let off = -sw / 2.0 + (a + b) * sw / 2.0;
+                    elements.push(LayoutElement::new(
+                        abs_x + off,
+                        abs_y + off,
+                        (text_box.width - 2.0 * off).max(0.0),
+                        (text_box.height - 2.0 * off).max(0.0),
+                        LayoutContent::BoxRect {
+                            fill: None,
+                            stroke_color: stroke_hex.clone(),
+                            stroke_width: (b - a) * sw,
+                            corner_radius: if cr > 0.0 { (cr - off).max(0.0) } else { 0.0 },
+                        },
+                    ));
+                }
+            } else {
             elements.push(LayoutElement::new(
                 abs_x,
                 abs_y,
@@ -9575,6 +9654,7 @@ cells={} pitch={:.2} text={:?}",
                     corner_radius: cr,
                 },
             ));
+            }
         }
 
         // 3. Clip region — TextBox content is clipped to the box sideways; below
@@ -10152,7 +10232,19 @@ cells={} pitch={:.2} text={:?}",
                     }
                 }
             }
-            if min_y < max_y {
+            // OXI_TXBX_CTR_FLOW (2026-11-03, default ON, opt-out _DISABLE): Word centres
+            // (or bottom-aligns) the LAID-OUT paragraphs -- empty ones, the first
+            // paragraph's before and the last one's after included -- not their ink;
+            // content taller than the box stays top-aligned. `_pb_txbx_ctr_content_gen.py`
+            // (200pt box, anchor ctr, Calibri 11, 13.38pt lines): 2 trailing empty
+            // paragraphs lift the text 13.44, 24pt after on the last 12, 24pt before
+            // on the first lowers it 12, 20 trailing empties top-align it.
+            // ja/reports__5373dd8a p2: a frame whose text ends in 34 empty paragraphs
+            // was centred on its ink and drawn 4.9pt low.
+            if !crate::env_flag!("OXI_TXBX_CTR_FLOW_DISABLE") {
+                cursor.cursor_y + if txbx_after_on { txbx_prev_after } else { 0.0 }
+                    - (abs_y + inset_t + v_corner_inset)
+            } else if min_y < max_y {
                 max_y - min_y
             } else {
                 cursor.cursor_y - (abs_y + inset_t + v_corner_inset)

@@ -8051,6 +8051,8 @@ fn parse_drawing(
     let mut font_ref_color: Option<String> = None;
     let mut stroke_color: Option<String> = None;
     let mut stroke_width: Option<f32> = None;
+    let mut stroke_cmpd: Option<String> = None;
+    let mut outer_shadow: Option<(f32, f32, String, f32)> = None;
     let mut shape_text_blocks: Vec<Block> = Vec::new();
     let mut rotation: Option<f32> = None;
     let mut flip_h = false;
@@ -8329,6 +8331,67 @@ fn parse_drawing(
                             }
                         }
                     }
+                    // OXI_TXBX_SHADOW (2026-11-03, default ON, opt-out _DISABLE): an outer
+                    // shadow is the shape's silhouette (outline included) moved dist
+                    // along dir (clockwise from +x, y down), in its colour at its
+                    // alpha; with blurRad the 50% edge stays on that silhouette.
+                    // `_pb_shape_cmpd_shadow_gen.py`: dist 9 at 315/45/135/0 deg ->
+                    // (+-6.36, +-6.36) / (9, 0); alpha 40% black over white -> 154.
+                    // ja/reports__5373dd8a's masthead roundRect.
+                    "outerShdw" if !crate::env_flag!("OXI_TXBX_SHADOW_DISABLE") => {
+                        let (mut dist, mut dir) = (0.0f32, 0.0f32);
+                        for attr in e.attributes().flatten() {
+                            let v = String::from_utf8_lossy(&attr.value).parse::<f32>().unwrap_or(0.0);
+                            match local_name(attr.key.as_ref()).as_str() {
+                                "dist" => dist = v / 12700.0,
+                                "dir" => dir = v / 60000.0,
+                                _ => {}
+                            }
+                        }
+                        let (mut col, mut alpha) = (String::from("000000"), 1.0f32);
+                        let mut sd = 1;
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Start(se)) | Ok(Event::Empty(se)) if {
+                                    let sl = local_name(se.name().as_ref());
+                                    matches!(sl.as_str(), "srgbClr" | "schemeClr" | "prstClr" | "sysClr" | "alpha")
+                                } => {
+                                    let sl = local_name(se.name().as_ref());
+                                    for attr in se.attributes().flatten() {
+                                        let k = local_name(attr.key.as_ref());
+                                        let v = String::from_utf8_lossy(&attr.value).to_string();
+                                        match (sl.as_str(), k.as_str()) {
+                                            ("srgbClr", "val") => col = v,
+                                            ("sysClr", "lastClr") => col = v,
+                                            ("schemeClr", "val") => {
+                                                if let Some(h) = ctx.theme.resolve(&v) { col = h.clone(); }
+                                            }
+                                            ("prstClr", "val") => {
+                                                col = if v == "white" { "FFFFFF".into() } else { "000000".into() };
+                                            }
+                                            ("alpha", "val") => alpha = v.parse::<f32>().unwrap_or(100000.0) / 100000.0,
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                Ok(Event::Start(_)) => sd += 1,
+                                Ok(Event::End(se)) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if sl == "outerShdw" { break; }
+                                    if !matches!(sl.as_str(), "srgbClr" | "schemeClr" | "prstClr" | "sysClr" | "alpha") {
+                                        sd -= 1;
+                                        if sd == 0 { break; }
+                                    }
+                                }
+                                Ok(Event::Eof) | Err(_) => break,
+                                _ => {}
+                            }
+                        }
+                        let a = dir.to_radians();
+                        outer_shadow = Some((dist * a.cos(), dist * a.sin(), col, alpha));
+                        // We consumed outerShdw's End, decrement outer depth
+                        depth -= 1;
+                    }
                     // Shape line as Start element — may contain srgbClr child
                     "ln" => {
                         // S839: per-shape capture of THIS a:ln's values (the
@@ -8337,6 +8400,10 @@ fn parse_drawing(
                         let mut s839_ln_nofill = false;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
+                            if key == "cmpd" {
+                                let v = String::from_utf8_lossy(&attr.value).to_string();
+                                stroke_cmpd = (v != "sng").then_some(v);
+                            }
                             if key == "w" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 stroke_width = val.parse::<f32>().ok().map(|v| v / 12700.0);
@@ -9620,6 +9687,10 @@ fn parse_drawing(
                     "ln" => {
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
+                            if key == "cmpd" {
+                                let v = String::from_utf8_lossy(&attr.value).to_string();
+                                stroke_cmpd = (v != "sng").then_some(v);
+                            }
                             if key == "w" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 stroke_width = val.parse::<f32>().ok().map(|v| v / 12700.0);
@@ -9898,6 +9969,8 @@ fn parse_drawing(
                                     corner_radius: None,
                                     ellipse: false,
             callout: None,
+            outline_cmpd: None,
+            outer_shadow: None,
                                     inset_left: text_inset_left,
                                     inset_right: text_inset_right,
                                     inset_top: text_inset_top,
@@ -10016,6 +10089,8 @@ fn parse_drawing(
                                     corner_radius: None,
                                     ellipse: false,
             callout: None,
+            outline_cmpd: None,
+            outer_shadow: None,
                                     inset_left: Some(0.0),
                                     inset_right: Some(0.0),
                                     inset_top: Some(0.0),
@@ -10410,6 +10485,8 @@ fn parse_drawing(
             // OXI_TXBX_ELLIPSE (2026-10-30, default ON, opt-out _DISABLE)
             ellipse: shape_type.as_deref() == Some("ellipse")
                 && std::env::var_os("OXI_TXBX_ELLIPSE_DISABLE").is_none(),
+            outline_cmpd: stroke_cmpd.clone(),
+            outer_shadow: outer_shadow.clone(),
             // OXI_TXBX_CALLOUT (2026-11-03, default ON, opt-out _DISABLE)
             callout: match shape_type.as_deref() {
                 Some(p @ ("wedgeRoundRectCallout" | "wedgeRectCallout"))
@@ -10652,6 +10729,8 @@ fn vml_shape_text_box(sh: &Shape) -> TextBox {
         corner_radius: None,
         ellipse: false,
             callout: None,
+            outline_cmpd: None,
+            outer_shadow: None,
         inset_left: Some(7.2),
         inset_right: Some(7.2),
         inset_top: Some(3.6),
@@ -11546,6 +11625,8 @@ fn parse_vml_pict(
             corner_radius: None,
             ellipse: false,
             callout: None,
+            outline_cmpd: None,
+            outer_shadow: None,
             inset_left: None,
             inset_right: None,
             inset_top: None,
@@ -11623,6 +11704,8 @@ fn parse_vml_pict(
             corner_radius: if shape_type.as_deref() == Some("roundRect") { Some(3.0) } else { None },
             ellipse: false,
             callout: None,
+            outline_cmpd: None,
+            outer_shadow: None,
             inset_left: Some(inset[0]),
             inset_top: Some(inset[1]),
             inset_right: Some(inset[2]),
@@ -11697,6 +11780,8 @@ fn parse_vml_pict(
             },
             ellipse: false,
             callout: None,
+            outline_cmpd: None,
+            outer_shadow: None,
             inset_left: None,
             inset_right: None,
             inset_top: None,

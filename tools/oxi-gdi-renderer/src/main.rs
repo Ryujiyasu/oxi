@@ -86,8 +86,46 @@ fn run_batch(list_path: &str) {
     }
 }
 
+/// OXI_DW_CLOUD_FONTS (GDI twin, same opt-out): make the Office cloud-cache and
+/// per-user font files drawable in this process (FR_PRIVATE), as the layout
+/// already measures them (core font::runtime). See the DirectWrite renderer.
+fn register_cloud_fonts() {
+    if std::env::var_os("OXI_DW_CLOUD_FONTS_DISABLE").is_some() {
+        return;
+    }
+    let Ok(local) = std::env::var("LOCALAPPDATA") else { return };
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let cloud = std::path::Path::new(&local).join(r"Microsoft\FontCache\4\CloudFonts");
+    if let Ok(rd) = std::fs::read_dir(&cloud) {
+        for fam in rd.flatten() {
+            if let Ok(inner) = std::fs::read_dir(fam.path()) {
+                files.extend(inner.flatten().map(|e| e.path()));
+            }
+        }
+    }
+    if let Ok(rd) = std::fs::read_dir(std::path::Path::new(&local).join(r"Microsoft\Windows\Fonts")) {
+        files.extend(rd.flatten().map(|e| e.path()));
+    }
+    for path in files {
+        let ok = path.extension().and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc"));
+        if !ok {
+            continue;
+        }
+        let w: Vec<u16> = path.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            let _ = windows::Win32::Graphics::Gdi::AddFontResourceExW(
+                windows::core::PCWSTR(w.as_ptr()),
+                windows::Win32::Graphics::Gdi::FR_PRIVATE,
+                None,
+            );
+        }
+    }
+}
+
 fn main() {
     install_memory_cap();
+    register_cloud_fonts();
     let args: Vec<String> = std::env::args().collect();
     if let Some(list) = args.get(1).and_then(|a| a.strip_prefix("--batch=")) {
         run_batch(list);

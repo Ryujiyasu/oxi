@@ -1299,6 +1299,14 @@ pub struct TextBox {
     /// [adj1, adj2, adj3] in 1/100000 (adj3 0 for the square-cornered one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callout: Option<[f32; 3]>,
+    /// OXI_TXBX_CMPD: the outline's compound type (a:ln@cmpd: dbl, thickThin,
+    /// thinThick, tri); None = a single line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_cmpd: Option<String>,
+    /// OXI_TXBX_SHADOW: a:outerShdw as (dx, dy, colour hex, alpha 0..1), the
+    /// offset in points (dist along dir, y down).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outer_shadow: Option<(f32, f32, String, f32)>,
     /// Text inset left (in points, default 7.2pt = 91440 EMU)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset_left: Option<f32>,

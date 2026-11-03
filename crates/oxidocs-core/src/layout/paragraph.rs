@@ -7843,6 +7843,8 @@ impl<'a> ParagraphLayouter<'a> {
             // OXI_S706_DISABLE.
             let s706_on = !crate::env_flag!("OXI_S706_DISABLE");
             let mut run_bdr_acc: Option<(f32, f32, BorderDef)> = None;
+            // OXI_SHD_NATURAL_BOX: the bordered runs' natural box on this line (top, bottom).
+            let mut run_bdr_vbox: Option<(f32, f32)> = None;
 
             // S-TWOSEG: where this row crosses the float, and to what x.
             let two_seg_jump: Option<(usize, f32)> = match (row_two_segments, line.seg2_at) {
@@ -8767,6 +8769,65 @@ impl<'a> ParagraphLayouter<'a> {
                         }
                     }
                 }
+                // OXI_SHD_NATURAL_BOX (2026-11-03, default ON, opt-out _DISABLE): a run's
+                // w:shd fill and w:bdr box cover the run's NATURAL line box around its
+                // own baseline -- not a grid / multiple line's full height; only an
+                // exact line fills the whole line. `_pb_run_bdr_box_gen.py` (ＭＳ 明朝 /
+                // BIZ UDPゴシック / Arial, 10.5 and 16pt; single, docGrid 36pt,
+                // multiple 2, exact 30): the yellow rect is baseline -1.03 / +0.27 em
+                // (BIZ, the 83/64 half lead each side), -1.01 / +0.29 (明朝), -0.938 /
+                // +0.21 (Arial: ascent + line gap / win descent) in every non-exact
+                // regime, the 30pt line under exact. ja/reports__5373dd8a's yellow
+                // headings (BIZ UDPゴシック 16 / 18 on a 36pt grid): Word 20.9 / 23.5pt
+                // tall, Oxi 36.
+                let shd_box = if !is_vert_frag
+                    && para.style.line_spacing_rule.as_deref() != Some("exact")
+                    && !crate::env_flag!("OXI_SHD_NATURAL_BOX_DISABLE")
+                    && (frag.style.run_border.is_some()
+                        || (frag.style.highlight.is_none() && frag.style.shading.is_some()))
+                {
+                    let m = &*self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                    let fs = resolved_font_size;
+                    let baseline = el.baseline_offset.map(|b| el.y + b)
+                        .unwrap_or(el.y + el.text_y_off - 1.0 + m.baseline_ascent() * fs);
+                    let (a, d) = if m.is_cjk_83_64_font() {
+                        let half = (m.win_ascent + m.win_descent) * (83.0 / 64.0 - 1.0) * 0.5;
+                        (m.win_ascent + half, m.win_descent + half)
+                    } else {
+                        (m.baseline_ascent(), m.win_descent)
+                    };
+                    Some((baseline - a * fs, baseline + d * fs))
+                } else {
+                    None
+                };
+                if let Some((top, bottom)) = shd_box {
+                    if frag.style.run_border.is_some() {
+                        run_bdr_vbox = Some(run_bdr_vbox.map_or((top, bottom), |(t, b)| (t.min(top), b.max(bottom))));
+                    }
+                    if frag.style.highlight.is_none() {
+                        if let Some(ref shd) = frag.style.shading {
+                            let mut sel = LayoutElement::new(
+                                el.x,
+                                top,
+                                el.width,
+                                (bottom - top).max(0.0),
+                                LayoutContent::BoxRect {
+                                    fill: Some(if shd.starts_with('#') { shd.clone() } else { format!("#{}", shd) }),
+                                    stroke_color: None,
+                                    stroke_width: 0.0,
+                                    corner_radius: 0.0,
+                                },
+                            );
+                            if let Some(pi) = body_para_index {
+                                sel.paragraph_index = Some(pi);
+                            }
+                            elements.push(sel);
+                            if let LayoutContent::Text { ref mut highlight, .. } = el.content {
+                                *highlight = None;
+                            }
+                        }
+                    }
+                }
                 // Round 7: capture base element x/y BEFORE push (move).
                 // Used below to position the ruby annotation above the base.
                 let base_el_x = el.x - s1650_lead;
@@ -9091,12 +9152,14 @@ impl<'a> ParagraphLayouter<'a> {
                     },
                 ));
                 let w = (r - l).max(0.0);
+                let (bt, bh) = run_bdr_vbox.take()
+                    .map_or((cursor.visual_y, line_height), |(t, b)| (t, b - t));
                 if w > 0.0 {
                     elements.push(LayoutElement::new(
                         l,
-                        cursor.visual_y - sp,
+                        bt - sp,
                         w,
-                        line_height + 2.0 * sp,
+                        bh + 2.0 * sp,
                         LayoutContent::BoxRect {
                             fill: None,
                             stroke_color: col,
