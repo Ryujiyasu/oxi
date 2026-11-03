@@ -19276,8 +19276,15 @@ cells={} pitch={:.2} text={:?}",
                             // ja/administrative__05e3143c, lines grid 18pt, 12pt text): a 16pt
                             // «　» before or after it, a 16pt ASCII space, a 20pt «　» all leave
                             // the baseline where the 12pt line has it; a 16pt «さ» moves it.
+                            // Only when a visible run is itself a CJK 83/64 face: a Latin line
+                            // whose one CJK-face run is its whitespace keeps that run's box
+                            // (db9ca183's «(Example of citation…)» dropped 5pt without it).
                             let ws_skip = !crate::env_flag!("OXI_GRID_WS_CENTER_DISABLE")
-                                && line.fragments.iter().any(|f| !f.text.trim().is_empty());
+                                && line.fragments.iter().any(|f| {
+                                    !f.text.trim().is_empty()
+                                        && self.metrics_for_text(&f.text, &f.style, para_style)
+                                            .is_cjk_83_64_font()
+                                });
                             let line_fs = line
                                 .fragments
                                 .iter()

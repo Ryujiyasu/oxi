@@ -7527,7 +7527,13 @@ impl<'a> ParagraphLayouter<'a> {
                 // 16 / 20pt «　» or a 16pt space beside 12pt text leaves Word's baseline
                 // where the 12pt line has it; ja/administrative__05e3143c's first body
                 // line (16pt «　» + 12pt) sat 1.4pt low.
+                // Typed-grid lines only: on a free line Word does let a larger «　» set
+                // the baseline (kojin_000505813's footnote: a 10.5pt «　» after the
+                // reference keeps the 8pt text 2.4pt lower than without it).
                 let ws_base = !crate::env_flag!("OXI_WS_BASELINE_DISABLE")
+                    && !page.doc_grid_no_type
+                    && para.style.snap_to_grid
+                    && grid_pitch.is_some_and(|p| p > 0.1)
                     && LayoutEngine::s1298_has_visible(&line.fragments);
                 line.fragments
                     .iter()
@@ -7568,6 +7574,9 @@ impl<'a> ParagraphLayouter<'a> {
             } else {
                 let s1045_ma = self.s1045_height_drivers(&line.fragments, para_font_size);
                 let ws_base = !crate::env_flag!("OXI_WS_BASELINE_DISABLE")
+                    && !page.doc_grid_no_type
+                    && para.style.snap_to_grid
+                    && grid_pitch.is_some_and(|p| p > 0.1)
                     && LayoutEngine::s1298_has_visible(&line.fragments);
                 line.fragments
                     .iter()
