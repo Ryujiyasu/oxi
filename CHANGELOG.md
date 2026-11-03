@@ -2,17 +2,81 @@
 
 ## How versions are numbered
 
-Since 0.8.2 the version number is the **penalized mean SSIM against Microsoft Word on the
-current frozen blind sets** — fifty English and fifty Japanese documents that nothing has
-been tuned against, scored on Word's own 150 DPI render of the same file, with every page
-Oxi adds or drops scored zero: `0.8.2` means the two-language penalized mean is 0.82
-(0.845 / 0.809, two-decimal truncation). A blind set is spent the moment its
+Since 0.9.0 the version number is the **mean SSIM against Microsoft Word on the current
+frozen blind sets**, over the pages Oxi and Word both draw — fifty English and fifty Japanese
+documents that nothing has been tuned against, scored on Word's own 150 DPI render of the same
+file: `0.9.0` means the two-language mean is 0.90 (0.924 / 0.892, two-decimal truncation of
+0.908). The penalized mean, which scores every page Oxi adds or drops as zero, is reported
+beside it in every release (0.911 / 0.866 for 0.9.0). A blind set is spent the moment its
 number is written down, so the next release is measured on a new one frozen beforehand.
 `1.0` is the project's stop condition, not a maturity label — it means no blind document is
 distinguishable from Word's output.
 
-0.8.0 used a different definition (the floor of the tuned development corpus: no document
-under 0.80). The change is recorded here so the two numbers are not read as one series.
+0.8.2 to 0.8.9 used the penalized mean as the number (blind-J's, 0.889, would have read
+0.8.8), and 0.8.0 the floor of the tuned development corpus (no document under 0.80). The
+changes are recorded here so the numbers are not read as one series.
+
+---
+
+## 0.9.0 — 2026-11-04
+
+Nine days and 126 commits after 0.8.9, most of them layout fixes each derived from a Word
+measurement (a probe document varying one property at a time, read back from Word's own PDF).
+Engine `58eb49d1`.
+
+### Rendering fidelity — blind-J, frozen 2026-11-03 before measurement
+
+Fifty English and fifty Japanese documents that nothing had touched, drawn by the declared
+SHA-order rule (`pipeline_data/FROZEN_BLIND_J.md`), scored against Microsoft Word's own
+150 DPI render (Microsoft 365 16.0.20527.20088, one fresh Word process per document). Every
+engine was updated to its latest public release on the measurement day. Mean SSIM on common
+pages / penalized (missing pages score 0) / page counts equal to Word's.
+
+| Engine | English (50) | Japanese (50) |
+|---|---|---|
+| **Oxi 0.9.0** | **0.924 / 0.911 / 46** | **0.892 / 0.866 / 45** |
+| ONLYOFFICE 10.0.0 | 0.921 / 0.901 / 43 | 0.770 / 0.747 / 42 |
+| LibreOffice 26.8.2.2 | 0.889 / 0.868 / 44 | 0.807 / 0.789 / 42 |
+| WordCraft 0.15.0 | 0.886 / 0.854 / 40 | 0.789 / 0.753 / 39 |
+| SILURUS @silurus/ooxml 0.89.7 | 0.863 / 0.830 / 40 | 0.805 / 0.734 / 34 |
+| GenOffice e1f50e90 | 0.847 / 0.818 / 41 | 0.801 / 0.717 / 32 (49 scored) |
+| Polaris Office 11.115.233 | 0.823 / 0.771 / 34 | 0.812 / 0.732 / 33 |
+| ibisOffice 0.8.5 | 0.801 / 0.766 / 36 | 0.825 / 0.789 / 43 |
+| BetterOffice @betteroffice/docx 0.5.1 | 0.774 / 0.654 / 30 | 0.756 / 0.679 / 35 |
+| eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.759 / 0.698 / 34 | 0.744 / 0.701 / 37 |
+| OfficeCLI 1.0.160 (`--render html`) | 0.753 / 0.483 / 23 | 0.745 / 0.544 / 28 |
+
+Common-page two-language mean 0.9078 → **0.9.0** (see "How versions are numbered": the
+penalized mean, 0.8887, is the 0.8.x definition). Oxi is first in both languages. In English
+the lead over ONLYOFFICE (0.003) is inside the ±0.02 one sample carries, and document by
+document ONLYOFFICE is closer to Word on 29 of 50; in Japanese Oxi leads ibisOffice by 0.067
+and is closer to Word than every other engine on at least 38 of 50 documents. Page breaks are
+the weak point in both: the worst documents in each language are one-page documents Oxi
+spreads onto two.
+
+### What changed since 0.8.9
+
+- **Text boxes and shapes**: Office cloud fonts drawn; shape shadows, compound and dashed
+  outlines; boxes aligned by their effect extent and centred on their laid-out content;
+  overflow clipped where Word clips it; upright and quarter-turned insets; tate-chu-yoko in
+  vertical boxes; VML chart groups, freeform paths, default-filled frames and absolute VML
+  text boxes; tables inside text boxes; SmartArt and charts drawn from the data Word saves
+- **Line height and baselines**: a line mixing faces takes the union of their boxes (single
+  spacing, compatible-spacing text boxes, atLeast lines); an empty `atLeast 0` line on a line
+  grid is sized by its ASCII face; whitespace runs do not move a grid line's centring or
+  baseline; run shading and borders sized to the run's own line; a style's character scale
+  (`w:w`) inherited
+- **Tables**: fixed-layout and positioned tables no longer clamped to the text column;
+  percentage-width fixed tables sized to their share; auto tables with no widths sized by
+  content; split rows moved whole when a cell would keep nothing; cell lines without
+  whitespace-only runs; compound cell borders
+- **Line breaking and Japanese typography**: middle dots and paired punctuation at line start
+  and before brackets; line-final ？／！ pulled in; spaces shrunk on justified Latin lines in
+  CJK documents; CJK lines wrapped beside anchored floats
+- **Headers, footers and pages**: floating footer pictures; drawings inside header/footer
+  content controls; page borders; mirror margins; header frames by page parity
+- **Tools**: `oxi serve` keeps fonts and metrics loaded across conversions; docx → DoclingDocument
+  export with page and bbox provenance; benchmarks run blind to Word's saved page breaks
 
 ---
 

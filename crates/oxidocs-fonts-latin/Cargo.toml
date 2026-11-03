@@ -1,6 +1,6 @@
 [package]
 name = "oxidocs-fonts-latin"
-version = "0.8.9"
+version = "0.9.0"
 edition = "2021"
 license = "MPL-2.0"
 description = "The metric-compatible Latin faces Oxi ships, as bytes"

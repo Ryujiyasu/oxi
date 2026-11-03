@@ -463,14 +463,14 @@ dependencies = [
 
 [[package]]
 name = "oxicells-calc"
-version = "0.8.9"
+version = "0.9.0"
 dependencies = [
  "oxicells-core",
 ]
 
 [[package]]
 name = "oxicells-core"
-version = "0.8.9"
+version = "0.9.0"
 dependencies = [
  "log",
  "oxicells-calc",
@@ -483,14 +483,14 @@ dependencies = [
 
 [[package]]
 name = "oxidocs"
-version = "0.8.9"
+version = "0.9.0"
 dependencies = [
  "oxidocs-core",
 ]
 
 [[package]]
 name = "oxidocs-cli"
-version = "0.8.9"
+version = "0.9.0"
 dependencies = [
  "image",
  "ovba",
@@ -507,7 +507,7 @@ dependencies = [
 
 [[package]]
 name = "oxidocs-common"
-version = "0.8.9"
+version = "0.9.0"
 dependencies = [
  "log",
  "quick-xml",
@@ -517,7 +517,7 @@ dependencies = [
 
 [[package]]
 name = "oxidocs-core"
-version = "0.8.9"
+version = "0.9.0"
 dependencies = [
  "encoding_rs",
  "flate2",
@@ -544,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "oxidocs-fonts"
-version = "0.8.9"
+version = "0.9.0"
 dependencies = [
  "oxidocs-fonts-jp",
  "oxidocs-fonts-latin",
@@ -552,15 +552,15 @@ dependencies = [
 
 [[package]]
 name = "oxidocs-fonts-jp"
-version = "0.8.9"
+version = "0.9.0"
 
 [[package]]
 name = "oxidocs-fonts-latin"
-version = "0.8.9"
+version = "0.9.0"
 
 [[package]]
 name = "oxidocs-wasm"
-version = "0.8.9"
+version = "0.9.0"
 dependencies = [
  "cfb",
  "codepage",
@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "oxihanko"
-version = "0.8.9"
+version = "0.9.0"
 dependencies = [
  "log",
  "oxipdf-core",
@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "oxipdf-core"
-version = "0.8.9"
+version = "0.9.0"
 dependencies = [
  "flate2",
  "log",
@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "oxislides-core"
-version = "0.8.9"
+version = "0.9.0"
 dependencies = [
  "log",
  "oxidocs-common",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "oxivba-core"
-version = "0.8.9"
+version = "0.9.0"
 
 [[package]]
 name = "png"
