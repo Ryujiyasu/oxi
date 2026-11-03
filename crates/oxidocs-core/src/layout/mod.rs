@@ -9599,7 +9599,61 @@ cells={} pitch={:.2} text={:?}",
                 .as_ref()
                 .map(|c| if c.starts_with('#') { c.clone() } else { format!("#{}", c) })
                 .or_else(|| Some("#000000".to_string()));
-            if !bands.is_empty() {
+            // OXI_TXBX_DASH (2026-11-03, default ON, opt-out _DISABLE): a square box's
+            // a:prstDash outline, one continuous pattern from the top-left corner
+            // clockwise (Word's PDF strokes the rect as one path). ja/administrative__0ba21b0c:
+            // the two 1.5pt dashDot frames, Word dash array [6 4.5 1.5 4.5] = [4 3 1 3] x w;
+            // Oxi drew them solid. Patterns in units of the width: ECMA-376 20.1.10.48.
+            let dash_units: Option<&[f32]> = match text_box.outline_dash.as_deref() {
+                _ if !has_border || cr > 0.0 || !bands.is_empty()
+                    || crate::env_flag!("OXI_TXBX_DASH_DISABLE") => None,
+                Some("dash") => Some(&[4.0, 3.0]),
+                Some("dashDot") => Some(&[4.0, 3.0, 1.0, 3.0]),
+                Some("lgDash") => Some(&[8.0, 3.0]),
+                Some("lgDashDot") => Some(&[8.0, 3.0, 1.0, 3.0]),
+                Some("lgDashDotDot") => Some(&[8.0, 3.0, 1.0, 3.0, 1.0, 3.0]),
+                Some("sysDash") => Some(&[3.0, 1.0]),
+                Some("sysDot") => Some(&[1.0, 1.0]),
+                Some("sysDashDot") => Some(&[3.0, 1.0, 1.0, 1.0]),
+                Some("sysDashDotDot") => Some(&[3.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+                Some("dot") => Some(&[1.0, 3.0]),
+                _ => None,
+            };
+            if let Some(units) = dash_units {
+                elements.push(LayoutElement::new(
+                    abs_x,
+                    abs_y,
+                    text_box.width,
+                    text_box.height,
+                    LayoutContent::BoxRect { fill: fill_hex.clone(), stroke_color: None, stroke_width: 0.0, corner_radius: 0.0 },
+                ));
+                let pat = units.iter().map(|u| format!("{u}")).collect::<Vec<_>>().join(",");
+                let (x0, y0, x1, y1) = (abs_x, abs_y, abs_x + text_box.width, abs_y + text_box.height);
+                let h = sw / 2.0;
+                // each side runs w/2 past both corners so the joins are filled; the
+                // pattern offset (in widths) carries on from the previous side.
+                let sides = [
+                    (x0 - h, y0, x1 + h, y0),
+                    (x1, y0 - h, x1, y1 + h),
+                    (x1 + h, y1, x0 - h, y1),
+                    (x0, y1 + h, x0, y0 - h),
+                ];
+                let mut run = -0.5f32;
+                for (k, &(ax, ay, bx, by)) in sides.iter().enumerate() {
+                    let len = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+                    elements.push(LayoutElement::new(
+                        ax.min(bx), ay.min(by), (bx - ax).abs(), (by - ay).abs(),
+                        LayoutContent::TableBorder {
+                            x1: ax, y1: ay, x2: bx, y2: by,
+                            color: stroke_hex.clone(),
+                            width: sw,
+                            style: Some(format!("prst:{pat}:{:.4}", run.rem_euclid(units.iter().sum::<f32>()))),
+                        },
+                    ));
+                    let _ = k;
+                    run += (len - sw) / sw.max(0.01);
+                }
+            } else if !bands.is_empty() {
                 elements.push(LayoutElement::new(
                     abs_x,
                     abs_y,
@@ -10260,6 +10314,8 @@ cells={} pitch={:.2} text={:?}",
             for el in elements.iter_mut() {
                 match &el.content {
                     LayoutContent::BoxRect { .. } | LayoutContent::ClipStart => {}
+                    // OXI_TXBX_DASH: the dashed outline's sides are the box, not content
+                    LayoutContent::TableBorder { style: Some(st), .. } if st.starts_with("prst:") => {}
                     LayoutContent::VectorPath { .. }
                         if (el.x - abs_x).abs() < 0.01 && (el.y - abs_y).abs() < 0.01
                             && (el.width - text_box.width).abs() < 0.01
@@ -23638,6 +23694,19 @@ cells={} pitch={:.2} text={:?}",
                 {
                     metrics.natural_line_height_hhea(font_size) * eff_ls.unwrap_or(1.0)
                 } else { lh };
+                // OXI_EST_RUN_BORDER (2026-11-03, default ON, opt-out _DISABLE): S1453's
+                // run-border growth (twice the drawn width + space) in the estimate too --
+                // the line emitter has it, the estimate did not, so a footer stack built
+                // from the estimate sat 1pt short and drew a bordered footer line low.
+                // `_pb_ftr_snap0_line_gen.py` bdr arms (w:bdr sz 4 on a 14pt footer line):
+                // Word 0.72 above the plain arm, Oxi 0.50 below it (+1.02 in every grid /
+                // snap arm). ja/creative__13152ea1's footer.
+                let lh = if !in_cell
+                    && !matches!(eff_lr, Some("exact"))
+                    && !crate::env_flag!("OXI_EST_RUN_BORDER_DISABLE")
+                {
+                    lh + 2.0 * Self::run_border_height_pad(&run.style)
+                } else { lh };
                 s1099_lhs.push((s1099_ri, lh));
                 if lh > max_line_height {
                     max_line_height = lh;
@@ -23768,6 +23837,18 @@ cells={} pitch={:.2} text={:?}",
                     let extra = max_line_height * (1.0 - 1.0 / factor);
                     max_line_height = object_h + extra;
                 }
+            }
+            // OXI_CELL_SHADOW_LINE estimate mirror (see table_fit.rs): every line of a
+            // shadowed cell paragraph grows by the shadow's extents.
+            if in_cell
+                && grid_pitch.is_none()
+                && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto") | Some("atLeast"))
+                && !(para.style.line_spacing_rule.as_deref() == Some("atLeast")
+                    && max_line_height <= para.style.line_spacing.unwrap_or(0.0) + 0.01)
+                && !crate::env_flag!("OXI_CELL_SHADOW_LINE_DISABLE")
+            {
+                let (t, b) = self.text_shadow_ext(para.runs.iter().map(|r| (&r.style, r.text.as_str())), &para.style);
+                max_line_height += t + b;
             }
             // S1099 (2026-08-08, default ON, opt-out `OXI_S1099_DISABLE`): the "max_lh x
             // line_count" model over-counts when the TALLEST run is a single

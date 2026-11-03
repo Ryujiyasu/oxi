@@ -8592,6 +8592,36 @@ impl<'a> TableFitLayouter<'a> {
                                             }
                                         }
 
+                                        // OXI_CELL_SHADOW_LINE (2026-11-03, default ON, opt-out _DISABLE): a
+                                        // w14:shadow run grows its cell line exactly as a body line
+                                        // (OXI_TEXT_SHADOW_LINE / text_shadow_ext): top part above the
+                                        // text, the rest below. `_pb_cell_shadow_line_gen.py` (Calibri /
+                                        // Cambria 12 / 18 / 24, blur 4 dist 3 down / up, 18 arms): the row
+                                        // grows 2.30 / 3.00 / 3.72 (law 2.27 / 3.03 / 3.72), the baseline
+                                        // drops 0.36 (down) / 2.64 (up) at 18pt. en/policies__009625de: the
+                                        // header table's shadowed «2016» put Word's body 3.1pt below Oxi's.
+                                        // atLeast (`_pb_cell_shadow_line_gen.py` PB_ATLEAST, Arial 14): the
+                                        // shadow grows the NATURAL line -- atLeast 0 / 15 grow 2.64 like
+                                        // auto; atLeast 20 (above natural + shadow) keeps 20 and lifts the
+                                        // baseline 2.18 = the bottom extent. Applied after the offsets
+                                        // below are worked out on the shadow-less line.
+                                        let (cell_sh_t, cell_sh_b) = if row_line_pitch.is_none()
+                                            && matches!(effective_line_rule, None | Some("auto") | Some("atLeast"))
+                                            && !crate::env_flag!("OXI_CELL_SHADOW_LINE_DISABLE")
+                                        {
+                                            self.text_shadow_ext(line.iter().map(|f| (&f.16, f.0.as_str())), &para.style)
+                                        } else {
+                                            (0.0, 0.0)
+                                        };
+                                        let (cell_sh_grow, cell_sh_dy) = if cell_sh_t + cell_sh_b <= 0.0 {
+                                            (0.0, 0.0)
+                                        } else if effective_line_rule == Some("atLeast")
+                                            && lh <= effective_line_spacing.unwrap_or(0.0) + 0.01
+                                        {
+                                            (0.0, -cell_sh_b)
+                                        } else {
+                                            (cell_sh_t + cell_sh_b, cell_sh_t)
+                                        };
                                         // Paragraph indentation: first line uses indent_left + first_line_indent
                                         let line_indent = p_indent_left
                                             + if line_idx == 0 {
@@ -9431,6 +9461,8 @@ impl<'a> TableFitLayouter<'a> {
                                         // shorter face beside a taller symbol or formatting run.
                                         // Grid, ruby, positioned scripts and embedded objects
                                         // retain their existing composed geometry.
+                                        let cell_text_y_off = cell_text_y_off + cell_sh_dy;
+                                        lh += cell_sh_grow;
                                         let shared_cell_baseline = if row_line_pitch.is_none()
                                             && effective_line_rule != Some("exact")
                                             && para.style.list_marker.is_none()

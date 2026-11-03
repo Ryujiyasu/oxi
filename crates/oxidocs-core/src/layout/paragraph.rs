@@ -8033,7 +8033,23 @@ impl<'a> ParagraphLayouter<'a> {
                 // a no-type docGrid (S614 already places those via text_y_off).
                 // Render-only (text_y_off). Opt-out OXI_S691_DISABLE.
                 let win_sum = frag_metrics.win_ascent + frag_metrics.win_descent;
+                // OXI_S691_NATBOX_RETIRE (2026-11-03, default ON, opt-out _DISABLE): S691
+                // predates OXI_CJK_NATBOX, which now puts a single-spaced snapToGrid=0
+                // CJK line's text at the 83/64 box in text_y_off itself -- S691 then
+                // added the same excess again. `_pb_ftr_snap0_line_gen.py` (footer, ＭＳ
+                // 明朝 / HG創英角ﾎﾟｯﾌﾟ体 14, snapToGrid 0 under a lines / linesAndChars
+                // grid): Oxi 3.35pt low, 0 with snapToGrid 1 or no grid.
+                // ja/creative__13152ea1's footer +4.4.
+                let s691_retired = !crate::env_flag!("OXI_S691_NATBOX_RETIRE_DISABLE")
+                    && !crate::env_flag!("OXI_CJK_NATBOX_DISABLE")
+                    && para.style.list_marker.is_none()
+                    // the natbox branch's own scope: auto at any factor (single, or
+                    // OXI_MULT_TEXT_TOP above it), or atLeast 0
+                    && (matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                        || (para.style.line_spacing_rule.as_deref() == Some("atLeast")
+                            && para.style.line_spacing.map_or(false, |v| v <= 0.01)));
                 let baseline_adjust = if !crate::env_flag!("OXI_S691_DISABLE")
+                    && !s691_retired
                     && is_header_footer
                     && !para.style.snap_to_grid
                     && !page.doc_grid_no_type

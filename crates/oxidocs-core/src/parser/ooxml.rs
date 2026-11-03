@@ -8052,6 +8052,7 @@ fn parse_drawing(
     let mut stroke_color: Option<String> = None;
     let mut stroke_width: Option<f32> = None;
     let mut stroke_cmpd: Option<String> = None;
+    let mut stroke_dash: Option<String> = None;
     let mut outer_shadow: Option<(f32, f32, String, f32)> = None;
     let mut shape_text_blocks: Vec<Block> = Vec::new();
     let mut rotation: Option<f32> = None;
@@ -8499,6 +8500,13 @@ fn parse_drawing(
                                                     s839_ln_color = Some(resolved.clone());
                                                     stroke_color = Some(resolved.clone());
                                                 }
+                                            }
+                                        }
+                                    } else if sl == "prstDash" {
+                                        for attr in se.attributes().flatten() {
+                                            if local_name(attr.key.as_ref()) == "val" {
+                                                let v = String::from_utf8_lossy(&attr.value).to_string();
+                                                stroke_dash = (v != "solid").then_some(v);
                                             }
                                         }
                                     } else if sl == "noFill" {
@@ -9971,6 +9979,7 @@ fn parse_drawing(
             callout: None,
             outline_cmpd: None,
             outer_shadow: None,
+            outline_dash: None,
                                     inset_left: text_inset_left,
                                     inset_right: text_inset_right,
                                     inset_top: text_inset_top,
@@ -10091,6 +10100,7 @@ fn parse_drawing(
             callout: None,
             outline_cmpd: None,
             outer_shadow: None,
+            outline_dash: None,
                                     inset_left: Some(0.0),
                                     inset_right: Some(0.0),
                                     inset_top: Some(0.0),
@@ -10487,6 +10497,7 @@ fn parse_drawing(
                 && std::env::var_os("OXI_TXBX_ELLIPSE_DISABLE").is_none(),
             outline_cmpd: stroke_cmpd.clone(),
             outer_shadow: outer_shadow.clone(),
+            outline_dash: stroke_dash.clone(),
             // OXI_TXBX_CALLOUT (2026-11-03, default ON, opt-out _DISABLE)
             callout: match shape_type.as_deref() {
                 Some(p @ ("wedgeRoundRectCallout" | "wedgeRectCallout"))
@@ -10731,6 +10742,7 @@ fn vml_shape_text_box(sh: &Shape) -> TextBox {
             callout: None,
             outline_cmpd: None,
             outer_shadow: None,
+            outline_dash: None,
         inset_left: Some(7.2),
         inset_right: Some(7.2),
         inset_top: Some(3.6),
@@ -11627,6 +11639,7 @@ fn parse_vml_pict(
             callout: None,
             outline_cmpd: None,
             outer_shadow: None,
+            outline_dash: None,
             inset_left: None,
             inset_right: None,
             inset_top: None,
@@ -11706,6 +11719,7 @@ fn parse_vml_pict(
             callout: None,
             outline_cmpd: None,
             outer_shadow: None,
+            outline_dash: None,
             inset_left: Some(inset[0]),
             inset_top: Some(inset[1]),
             inset_right: Some(inset[2]),
@@ -11782,6 +11796,7 @@ fn parse_vml_pict(
             callout: None,
             outline_cmpd: None,
             outer_shadow: None,
+            outline_dash: None,
             inset_left: None,
             inset_right: None,
             inset_top: None,

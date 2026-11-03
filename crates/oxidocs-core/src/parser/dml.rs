@@ -203,6 +203,7 @@ pub(super) fn text_box(
         callout: None,
         outline_cmpd: None,
         outer_shadow: None,
+        outline_dash: None,
         inset_left: Some(insets[0]),
         inset_right: Some(insets[2]),
         inset_top: Some(insets[1]),

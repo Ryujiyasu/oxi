@@ -1307,6 +1307,10 @@ pub struct TextBox {
     /// offset in points (dist along dir, y down).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outer_shadow: Option<(f32, f32, String, f32)>,
+    /// OXI_TXBX_DASH: the outline's a:prstDash (dash, dashDot, sysDot, ...);
+    /// None = solid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_dash: Option<String>,
     /// Text inset left (in points, default 7.2pt = 91440 EMU)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset_left: Option<f32>,

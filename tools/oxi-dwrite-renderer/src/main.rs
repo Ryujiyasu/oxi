@@ -1200,8 +1200,29 @@ unsafe fn render_line(
     // Build a dashed stroke style when the border declares a dash art style.
     // Thin styles (S711b) use a FIXED-cadence CUSTOM dash; the heavy "Stroked"
     // art borders (S480) use the built-in cadence.
+    // OXI_TXBX_DASH (layout): "prst:<units,...>:<offset>" -- a DrawingML preset
+    // dash in multiples of the line width, continuing at <offset> widths.
+    let prst_dash: Option<(Vec<f32>, f32)> = style
+        .and_then(|st| st.strip_prefix("prst:"))
+        .and_then(|rest| {
+            let (pat, off) = rest.rsplit_once(':')?;
+            let units: Vec<f32> = pat.split(',').filter_map(|u| u.parse().ok()).collect();
+            (!units.is_empty()).then(|| (units, off.parse().unwrap_or(0.0)))
+        });
     let stroke_style: Option<ID2D1StrokeStyle> =
-        if let Some(dashes) = s711b_dash_units(style, width_pt) {
+        if let Some((units, offset)) = prst_dash {
+            let factory: ID2D1Factory = rt.GetFactory()?;
+            let props = D2D1_STROKE_STYLE_PROPERTIES {
+                startCap: D2D1_CAP_STYLE_FLAT,
+                endCap: D2D1_CAP_STYLE_FLAT,
+                dashCap: D2D1_CAP_STYLE_FLAT,
+                lineJoin: D2D1_LINE_JOIN_MITER,
+                miterLimit: 10.0,
+                dashStyle: D2D1_DASH_STYLE_CUSTOM,
+                dashOffset: offset,
+            };
+            factory.CreateStrokeStyle(&props, Some(&units)).ok()
+        } else if let Some(dashes) = s711b_dash_units(style, width_pt) {
             let factory: ID2D1Factory = rt.GetFactory()?;
             let props = D2D1_STROKE_STYLE_PROPERTIES {
                 startCap: D2D1_CAP_STYLE_FLAT,
