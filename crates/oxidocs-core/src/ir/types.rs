@@ -1419,6 +1419,10 @@ pub struct VectorShape {
     /// M x y (move), L x y (line), C x1 y1 x2 y2 x y (cubic), Z (close).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub path: Vec<PathSeg>,
+    /// OXI_VML_GROUP_MEMBERS: a picture member (v:shape + v:imagedata) stretched
+    /// over the shape's box; None for drawn shapes.
+    #[serde(skip)]
+    pub image: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 /// One command of a `VectorShape::path` outline (coordinates normalized 0..1

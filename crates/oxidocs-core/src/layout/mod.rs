@@ -3830,6 +3830,9 @@ thread_local! {
     pub(crate) static HF_PAGE_EVEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// OXI_HF_TXBX_NO_CHARGRID: set while a header / footer text box is laid out.
     static IN_HF_TEXT_BOX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// OXI_VERT_TCY: set while an eaVert text box lays out its columns -- the
+    /// measured scope (a tbRl body section is not probed).
+    pub(crate) static IN_VERT_TEXT_BOX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// S816 (2026-07-13): true once the document's FIRST IR section has been
     /// laid out. The page-top space-before suppression keys on
     /// `!pages.is_empty() || !current_elements.is_empty()`, but those vecs are
@@ -8647,11 +8650,22 @@ cells={} pitch={:.2} text={:?}",
                             _ => 0.0,
                         }
                     } else { 0.0 };
+                    // OXI_VERT_TCY: a 縦中横 run wider than the column widens it
+                    // (`_pb_tcy_vert_gen.py`: «２４» 36pt -> a 72pt column, the other
+                    // characters centred on it).
+                    let tcy_w = if crate::env_flag!("OXI_VERT_TCY_DISABLE") || !IN_VERT_TEXT_BOX.with(|c| c.get()) { 0.0 } else {
+                        segs.iter().filter(|(ri, _)| para.runs[*ri].style.vert_in_horz).map(|(ri, t)| {
+                            let st = &para.runs[*ri].style;
+                            let fs = self.resolve_font_size(st, &para.style);
+                            t.chars().map(|c| self.metrics_for_char_in(c, false, st, &para.style).char_width_em(c) * fs)
+                                .sum::<f32>() * st.text_scale.unwrap_or(100.0) / 100.0
+                        }).fold(0.0f32, f32::max)
+                    };
                     if let (Some(a), Some(b)) = (segs.first(), segs.last()) {
                         cols.push(VertColumn {
                             recipe,
                             text: segs.iter().map(|(_, s)| s.as_str()).collect(),
-                            pitch: col_pitch(a.0, b.0),
+                            pitch: col_pitch(a.0, b.0).max(tcy_w),
                             segs,
                             top: line_start + jc_shift,
                             blank: false,
@@ -8825,6 +8839,38 @@ cells={} pitch={:.2} text={:?}",
         } else { x };
         for (ri, text) in &col.segs {
             let run = &para.runs[*ri];
+            // OXI_VERT_TCY (2026-11-03, default ON, opt-out _DISABLE): a 縦中横 run
+            // (eastAsianLayout w:vert) in vertical text is ONE horizontal unit: its
+            // natural (w-scaled) width centred on the column, its em box centred in
+            // the face's natural line box, which is what it advances down the column.
+            // `_pb_tcy_vert_gen.py` (eaVert box, ＭＳ ゴシック 20 / 36, «２４» «12»
+            // «１２３», w 100 / 88, vertCompress 0 / 1 -- the latter changes
+            // nothing): «２４» at 36pt is 72 (63.4 at w 88) wide, advances 46.68 =
+            // 83/64 em with 5.34 above and below its em box; at 20pt 25.9.
+            // ja/reports__542222d0's «２４春闘だ！» stacked the 2 and the 4.
+            if run.style.vert_in_horz && !text.is_empty() && !crate::env_flag!("OXI_VERT_TCY_DISABLE")
+                && IN_VERT_TEXT_BOX.with(|c| c.get()) {
+                let fs = self.resolve_font_size(&run.style, &para.style);
+                let fam = self
+                    .resolve_font_family_for_text(text, &run.style, &para.style)
+                    .map(|s| s.to_string());
+                let scale = run.style.text_scale.unwrap_or(100.0) / 100.0;
+                let w: f32 = text.chars()
+                    .map(|c| self.metrics_for_char_in(c, false, &run.style, &para.style).char_width_em(c) * fs)
+                    .sum::<f32>() * scale;
+                let adv = self.vert_tcy_advance(text, &run.style, &para.style, fs);
+                let mut el = self.vertical_line_element(
+                    text.clone(), x + col.pitch / 2.0 - w / 2.0, cy + (adv - fs) / 2.0, w, fs, fs, 0.0,
+                    &fam, &run.style, &para_style, recipe.block_idx,
+                );
+                if let LayoutContent::Text { ref mut is_vertical, .. } = el.content {
+                    *is_vertical = false;
+                }
+                el.text_y_off = 1.0;
+                out.push(el);
+                cy += adv;
+                continue;
+            }
             let seg_start = cy;
             let ruby_out = out.len();
             let fs = self.resolve_font_size(&run.style, &para.style);
@@ -8978,6 +9024,17 @@ cells={} pitch={:.2} text={:?}",
     /// Build one vertical-line Text element (is_vertical=true). The renderer
     /// stacks `text`'s chars downward from `y`, each centred in [x, x+w].
     #[allow(clippy::too_many_arguments)]
+    /// OXI_VERT_TCY: how far a 縦中横 run advances down a vertical column -- its
+    /// face's natural line box (win box x 83/64 for the 83/64 faces).
+    pub(crate) fn vert_tcy_advance(&self, text: &str, style: &RunStyle, para_style: &ParagraphStyle, fs: f32) -> f32 {
+        let m = &*self.metrics_for_text(text, style, para_style);
+        if m.is_cjk_83_64_font() {
+            (m.win_ascent + m.win_descent) * fs * (83.0 / 64.0)
+        } else {
+            m.natural_line_height_hhea(fs)
+        }
+    }
+
     fn vertical_line_element(
         &self,
         text: String,
@@ -9409,7 +9466,15 @@ cells={} pitch={:.2} text={:?}",
             if !is_inline_sig && !anchor_is_table {
                 for vs in &text_box.vector_shapes {
                     let (vx, vy) = (abs_x + vs.x, abs_y + vs.y);
-                    if vs.is_line {
+                    if let Some(ref data) = vs.image {
+                        // OXI_VML_GROUP_MEMBERS: a picture member over its box
+                        elements.push(LayoutElement::new(vx, vy, vs.w, vs.h, LayoutContent::Image {
+                            data: data.as_ref().clone(),
+                            content_type: None,
+                            crop: None,
+                            rotation: 0.0,
+                        }));
+                    } else if vs.is_line {
                         elements.push(LayoutElement::new(
                             vx,
                             vy,
@@ -9815,6 +9880,7 @@ cells={} pitch={:.2} text={:?}",
             box_page.section_grid_runs.clear();
             box_page.grid_char_runs.clear();
             box_page.doc_grid_lines_and_chars = false;
+            IN_VERT_TEXT_BOX.with(|c| c.set(true));
             let (recipes, columns) = self.vertical_section_columns(
                 &box_page, 0, box_page.blocks.len(), height,
                 self.default_font_size.max(1.0), true,
@@ -9834,6 +9900,7 @@ cells={} pitch={:.2} text={:?}",
                     abs_y + inset_t + v_corner_inset + outline,
                 ));
             }
+            IN_VERT_TEXT_BOX.with(|c| c.set(false));
             elements.push(LayoutElement::new(abs_x, abs_y, text_box.width,
                 text_box.height, LayoutContent::ClipEnd));
             return elements;
@@ -10326,6 +10393,22 @@ cells={} pitch={:.2} text={:?}",
                     }
                 }
             }
+        }
+
+        // OXI_TXBX_OVERFLOW_MID (2026-11-03, default ON, opt-out _DISABLE): of the lines
+        // running past a text box (S1644 draws them), Word draws only those whose
+        // vertical MIDDLE is at or above the box's inner bottom (height - bIns), whatever
+        // vertOverflow says. `_pb_txbx_overflow_clip_gen.py` (18pt exact lines, bIns
+        // 0 / 3.6 / 10, box heights 92..120 in 2pt steps, overflow / clip / ellipsis):
+        // every arm's last drawn line is the last whose middle clears the inner bottom.
+        // ja/reference__22761439's two 660pt column boxes of «○○○» lines: Word stops at
+        // 804 / 811, Oxi ran them on to 1100 across the footer.
+        if !crate::env_flag!("OXI_TXBX_OVERFLOW_MID_DISABLE") && !text_box.vertical_text {
+            let inner_bottom = abs_y + text_box.height - inset_b - v_corner_inset;
+            elements.retain(|el| match &el.content {
+                LayoutContent::Text { .. } => el.y + el.height / 2.0 <= inner_bottom + 0.01,
+                _ => true,
+            });
         }
 
         // S662 (2026-06-24): bodyPr@compatLnSpc="1" textbox text vertical DY.
@@ -16918,6 +17001,7 @@ cells={} pitch={:.2} text={:?}",
                 max_combined = max_combined.max(mix);
             }
         }
+        let mut union_box = 0.0f32;
         // OXI_LINE_UNION_BOX: the same union fold as natural_line_height_for_line_inner
         // (max ascent + max descent about the shared baseline, 83/64 faces centred)
         // feeds the line ADVANCE here; mix_split's 23.03 is reached by neither
@@ -16964,6 +17048,9 @@ cells={} pitch={:.2} text={:?}",
             }
             if plain && ua + ud > max_combined {
                 max_combined = ua + ud;
+            }
+            if plain {
+                union_box = ua + ud;
             }
         }
         let run_base = if !crate::env_flag!("OXI_S1361_DISABLE") && max_combined > 0.0 {
@@ -17246,8 +17333,16 @@ cells={} pitch={:.2} text={:?}",
                     // Info6's 0.75; hhea x 83/64 would be 21.8 / 24.9 / 29.1 / 33.2.
                     // educational__0214ac95: three 14pt empties (AR P丸ゴシック体E,
                     // which Word substitutes with 游ゴシック) drifted +5.5 each.
+                    // OXI_ATLEAST0_UNION (2026-11-03, default ON, opt-out _DISABLE): a
+                    // `line=0 atLeast` line is the natural line, so a mixed line takes the
+                    // same union box (largest ascent over largest descent, 83/64 faces
+                    // centred) as the auto line. `_pb_latin_run_ea_lineh_gen.py` PB_UD
+                    // (UD デジタル 教科書体 NP-B 10 + Arial 14): Word grows the line 1.56
+                    // under auto and atLeast 0 alike; Oxi grew it under auto only (16.1).
+                    // ja/administrative__0ba21b0c's framed heading «～個人懇談会～Reunião…».
+                    let union_floor = if crate::env_flag!("OXI_ATLEAST0_UNION_DISABLE") { 0.0 } else { union_box };
                     if hhea_natural_max > 0.0 && !crate::env_flag!("OXI_S1145_DISABLE") {
-                        return if dominant_cjk_83_64 {
+                        return union_floor.max(if dominant_cjk_83_64 {
                             if s1322_win_natural > 0.0
                                 && !crate::env_flag!("OXI_S1322_DISABLE")
                             {
@@ -17261,7 +17356,7 @@ cells={} pitch={:.2} text={:?}",
                             }
                         } else {
                             hhea_natural_max
-                        };
+                        });
                     }
                     return base;
                 }
@@ -23841,7 +23936,7 @@ cells={} pitch={:.2} text={:?}",
             // OXI_CELL_SHADOW_LINE estimate mirror (see table_fit.rs): every line of a
             // shadowed cell paragraph grows by the shadow's extents.
             if in_cell
-                && grid_pitch.is_none()
+                && (grid_pitch.is_none() || para.style.line_spacing_rule.as_deref() == Some("atLeast"))
                 && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto") | Some("atLeast"))
                 && !(para.style.line_spacing_rule.as_deref() == Some("atLeast")
                     && max_line_height <= para.style.line_spacing.unwrap_or(0.0) + 0.01)

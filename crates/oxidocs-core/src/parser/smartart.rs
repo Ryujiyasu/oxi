@@ -393,6 +393,7 @@ pub(super) fn from_drawing(xml: &str, theme: &ThemeColors) -> Option<Group> {
                             stroke_width,
                             is_line: false,
                             path: place(outline, rect, rot, flip_h, flip_v),
+                            image: None,
                         });
                     }
                 }

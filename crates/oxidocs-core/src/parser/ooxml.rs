@@ -10020,6 +10020,7 @@ fn parse_drawing(
                                     stroke_width: w.ln_w.unwrap_or(0.75).max(0.25),
                                     is_line: is_line && !s1120_curve,
                                     path: s1120_path,
+                                    image: None,
                                 });
                             }
                         }
@@ -10395,6 +10396,29 @@ fn parse_drawing(
             (t - 90.0).abs() < 0.5 || (t - 270.0).abs() < 0.5
         });
     let (tb_width, tb_height) = if upright_turn { (height, width) } else { (width, height) };
+    // OXI_UPRIGHT_TURN_INSETS (2026-11-03, default ON, opt-out _DISABLE): Word sets
+    // the text in the UNTURNED inner rectangle with its sides swapped, centred where
+    // that rectangle's centre is in unturned axes: left (t+b+l-r)/2, top (l+r+t-b)/2,
+    // right (t+b-l+r)/2, bottom (l+r-t+b)/2, the same at 90 and 270.
+    // `_pb_upright_turn_insets_gen.py` (100 x 300 rect turned to 300 x 100, insets
+    // 2/10/20/30 -> left 11.06, top 0.95; one inset of 20 at a time, left- and
+    // right-aligned text: every edge to 0.1). ja/creative__13152ea1's turned
+    // roundRect (7.2 / 3.6 defaults -> left 3.6, top 7.2): Oxi used tIns / lIns as
+    // they stand and put every line 3.6pt right of and 3.7pt above Word's.
+    // [left, top, right, bottom].
+    let turned_insets: Option<[f32; 4]> = if upright_turn
+        && std::env::var_os("OXI_UPRIGHT_TURN_INSETS_DISABLE").is_none()
+    {
+        let (l, t, r, b) = (
+            text_inset_left.unwrap_or(7.2),
+            text_inset_top.unwrap_or(3.6),
+            text_inset_right.unwrap_or(7.2),
+            text_inset_bottom.unwrap_or(3.6),
+        );
+        Some([(t + b + l - r) / 2.0, (l + r + t - b) / 2.0, (t + b - l + r) / 2.0, (l + r - t + b) / 2.0])
+    } else {
+        None
+    };
     let turned_position = position.as_ref().map(|p| {
         let mut p = p.clone();
         if upright_turn {
@@ -10510,11 +10534,11 @@ fn parse_drawing(
                 }
                 _ => None,
             },
-            inset_left: text_inset_left,
-            inset_right: text_inset_right,
-            inset_top: text_inset_top,
+            inset_left: turned_insets.map_or(text_inset_left, |i| Some(i[0])),
+            inset_right: turned_insets.map_or(text_inset_right, |i| Some(i[2])),
+            inset_top: turned_insets.map_or(text_inset_top, |i| Some(i[1])),
             auto_fit: text_auto_fit,
-            inset_bottom: text_inset_bottom,
+            inset_bottom: turned_insets.map_or(text_inset_bottom, |i| Some(i[3])),
             // S535: an inline canvas text_box must stay RENDER-ONLY — without
             // an explicit WrapType::None the table wrap-below rule (layout
             // ~2415) fires on its new synthetic position and pushes following
@@ -10716,6 +10740,84 @@ fn vml_group_member(e: &quick_xml::events::BytesStart) -> Option<crate::ir::Vect
         stroke_width: if stroked { stroke_width } else { 0.0 },
         is_line: false,
         path: Vec::new(),
+        image: None,
+    })
+}
+
+/// OXI_VML_GROUP_MEMBERS: a VML group member's style box (left/top/width/height in
+/// group units), or None when hidden.
+fn vml_member_box(e: &quick_xml::events::BytesStart) -> Option<[f32; 4]> {
+    let mut b = [0.0f32; 4];
+    for attr in e.attributes().flatten() {
+        if local_name(attr.key.as_ref()) == "style" {
+            let val = String::from_utf8_lossy(&attr.value).to_string();
+            for part in val.split(';') {
+                let (k, v) = match part.split_once(':') { Some(kv) => kv, None => continue };
+                let n = v.trim().parse::<f32>().unwrap_or(0.0);
+                match k.trim() {
+                    "left" => b[0] = n,
+                    "top" => b[1] = n,
+                    "width" => b[2] = n,
+                    "height" => b[3] = n,
+                    "visibility" if v.trim() == "hidden" => return None,
+                    _ => {}
+                }
+            }
+        }
+    }
+    Some(b)
+}
+
+/// OXI_VML_GROUP_MEMBERS: a group member's line or freeform path outline in group
+/// units. A v:line spans from -> to; a v:shape path is drawn over its own
+/// coordorigin / coordsize mapped onto its style box.
+fn vml_group_stroke_member(e: &quick_xml::events::BytesStart, local: &str) -> Option<crate::ir::VectorShape> {
+    let attr = |n: &str| e.attributes().flatten()
+        .find(|a| local_name(a.key.as_ref()) == n)
+        .map(|a| String::from_utf8_lossy(&a.value).to_string());
+    let stroked = !matches!(attr("stroked").as_deref(), Some("f" | "false"));
+    let stroke = stroked.then(|| attr("strokecolor").map(|c| vml_color_token(&c)).unwrap_or_else(|| "000000".to_string()));
+    let stroke_width = if stroked { attr("strokeweight").and_then(|w| parse_css_length_opt(&w)).unwrap_or(0.75) } else { 0.0 };
+    let pair = |s: Option<String>| -> Option<(f32, f32)> {
+        let s = s?;
+        let mut it = s.split(',').map(|t| t.trim().parse::<f32>().unwrap_or(0.0));
+        Some((it.next()?, it.next().unwrap_or(0.0)))
+    };
+    if local == "line" {
+        let (x1, y1) = pair(attr("from"))?;
+        let (x2, y2) = pair(attr("to"))?;
+        return Some(crate::ir::VectorShape {
+            x: x1, y: y1, w: x2 - x1, h: y2 - y1,
+            fill: None, stroke, stroke_width, is_line: true, path: Vec::new(), image: None,
+        });
+    }
+    let path = attr("path")?;
+    let b = vml_member_box(e)?;
+    if b[2] <= 0.0 || b[3] <= 0.0 {
+        return None;
+    }
+    let (ox, oy) = pair(attr("coordorigin")).unwrap_or((0.0, 0.0));
+    let (cw, ch) = pair(attr("coordsize")).unwrap_or((b[2], b[3]));
+    if cw <= 0.0 || ch <= 0.0 {
+        return None;
+    }
+    use crate::ir::PathSeg;
+    let nx = |x: f32| (x - ox) / cw;
+    let ny = |y: f32| (y - oy) / ch;
+    let segs: Vec<PathSeg> = parse_vml_path(&path, (1.0, 1.0)).into_iter().map(|s| match s {
+        PathSeg::M(x, y) => PathSeg::M(nx(x), ny(y)),
+        PathSeg::L(x, y) => PathSeg::L(nx(x), ny(y)),
+        PathSeg::C(a, b2, c, d, x, y) => PathSeg::C(nx(a), ny(b2), nx(c), ny(d), nx(x), ny(y)),
+        other => other,
+    }).collect();
+    if segs.is_empty() {
+        return None;
+    }
+    let filled = matches!(attr("filled").as_deref(), Some("t" | "true"));
+    Some(crate::ir::VectorShape {
+        x: b[0], y: b[1], w: b[2], h: b[3],
+        fill: if filled { attr("fillcolor").map(|c| vml_color_token(&c)) } else { None },
+        stroke, stroke_width, is_line: false, path: segs, image: None,
     })
 }
 
@@ -10830,6 +10932,18 @@ fn parse_vml_pict(
     let vml_group_rects_on = std::env::var_os("OXI_VML_GROUP_RECTS_DISABLE").is_none();
     let mut vml_group_coord: (f32, f32, f32, f32) = (0.0, 0.0, 0.0, 0.0);
     let mut vml_group_rects: Vec<crate::ir::VectorShape> = Vec::new();
+    // OXI_VML_GROUP_MEMBERS (2026-11-03, default ON, opt-out _DISABLE): the outer
+    // group's line / freeform / picture members join its rects (document order), and
+    // its text-box members become positioned children. ja/reports__619945ca's chart
+    // (a VML group of 11 dashed grid lines, 9 freeform polylines, 146 picture bars
+    // with their 144 outline rects and two legend text boxes): Oxi stretched the LAST
+    // bar tile over the whole 427 x 254pt group and dropped the rest.
+    let vml_group_members_on = vml_group_rects_on
+        && std::env::var_os("OXI_VML_GROUP_MEMBERS_DISABLE").is_none();
+    let mut grp_member_open: Option<([f32; 4], usize)> = None;
+    let mut grp_image_rids: Vec<(usize, [f32; 4], String)> = Vec::new();
+    let mut grp_texts: Vec<([f32; 4], Vec<Block>, Option<[f32; 4]>)> = Vec::new();
+    let mut grp_member_count = 0usize;
     // S852: an inline VML horizontal rule (<v:rect o:hr="t" .../>). Word draws
     // it on its OWN line (a full-width gray divider). Marked here so parse_run
     // routes it to the run style (reserve a line + draw the rule) instead of a
@@ -10994,6 +11108,13 @@ fn parse_vml_pict(
                     "shape" | "rect" | "oval" | "roundrect" | "line" => {
                         if vml_group_rects_on && group_depth == 1 && local == "rect" {
                             vml_group_rects.extend(vml_group_member(&e));
+                        }
+                        if vml_group_members_on && group_depth == 1 {
+                            grp_member_count += 1;
+                            if matches!(local.as_str(), "line" | "shape") {
+                                vml_group_rects.extend(vml_group_stroke_member(&e, &local));
+                            }
+                            grp_member_open = vml_member_box(&e).map(|b| (b, text_blocks.len()));
                         }
                         // Check VML type attribute for preset shape identification
                         for attr in e.attributes().flatten() {
@@ -11180,6 +11301,11 @@ fn parse_vml_pict(
                                 rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
+                        if vml_group_members_on && group_depth == 1 {
+                            if let (Some((b, _)), Some(rid)) = (grp_member_open, rel_id.clone()) {
+                                grp_image_rids.push((vml_group_rects.len(), b, rid));
+                            }
+                        }
                     }
                     "fill" => {
                         for attr in e.attributes().flatten() {
@@ -11239,6 +11365,12 @@ fn parse_vml_pict(
                     {
                         if vml_group_rects_on && group_depth == 1 && local == "rect" {
                             vml_group_rects.extend(vml_group_member(&e));
+                        }
+                        if vml_group_members_on && group_depth == 1 {
+                            grp_member_count += 1;
+                            if matches!(local.as_str(), "line" | "shape") {
+                                vml_group_rects.extend(vml_group_stroke_member(&e, &local));
+                            }
                         }
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
@@ -11417,6 +11549,15 @@ fn parse_vml_pict(
                 if local == "pict" && depth == 0 {
                     break;
                 }
+                if vml_group_members_on && group_depth == 1
+                    && matches!(local.as_str(), "shape" | "rect" | "oval" | "roundrect")
+                {
+                    if let Some((b, start)) = grp_member_open.take() {
+                        if text_blocks.len() > start {
+                            grp_texts.push((b, text_blocks[start..].to_vec(), vml_tb_inset));
+                        }
+                    }
+                }
                 if local == "group" && group_depth > 0 {
                     group_depth -= 1;
                 }
@@ -11538,6 +11679,7 @@ fn parse_vml_pict(
         None
     };
 
+    let vml_had_imagedata = rel_id.is_some();
     // Build image if we have a blip reference
     let image = if let Some(rid) = rel_id {
         let data = ctx.media.get(&rid).cloned().unwrap_or_default();
@@ -11606,11 +11748,83 @@ fn parse_vml_pict(
     // is a header group of 20 full-width row rects and 21 5.5pt column-gap rects,
     // white-filled with a 0.5pt #00008b outline; the later gap rects' fill cuts the
     // row lines, which is what leaves the double rule between the columns.
-    if vml_group_rects.len() >= 2 && is_absolute && image.is_none() && text_blocks.is_empty()
+    let grp_members_path = vml_group_members_on
+        && grp_member_count >= 2
+        && (!grp_image_rids.is_empty() || !grp_texts.is_empty() || vml_group_rects.len() >= 2);
+    if ((vml_group_rects.len() >= 2 && image.is_none() && text_blocks.is_empty()) || grp_members_path)
+        && is_absolute
         && group_width > 0.0 && group_height > 0.0 && vml_group_coord.2 > 0.0 && vml_group_coord.3 > 0.0
     {
         let (ox, oy, cw, ch) = vml_group_coord;
         let (sx, sy) = (group_width / cw, group_height / ch);
+        let mut vml_group_rects = vml_group_rects;
+        if grp_members_path {
+            // pictures go back in at their document position (z-order)
+            for (idx, b, rid) in grp_image_rids.into_iter().rev() {
+                if let Some(data) = ctx.media.get(&rid) {
+                    if b[2] > 0.0 && b[3] > 0.0 {
+                        vml_group_rects.insert(idx.min(vml_group_rects.len()), crate::ir::VectorShape {
+                            x: b[0], y: b[1], w: b[2], h: b[3],
+                            fill: None, stroke: None, stroke_width: 0.0, is_line: false, path: Vec::new(),
+                            image: Some(std::sync::Arc::new(data.clone())),
+                        });
+                    }
+                }
+            }
+        }
+        let grp_children: Vec<TextBox> = grp_texts.drain(..).map(|(b, blocks, inset)| {
+            let ins = inset.unwrap_or([7.2, 3.6, 7.2, 3.6]);
+            TextBox {
+                wrap_polygon: Vec::new(),
+                text_outline_inset: 0.0,
+                vertical_text: false,
+                blocks,
+                inline: false,
+                font_ref_color: None,
+                auto_fit: false,
+                width: b[2] * sx,
+                height: b[3] * sy,
+                position: Some(FloatingPosition {
+                    flow_page_offset: 0,
+                    flow_boundary_offset: 0,
+                    flow_source: None,
+                    x: (b[0] - ox) * sx,
+                    y: (b[1] - oy) * sy,
+                    h_relative: None,
+                    v_relative: None,
+                    h_align: None,
+                    v_align: None,
+                    dist_l: None,
+                    dist_r: None, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
+                }),
+                border: false,
+                stroke_color: None,
+                stroke_width: None,
+                fill: None,
+                anchor_block_index: 0,
+                corner_radius: None,
+                ellipse: false,
+                callout: None,
+                outline_cmpd: None,
+                outer_shadow: None,
+                outline_dash: None,
+                inset_left: Some(ins[0]),
+                inset_right: Some(ins[2]),
+                inset_top: Some(ins[1]),
+                inset_bottom: Some(ins[3]),
+                wrap_type: Some(WrapType::None),
+                v_text_anchor: None,
+                relative_height: 0,
+                behind_doc: false,
+                vert_overflow: None,
+                compat_line_spacing: false,
+                vector_shapes: Vec::new(),
+                host_break_after: false,
+                children: Vec::new(),
+                body_wrap_none: false,
+                children_on_line: false,
+            }
+        }).collect();
         let vector_shapes = vml_group_rects.into_iter().map(|mut v| {
             v.x = (v.x - ox) * sx;
             v.y = (v.y - oy) * sy;
@@ -11652,7 +11866,7 @@ fn parse_vml_pict(
             compat_line_spacing: false,
             vector_shapes,
             host_break_after: false,
-            children: Vec::new(),
+            children: grp_children,
             body_wrap_none: false,
             children_on_line: false,
         });
@@ -11850,13 +12064,33 @@ fn parse_vml_pict(
         .filter(|_| !crate::env_flag!("OXI_VML_PATH_DISABLE"))
         .map(|p| parse_vml_path(p, shape_coord_size))
         .unwrap_or_default();
+    // OXI_VML_RECT_DEFAULT_FILL (2026-11-03, default ON, opt-out _DISABLE): a VML
+    // rect with no fillcolor is filled WHITE (the VML default, as filled="t" with
+    // fillcolor white) -- the fill-less Shape fell to the outline-only preset path,
+    // which drew nothing without a stroke colour. ja/forms__01dc1d6c's page frames
+    // (<v:rect> with only an empty <v:textbox>, z-index < 0): Word fills white and
+    // strokes 0.75pt black (PDF: fs 0.75, fill 1.0, stroke 0.0); Oxi drew neither.
+    // (a picture shape -- v:shape + v:imagedata -- is not a drawn rect: golden
+    // harassmanual's full-page frame image was painted over in white, -0.0135)
+    let vml_rect_default_fill = !no_fill
+        && fill_color.is_none()
+        && image.is_none()
+        && !vml_had_imagedata
+        && matches!(shape_type.as_deref(), Some("rect" | "roundRect"))
+        && !crate::env_flag!("OXI_VML_RECT_DEFAULT_FILL_DISABLE");
     let shape = shape_type.as_ref().map(|st| Shape {
         vml_path: vml_path.clone(),
         shape_type: st.clone(),
         width,
         height,
         position: vml_position,
-        fill: if no_fill { None } else { fill_color.clone() },
+        fill: if no_fill {
+            None
+        } else if vml_rect_default_fill {
+            Some("FFFFFF".to_string())
+        } else {
+            fill_color.clone()
+        },
         stroke_color: if no_stroke { None } else { stroke_color_val },
         stroke_width: if no_stroke {
             None

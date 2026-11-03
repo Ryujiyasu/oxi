@@ -88,6 +88,6 @@ if __name__ == "__main__":
     for ea in os.environ.get("PB_EAFONTS", "ＭＳ 明朝").split(","):
         for rule_off in ((False, True) if not os.environ.get("PB_RULE_ON_ONLY") else (False,)):
             for lang in os.environ.get("PB_LANGS", "ja-JP,en-US").split(","):
-                cm = 14
+                cm = int(os.environ.get("PB_CM", "14"))
                 name = "rule%s_%s_cm%d_%s" % ("OFF" if rule_off else "on", lang, cm, ea.replace(" ", ""))
                 print("%-34s %s" % (name, word_classes(build(name, rule_off, lang, cm, ea))), flush=True)

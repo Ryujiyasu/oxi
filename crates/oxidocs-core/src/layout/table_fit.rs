@@ -8605,7 +8605,11 @@ impl<'a> TableFitLayouter<'a> {
                                         // auto; atLeast 20 (above natural + shadow) keeps 20 and lifts the
                                         // baseline 2.18 = the bottom extent. Applied after the offsets
                                         // below are worked out on the shadow-less line.
-                                        let (cell_sh_t, cell_sh_b) = if row_line_pitch.is_none()
+                                        // an atLeast line does not snap to the grid, so it grows
+                                        // under a typed grid too (ja/administrative__0ba21b0c's
+                                        // «Programação…» line, atLeast 0, docGrid lines).
+                                        let (cell_sh_t, cell_sh_b) = if (row_line_pitch.is_none()
+                                                || effective_line_rule == Some("atLeast"))
                                             && matches!(effective_line_rule, None | Some("auto") | Some("atLeast"))
                                             && !crate::env_flag!("OXI_CELL_SHADOW_LINE_DISABLE")
                                         {
@@ -9463,7 +9467,14 @@ impl<'a> TableFitLayouter<'a> {
                                         // retain their existing composed geometry.
                                         let cell_text_y_off = cell_text_y_off + cell_sh_dy;
                                         lh += cell_sh_grow;
-                                        let shared_cell_baseline = if row_line_pitch.is_none()
+                                        // OXI_CELL_ATLEAST_SHARED_BASE (2026-11-03, default ON, opt-out
+                                        // _DISABLE): an atLeast line does not snap to the grid, so its runs
+                                        // share one baseline under a typed grid too. ja/administrative__
+                                        // 0ba21b0c «給食費 Merenda ３，２５０円» (8pt + 11pt, atLeast 0,
+                                        // docGrid lines): Word one baseline; Oxi drew the 8pt run 4.2pt high.
+                                        let shared_cell_baseline = if (row_line_pitch.is_none()
+                                                || (effective_line_rule == Some("atLeast")
+                                                    && !crate::env_flag!("OXI_CELL_ATLEAST_SHARED_BASE_DISABLE")))
                                             && effective_line_rule != Some("exact")
                                             && para.style.list_marker.is_none()
                                             && line.iter().all(|f| !f.15 && !f.16.combine

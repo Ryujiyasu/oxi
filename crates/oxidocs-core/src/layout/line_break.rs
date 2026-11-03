@@ -1902,7 +1902,16 @@ impl<'a> LineBreaker<'a> {
             if style.vert_in_horz && !text.is_empty() && !crate::env_flag!("OXI_S700_DISABLE")
             {
                 flush_word!(style);
-                let vw_tw = pt_to_tw(font_size);
+                // OXI_VERT_TCY: in vertical text the 縦中横 unit spans its face's natural
+                // line box along the column (see place_vertical_column).
+                let tcy_adv = if vertical && !crate::env_flag!("OXI_VERT_TCY_DISABLE")
+                    && super::IN_VERT_TEXT_BOX.with(|c| c.get())
+                {
+                    self.vert_tcy_advance(text, style, para_style, font_size)
+                } else {
+                    font_size
+                };
+                let vw_tw = pt_to_tw(tcy_adv);
                 if current_width_tw + vw_tw > available_tw
                     && !current_line.fragments.is_empty()
                     && !para_all_whitespace
@@ -1929,7 +1938,11 @@ impl<'a> LineBreaker<'a> {
                     run_index: frag_run_index,
                     char_offset: frag_char_start,
                 });
-                current_width += font_size;
+                if let Some(f) = current_line.fragments.last_mut() {
+                    f.width = tcy_adv;
+                    f.natural_width = tcy_adv;
+                }
+                current_width += tcy_adv;
                 current_width_tw += vw_tw;
                 current_capw_tw += vw_tw;
                 continue;
