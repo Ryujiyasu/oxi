@@ -81,6 +81,8 @@ pub(super) struct SharedInputFormat {
     pub after: String,
     pub changed: bool,
     pub before_automatic: bool,
+    pub before_recorded: bool,
+    pub style_dxf: Option<(String,String)>,
 }
 
 #[derive(Clone)]
@@ -102,8 +104,10 @@ pub(super) struct SharedFormatRequest {
 pub(super) struct SharedCellEdit {
     at: CellAddress,
     before: (Option<&'static str>,String),
+    before_exists: bool,
     after: (Option<&'static str>,String),
     format: SharedInputFormat,
+    previous_format: Option<SharedInputFormat>,
 }
 
 struct SharedCellChange {
@@ -418,6 +422,74 @@ impl WorkbookFiles {
         Ok(elements)
     }
 
+    /// Direct children as complete XML fragments; namespace declarations
+    /// are retained at the embedding site when these cross package parts.
+    fn xml_children(xml: &str) -> Result<Vec<(String,String)>,String> {
+        use quick_xml::events::Event;
+        let mut reader=quick_xml::Reader::from_str(xml);
+        let (mut depth,mut start)=(0usize,None);
+        let mut children=Vec::new();
+        loop {
+            let before=reader.buffer_position() as usize;
+            match reader.read_event().map_err(|error|error.to_string())? {
+                Event::Start(e) => {
+                    if depth==1 {start=Some((before,String::from_utf8_lossy(e.local_name().as_ref()).into_owned()));}
+                    depth+=1;
+                }
+                Event::Empty(e) if depth==1 => children.push((String::from_utf8_lossy(e.local_name().as_ref()).into_owned(),
+                    xml[before..reader.buffer_position() as usize].into())),
+                Event::End(_) => {
+                    depth=depth.saturating_sub(1);
+                    if depth==1 {
+                        if let Some((at,name))=start.take() {children.push((name,xml[at..reader.buffer_position() as usize].into()));}
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        Ok(children)
+    }
+
+    fn default_revision_font(&self) -> Result<(String,Vec<(String,String)>),String> {
+        use quick_xml::events::Event;
+        let package=self.package.as_deref().ok_or("Missing workbook package")?;
+        let mut archive=oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error|error.to_string())?;
+        let styles=archive.read_part("xl/styles.xml").map_err(|error|error.to_string())?;
+        let parts=Self::xml_children(&styles)?;
+        let section=|name: &str|parts.iter().find(|(tag,_)|tag==name).map(|(_,xml)|xml.as_str())
+            .ok_or_else(||format!("Missing {name} style section"));
+        let mut xf=Self::xml_elements(section("cellXfs")?,b"xf",1)?.into_iter().next().ok_or("Missing default cell format")?;
+        if xf.get("applyFont").is_some_and(|v|v=="0" || v=="false") {
+            if let Some(index)=xf.get("xfId").and_then(|id|id.parse::<usize>().ok()) {
+                if let Some(parent)=Self::xml_elements(section("cellStyleXfs")?,b"xf",1)?.get(index) {xf=parent.clone();}
+            }
+        }
+        let index=xf.get("fontId").and_then(|id|id.parse::<usize>().ok()).unwrap_or(0);
+        let fonts=Self::xml_children(section("fonts")?)?;
+        let font=fonts.get(index).ok_or("Missing default font")?;
+        let mut namespaces=String::new();
+        let mut reader=quick_xml::Reader::from_str(&styles);
+        loop {
+            match reader.read_event().map_err(|error|error.to_string())? {
+                Event::Start(e) | Event::Empty(e) => {
+                    for a in e.attributes() {
+                        let a=a.map_err(|error|error.to_string())?;
+                        let key=String::from_utf8_lossy(a.key.as_ref());
+                        if key=="xmlns" || key.starts_with("xmlns:") {
+                            let value=a.decode_and_unescape_value(reader.decoder()).map_err(|error|error.to_string())?;
+                            namespaces.push_str(&format!(" {key}=\"{}\"",quick_xml::escape::escape(value)));
+                        }
+                    }
+                    break;
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        Ok((namespaces,Self::xml_children(&font.1)?))
+    }
+
     fn package_is_shared(package: &[u8]) -> Result<bool, String> {
         let mut archive = oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error| error.to_string())?;
         let Ok(xml) = archive.read_part("xl/_rels/workbook.xml.rels") else { return Ok(false); };
@@ -670,7 +742,7 @@ impl WorkbookFiles {
     }
 
     fn cell_revision(at: CellAddress, before: &(Option<&'static str>,String), after: &(Option<&'static str>,String),
-        format: Option<&SharedInputFormat>, sheet_id: u32) -> SharedCellChange {
+        format: Option<&SharedInputFormat>, sheet_id: u32, copy_only: bool, before_exists: bool) -> SharedCellChange {
         let (index,row,column)=(at.sheet,at.row,at.column);
         let new_format=format.and_then(|held|Self::revision_number_format(&held.after));
         let mut format_attributes=String::new();
@@ -686,11 +758,20 @@ impl WorkbookFiles {
                 format_children.push_str(&format!("<ndxf><numFmt numFmtId=\"{id}\" formatCode=\"{}\"/></ndxf>",quick_xml::escape::escape(code)));
             } else if id!=0 { format_attributes=format!(" numFmtId=\"{id}\""); }
         }
+        if let Some((before,after))=format.and_then(|held|held.style_dxf.as_ref()) {
+            format_attributes=" odxf=\"1\" dxf=\"1\"".into();
+            format_children.clear();
+            if copy_only || format.is_none_or(|held|!held.before_recorded) {
+                format_children.push_str(&format!("<odxf>{before}</odxf>"));
+            }
+            format_children.push_str(&format!("<ndxf>{after}</ndxf>"));
+        }
         let mut body=String::new();
         let mut col=column+1;let mut letters=Vec::new();
         while col>0 { letters.push((b'A'+((col-1)%26) as u8) as char);col=(col-1)/26; }
         let reference=format!("{}{row}",letters.into_iter().rev().collect::<String>());
         for (tag,(kind,contents)) in [("oc",before),("nc",after)] {
+            if tag=="oc" && !before_exists {continue;}
             let ty=kind.map(|value|format!(" t=\"{value}\"")).unwrap_or_default();
             if contents.is_empty() { body.push_str(&format!("<{tag} r=\"{reference}\"{ty}/>")); }
             else { body.push_str(&format!("<{tag} r=\"{reference}\"{ty}>{contents}</{tag}>")); }
@@ -742,13 +823,13 @@ impl WorkbookFiles {
                 if before==after { continue; }
                 let sheet_id=sheet_ids.get(index).ok_or("Missing revision sheet identity")?;
                 let format=pending.shared_input_formats.get(&(index,row,column));
-                cell_changes.push(Self::cell_revision(CellAddress {sheet:index,row,column},&before,&after,format,*sheet_id));
+                cell_changes.push(Self::cell_revision(CellAddress {sheet:index,row,column},&before,&after,format,*sheet_id,copy_only,old_cells.contains_key(&(row,column))));
             }
         }
         if copy_only {
             for edit in &pending.shared_cell_edits {
                 let Some(&sheet_id)=sheet_ids.get(edit.at.sheet) else {continue;};
-                cell_changes.push(Self::cell_revision(edit.at,&edit.before,&edit.after,Some(&edit.format),sheet_id));
+                cell_changes.push(Self::cell_revision(edit.at,&edit.before,&edit.after,Some(&edit.format),sheet_id,true,edit.before_exists));
             }
         }
         cell_changes.sort_by_key(|change|(change.sequence,change.sheet,change.row,change.column));
@@ -1080,14 +1161,15 @@ impl WorkbookHost<'_> {
             .and_then(|cell|cell.style.number_format).or_else(||self.template_style(at).number_format)
             .unwrap_or_else(||"General".into());
         self.file_io.shared_revision_sequence=self.file_io.shared_revision_sequence.saturating_add(1);
-        self.file_io.shared_input_formats.insert(key,SharedInputFormat {
+        let before_recorded=self.file_io.shared_input_formats.contains_key(&key);
+        let previous_format=self.file_io.shared_input_formats.insert(key,SharedInputFormat {
             sequence:self.file_io.shared_revision_sequence,before:format.clone(),after:format,
-            changed:false,before_automatic:self.file_io.shared_automatic_formats.contains(&key),
+            changed:false,before_automatic:self.file_io.shared_automatic_formats.contains(&key),before_recorded,style_dxf:None,
         });
         let held=self.cell_here(at.sheet,at.row,at.column);
         Some(SharedCellEdit {
-            at,before:WorkbookFiles::revision_cell_content(held.as_ref()),after:(None,String::new()),
-            format:self.file_io.shared_input_formats[&key].clone(),
+            at,before:WorkbookFiles::revision_cell_content(held.as_ref()),before_exists:held.is_some(),after:(None,String::new()),
+            format:self.file_io.shared_input_formats[&key].clone(),previous_format,
         })
     }
 
@@ -1095,7 +1177,103 @@ impl WorkbookHost<'_> {
         let Some(mut edit)=edit else {return;};
         let held=self.cell_here(edit.at.sheet,edit.at.row,edit.at.column);
         edit.after=WorkbookFiles::revision_cell_content(held.as_ref());
+        // Empty-to-empty writes dirty the book but add no cell revision.
+        // Restore the prior input identity so a later real save retains the
+        // ordering and format of the last write Excel actually recorded.
+        if edit.before.0.is_none() && edit.before.1.is_empty() && edit.after==edit.before && edit.format.style_dxf.is_none() {
+            let key=(edit.at.sheet,edit.at.row,edit.at.column);
+            if let Some(previous)=edit.previous_format {
+                self.file_io.shared_input_formats.insert(key,previous);
+            } else {
+                self.file_io.shared_input_formats.remove(&key);
+            }
+            return;
+        }
+        edit.previous_format=None;
         self.file_io.shared_cell_edits.push(edit);
+    }
+
+    pub(super) fn finish_shared_cell_paste(&mut self, edit: Option<SharedCellEdit>, before: CellStyle) -> Result<(),String> {
+        let Some(mut edit)=edit else {return Ok(());};
+        let default=self.workbook.default_style.clone();
+        let inherit=|mut style: CellStyle| {
+            style.font_size=style.font_size.or(default.font_size);
+            style.font_name=style.font_name.or_else(||default.font_name.clone());
+            style.font_color=style.font_color.or_else(||default.font_color.clone());
+            style.font_family=style.font_family.or(default.font_family);
+            style.font_charset=style.font_charset.or(default.font_charset);
+            style
+        };
+        let before=inherit(before);
+        let after=inherit(self.cell_here(edit.at.sheet,edit.at.row,edit.at.column).map(|cell|cell.style)
+            .unwrap_or_else(||self.template_style(edit.at)));
+        let mut old=String::new();let mut new=String::new();
+        let mut old_font=String::new();let mut new_font=String::new();let mut changed=BTreeSet::new();
+        for (tag,was,now) in [("b",before.bold,after.bold),("i",before.italic,after.italic),
+            ("u",before.underline,after.underline),("strike",before.strikethrough,after.strikethrough)] {
+            if was==now {continue;}
+            changed.insert(tag);
+            old_font.push_str(&if was {format!("<{tag}/>")} else {format!("<{tag} val=\"0\"/>")});
+            new_font.push_str(&if now {format!("<{tag}/>")} else {format!("<{tag} val=\"0\"/>")});
+        }
+        let color=|value: &str| {
+            let hex=value.trim_start_matches('#');
+            if hex.len()==6 {format!("FF{hex}").to_ascii_uppercase()} else {hex.to_ascii_uppercase()}
+        };
+        let font_values=|style: &CellStyle| [
+            ("sz",style.font_size.map(|v|v.to_string())),
+            ("color",style.font_color.clone()),("name",style.font_name.clone()),
+            ("family",style.font_family.map(|v|v.to_string())),("charset",style.font_charset.map(|v|v.to_string()))];
+        for ((tag,was),(_,now)) in font_values(&before).into_iter().zip(font_values(&after)) {
+            if was==now {continue;}
+            changed.insert(tag);
+            for (out,value) in [(&mut old_font,was),(&mut new_font,now)] {
+                if tag=="color" {
+                    out.push_str(&value.map_or_else(||"<color auto=\"1\"/>".into(),
+                        |value|format!("<color rgb=\"{}\"/>",color(&value))));
+                } else if let Some(value)=value {
+                    out.push_str(&format!("<{tag} val=\"{}\"/>",quick_xml::escape::escape(&value)));
+                }
+            }
+        }
+        if !changed.is_empty() {
+            let default=&self.workbook.default_style;
+            let normal=after.bold==default.bold && after.italic==default.italic && after.underline==default.underline
+                && after.strikethrough==default.strikethrough && font_values(&after)==font_values(default);
+            let namespaces=if normal || !edit.before_exists {
+                let (namespaces,children)=self.file_io.default_revision_font()?;
+                for (tag,xml) in children {
+                    if !changed.contains(tag.as_str()) {
+                        if !edit.before_exists {old_font.push_str(&xml);}
+                        new_font.push_str(&xml);
+                    }
+                }
+                namespaces
+            } else {String::new()};
+            let old_namespaces=if edit.before_exists {""} else {namespaces.as_str()};
+            old.push_str(&format!("<font{old_namespaces}>{old_font}</font>"));
+            new.push_str(&format!("<font{namespaces}>{new_font}</font>"));
+        }
+        if before.number_format!=after.number_format {
+            old.push_str(&self.shared_format_dxf(before.number_format.as_deref().unwrap_or("General"),false));
+            new.push_str(&self.shared_format_dxf(after.number_format.as_deref().unwrap_or("General"),false));
+        }
+        if before.bg_color!=after.bg_color {
+            for (out,value) in [(&mut old,before.bg_color.as_deref()),(&mut new,after.bg_color.as_deref())] {
+                out.push_str(&value.map_or_else(||"<fill><patternFill patternType=\"none\"><bgColor indexed=\"65\"/></patternFill></fill>".into(),
+                    |value|format!("<fill><patternFill patternType=\"solid\"><bgColor rgb=\"{}\"/></patternFill></fill>",color(value))));
+            }
+        }
+        edit.format.after=after.number_format.clone().unwrap_or_else(||"General".into());
+        if !old.is_empty() || !new.is_empty() {
+            self.file_io.shared_format_edits.push(SharedFormatEdit {
+                sequence:edit.format.sequence,range:CellRange::single(edit.at),length:Some(0),dxf:new.clone(),automatic:true,
+            });
+            edit.format.style_dxf=Some((old,new));
+        }
+        self.file_io.shared_input_formats.insert((edit.at.sheet,edit.at.row,edit.at.column),edit.format.clone());
+        self.finish_shared_cell_input(Some(edit));
+        Ok(())
     }
 
     pub(super) fn refresh_shared_cell_input(&mut self, at: CellAddress) {
