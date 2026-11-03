@@ -16753,8 +16753,19 @@ cells={} pitch={:.2} text={:?}",
             let s1305 = !para_style.snap_to_grid
                 && !crate::env_flag!("OXI_S1305_DISABLE")
                 && !crate::env_flag!("OXI_S1306_DISABLE");
+            // OXI_ATL0_EMPTY_ASCII (2026-11-03, default ON, opt-out _DISABLE): a
+            // `line=0 atLeast` line does not snap to a typed grid, so its EMPTY line is
+            // sized like a no-grid one -- by the mark's ASCII face. `_pb_empty_atl0_typed_grid_gen.py`
+            // (slice of ja/administrative__05e3143c, docGrid lines 360, docDefaults
+            // Century / ＭＳ 明朝 10.5): empty, bordered-mark and anchor-only paragraphs
+            // all add 12.60 (Century), 13.56 once the mark names ascii ＭＳ 明朝;
+            // Oxi added ＭＳ 明朝's 13.61 to every arm.
+            let atl0_ascii = para_style.line_spacing_rule.as_deref() == Some("atLeast")
+                && para_style.line_spacing.map_or(false, |v| v == 0.0)
+                && !crate::env_flag!("OXI_ATL0_EMPTY_ASCII_DISABLE");
             let s949_ascii = grid_pitch.is_none()
                 || s1305
+                || atl0_ascii
                 || (grid_no_type
                     && !self.doc_body_has_real_cjk
                     && !crate::env_flag!("OXI_S949_DISABLE"));
@@ -19259,9 +19270,18 @@ cells={} pitch={:.2} text={:?}",
                                     .is_cjk_83_64_font()
                             });
                         if s1354 {
+                            // OXI_GRID_WS_CENTER (2026-11-03, default ON, opt-out _DISABLE): a
+                            // whitespace-only run does not size the box Word centres in the
+                            // grid cell(s). `_pb_grid_space_center_gen.py` (slice of
+                            // ja/administrative__05e3143c, lines grid 18pt, 12pt text): a 16pt
+                            // «　» before or after it, a 16pt ASCII space, a 20pt «　» all leave
+                            // the baseline where the 12pt line has it; a 16pt «さ» moves it.
+                            let ws_skip = !crate::env_flag!("OXI_GRID_WS_CENTER_DISABLE")
+                                && line.fragments.iter().any(|f| !f.text.trim().is_empty());
                             let line_fs = line
                                 .fragments
                                 .iter()
+                                .filter(|f| !(ws_skip && f.text.trim().is_empty()))
                                 .filter(|f| {
                                     self.metrics_for_text(&f.text, &f.style, para_style)
                                         .is_cjk_83_64_font()
@@ -19282,6 +19302,7 @@ cells={} pitch={:.2} text={:?}",
                             let line_box = if !crate::env_flag!("OXI_S1354_WINBOX_DISABLE") {
                                 line.fragments
                                     .iter()
+                                    .filter(|f| !(ws_skip && f.text.trim().is_empty()))
                                     .map(|f| {
                                         let m = &*self.metrics_for_text(&f.text, &f.style, para_style);
                                         if m.is_cjk_83_64_font() {

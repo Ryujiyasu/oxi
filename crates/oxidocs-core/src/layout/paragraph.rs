@@ -7521,10 +7521,19 @@ impl<'a> ParagraphLayouter<'a> {
                 // visible baseline either (para 18's 11pt trailing spaces pushed line 2's
                 // baseline down; Word keeps the 9pt visible pitch, 10.320pt measured).
                 let s1045_ma = self.s1045_height_drivers(&line.fragments, para_font_size);
+                // OXI_WS_BASELINE (2026-11-03, default ON, opt-out _DISABLE): a run that
+                // paints no glyph does not set the shared baseline either (S1298 already
+                // keeps it out of the line height). `_pb_grid_space_center_gen.py`: a
+                // 16 / 20pt «　» or a 16pt space beside 12pt text leaves Word's baseline
+                // where the 12pt line has it; ja/administrative__05e3143c's first body
+                // line (16pt «　» + 12pt) sat 1.4pt low.
+                let ws_base = !crate::env_flag!("OXI_WS_BASELINE_DISABLE")
+                    && LayoutEngine::s1298_has_visible(&line.fragments);
                 line.fragments
                     .iter()
                     .enumerate()
                     .filter(|(fi, f)| !LayoutEngine::s1045_skip(s1045_ma, *fi, f, para_font_size))
+                    .filter(|(_, f)| !(ws_base && LayoutEngine::s1298_glyphless(f)))
                     .map(|(_, f)| {
                         let fs = f.style.font_size.unwrap_or(para_font_size);
                         let a = self
@@ -7558,10 +7567,13 @@ impl<'a> ParagraphLayouter<'a> {
                 0.0
             } else {
                 let s1045_ma = self.s1045_height_drivers(&line.fragments, para_font_size);
+                let ws_base = !crate::env_flag!("OXI_WS_BASELINE_DISABLE")
+                    && LayoutEngine::s1298_has_visible(&line.fragments);
                 line.fragments
                     .iter()
                     .enumerate()
                     .filter(|(fi, f)| !LayoutEngine::s1045_skip(s1045_ma, *fi, f, para_font_size))
+                    .filter(|(_, f)| !(ws_base && LayoutEngine::s1298_glyphless(f)))
                     .map(|(_, f)| {
                         let base = f.style.font_size.unwrap_or(para_font_size);
                         // The size the fragment is actually SET at: a super- or
