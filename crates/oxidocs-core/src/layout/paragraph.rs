@@ -2201,7 +2201,16 @@ impl<'a> ParagraphLayouter<'a> {
                         }
                     })
                     .fold(0.0f32, f32::max);
-                if obj_h > 0.0 && !header_exact_inline {
+                // OXI_EXACT_INLINE_NO_GROW (2026-11-04, default ON, opt-out _DISABLE):
+                // an exact line keeps its height with an inline object beside its
+                // text, in the body as in a header (S1320 / S1321 for object-only
+                // lines). `_pb_exact_inline_chart_gen.py` (slice of blind-J
+                // ja/reports__7a8daf36, its 324 x 220.5pt inline chart): exact 12 /
+                // 30 give Word gaps 25.68 / 43.68 = the A line + the exact value,
+                // auto 244.01; Oxi grew every exact arm by the chart.
+                let body_exact = para.style.line_spacing_rule.as_deref() == Some("exact")
+                    && !crate::env_flag!("OXI_EXACT_INLINE_NO_GROW_DISABLE");
+                if obj_h > 0.0 && !header_exact_inline && !body_exact {
                     // The object BOTTOM sits on the text baseline (emit), so the
                     // line height = object (all above baseline) + the line's text
                     // DESCENT (below baseline). Word's PA-form member-info gap
@@ -3142,7 +3151,13 @@ impl<'a> ParagraphLayouter<'a> {
                         target > line_heights[0]
                     );
                 }
-                if target > line_heights[0] {
+                // OXI_EXACT_INLINE_NO_GROW: an exact line keeps its height, and its
+                // text keeps the exact baseline; the group sits on that baseline and
+                // overflows upward (see the S851 site).
+                let exact_keep = para.style.line_spacing_rule.as_deref() == Some("exact")
+                    && !crate::env_flag!("OXI_EXACT_INLINE_NO_GROW_DISABLE");
+                if exact_keep {
+                } else if target > line_heights[0] {
                     line_heights[0] = target;
                     if natural_line_heights[0] < target {
                         natural_line_heights[0] = target;
@@ -3152,7 +3167,7 @@ impl<'a> ParagraphLayouter<'a> {
                     }
                     s837_fired_cy = s773_cy;
                 }
-                if lines.len() == 1 {
+                if lines.len() == 1 && !exact_keep {
                     s773_line0_target = target;
                 }
             }
@@ -6731,6 +6746,42 @@ impl<'a> ParagraphLayouter<'a> {
             // break_into_lines may put more chars than fit in the indented area;
             // negative slack triggers punctuation compression to fit.
             let render_width = content_width - indent_left - indent_right - s758_line_red;
+            // OXI_ALIGN_TRAIL_WS (2026-11-04, default ON, opt-out _DISABLE): a right- or
+            // centre-aligned line is placed by its width WITHOUT its trailing
+            // whitespace -- ASCII spaces and «　» alike hang past the edge.
+            // `_pb_trail_ideo_jc_gen.py` (slice of blind-J ja/reports__7a8daf36, ＭＳ
+            // 明朝 12, «あいう» + «», «　», «　　», «　　 », «  »): Word puts «あ» at
+            // 524.14 (right) / 293.93 (centre) in every arm; Oxi moved it left by the
+            // tail. 7a8daf36's jc=right [inline chart]«　　» « » line sat 28pt short.
+            let line_text_width = if matches!(para.alignment, Alignment::Right | Alignment::Center)
+                && !crate::env_flag!("OXI_ALIGN_TRAIL_WS_DISABLE")
+                && line.fragments.iter().any(|f| f.text.chars().any(|c| !c.is_whitespace()))
+            {
+                let mut trail = 0.0f32;
+                for f in line.fragments.iter().rev() {
+                    if f.tab_alignment.is_some() {
+                        break;
+                    }
+                    if !f.text.is_empty() && f.text.chars().all(|c| c.is_whitespace()) {
+                        trail += f.width;
+                        continue;
+                    }
+                    let ws: Vec<char> = f.text.chars().rev().take_while(|c| c.is_whitespace()).collect();
+                    if !ws.is_empty() {
+                        let fs = f.style.font_size.unwrap_or(para_font_size);
+                        let scale = f.style.text_scale.unwrap_or(100.0) / 100.0;
+                        let cs = f.style.character_spacing.unwrap_or(0.0);
+                        let w: f32 = ws.iter()
+                            .map(|&c| self.metrics_for_char_in(c, false, &f.style, &para.style).char_width_em(c) * fs * scale + cs)
+                            .sum();
+                        trail += w.min(f.width);
+                    }
+                    break;
+                }
+                line_text_width - trail
+            } else {
+                line_text_width
+            };
             let align_offset = match para.alignment {
                 Alignment::Left => 0.0,
                 Alignment::Center => {
@@ -8615,6 +8666,13 @@ impl<'a> ParagraphLayouter<'a> {
                             let fs = tf.style.font_size.unwrap_or(para_font_size);
                             let m = &*self.metrics_for_text(&tf.text, &tf.style, &para.style);
                             emit_y + text_y_off - 1.0 + m.win_ascent * fs
+                        } else if para.style.line_spacing_rule.as_deref() == Some("exact")
+                            && !crate::env_flag!("OXI_EXACT_INLINE_NO_GROW_DISABLE")
+                        {
+                            // An exact line's baseline is 0.8 of the line (S1261); the
+                            // group stands on it and overflows upward (Word 48.2 for an
+                            // exact 12pt line starting at 38.6).
+                            emit_y + 0.8 * line_height
                         } else {
                             emit_y + line_height
                         };
