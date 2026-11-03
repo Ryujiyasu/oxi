@@ -61,11 +61,58 @@ pub(super) struct WorkbookFiles {
     pub read_only_recommended: bool,
     pub create_backup: bool,
     pub shared: bool,
+    pub shared_input_formats: BTreeMap<(usize,u32,u32), SharedInputFormat>,
+    pub shared_automatic_formats: BTreeSet<(usize,u32,u32)>,
+    pub shared_revision_sequence: u64,
+    pub shared_format_edits: Vec<SharedFormatEdit>,
+    pub shared_cell_edits: Vec<SharedCellEdit>,
+    pub shared_format_ids: BTreeMap<String,u32>,
     pub source: String,
     pub files: Files,
     pub exports: BTreeSet<String>,
     mounted_folders: BTreeSet<String>,
     mounted_files: BTreeSet<String>,
+}
+
+#[derive(Clone)]
+pub(super) struct SharedInputFormat {
+    pub sequence: u64,
+    pub before: String,
+    pub after: String,
+    pub changed: bool,
+    pub before_automatic: bool,
+}
+
+#[derive(Clone)]
+pub(super) struct SharedFormatEdit {
+    sequence: u64,
+    range: CellRange,
+    length: Option<u32>,
+    dxf: String,
+    automatic: bool,
+}
+
+pub(super) struct SharedFormatRequest {
+    range: CellRange,
+    property: &'static str,
+    before: CellStyle,
+}
+
+#[derive(Clone)]
+pub(super) struct SharedCellEdit {
+    at: CellAddress,
+    before: (Option<&'static str>,String),
+    after: (Option<&'static str>,String),
+    format: SharedInputFormat,
+}
+
+struct SharedCellChange {
+    sequence: u64,
+    sheet: usize,
+    row: u32,
+    column: u32,
+    attributes: String,
+    body: String,
 }
 
 struct SharedXmlChild<'a> {
@@ -523,6 +570,249 @@ impl WorkbookFiles {
         Self::replace_package_parts(package,replacements,&removed)
     }
 
+
+    fn related_part(base: &str, target: &str) -> Result<String, String> {
+        let mut parts: Vec<_> = if target.starts_with('/') { Vec::new() }
+            else { base.rsplit_once('/').map_or("", |(parent, _)| parent).split('/').filter(|p| !p.is_empty()).collect() };
+        for part in target.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => { parts.pop().ok_or("Relationship escapes the package")?; }
+                part => parts.push(part),
+            }
+        }
+        Ok(parts.join("/"))
+    }
+
+    fn sidecar_part(part: &str) -> String {
+        part.rsplit_once('/').map_or_else(||format!("_rels/{part}.rels"),
+            |(parent, leaf)|format!("{parent}/_rels/{leaf}.rels"))
+    }
+
+    /// Change the header counters without disturbing imported namespaces or
+    /// extension nodes, and append a complete, namespace-qualified header.
+    fn append_revision_header(xml: &str, attributes: &BTreeMap<&str, String>, header: &str) -> Result<Vec<u8>, String> {
+        use quick_xml::events::{BytesStart, Event};
+        let mut reader=quick_xml::Reader::from_str(xml);
+        let mut writer=quick_xml::Writer::new(Vec::new());
+        let mut depth=0usize;
+        loop {
+            let mut event=reader.read_event().map_err(|e|e.to_string())?;
+            if depth==0 {
+                if let Event::Start(root)=&event {
+                    let name=String::from_utf8(root.name().as_ref().to_vec()).map_err(|e|e.to_string())?;
+                    let mut replacement=BytesStart::new(name);
+                    for attr in root.attributes() {
+                        let attr=attr.map_err(|e|e.to_string())?;
+                        if !attributes.keys().any(|key|key.as_bytes()==attr.key.as_ref()) {
+                            replacement.push_attribute(attr);
+                        }
+                    }
+                    for (key,value) in attributes { replacement.push_attribute((*key,value.as_str())); }
+                    event=Event::Start(replacement);
+                }
+            }
+            if depth==1 && matches!(&event, Event::End(_)) {
+                let mut child=quick_xml::Reader::from_str(header);
+                loop {
+                    let next=child.read_event().map_err(|e|e.to_string())?;
+                    if matches!(&next,Event::Eof) { break; }
+                    writer.write_event(next).map_err(|e|e.to_string())?;
+                }
+            }
+            match &event {
+                Event::Start(_) => depth+=1,
+                Event::End(_) => depth=depth.saturating_sub(1),
+                Event::Eof => break,
+                _ => {}
+            }
+            writer.write_event(event).map_err(|e|e.to_string())?;
+        }
+        Ok(writer.into_inner())
+    }
+
+    /// Canonical content excludes a formula's cached result and explicit style
+    /// edits. The same content written twice is a single net change at save.
+    fn revision_cell_content(cell: Option<&oxicells_core::ir::Cell>) -> (Option<&'static str>, String) {
+        let Some(cell)=cell else { return (None,String::new()); };
+        let text = |units: &[u16]| quick_xml::escape::escape(oxicells_core::encode_ooxml_string(units)).into_owned();
+        if let Some(formula)=cell.formula.as_deref() {
+            let units=cell.formula_units().map(|units|units.to_vec()).unwrap_or_else(||formula.encode_utf16().collect());
+            let units=units.strip_prefix(&[b'=' as u16]).unwrap_or(&units);
+            return (None,format!("<f>{}</f>",text(units)));
+        }
+        if let Some(units)=cell.value.string_units() {
+            if units.is_empty() { return (None,String::new()); }
+            let preserve=units.first().into_iter().chain(units.last()).any(|unit|matches!(*unit,9|10|13|32));
+            return (Some("inlineStr"),format!("<is><t{}>{}</t></is>",
+                if preserve {" xml:space=\"preserve\""} else {""},text(&units)));
+        }
+        match &cell.value {
+            oxicells_core::ir::CellValue::Number(value) => (None,format!("<v>{value}</v>")),
+            oxicells_core::ir::CellValue::Boolean(value) => (Some("b"),format!("<v>{}</v>",u8::from(*value))),
+            oxicells_core::ir::CellValue::Error(value) => (Some("e"),format!("<v>{}</v>",quick_xml::escape::escape(value))),
+            _ => (None,String::new()),
+        }
+    }
+
+    fn revision_number_format(format: &str) -> Option<(u32,&str)> {
+        // Revision format identities use Excel's history format table; they
+        // are distinct from the built-in IDs written to styles.xml.
+        match format {
+            "General" => Some((0,"General")),
+            MONEY_FORMAT => Some((11,"\"$\"#,##0.00_);\\(\"$\"#,##0.00\\)")),
+            "m/d/yyyy" => Some((19,"m/d/yyyy")),
+            "0%" => Some((13,"0%")),
+            "0" | "0.0" | "0.00" | "0.000" | "#,##0" | "#,##0.00" => Some((4,format)),
+            "0.00%" => Some((14,"0.00%")),
+            _ => None,
+        }
+    }
+
+    fn cell_revision(at: CellAddress, before: &(Option<&'static str>,String), after: &(Option<&'static str>,String),
+        format: Option<&SharedInputFormat>, sheet_id: u32) -> SharedCellChange {
+        let (index,row,column)=(at.sheet,at.row,at.column);
+        let new_format=format.and_then(|held|Self::revision_number_format(&held.after));
+        let mut format_attributes=String::new();
+        let mut format_children=String::new();
+        if let Some((id,code))=new_format {
+            if let Some(held)=format.filter(|held|held.changed) {
+                format_attributes=format!(" odxf=\"1\" dxf=\"1\" numFmtId=\"{id}\"");
+                if !held.before_automatic {
+                    if let Some((old_id,old_code))=Self::revision_number_format(&held.before) {
+                        format_children.push_str(&format!("<odxf><numFmt numFmtId=\"{old_id}\" formatCode=\"{}\"/></odxf>",quick_xml::escape::escape(old_code)));
+                    }
+                }
+                format_children.push_str(&format!("<ndxf><numFmt numFmtId=\"{id}\" formatCode=\"{}\"/></ndxf>",quick_xml::escape::escape(code)));
+            } else if id!=0 { format_attributes=format!(" numFmtId=\"{id}\""); }
+        }
+        let mut body=String::new();
+        let mut col=column+1;let mut letters=Vec::new();
+        while col>0 { letters.push((b'A'+((col-1)%26) as u8) as char);col=(col-1)/26; }
+        let reference=format!("{}{row}",letters.into_iter().rev().collect::<String>());
+        for (tag,(kind,contents)) in [("oc",before),("nc",after)] {
+            let ty=kind.map(|value|format!(" t=\"{value}\"")).unwrap_or_default();
+            if contents.is_empty() { body.push_str(&format!("<{tag} r=\"{reference}\"{ty}/>")); }
+            else { body.push_str(&format!("<{tag} r=\"{reference}\"{ty}>{contents}</{tag}>")); }
+        }
+        body.push_str(&format_children);
+        SharedCellChange {
+            sequence:format.map_or(u64::MAX,|held|held.sequence),sheet:index,row,column,
+            attributes:format!(" sId=\"{sheet_id}\"{format_attributes}"),body,
+        }
+    }
+
+    fn package_with_revision_history(package: &[u8], baseline: &[u8], current: &oxicells_core::ir::Workbook,
+        author: &[u16], now: Option<f64>, copy_only: bool,
+        pending: &Self) -> Result<Vec<u8>, String> {
+        if !Self::package_is_shared(baseline)? { return Self::package_with_sharing(package,author,now); }
+        let old=oxicells_core::parse_xlsx_preserving_values(baseline).map_err(|e|e.to_string())?;
+        let mut archive=oxidocs_common::archive::OoxmlArchive::new(package).map_err(|e|e.to_string())?;
+        let rels=archive.read_part("xl/_rels/workbook.xml.rels").map_err(|e|e.to_string())?;
+        let relationships_ns="http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let relations=Self::xml_elements(&rels,b"Relationship",1)?;
+        let header_relation=relations.iter().find(|r|r.get("Type").is_some_and(|ty|ty==&format!("{relationships_ns}/revisionHeaders"))
+            && r.get("TargetMode").is_none_or(|mode|mode!="External")).ok_or("Missing revision headers relationship")?;
+        let header_part=Self::related_part("xl/workbook.xml",header_relation.get("Target").ok_or("Missing revision headers target")?)?;
+        let headers=archive.read_part(&header_part).map_err(|e|e.to_string())?;
+        let attributes=Self::xml_elements(&headers,b"headers",0)?.into_iter().next().ok_or("Missing revision headers")?;
+        let parse_counter = |name: &str, default: u32| -> Result<u32,String> {
+            attributes.get(name).map(|value|value.parse().map_err(|e: std::num::ParseIntError|e.to_string())).unwrap_or(Ok(default))
+        };
+        let mut revision_id=parse_counter("revisionId",0)?;
+        let first_revision=revision_id.checked_add(1).ok_or("Revision identity overflow")?;
+        let workbook=archive.read_part("xl/workbook.xml").map_err(|e|e.to_string())?;
+        let sheet_ids=Self::xml_elements(&workbook,b"sheet",2)?.into_iter().map(|sheet|
+            sheet.get("sheetId").ok_or_else(||"Missing sheet identity".to_string())?.parse::<u32>().map_err(|e|e.to_string()))
+            .collect::<Result<Vec<_>,_>>()?;
+        let mut cell_changes=Vec::new();
+        let recorded_cells: BTreeSet<_>=if copy_only {
+            pending.shared_cell_edits.iter().map(|edit|(edit.at.sheet,edit.at.row,edit.at.column)).collect()
+        } else {BTreeSet::new()};
+        for (index,sheet) in current.sheets.iter().enumerate() {
+            let previous=old.sheets.get(index);
+            let old_cells: BTreeMap<_,_>=previous.into_iter().flat_map(|sheet|sheet.rows.iter())
+                .flat_map(|row|row.cells.iter().map(move |cell|((row.index,cell.col),cell))).collect();
+            let new_cells: BTreeMap<_,_>=sheet.rows.iter().flat_map(|row|row.cells.iter().map(move |cell|((row.index,cell.col),cell))).collect();
+            let positions: BTreeSet<_>=old_cells.keys().chain(new_cells.keys()).copied().collect();
+            for (row,column) in positions {
+                let before=Self::revision_cell_content(old_cells.get(&(row,column)).copied());
+                let after=Self::revision_cell_content(new_cells.get(&(row,column)).copied());
+                if recorded_cells.contains(&(index,row,column)) {continue;}
+                if before==after { continue; }
+                let sheet_id=sheet_ids.get(index).ok_or("Missing revision sheet identity")?;
+                let format=pending.shared_input_formats.get(&(index,row,column));
+                cell_changes.push(Self::cell_revision(CellAddress {sheet:index,row,column},&before,&after,format,*sheet_id));
+            }
+        }
+        if copy_only {
+            for edit in &pending.shared_cell_edits {
+                let Some(&sheet_id)=sheet_ids.get(edit.at.sheet) else {continue;};
+                cell_changes.push(Self::cell_revision(edit.at,&edit.before,&edit.after,Some(&edit.format),sheet_id));
+            }
+        }
+        cell_changes.sort_by_key(|change|(change.sequence,change.sheet,change.row,change.column));
+        let mut attached=BTreeSet::new();
+        let mut records=Vec::new();
+        for change in cell_changes {
+            revision_id=revision_id.checked_add(1).ok_or("Revision identity overflow")?;
+            attached.insert((change.sequence,change.sheet,change.row,change.column));
+            records.push((change.sequence,format!("<rcc rId=\"{revision_id}\"{}>{}</rcc>",change.attributes,change.body)));
+        }
+        for edit in &pending.shared_format_edits {
+            let at=edit.range.first();
+            if edit.automatic && attached.contains(&(edit.sequence,at.sheet,at.row,at.column)) {continue;}
+            let Some(sheet_id)=sheet_ids.get(edit.range.sheet) else {continue;};
+            let reference=format_range_address(edit.range,false,false);
+            let span=edit.length.map(|length|format!(" start=\"0\" length=\"{length}\"")).unwrap_or_default();
+            records.push((edit.sequence,format!("<rfmt sheetId=\"{sheet_id}\" sqref=\"{reference}\"{span}><dxf>{}</dxf></rfmt>",edit.dxf)));
+        }
+        records.sort_by_key(|record|record.0);
+        let changes=records.into_iter().map(|(_,xml)|xml).collect::<String>();
+        if copy_only && changes.is_empty() { return Ok(package.to_vec()); }
+        let sidecar=Self::sidecar_part(&header_part);
+        let header_rels=archive.read_part(&sidecar).map_err(|e|e.to_string())?;
+        let existing=Self::xml_elements(&header_rels,b"Relationship",1)?;
+        let ids: BTreeSet<_>=existing.iter().filter_map(|rel|rel.get("Id").cloned()).collect();
+        let mut index=1u32;
+        while ids.contains(&format!("rId{index}")) { index=index.checked_add(1).ok_or("Relationship identity overflow")?; }
+        let relation_id=format!("rId{index}");
+        let mut log_index=1u32;
+        let parent=header_part.rsplit_once('/').map_or("",|(parent,_)|parent);
+        let log_part=loop {
+            let name=format!("{parent}/revisionLog{log_index}.xml");
+            if archive.try_read_part(&name).map_err(|e|e.to_string())?.is_none() { break name; }
+            log_index=log_index.checked_add(1).ok_or("Revision log identity overflow")?;
+        };
+        let guid=Self::shared_guid()?;
+        let timestamp=now.map(Self::shared_timestamp).unwrap_or_else(||current_threaded_comment_timestamp().trim_end_matches('Z').to_string());
+        let author=oxicells_core::encode_ooxml_string(author).replace('\t',"_x0009_").replace('\n',"_x000A_");
+        let author=quick_xml::escape::escape(&author);
+        let ns="http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let max_sheet=sheet_ids.iter().max().copied().ok_or("Missing revision sheet map")?
+            .checked_add(1).ok_or("Sheet identity overflow")?;
+        let sheet_map=sheet_ids.iter().map(|id|format!("<sheetId val=\"{id}\"/>")).collect::<String>();
+        let bounds=if revision_id<first_revision {String::new()} else {
+            format!(" minRId=\"{first_revision}\"{}",if revision_id>first_revision {format!(" maxRId=\"{revision_id}\"")} else {String::new()})
+        };
+        let header=format!("<header xmlns=\"{ns}\" xmlns:r=\"{relationships_ns}\" guid=\"{guid}\" dateTime=\"{timestamp}\" maxSheetId=\"{max_sheet}\" userName=\"{author}\" r:id=\"{relation_id}\"{bounds}><sheetIdMap count=\"{}\">{sheet_map}</sheetIdMap></header>",sheet_ids.len());
+        let mut counters=BTreeMap::from([("guid",guid),("diskRevisions","1".into())]);
+        if revision_id>0 { counters.insert("revisionId",revision_id.to_string()); }
+        if !copy_only { counters.insert("version",parse_counter("version",1)?.checked_add(1).ok_or("Revision version overflow")?.to_string()); }
+        let log=format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><revisions xmlns=\"{ns}\">{changes}</revisions>");
+        let types=archive.read_part("[Content_Types].xml").map_err(|e|e.to_string())?;
+        let replacements=BTreeMap::from([
+            (header_part,Self::append_revision_header(&headers,&counters,&header)?),
+            (sidecar,Self::append_xml_children(&header_rels,&[SharedXmlChild {name:"Relationship",attributes:vec![
+                ("Id",relation_id),("Type",format!("{relationships_ns}/revisionLog")),
+                ("Target",format!("revisionLog{log_index}.xml"))]}])?),
+            ("[Content_Types].xml".into(),Self::append_xml_children(&types,&[SharedXmlChild {name:"Override",attributes:vec![
+                ("PartName",format!("/{log_part}")),("ContentType","application/vnd.openxmlformats-officedocument.spreadsheetml.revisionLog+xml".into())]}])?),
+            (log_part,log.into_bytes()),
+        ]);
+        Self::replace_package_parts(package,replacements,&BTreeSet::new())
+    }
+
     fn shared_guid() -> Result<String, String> {
         let mut bytes = [0u8;16];
         #[cfg(target_arch="wasm32")]
@@ -782,6 +1072,151 @@ pub(super) fn validate_snapshot_js(options: &JsValue) -> Result<(), JsError> {
 }
 
 impl WorkbookHost<'_> {
+
+    pub(super) fn begin_shared_cell_input(&mut self, at: CellAddress) -> Option<SharedCellEdit> {
+        if !self.file_io.shared {return None;}
+        let key=(at.sheet,at.row,at.column);
+        let format=self.cell_here(at.sheet,at.row,at.column)
+            .and_then(|cell|cell.style.number_format).or_else(||self.template_style(at).number_format)
+            .unwrap_or_else(||"General".into());
+        self.file_io.shared_revision_sequence=self.file_io.shared_revision_sequence.saturating_add(1);
+        self.file_io.shared_input_formats.insert(key,SharedInputFormat {
+            sequence:self.file_io.shared_revision_sequence,before:format.clone(),after:format,
+            changed:false,before_automatic:self.file_io.shared_automatic_formats.contains(&key),
+        });
+        let held=self.cell_here(at.sheet,at.row,at.column);
+        Some(SharedCellEdit {
+            at,before:WorkbookFiles::revision_cell_content(held.as_ref()),after:(None,String::new()),
+            format:self.file_io.shared_input_formats[&key].clone(),
+        })
+    }
+
+    pub(super) fn finish_shared_cell_input(&mut self, edit: Option<SharedCellEdit>) {
+        let Some(mut edit)=edit else {return;};
+        let held=self.cell_here(edit.at.sheet,edit.at.row,edit.at.column);
+        edit.after=WorkbookFiles::revision_cell_content(held.as_ref());
+        self.file_io.shared_cell_edits.push(edit);
+    }
+
+    pub(super) fn refresh_shared_cell_input(&mut self, at: CellAddress) {
+        if !self.file_io.shared {return;}
+        let held=self.cell_here(at.sheet,at.row,at.column);
+        let after=WorkbookFiles::revision_cell_content(held.as_ref());
+        if let Some(edit)=self.file_io.shared_cell_edits.iter_mut().rev().find(|edit|edit.at==at) {edit.after=after;}
+    }
+
+    fn shared_format_dxf(&mut self, format: &str, automatic: bool) -> String {
+        let known=if automatic {WorkbookFiles::revision_number_format(format)} else {
+            match format {
+                "General" => Some((0,"General")), "0" => Some((1,"0")),
+                "0.00" => Some((2,"0.00")), "#,##0" => Some((3,"#,##0")),
+                "#,##0.00" => Some((4,"#,##0.00")),
+                MONEY_FORMAT | "m/d/yyyy" | "0%" | "0.00%" => WorkbookFiles::revision_number_format(format),
+                _ => None,
+            }
+        };
+        let (id,code)=if let Some(known)=known {known} else {
+            if self.file_io.shared_format_ids.is_empty() {
+                if let Some(package)=&self.file_io.package {
+                    if let Ok(mut archive)=oxidocs_common::archive::OoxmlArchive::new(package) {
+                        if let Ok(styles)=archive.read_part("xl/styles.xml") {
+                            if let Ok(formats)=WorkbookFiles::xml_elements(&styles,b"numFmt",2) {
+                                for held in formats {
+                                    if let (Some(code),Some(id))=(held.get("formatCode"),held.get("numFmtId").and_then(|v|v.parse::<u32>().ok())) {
+                                        self.file_io.shared_format_ids.insert(code.clone(),id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let next=self.file_io.shared_format_ids.values().copied().filter(|id|*id>=164).max()
+                .map_or(164,|id|id.saturating_add(1));
+            let id=*self.file_io.shared_format_ids.entry(format.into()).or_insert(next);
+            (id,format)
+        };
+        format!("<numFmt numFmtId=\"{id}\" formatCode=\"{}\"/>",quick_xml::escape::escape(code))
+    }
+
+    pub(super) fn record_shared_automatic_format(&mut self, at: CellAddress, format: &str) {
+        if !self.file_io.shared {return;}
+        let key=(at.sheet,at.row,at.column);
+        let Some(input)=self.file_io.shared_input_formats.get_mut(&key) else {return;};
+        input.after=format.into();input.changed=input.before!=format;
+        let (sequence,changed)=(input.sequence,input.changed);
+        let format_metadata=input.clone();
+        if let Some(edit)=self.file_io.shared_cell_edits.last_mut().filter(|edit|edit.at==at && edit.format.sequence==sequence) {
+            edit.format=format_metadata;
+        }
+        if changed {
+            let dxf=self.shared_format_dxf(format,true);
+            self.file_io.shared_format_edits.push(SharedFormatEdit {
+                sequence,range:CellRange::single(at),length:Some(0),dxf,automatic:true,
+            });
+            self.file_io.shared_automatic_formats.insert(key);
+        }
+    }
+
+    pub(super) fn shared_format_request(&self, receiver: &ObjectRef, name: &str, value: &Value) -> Option<SharedFormatRequest> {
+        if !self.file_io.shared || self.gone(receiver) || matches!(value,Value::Null) {return None;}
+        let lower=name.to_ascii_lowercase();
+        let (range,property)=if let Some(range)=self.range_font(receiver) {
+            (range,match lower.as_str() {"bold"=>"bold","italic"=>"italic","color"=>"fontcolor",_=>return None})
+        } else if let Some(range)=self.range_interior(receiver) {
+            (range,match lower.as_str() {"color"=>"fill",_=>return None})
+        } else {
+            (self.range(receiver)?,match lower.as_str() {
+                "numberformat"|"numberformatlocal"=>"numberformat","horizontalalignment"=>"horizontal",
+                "verticalalignment"=>"vertical","wraptext"=>"wrap","shrinktofit"=>"shrink",_=>return None})
+        };
+        let at=range.first();
+        let before=self.cell_here(at.sheet,at.row,at.column).map(|cell|cell.style).unwrap_or_else(||self.template_style(at));
+        Some(SharedFormatRequest {range,property,before})
+    }
+
+    pub(super) fn finish_shared_format(&mut self, request: SharedFormatRequest) {
+        let SharedFormatRequest {range,property,before}=request;
+        let at=range.first();
+        let after=self.cell_here(at.sheet,at.row,at.column).map(|cell|cell.style).unwrap_or_else(||self.template_style(at));
+        let color=|value: &str| {
+            let hex=value.trim_start_matches('#');
+            if hex.len()==6 {format!("FF{hex}").to_ascii_uppercase()} else {hex.to_ascii_uppercase()}
+        };
+        let (length,dxf)=match property {
+            "numberformat" => {
+                if before.number_format==after.number_format {return;}
+                let code=after.number_format.as_deref().unwrap_or("General");
+                let dxf=self.shared_format_dxf(code,false);
+                self.file_io.shared_automatic_formats.retain(|&(sheet,row,column)|
+                    sheet!=range.sheet || row<range.start_row || row>range.end_row || column<range.start_column || column>range.end_column);
+                (None,dxf)
+            }
+            "bold"|"italic" => {
+                let (old,new,tag)=if property=="bold" {(before.bold,after.bold,"b")} else {(before.italic,after.italic,"i")};
+                (Some(i32::MAX as u32),if old==new {String::new()} else if new {format!("<font><{tag}/></font>")}
+                    else {format!("<font><{tag} val=\"0\"/></font>")})
+            }
+            "fontcolor" => (Some(0),if before.font_color==after.font_color {String::new()} else {
+                after.font_color.as_deref().map_or_else(||"<font><color auto=\"1\"/></font>".into(),
+                    |value|format!("<font><color rgb=\"{}\"/></font>",color(value)))
+            }),
+            "fill" => (Some(0),if before.bg_color==after.bg_color {String::new()} else {
+                after.bg_color.as_deref().map_or_else(||"<fill><patternFill patternType=\"none\"/></fill>".into(),
+                    |value|format!("<fill><patternFill patternType=\"solid\"><bgColor rgb=\"{}\"/></patternFill></fill>",color(value)))
+            }),
+            "horizontal" => (None,format!("<alignment horizontal=\"{}\"/>",after.horizontal_align.as_deref().unwrap_or("general"))),
+            "vertical" => (None,format!("<alignment vertical=\"{}\"/>",after.vertical_align.as_deref().unwrap_or("bottom"))),
+            "wrap" => (None,format!("<alignment wrapText=\"{}\"/>",u8::from(after.wrap_text))),
+            "shrink" => (None,format!("<alignment shrinkToFit=\"{}\"/>",u8::from(after.shrink_to_fit))),
+            _ => return,
+        };
+        self.file_io.shared_revision_sequence=self.file_io.shared_revision_sequence.saturating_add(1);
+        self.file_io.shared_format_edits.push(SharedFormatEdit {
+            sequence:self.file_io.shared_revision_sequence,range,length,dxf,automatic:false,
+        });
+    }
+
     fn sync_links_for_save(&mut self) {
         for sheet in &mut self.workbook.sheets {
             sheet.hyperlinks.clear();
@@ -868,6 +1303,11 @@ impl WorkbookHost<'_> {
         self.file_io.package = Some(files.bytes(&normalized).map_err(|error| error.description().to_string())?.to_vec());
         if let Some(format) = format { self.file_io.format = Some(format as f64); }
         self.file_io.read_only = false;
+        self.file_io.shared_input_formats.clear();
+        self.file_io.shared_automatic_formats.clear();
+        self.file_io.shared_format_edits.clear();
+        self.file_io.shared_cell_edits.clear();
+        self.file_io.shared_revision_sequence=0;
         self.saved = true;
         Ok(true)
     }
@@ -958,7 +1398,15 @@ impl WorkbookHost<'_> {
         if path.ends_with(['\\', '/']) { return Err(CopyFailure::Excel(self.copy_access_failure(path))); }
         let normalized = files.absolute_path(path);
         if let Some((parent, _)) = normalized.rsplit_once('\\') {
-            if !parent.is_empty() && !files.folder_exists(parent) { return Err(CopyFailure::Excel(self.copy_access_failure(path))); }
+            if !parent.is_empty() && !files.folder_exists(parent) {
+                // Shared real saves first try an Excel-style temporary file.
+                // A failed creation leaves the saved package and history intact.
+                let inaccessible = if self.file_io.shared && !copy_only {
+                    let guid=WorkbookFiles::shared_guid().map_err(|_|CopyFailure::Method(self.copy_method_failure()))?;
+                    format!("{parent}\\{}", &guid[1..9])
+                } else { path.to_string() };
+                return Err(CopyFailure::Excel(self.copy_access_failure(&inaccessible)));
+            }
         }
         let Some(package) = self.file_io.package.as_ref() else { return Err(CopyFailure::Method(self.copy_method_failure())); };
         let package = package.clone();
@@ -1003,7 +1451,7 @@ impl WorkbookHost<'_> {
         if shared {
             let author = self.application_setting("username").unwrap_or_else(||Value::String("User".into()));
             let units = author.string_units().map(|units|units.into_owned()).unwrap_or_else(||"User".encode_utf16().collect());
-            bytes = WorkbookFiles::package_with_sharing(&bytes, &units, self.now).map_err(|_|failure())?;
+            bytes = WorkbookFiles::package_with_revision_history(&bytes, &package, &self.workbook, &units, self.now, copy_only, &self.file_io).map_err(|_|failure())?;
         } else {
             bytes = WorkbookFiles::package_without_sharing(&bytes).map_err(|_|failure())?;
         }
