@@ -27,8 +27,7 @@ RELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships x
 DRELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
          '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>')
-FONT = os.environ.get("PB_FONT", "ＭＳ 明朝")  # ascii / hAnsi face
-EA_FONT = os.environ.get("PB_EA_FONT", "ＭＳ 明朝")  # eastAsia face (the kana side of the gap)
+FONT = os.environ.get("PB_FONT", "ＭＳ 明朝")
 CHARS = {"hwkana": "ｱ", "fwkana": "カ", "ascii": "x"}
 SIZE = 10.0
 
@@ -40,7 +39,7 @@ def build(compat, autospace):
               '<w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/><w:sz w:val="%d"/><w:lang w:val="en-US" w:eastAsia="ja-JP"/>'
               '</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0"/><w:jc w:val="left"/>%s</w:pPr></w:pPrDefault></w:docDefaults>'
               '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>'
-              ) % (W, FONT, FONT, EA_FONT, int(SIZE * 2), "" if autospace else '<w:autoSpaceDE w:val="0"/><w:autoSpaceDN w:val="0"/>')
+              ) % (W, FONT, FONT, FONT, int(SIZE * 2), "" if autospace else '<w:autoSpaceDE w:val="0"/><w:autoSpaceDN w:val="0"/>')
     body = "".join('<w:p><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p><w:p/>' % ("あ" * 10 + c + "abc" + "いうえお") for c in CHARS.values())
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document %s><w:body>%s'
            '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="720" w:right="1440" w:bottom="720" w:left="1440"/></w:sectPr></w:body></w:document>'
