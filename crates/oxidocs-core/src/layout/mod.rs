@@ -10507,6 +10507,27 @@ cells={} pitch={:.2} text={:?}",
                     _ => None,
                 }))
             }
+            // OXI_CLNSP_UNION (2026-11-03, default ON, opt-out _DISABLE): a line that
+            // mixes faces takes the union of their chain boxes -- the largest ascent
+            // over the largest descent -- not the box of its largest run alone.
+            // `_pb_clnsp_mixed_union_gen.py` (compatLnSpc 1, UD デジタル 教科書体 NP-B
+            // 10 + Arial 14, auto / atLeast 0): Word's next line drops 1.56 when the
+            // UD run leads the Arial one (the same growth as a body line);
+            // ja/administrative__0ba21b0c's framed «～個人懇談会～Reunião de pais e mestres».
+            let clnsp_union = !crate::env_flag!("OXI_CLNSP_UNION_DISABLE");
+            fn clnsp_line_faces(elements: &[LayoutElement], idxs: &[usize]) -> Vec<(String, f32)> {
+                let mut out: Vec<(String, f32)> = Vec::new();
+                for &i in idxs {
+                    if let LayoutContent::Text { font_family: Some(f), font_size, text, .. } = &elements[i].content {
+                        let symbolic = matches!(f.as_str(), "Symbol" | "Wingdings" | "Wingdings 2" | "Wingdings 3")
+                            || text.chars().all(|c| ('\u{E000}'..='\u{F8FF}').contains(&c) || c.is_whitespace());
+                        if !symbolic && !out.iter().any(|(g, z)| g == f && (*z - *font_size).abs() < 0.01) {
+                            out.push((f.clone(), *font_size));
+                        }
+                    }
+                }
+                out
+            }
             // group text elements into lines by y
             use std::collections::BTreeMap;
             let mut lines: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
@@ -10583,8 +10604,12 @@ cells={} pitch={:.2} text={:?}",
                         .get(line_no)
                         .map(|(r, v, sb, a, sh)| (r.clone(), *v, *sb, *a, *sh))
                         .unwrap_or((None, None, 0.0, 0.0, (0.0, 0.0)));
-                    let (asc, desc) =
-                        self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs));
+                    let (asc, desc) = if clnsp_union {
+                        self.clnsp_line_box_union(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs),
+                            &clnsp_line_faces(&elements, idxs))
+                    } else {
+                        self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs))
+                    };
                     let (asc, desc) = (asc + sh_t, desc + sh_b);
                     let cur_base = {
                         let i0 = idxs[0];
@@ -10651,7 +10676,12 @@ cells={} pitch={:.2} text={:?}",
                         .first()
                         .map(|(r, v, _, _, sh)| (r.clone(), *v, sh.0))
                         .unwrap_or((None, None, 0.0));
-                    self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs0)).0 + sh_t
+                    if clnsp_union {
+                        self.clnsp_line_box_union(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs0),
+                            &clnsp_line_faces(&elements, idxs0)).0 + sh_t
+                    } else {
+                        self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs0)).0 + sh_t
+                    }
                 };
                 let mode = std::env::var("OXI_CLNSP_ANCHOR").unwrap_or_default();
                 let anchor = if mode == "mean" {
@@ -16465,6 +16495,58 @@ cells={} pitch={:.2} text={:?}",
         self.ruby_expansion_for_runs(&para.runs, fs, &para.style)
     }
 
+    /// OXI_LINE_UNION_BOX: the line's union box -- the largest ascent over the
+    /// largest descent about the shared baseline, 83/64 faces centred -- or 0.0
+    /// when the line carries no 83/64 face or a run that the plain fold cannot
+    /// size (position, emphasis, run border, 縦中横, inline object).
+    pub(crate) fn line_union_box(&self, line: &Line, para_style: &ParagraphStyle, para_font_size: f32) -> f32 {
+        if !crate::env_flag!("OXI_LINE_UNION_BOX_DISABLE")
+            && line.fragments.iter().any(|f| {
+                !f.text.trim().is_empty()
+                    && self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font()
+            })
+        {
+            let (mut ua, mut ud) = (0.0_f32, 0.0_f32);
+            let mut plain = true;
+            for frag in &line.fragments {
+                if Self::s1298_glyphless(frag) || frag.text.trim().is_empty() {
+                    continue;
+                }
+                if frag.style.position.is_some() || frag.style.emphasis_mark.is_some()
+                    || frag.style.run_border.is_some() || frag.style.vert_in_horz
+                    || frag.style.inline_object_image.is_some()
+                {
+                    plain = false;
+                    break;
+                }
+                let fs = frag.style.font_size.unwrap_or(para_font_size);
+                let m = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
+                // Exact faces: the union is measured, not pixel-rounded (a Segoe UI
+                // Symbol ✔ beside BIZ UD明朝 12pt is 12.95 + 3.22 = 16.17 in Word;
+                // the rounded sets gave 15.94, under the symbol face's own 15.96).
+                let (a, d) = if m.is_cjk_83_64_font() {
+                    let win = (m.win_ascent + m.win_descent) * fs;
+                    let nat = win * (83.0 / 64.0);
+                    let a = m.win_ascent * fs + (nat - win) * 0.5;
+                    (a, nat - a)
+                } else {
+                    // the face's no-grid line (the S1119 fold's own measure: Cambria
+                    // Math 21.09 at 18pt), not its hhea/win box -- Cambria Math's
+                    // 5.6-em hhea box opened a 9pt non-breaking hyphen's line 40pt
+                    let a = m.baseline_ascent() * fs;
+                    let nat = m.word_line_height_no_grid(fs);
+                    (a, (nat - a).max(0.0))
+                };
+                ua = ua.max(a + self.symbol_chain_extra(&frag.text, m, fs));
+                ud = ud.max(d);
+            }
+            if plain {
+                return ua + ud;
+            }
+        }
+        0.0
+    }
+
     fn cjk_baseline_union(&self, line: &Line, para_style: &ParagraphStyle, para_font_size: f32) -> f32 {
         if crate::env_flag!("OXI_CJK_BASELINE_UNION_DISABLE") {
             return 0.0;
@@ -17001,57 +17083,13 @@ cells={} pitch={:.2} text={:?}",
                 max_combined = max_combined.max(mix);
             }
         }
-        let mut union_box = 0.0f32;
         // OXI_LINE_UNION_BOX: the same union fold as natural_line_height_for_line_inner
         // (max ascent + max descent about the shared baseline, 83/64 faces centred)
         // feeds the line ADVANCE here; mix_split's 23.03 is reached by neither
         // fold alone.
-        if !crate::env_flag!("OXI_LINE_UNION_BOX_DISABLE")
-            && line.fragments.iter().any(|f| {
-                !f.text.trim().is_empty()
-                    && self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font()
-            })
-        {
-            let (mut ua, mut ud) = (0.0_f32, 0.0_f32);
-            let mut plain = true;
-            for frag in &line.fragments {
-                if Self::s1298_glyphless(frag) || frag.text.trim().is_empty() {
-                    continue;
-                }
-                if frag.style.position.is_some() || frag.style.emphasis_mark.is_some()
-                    || frag.style.run_border.is_some() || frag.style.vert_in_horz
-                    || frag.style.inline_object_image.is_some()
-                {
-                    plain = false;
-                    break;
-                }
-                let fs = frag.style.font_size.unwrap_or(para_font_size);
-                let m = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
-                // Exact faces: the union is measured, not pixel-rounded (a Segoe UI
-                // Symbol ✔ beside BIZ UD明朝 12pt is 12.95 + 3.22 = 16.17 in Word;
-                // the rounded sets gave 15.94, under the symbol face's own 15.96).
-                let (a, d) = if m.is_cjk_83_64_font() {
-                    let win = (m.win_ascent + m.win_descent) * fs;
-                    let nat = win * (83.0 / 64.0);
-                    let a = m.win_ascent * fs + (nat - win) * 0.5;
-                    (a, nat - a)
-                } else {
-                    // the face's no-grid line (the S1119 fold's own measure: Cambria
-                    // Math 21.09 at 18pt), not its hhea/win box -- Cambria Math's
-                    // 5.6-em hhea box opened a 9pt non-breaking hyphen's line 40pt
-                    let a = m.baseline_ascent() * fs;
-                    let nat = m.word_line_height_no_grid(fs);
-                    (a, (nat - a).max(0.0))
-                };
-                ua = ua.max(a + self.symbol_chain_extra(&frag.text, m, fs));
-                ud = ud.max(d);
-            }
-            if plain && ua + ud > max_combined {
-                max_combined = ua + ud;
-            }
-            if plain {
-                union_box = ua + ud;
-            }
+        let union_box = self.line_union_box(line, para_style, para_font_size);
+        if union_box > max_combined {
+            max_combined = union_box;
         }
         let run_base = if !crate::env_flag!("OXI_S1361_DISABLE") && max_combined > 0.0 {
             max_combined
@@ -17304,7 +17342,10 @@ cells={} pitch={:.2} text={:?}",
                     && (grid_pitch.is_none() || grid_no_type)
                     && !crate::env_flag!("OXI_S887_DISABLE")
                 {
-                    return hhea_natural_max.max(val);
+                    // OXI_ATLEAST0_UNION: a CJK run on the line still unions its box
+                    // in (a text box in a Latin-bodied document reaches here).
+                    let union_floor = if crate::env_flag!("OXI_ATLEAST0_UNION_DISABLE") { 0.0 } else { union_box };
+                    return hhea_natural_max.max(val).max(union_floor);
                 }
                 if val == 0.0 {
                     // S1145 (2026-08-16, opt-out OXI_S1145_DISABLE): R55's
@@ -24279,6 +24320,37 @@ cells={} pitch={:.2} text={:?}",
     /// (24.72, old 15.49); first baselines of Arial / Calibri / TNR within 0.1.
     /// Word gives the same results with and without compatLnSpc (compat 12/14/15,
     /// typed grid too).
+    /// OXI_CLNSP_UNION: the chain box of a line carrying several faces -- each
+    /// face's natural (ascent, descent), unioned about the shared baseline, then
+    /// the line rule applied to the union as `clnsp_line_box` applies it to one.
+    pub(crate) fn clnsp_line_box_union(
+        &self,
+        rule: Option<&str>,
+        val: Option<f32>,
+        fs: f32,
+        face: Option<String>,
+        faces: &[(String, f32)],
+    ) -> (f32, f32) {
+        if faces.len() < 2 || matches!(rule, Some("exact")) {
+            return self.clnsp_line_box(rule, val, fs, face);
+        }
+        let (mut a, mut d) = self.clnsp_line_box(None, None, fs, face.clone());
+        for (f, z) in faces {
+            let (fa, fd) = self.clnsp_line_box(None, None, *z, Some(f.clone()));
+            a = a.max(fa);
+            d = d.max(fd);
+        }
+        let font_law = !crate::env_flag!("OXI_CLNSP_FONT_LAW_DISABLE");
+        match (rule, val) {
+            (Some("atLeast"), Some(v)) => ((a + d).max(v) - d, d),
+            (_, v) if font_law => {
+                let mult = v.filter(|v| *v > 0.0).unwrap_or(1.0);
+                (a, (a + d) * mult - a)
+            }
+            _ => (a, d),
+        }
+    }
+
     pub(crate) fn clnsp_line_box(
         &self,
         rule: Option<&str>,

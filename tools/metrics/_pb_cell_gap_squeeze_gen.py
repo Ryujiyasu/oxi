@@ -26,9 +26,7 @@ DRELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships 
 FONT = 'BIZ UDPゴシック'
 RPR = (f'<w:rPr><w:rFonts w:ascii="{FONT}" w:eastAsia="{FONT}" w:hAnsi="{FONT}"/>'
        '<w:sz w:val="21"/><w:lang w:eastAsia="ja-JP"/></w:rPr>')
-TEXTS = {'g1': '317万人', 'g2': '万317万人', 'g1x': '1499万人',
-         # mark + gap: does the gap credit add to the 、 capacity (compressPunctuation)?
-         'm0': 'あ、いう万人', 'm1': 'あ、い317万人'}
+TEXTS = {'g1': '317万人', 'g2': '万317万人', 'g1x': '1499万人'}
 # natural widths (pt) from the face's hmtx at 10.5pt; the sweep spans -4.0..+0.4
 ADV = {'3': 1556, '1': 1290, '7': 1556, '4': 1556, '9': 1556}
 
@@ -54,7 +52,7 @@ def para(text, jc, ind_r=0):
 def document(text, jc, ctx):
     nat_tw = round(natural(text) * 20)
     body = []
-    for k in (range(-240, 9, 4) if text.startswith("あ") else range(-80, 9, 2)):
+    for k in range(-80, 9, 2):
         inner = nat_tw + k
         body.append(para(f'K{k:+d}', 'left'))
         if ctx == 'cell':

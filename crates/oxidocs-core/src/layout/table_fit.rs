@@ -3130,7 +3130,18 @@ impl<'a> TableFitLayouter<'a> {
                 // column, «題材の評価規準» on one line, column 1 untouched).
                 let positioned_float = table.style.position.is_some()
                     && !crate::env_flag!("OXI_FLOAT_NO_PAGE_CLAMP_DISABLE");
+                // OXI_S585C_FIXED_EXEMPT (2026-11-03, default ON, opt-out _DISABLE): a
+                // fixed-layout table keeps its declared width past the margin -- Word
+                // neither clamps the border nor narrows the text. ja/educational__0f950495
+                // (tblLayout fixed, 9846tw, tblInd 72, 4.7pt over): faithful slice in
+                // compat 15 and 14 alike, the full-width cell's line is 472.34 wide and
+                // the right rule sits at the declared edge (549.94 / 543.46); Oxi clamped
+                // the cell 2.9pt and wrapped 3–4pt short (`_pb` slice in
+                // tests/fixtures/thick_cell_slice). S585c's own cases are auto-width boxes.
+                let s585c_fixed_exempt = table.style.layout.as_deref() == Some("fixed")
+                    && !crate::env_flag!("OXI_S585C_FIXED_EXEMPT_DISABLE");
                 let s585c_clamp_base = !crate::env_flag!("OXI_S585C_DISABLE")
+                    && !s585c_fixed_exempt
                     && !positioned_float
                     && !is_nested
                     && row.cells.len() == 1

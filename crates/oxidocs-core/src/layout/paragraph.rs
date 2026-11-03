@@ -3655,8 +3655,19 @@ impl<'a> ParagraphLayouter<'a> {
                             }
                         }
                     }
+                    // OXI_CUM_UNION_BOX (2026-11-03, default ON, opt-out _DISABLE): the
+                    // cursor basis takes the union box that line_height_for_line folds in
+                    // (largest ascent over largest descent): `_pb_latin_run_ea_lineh_gen.py`
+                    // PB_UD and `_pb_clnsp_mixed_union_gen.py` (UD デジタル 教科書体 NP-B
+                    // 10 + Arial 14, single): Word's next line drops 1.56; the line was
+                    // 17.62 here but a single-line paragraph advanced by Arial's 16.10.
+                    let cum_union = if crate::env_flag!("OXI_CUM_UNION_BOX_DISABLE") {
+                        0.0
+                    } else {
+                        self.line_union_box(first_line, &para.style, para_font_size)
+                    };
                     if s1363_site2 && s1363_box_max > 0.0 {
-                        s1363_box_max.max(self.cjk_baseline_union(first_line, &para.style, para_font_size))
+                        s1363_box_max.max(cum_union).max(self.cjk_baseline_union(first_line, &para.style, para_font_size))
                     } else if is_multiple_spacing
                         && (first_line.fragments.is_empty() || s902_all_ws)
                         && s805_hhea_max > 0.0
