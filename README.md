@@ -2,15 +2,29 @@
 
 **Oxi = Opensource Xplatform Interoperability**
 
-A browser-native Office document engine — Rust + WebAssembly, no server.
-Word (.docx) layout is scored against Microsoft Word page by page, PowerPoint (.pptx) against PowerPoint slide by slide, on **frozen blind benchmarks of documents the engine has never been tuned against** — and Excel (.xlsx) ships a formula engine and a browser VBA host verified against Excel itself.
+**Office documents, processed on your device.**
 
-[Live Demo](https://ryujiyasu.gitlab.io/oxi/docs.html) · [Layout Accuracy](#layout-accuracy-vs-microsoft-word) · [Contributing](#contributing)
+Oxi is an open-source engine for viewing and editing Word, Excel and PowerPoint files. Built in Rust and WebAssembly, it brings document processing into a browser, a desktop app or your own application, without a document-processing server or a Microsoft Office installation.
+
+The goal is to keep existing documents and workflows usable across platforms: page layout, Japanese typography, spreadsheet formulas and supported VBA. Compatibility is measured against Microsoft Office itself.
+
+[Word demo](https://ryujiyasu.gitlab.io/oxi/docs.html) · [Excel preview](https://ryujiyasu.gitlab.io/oxi/sheets.html) · [PowerPoint preview](https://ryujiyasu.gitlab.io/oxi/slides.html) · [Benchmarks](#layout-accuracy-vs-microsoft-word) · [Get started](#quick-start) · [Contribute](#contributing)
 
 ![release v0.8.9](https://img.shields.io/badge/release-v0.8.9-8a2be2) ![MPL-2.0 License](https://img.shields.io/badge/license-MPL--2.0-blue) ![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange) ![wasm-pack 0.14](https://img.shields.io/badge/wasm--pack-0.14-green)
 
 > **Canonical repository:** [GitHub — Ryujiyasu/oxi](https://github.com/Ryujiyasu/oxi) (issues, pull requests, CI, releases).
 > The [GitLab repository](https://gitlab.com/Ryujiyasu/oxi) receives `main` from GitHub and exists to run the Pages job that serves the live demo.
+
+## What Oxi Does
+
+| Format | Capabilities |
+|--------|--------------|
+| **Word — `.docx`** | Paginated rendering, editing and PDF export, with Japanese typography as a primary target |
+| **Excel — `.xlsx` / `.xlsm`** | Spreadsheet rendering, formulas, editing and a browser VBA host for supported workbook operations |
+| **PowerPoint — `.pptx`** | Slide rendering and editing, measured against PowerPoint's own output |
+| **PDF** | Parsing, text extraction, generation and digital-signature support |
+
+The same Rust engines power the browser editors, desktop app, CLI and language bindings. Available features depend on the build; the full browser suite is built with `--features suite`. Full Microsoft Office and VBA compatibility remains in progress.
 
 ---
 
@@ -34,19 +48,26 @@ Three editors over one engine, recorded from the assembled desktop build — the
 
 ## Why Now
 
-Europe is actively dismantling its Microsoft Office dependency in 2026:
+An Office file can open successfully and still move a page break, shift a table or change a calculation. Those differences make existing documents expensive to move between products, and make a document viewer difficult to embed in another application.
 
-- **France** — the DINUM directive (2026-04-08) puts 2.5M public-sector PCs on a free-software path by 2027; each ministry files a roadmap in autumn 2026.
-- **Switzerland** — the Federal Chancellery announced (2026-04-18) a phased reduction of Microsoft 365 dependency; the BOSS feasibility study lands mid-2026.
-- **Germany** — ZenDiS OpenDesk is in production at Schleswig-Holstein, Thüringen, Baden-Württemberg, and the International Criminal Court.
-
-Every one of these transitions is missing the same piece: **a rendering engine that opens existing .docx files identically to Microsoft Word**, so that "migration" stops being a project and becomes indistinguishable from switching applications. LibreOffice's long struggle in public-sector rollouts is well documented — not because its features are weak, but because per-document visual divergence forces every organization into a per-file audit it cannot staff.
-
-Oxi's answer is a measurement loop, not a promise: Word is the ground truth, the gate is external, and the headline numbers come from documents the engine has never been allowed to fix.
+Oxi puts parsing, rendering, editing and supported spreadsheet execution into a reusable local engine. Its priorities are concrete: keep document processing on the user's device, make Japanese layout a first-class target, and measure compatibility against Word, Excel and PowerPoint.
 
 ---
 
 ## Layout Accuracy vs Microsoft Word
+
+The published benchmarks compare Oxi with Microsoft Office's own output on fixed document sets.
+
+| Reference and corpus | Mean visual similarity (SSIM) | Matching page / slide counts | Measurement |
+|----------------------|-------------------------------|-----------------------------|-------------|
+| **Word — English, 50 documents** | **0.903** | **47 / 50** | 2026-10-28, without Word's saved page-break hints |
+| **Word — Japanese, 50 documents** | **0.905** | **47 / 50** | 2026-10-28, without Word's saved page-break hints |
+| **PowerPoint — 48 usable decks from 50 sampled files** | **0.953** | **48 / 48** | 2026-08-20 |
+
+SSIM measures visual similarity on these corpora. Formula and VBA behavior are checked separately against Excel. Coverage is limited to the measured documents and behaviors.
+
+<details>
+<summary>Full comparison tables, corpus definitions, limitations and reproduction</summary>
 
 ### How the corpora are split
 
@@ -161,7 +182,7 @@ The blind sets are the published claim; the development corpus is how regression
 - **Adversarial probe harness** — 95 synthetic documents stressing under-tested layout paths, each gated against real Word ground truth.
 - **Feature-injection perturbation harness** — individual OOXML features injected one at a time into a clean base document and pixel-verified against Word.
 - **PPTX render gate** — 40 development decks (886 slides) pixel-compared against PowerPoint's own PDF render (mean SSIM 0.957), plus 156 synthetic probe decks byte-compared per change and a determinism check (same input twice → identical bytes). LibreOffice Impress and a browser OOXML viewer render the same decks as independent references, so a slide where they land closer to PowerPoint than Oxi does is a bug with a worked example.
-- **Spreadsheet oracles** — the formula engine recalculates 285 real .xlsx workbooks and diffs against Excel's own cached results; the browser VBA host is derived and verified against real Excel COM behaviour (82 scripted A/B comparisons in `tools/measure_vba_*_com.ps1`).
+- **Spreadsheet oracles** — the formula engine recalculates 285 real .xlsx workbooks and diffs against Excel's own cached results; the browser VBA host is checked against real Excel COM behavior.
 - **Unit / integration suite** — `cargo test`.
 
 These numbers are *tuned* — every document in them has been individually root-caused — so they belong in a gate, not in a headline. The date-by-date development history is in [docs/layout_accuracy.md](docs/layout_accuracy.md); the derivation log is [RESEARCH_LOG.md](RESEARCH_LOG.md).
@@ -208,6 +229,8 @@ tools/metrics/browser_oracle.py         # @silurus/ooxml via Playwright (tools/b
 tools/metrics/compare_renderers_3way.py # cross-renderer scoring on identical inputs
 tools/oxi-lrpb-bench                    # Word-free page-break check against Word's saved markers
 ```
+
+</details>
 
 ---
 
@@ -264,23 +287,19 @@ Most Word-compatible renderers treat Japanese layout as an afterthought. For Oxi
 
 ---
 
-## Landscape — Why Not Use ...?
+## Where Oxi Fits
 
-| Solution | Approach | Limitation |
-|----------|----------|------------|
-| **LibreOffice / Collabora Online** | C++ server-side rendering | Requires server infrastructure. No pixel-fidelity goal against Word |
-| **ZetaOffice** | LibreOffice compiled to WASM | 100MB+ download. Layout accuracy = LibreOffice quality. Not a rewrite, just a port |
-| **ONLYOFFICE** | JavaScript canvas rendering | Strong Word fidelity, but AGPL — not embeddable in proprietary products — and server-oriented |
-| **@silurus/ooxml** | Rust/WASM + canvas | Same stack as Oxi, but a self-referential Canvas2D oracle — no external Word ground truth ([measured above](#layout-accuracy-vs-microsoft-word)) |
-| **Apryse (PDFTron)** | C++ → WASM viewer | Proprietary. Converts to internal format — not native OOXML rendering |
-| **Google Docs** | Server-rendered | Proprietary. Requires server. Intentionally diverges from Word layout |
-| **docx-rs / rdocx** | Rust DOCX libraries | Read/write and export only — no layout engine for browser rendering |
+Oxi is intended for applications that need Office document handling on the user's device: embedded viewers and editors, document workflows, and desktop tools built on the same engine.
 
-**Oxi's unique combination:** OSS (MPL-2.0 core + permissive bindings — embeddable in proprietary products, unlike AGPL) + Rust/WASM client-side + a format-agnostic IR (no proprietary "Oxi format") + externally-gated Word fidelity + zero server cost. No other project occupies this intersection.
+| Design choice | What it provides |
+|---------------|------------------|
+| **Local Rust / WebAssembly execution** | Document processing without a document-processing backend |
+| **Format engines with shared utilities** | Dedicated document, spreadsheet and slide models, with common OOXML and WebAssembly infrastructure |
+| **Microsoft Office as the reference** | Compatibility checked against external output and behavior |
+| **Japanese typography as a measured target** | Dedicated work on line breaking, vertical text, ruby and document grids |
+| **Open-source engines and language bindings** | Source access and an API for embedding; see the [license](#license) |
 
-The comparative claims are measured, not asserted — see the blind-set tables above, where ONLYOFFICE still beats Oxi on English pixel similarity and LibreOffice is a statistical tie there (Oxi leads both on English page-count accuracy, and leads outright on the Japanese and PowerPoint sets).
-
-LibreOffice treats ODF as native and OOXML as an import (round-trip degrades). Microsoft Word inverts that. Oxi's IR is format-agnostic from the start — neither format owns it, so neither degrades on round-trip.
+The dated benchmark tables above show comparisons with other renderers, including cases where Oxi falls behind. The current release still has layout, editing and VBA gaps.
 
 ---
 
@@ -290,13 +309,13 @@ Beyond .docx rendering (the core mission), Oxi also ships:
 
 - **.xlsx / .pptx / PDF** — parsing, rendering, text extraction, PDF generation
 - **Round-trip editing** — edit .docx / .xlsx / .pptx; the original ZIP is preserved and only changed XML text nodes are patched, never rebuilt from scratch (a no-edit save is byte-identical, and that is a test)
-- **Spreadsheet formulas + browser VBA** — a dependency-graph formula engine (215 functions, recalculation diffed against Excel's own cached results across 285 real workbooks) and a client-side VBA host that runs workbook macros in the browser: Range / Worksheet / Workbook operations, Sort, AutoFilter, Find, Copy/PasteSpecial and WorksheetFunction — 95 members across 11 host objects, each derived from and A/B-verified against real Excel COM behaviour (82 scripted comparisons). Macro edits write back through the same differential patcher — values, formulas, hidden rows/columns, merges and cell styling.
+- **Spreadsheet formulas + browser VBA** — a dependency-graph formula engine checked against Excel's cached results across 285 real workbooks, and a client-side VBA host for supported workbook macros: Range / Worksheet / Workbook operations, Sort, AutoFilter, Find, Copy/PasteSpecial and WorksheetFunction. Macro edits write back through the differential patcher. API coverage and edge cases continue to expand; full Excel VBA compatibility is still in progress.
 - **Rich formatting** — run/paragraph shading, character borders, text effects (shadow / emboss / imprint / outline), small caps, drop caps, tab leaders
 - **Hanko / Inkan** — Japanese digital stamp generation + PAdES PDF signatures
-- **100% client-side** — all processing runs in WebAssembly; nothing leaves your browser
+- **Local document processing** — the browser engine handles documents on the device without a document-processing backend
 - **VS Code extension** — open .docx / .xlsx / .pptx inside the editor, rendered by the same WebAssembly build ([editors/vscode](editors/vscode))
 
-These share the IR and the font engines, but they are not where Oxi's measured differentiation lives — the rendering fidelity above is.
+These reuse common OOXML utilities, font metrics and language bindings. The rendering benchmarks above provide the visual compatibility measurements.
 
 ---
 
@@ -307,6 +326,8 @@ crates/
   oxidocs-common/     Shared OOXML utilities (ZIP, XML, relationships)
   oxidocs-core/       .docx engine — parser, IR, layout, font metrics, editor
   oxicells-core/      .xlsx engine — parser, IR, editor
+  oxicells-calc/      Spreadsheet formulas and recalculation
+  oxivba-core/        VBA parser, compiler and runtime
   oxislides-core/     .pptx engine — parser, IR, editor
   oxipdf-core/        PDF 1.7 engine — parser, text extraction, generator
   oxihanko/           Japanese digital stamp (hanko) generator + PAdES signer
@@ -323,7 +344,7 @@ tests/fixtures/       Test .docx / .xlsx / .pptx files
 
 ### IR Design
 
-The Intermediate Representation is language-agnostic and does not depend on Word/Excel/PowerPoint internals:
+The document IR is language-agnostic and does not depend on Word-specific internals. Spreadsheets and presentations have their own models:
 
 ```
 Document → Page → Block (Paragraph | Table | Image) → Run
@@ -363,7 +384,7 @@ const layout = layout_document(bytes); // positioned elements for canvas renderi
 ### Install it
 
 ```bash
-npm install @oxidocs/wasm            # the engine, for a browser
+npm install @oxidocs/wasm             # published Word-focused browser bindings
 cargo install oxidocs-cli            # the command-line tool
 ```
 
@@ -371,8 +392,9 @@ Or download a desktop installer for Windows, macOS or Linux from
 [Releases](https://github.com/Ryujiyasu/oxi/releases). Installed apps update
 themselves from that feed.
 
-The engine crates are on crates.io under the `oxidocs-` prefix: `oxidocs` (the
-facade), `oxidocs-core`, `oxicells-core`, `oxislides-core`, `oxipdf-core`,
+The published npm package uses the default Word-focused build. To use the spreadsheet, presentation and VBA browser editors, build the full suite below.
+
+The Rust engine crates include `oxidocs` (the facade), `oxidocs-core`, `oxicells-core`, `oxislides-core`, `oxipdf-core`,
 `oxihanko`, `oxivba-core`.
 
 ### Build it yourself
@@ -392,10 +414,12 @@ cargo clippy                         # Lint
 
 ```bash
 cd crates/oxidocs-wasm
-wasm-pack build --target web         # Build .wasm + JS bindings
+wasm-pack build --target web --release -- --features suite
+cp pkg/oxidocs_wasm* ../../web/       # Copy this build into the local demo
 
 cd ../../web
 python3 -m http.server 8080          # Serve at http://localhost:8080
+# Word: /docs.html; Excel/VBA: /xlsx-demo.html; slides: /pptx-editor.html
 ```
 
 ---
@@ -409,20 +433,19 @@ python3 -m http.server 8080          # Serve at http://localhost:8080
 | ZIP handling | zip crate |
 | Serialization | serde / serde_json |
 | Browser bindings | wasm-bindgen + wasm-pack |
-| Font metrics | Generated at build time from the local system fonts via tools/font-metrics-gen |
+| Font metrics | Pre-computed metric tables; generation tools in tools/font-metrics-gen |
 | Web demo | Vanilla JS + Canvas (no framework dependencies) |
 
 ---
 
 ## Security & Hardening
 
-Oxi treats every document as untrusted input. A hostile file can render wrong — it cannot run code, exfiltrate data, or escape the sandbox. See [SECURITY.md](SECURITY.md) for the reporting policy.
+Oxi treats document parsing, rendering and macro execution as separate parts of the security model. See [SECURITY.md](SECURITY.md) for the reporting policy and current limits.
 
-- **Zero `unsafe`** in the WASM-facing crates — memory safety end-to-end in the engine; platform `unsafe` exists only in the optional native GDI/DirectWrite verification renderers
-- **No active content, ever** — macros (`vbaProject.bin`), OLE objects and embedded scripts are never executed; they are preserved as opaque bytes for round-trip. Field codes are never evaluated (only `PAGE`/`NUMPAGES` are computed, from the engine's own layout state)
-- **XXE-immune by design** — streaming XML via `quick-xml`; external entities and DTDs are never fetched or expanded
-- **No network I/O** — parsing and layout make zero network requests; in the browser everything stays inside the WASM sandbox
-- **Inert embedded fonts** — document-embedded fonts are never loaded or rasterized; text metrics come from pre-computed tables shipped with the engine
+- **Local parsing and layout** — document-processing code runs on the client; parsing and layout do not require network requests.
+- **Browser isolation** — the browser build runs in WebAssembly. Optional native Windows font and renderer bindings are separate from the browser runtime.
+- **VBA has its own runtime** — the spreadsheet host interprets supported VBA through Oxi's APIs. It does not run Microsoft Office or provide native Windows COM execution.
+- **Streaming XML** — external entities and DTDs are not fetched or expanded.
 
 ---
 
@@ -478,9 +501,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 - **Performance** — native-speed document parsing and layout in the browser
 - **Memory safety** — no buffer overflows, no use-after-free, no data races
-- **One artifact** — a single ~24 MB .wasm (9.8 MB gzipped over the wire) carries the whole suite: four format engines, layout, PDF export and the bundled font metric tables
-- **Zero server cost** — all processing runs client-side, no backend needed
-- **Privacy** — documents never leave the user's device
+- **Builds for your use case** — Word-focused bindings or the full suite; an optional external font catalog loads metric data on demand
+- **Static delivery** — the browser runtime can be served as static assets, with document processing on the client
+- **Privacy** — document processing does not require uploading user files
 
 ---
 

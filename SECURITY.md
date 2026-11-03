@@ -16,17 +16,18 @@ Oxi is pre-1.0; only the latest release line receives security fixes.
 
 ## Threat Model
 
-Oxi's job is to parse and render untrusted Office documents. The engine is
-designed so that a hostile document cannot do more than render incorrectly:
+Oxi parses and renders untrusted Office documents. The browser engine runs
+in WebAssembly; spreadsheet VBA execution is provided by a separate host API.
+The relevant boundaries and current hardening limits are listed below:
 
 | Property | Design |
 |---|---|
-| **Memory safety** | The four core crates (`oxi-common`, `oxidocs-core`, `oxicells-core`, `oxislides-core`) contain **zero `unsafe` blocks**. Platform `unsafe` is confined to the optional native renderers (GDI / DirectWrite bindings), which are not part of the WASM build. |
-| **No active content** | Macros (`vbaProject.bin`), embedded scripts, and OLE objects are **never executed** — they are treated as opaque bytes and preserved for round-trip. Field instructions (`w:instrText`) are never evaluated; only `PAGE` / `NUMPAGES` are substituted from the engine's own layout state, and other fields display their cached result text. |
+| **Memory safety / platform bindings** | Browser processing uses Rust and WebAssembly. Native Windows font and renderer integrations use platform FFI behind target-specific configuration; those Windows bindings are not part of the browser runtime. |
+| **VBA / active content** | Parsing preserves VBA projects for round-trip. Supported macros can execute through the spreadsheet VBA host, which interprets VBA using its own APIs rather than Microsoft Office or native Windows COM. The document renderer does not execute OLE objects or embedded scripts. |
 | **No XXE / no entity expansion** | XML is parsed with [`quick-xml`](https://crates.io/crates/quick-xml) in streaming mode. External entities and DTDs are never fetched or expanded. |
-| **No network I/O** | Parsing and layout perform no network requests. In the browser build, every byte stays in the WASM sandbox on the client — documents never leave the machine. |
+| **Network boundary** | Parsing and layout do not make network requests. Embedding applications control document loading, sharing and any other network activity. |
 | **Constrained decompression** | OOXML containers are opened with the `zip` crate built with `default-features = false` (deflate only — no executable-adjacent codecs). |
-| **Fonts** | Document-embedded fonts are **not loaded or rasterized**. Text is measured against pre-computed metric tables shipped with the engine, so a malicious font file in a document is inert. |
+| **Fonts** | Layout uses pre-computed metric tables. Browser font delivery and native font access depend on the host integration. |
 
 ## Hardening Roadmap
 
