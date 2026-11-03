@@ -6642,12 +6642,38 @@ mod tests {
 
     #[test]
     fn workbook_ir_retains_a_custom_indexed_color_palette() {
-        let workbook = parse_xlsx(include_bytes!(
-            "../../../tools/golden-test/documents/xlsx/e1c631fac30a_bunya_taikeizu_point.xlsx"
-        ))
-        .unwrap();
-        assert_eq!(workbook.indexed_colors.len(), 64);
-        assert_eq!(workbook.indexed_colors[12], "0000D4");
+        use std::io::Write;
+        let palette=(0..64).map(|index| {
+            let rgb=if index==12 {"0000D4".to_string()} else {format!("{index:06X}")};
+            format!(r#"<rgbColor rgb="FF{rgb}"/>"#)
+        }).collect::<String>();
+        let styles=format!(r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="1"><font><sz val="11"/><color indexed="12"/><name val="Calibri"/></font></fonts>
+<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+<colors><indexedColors>{palette}</indexedColors></colors></styleSheet>"#);
+        let parts=[
+            ("[Content_Types].xml",r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>"#.to_string()),
+            ("_rels/.rels",r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#.to_string()),
+            ("xl/workbook.xml",r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#.to_string()),
+            ("xl/_rels/workbook.xml.rels",r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#.to_string()),
+            ("xl/worksheets/sheet1.xml",r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#.to_string()),
+            ("xl/styles.xml",styles),
+        ];
+        let mut zip=zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name,xml) in parts {
+            zip.start_file(name,zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(xml.as_bytes()).unwrap();
+        }
+        let workbook=parse_xlsx(&zip.finish().unwrap().into_inner()).unwrap();
+        assert_eq!(workbook.indexed_colors.len(),64);
+        assert_eq!(workbook.indexed_colors[12],"0000D4");
+        assert_eq!(workbook.indexed_colors[63],"00003F");
+        assert_eq!(workbook.default_style.font_color.as_deref(),Some("0000D4"));
+        assert_eq!(workbook.default_style.font_reference.as_ref().and_then(|r|r.indexed),Some(12));
     }
 
     /// `<a:br/>` starts a line without starting a paragraph. Without it
