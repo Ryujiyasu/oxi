@@ -32284,33 +32284,17 @@ impl Host for WorkbookHost<'_> {
             ));
         }
         if name.eq_ignore_ascii_case("verticalalignment") {
-            // A cell that says nothing of its own wears the workbook's default
-            // style, and only when that says nothing either does the file
-            // format's own answer — the bottom — apply.
-            //
-            // Worth saying because the measurement nearly became a law: on the
-            // machine this was asked, a brand new cell answered xlCenter, and
-            // the reason is that Excel had written `<alignment
-            // vertical="center"/>` into the Normal style of its own default
-            // workbook. The object model reports what a cell EFFECTIVELY
-            // wears, not what it states.
-            let fallback = self.workbook.default_style.vertical_align.clone();
+            // Missing cells already use their row, column or workbook template.
+            // An explicit cell format without an alignment means bottom.
             return self
-                .uniform_style(range, |style| style.vertical_align.clone())
-                .map(|value| {
-                    let seen = match value {
-                        None => return Some(Value::Null),
-                        Some(Some(named)) => Some(named),
-                        Some(None) => fallback.clone(),
-                    };
-                    Some(Value::Integer(match seen.as_deref() {
-                        Some("top") => -4160,
-                        Some("center") | Some("centre") => -4108,
-                        Some("justify") => -4130,
-                        Some("distributed") => -4117,
-                        _ => -4107,
-                    }))
-                });
+                .uniform_style(range, |style| match style.vertical_align.as_deref() {
+                    Some("top") => -4160,
+                    Some("center") | Some("centre") => -4108,
+                    Some("justify") => -4130,
+                    Some("distributed") => -4117,
+                    _ => -4107,
+                })
+                .map(|value| Some(value.map(Value::Integer).unwrap_or(Value::Null)));
         }
         // Every cell starts locked, and a range whose cells disagree answers
         // Null, the way Bold does.
@@ -45709,7 +45693,7 @@ End Function
 <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
 <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border diagonalUp="1"><left style="thin"><color rgb="FFFF0000"/></left><right style="double"><color rgb="FF0000FF"/></right><top style="mediumDashDot"><color rgb="FF008000"/></top><bottom style="dotted"><color rgb="FFFF00FF"/></bottom><diagonal style="thin"><color rgb="FF0000FF"/></diagonal></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="1"/></cellStyleXfs>
-<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyBorder="1"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyBorder="1"/></cellXfs>
+<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyBorder="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyBorder="1"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyBorder="1"/></cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>"#;
         const CODE:&str=r#"Attribute VB_Name = "Driver"
@@ -45740,7 +45724,12 @@ End Function
             let styles=STYLES.replace(r#" diagonalUp="1""#,flags)
                 .replace(r#"<diagonal style="thin"><color rgb="FF0000FF"/></diagonal>"#,diagonal);
             let package=shared_fixture_styles(seed,&styles);
-            let mut expected=oxicells_core::parse_xlsx_preserving_values(&package).unwrap()
+            let input=oxicells_core::parse_xlsx_preserving_values(&package).unwrap();
+            let before=&input.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+                .cells.iter().find(|c|c.col==0).unwrap().style;
+            assert!(before.bold);
+            assert!(before.border_diagonal.is_none());
+            let mut expected=input
                 .named_styles.iter().find(|style|style.builtin_id==Some(0)).unwrap().style.clone();
             if !expected.diagonal_up && !expected.diagonal_down {expected.border_diagonal=None;}
             for mode in [1,2] {
@@ -45778,6 +45767,28 @@ End Function
                 }
             }
         }
+    }
+
+    #[test]
+    fn explicit_default_vertical_alignment_is_not_replaced_by_workbook_alignment() {
+        let seed=execute_workbook_vba(workbook(),
+            "Public Sub Seed()\nRange(\"A1\").Value = 1\nRange(\"A2\").Value = 2\nEnd Sub\n",
+            "Seed",vec![],0,failure_context()).unwrap();
+        assert!(seed.error.is_none());
+        let mut book=seed.workbook;
+        book.default_style.vertical_align=Some("center".into());
+        book.sheets[0].rows.iter_mut().find(|row|row.index==1).unwrap()
+            .cells.iter_mut().find(|cell|cell.col==0).unwrap().style.vertical_align=None;
+        book.sheets[0].rows.iter_mut().find(|row|row.index==2).unwrap()
+            .cells.iter_mut().find(|cell|cell.col==0).unwrap().style.vertical_align=Some("center".into());
+        const CODE:&str=r#"Public Function Driver() As String
+ Driver = TypeName(Range("A1").VerticalAlignment) & ":" & CStr(Range("A1").VerticalAlignment) & _
+  "|" & CStr(Range("A2").VerticalAlignment) & "|" & CStr(Range("Z99").VerticalAlignment) & _
+  "|" & TypeName(Range("A1:A2").VerticalAlignment)
+End Function"#;
+        let out=execute_workbook_vba(book,CODE,"Driver",vec![],0,failure_context()).unwrap();
+        assert!(out.error.is_none(),"{:?}",out.error.as_ref().map(|e|&e.message));
+        assert_eq!(serde_json::to_value(&out.result).unwrap()["value"],"Long:-4107|-4108|-4108|Null");
     }
 
     #[test]
