@@ -9600,6 +9600,7 @@ fn border_xml(style: &CellStyle) -> String {
         Some(line) => {
             let colour = match line.color.as_deref() {
                 Some(colour) => format!("<color rgb=\"FF{}\"/>", escape(colour)),
+                None if name == "diagonal" => "<color auto=\"1\"/>".to_string(),
                 None => "<color indexed=\"64\"/>".to_string(),
             };
             format!(
@@ -9609,12 +9610,15 @@ fn border_xml(style: &CellStyle) -> String {
         }
         None => format!("<{name}/>"),
     };
+    let up = if style.diagonal_up { " diagonalUp=\"1\"" } else { "" };
+    let down = if style.diagonal_down { " diagonalDown=\"1\"" } else { "" };
     format!(
-        "<border>{}{}{}{}<diagonal/></border>",
+        "<border{up}{down}>{}{}{}{}{}</border>",
         edge("left", &style.border_left),
         edge("right", &style.border_right),
         edge("top", &style.border_top),
-        edge("bottom", &style.border_bottom)
+        edge("bottom", &style.border_bottom),
+        edge("diagonal", &style.border_diagonal)
     )
 }
 
@@ -13064,6 +13068,50 @@ mod tests {
         let patched = patch_indexed_colors_xml(missing, &colors).unwrap();
         assert!(patched.find("</cellXfs>").unwrap() < patched.find("<colors>").unwrap());
         assert!(patched.find("</colors>").unwrap() < patched.find("<extLst").unwrap());
+    }
+
+    #[test]
+    fn diagonal_borders_survive_cell_edits_and_workbook_saves() {
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        for whole_workbook in [false,true] {
+            for (up,down) in [(false,false),(true,false),(false,true),(true,true)] {
+                for color in [None,Some("0000FF".to_string())] {
+                    let mut editor=XlsxEditor::new(original).unwrap();
+                    let mut edited=editor.workbook().clone();
+                    let cell=edited.sheets[0].rows.iter_mut().find(|r|r.index==1).unwrap()
+                        .cells.iter_mut().find(|c|c.col==0).unwrap();
+                    cell.style.border_diagonal=Some(BorderLine {style:"thin".into(),color});
+                    cell.style.diagonal_up=up;
+                    cell.style.diagonal_down=down;
+                    cell.style.border_left=Some(BorderLine {style:"double".into(),color:Some("FF0000".into())});
+                    let expected=cell.style.clone();
+                    if whole_workbook {
+                        editor.apply_workbook(&edited).unwrap();
+                    } else {
+                        editor.set_cell_style(0,1,0,expected.clone());
+                    }
+                    let saved=editor.save().unwrap();
+                    let restored=parse_xlsx(&saved).unwrap();
+                    let actual=&restored.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+                        .cells.iter().find(|c|c.col==0).unwrap().style;
+                    assert_eq!(actual.border_diagonal,expected.border_diagonal);
+                    assert_eq!((actual.diagonal_up,actual.diagonal_down),(up,down));
+                    assert_eq!(actual.border_left,expected.border_left);
+                    let mut cleared=actual.clone();
+                    cleared.border_diagonal=None;
+                    cleared.diagonal_up=false;
+                    cleared.diagonal_down=false;
+                    let mut editor=XlsxEditor::new(&saved).unwrap();
+                    editor.set_cell_style(0,1,0,cleared);
+                    let restored=parse_xlsx(&editor.save().unwrap()).unwrap();
+                    let actual=&restored.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+                        .cells.iter().find(|c|c.col==0).unwrap().style;
+                    assert!(actual.border_diagonal.is_none());
+                    assert!(!actual.diagonal_up && !actual.diagonal_down);
+                    assert_eq!(actual.border_left,expected.border_left);
+                }
+            }
+        }
     }
 
     #[test]

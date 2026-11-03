@@ -6340,7 +6340,8 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn apply_normal_style(&mut self, range: CellRange) -> Result<(),String> {
-        let normal=self.normal_style().clone();
+        let mut normal=self.normal_style().clone();
+        if !normal.diagonal_up && !normal.diagonal_down {normal.border_diagonal=None;}
         self.set_range_style(range,|_,held| {
             let quote_prefix=held.quote_prefix;
             *held=normal.clone();
@@ -45698,6 +45699,84 @@ End Function
             assert!(outcome.error.is_none(), "{modern}: {:?}", outcome.error.as_ref().map(|error| &error.message));
             assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], format!("{modern}|{legacy}"));
             book = outcome.workbook;
+        }
+    }
+
+    #[test]
+    fn imported_normal_diagonal_survives_save_copy_and_shared_history() {
+        const STYLES:&str=r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>
+<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border diagonalUp="1"><left style="thin"><color rgb="FFFF0000"/></left><right style="double"><color rgb="FF0000FF"/></right><top style="mediumDashDot"><color rgb="FF008000"/></top><bottom style="dotted"><color rgb="FFFF00FF"/></bottom><diagonal style="thin"><color rgb="FF0000FF"/></diagonal></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="1"/></cellStyleXfs>
+<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyBorder="1"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyBorder="1"/></cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"#;
+        const CODE:&str=r#"Attribute VB_Name = "Driver"
+Public Function Driver(ByVal mode As Long) As String
+ Application.DisplayAlerts = False
+ Application.EnableEvents = False
+ ThisWorkbook.SaveAs Filename:="C:\probe\diagonal-result.xlsm", FileFormat:=52, AccessMode:=mode
+ ThisWorkbook.Worksheets(1).Range("A1").Style = "Normal"
+ ThisWorkbook.Save
+ ThisWorkbook.SaveCopyAs "C:\probe\diagonal-copy.xlsm"
+ Driver = CStr(ThisWorkbook.Worksheets(1).Range("A1").Borders(6).LineStyle)
+End Function
+"#;
+        let seed=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        for (flags,diagonal,expected_result,header,expected_diagonal) in [
+            (r#" diagonalUp="1""#,r#"<diagonal style="thin"><color rgb="FF0000FF"/></diagonal>"#,"1",
+                r#"<border diagonalUp="1" diagonalDown="0" outline="0">"#,
+                r#"<diagonal style="thin"><color rgb="FF0000FF"/></diagonal>"#),
+            (r#" diagonalDown="1""#,r#"<diagonal style="medium"/>"#,"-4142",
+                r#"<border diagonalUp="0" diagonalDown="1" outline="0">"#,
+                r#"<diagonal style="medium"><color auto="1"/></diagonal>"#),
+            (r#" diagonalUp="1" diagonalDown="1""#,r#"<diagonal style="double"><color rgb="FFFF0000"/></diagonal>"#,"-4119",
+                r#"<border diagonalUp="1" diagonalDown="1" outline="0">"#,
+                r#"<diagonal style="double"><color rgb="FFFF0000"/></diagonal>"#),
+            ("",r#"<diagonal style="thin"><color rgb="FF008000"/></diagonal>"#,"-4142",
+                r#"<border diagonalUp="0" diagonalDown="0" outline="0">"#,""),
+        ] {
+            let styles=STYLES.replace(r#" diagonalUp="1""#,flags)
+                .replace(r#"<diagonal style="thin"><color rgb="FF0000FF"/></diagonal>"#,diagonal);
+            let package=shared_fixture_styles(seed,&styles);
+            let mut expected=oxicells_core::parse_xlsx_preserving_values(&package).unwrap()
+                .named_styles.iter().find(|style|style.builtin_id==Some(0)).unwrap().style.clone();
+            if !expected.diagonal_up && !expected.diagonal_down {expected.border_diagonal=None;}
+            for mode in [1,2] {
+                let mut context=failure_context();
+                context.file_name=Some("diagonal.xlsm".into());
+                context.file_context=Some(file_io::FileContext {
+                    full_name:Some(r"C:\probe\diagonal.xlsm".into()),
+                    package_bytes:Some(package.clone()),folders:vec![r"C:\probe".into()],
+                    ..Default::default()
+                });
+                let outcome=execute_workbook_action_in_session(
+                    oxicells_core::parse_xlsx_preserving_values(&package).unwrap(),CODE,
+                    Some("Driver.Driver"),vec![Value::Integer(mode)],0,context,&mut None).unwrap();
+                assert!(outcome.error.is_none(),"{:?}",outcome.error.as_ref().map(|e|&e.message));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],expected_result);
+                let state=serde_json::to_value(&outcome.file_system_state).unwrap();
+                let files:Vec<file_io::ProducedFile>=serde_json::from_value(state["files"].clone()).unwrap();
+                for name in ["diagonal-result.xlsm","diagonal-copy.xlsm"] {
+                    let file=files.iter().find(|file|file.path.eq_ignore_ascii_case(&format!(r"C:\probe\{name}"))).unwrap();
+                    let book=oxicells_core::parse_xlsx_preserving_values(&file.bytes).unwrap();
+                    let actual=&book.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+                        .cells.iter().find(|c|c.col==0).unwrap().style;
+                    assert_eq!(actual.border_diagonal,expected.border_diagonal);
+                    assert_eq!((actual.diagonal_up,actual.diagonal_down),(expected.diagonal_up,expected.diagonal_down));
+                    assert_eq!(actual.border_left,expected.border_left);
+                    assert_eq!(actual.border_right,expected.border_right);
+                    assert_eq!(actual.border_top,expected.border_top);
+                    assert_eq!(actual.border_bottom,expected.border_bottom);
+                    if mode==2 {
+                        let mut archive=oxidocs_common::archive::OoxmlArchive::new(&file.bytes).unwrap();
+                        let revisions=archive.read_part("xl/revisions/revisionLog2.xml").unwrap();
+                        let expected=format!("{header}<left style=\"thin\"><color rgb=\"FFFF0000\"/></left><right style=\"double\"><color rgb=\"FF0000FF\"/></right><top style=\"mediumDashDot\"><color rgb=\"FF008000\"/></top><bottom style=\"dotted\"><color rgb=\"FFFF00FF\"/></bottom>{expected_diagonal}</border>");
+                        assert!(revisions.contains(&expected),"{revisions}");
+                    }
+                }
+            }
         }
     }
 

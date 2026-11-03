@@ -746,14 +746,15 @@ impl WorkbookFiles {
         let mut xml=if outline {"<border outline=\"0\">".to_string()} else {"<border>".to_string()};
         for &tag in edges {
             let edge=match tag {"left"=>&style.border_left,"right"=>&style.border_right,
-                "top"=>&style.border_top,_=>&style.border_bottom};
+                "top"=>&style.border_top,"diagonal"=>&style.border_diagonal,_=>&style.border_bottom};
             if let Some(edge)=edge {
                 xml.push_str(&format!("<{tag} style=\"{}\">",quick_xml::escape::escape(&edge.style)));
                 if let Some(color)=&edge.color {
                     let color=color.trim_start_matches('#');
                     let argb=if color.len()==6 {format!("FF{color}")} else {color.into()};
                     xml.push_str(&format!("<color rgb=\"{}\"/>",argb.to_ascii_uppercase()));
-                } else {xml.push_str("<color indexed=\"64\"/>");}
+                } else if tag=="diagonal" {xml.push_str("<color auto=\"1\"/>");}
+                else {xml.push_str("<color indexed=\"64\"/>");}
                 xml.push_str(&format!("</{tag}>"));
             } else {xml.push_str(&format!("<{tag}/>"));}
         }
@@ -775,8 +776,13 @@ impl WorkbookFiles {
         let scheme=style.font_reference.as_ref().and_then(|r|r.scheme.as_deref()).unwrap_or("none");
         font.push_str(&format!("<scheme val=\"{}\"/>",quick_xml::escape::escape(scheme)));
         font.push_str("</font>");
-        let border=Self::revision_border(style,&["left","right","top","bottom"],true)
-            .replacen("<border outline=\"0\">","<border diagonalUp=\"0\" diagonalDown=\"0\" outline=\"0\">",1);
+        let edges:&[&str]=if style.border_diagonal.is_some() || style.diagonal_up || style.diagonal_down {
+            &["left","right","top","bottom","diagonal"]
+        } else { &["left","right","top","bottom"] };
+        let border=Self::revision_border(style,edges,true)
+            .replacen("<border outline=\"0\">",&format!(
+                "<border diagonalUp=\"{}\" diagonalDown=\"{}\" outline=\"0\">",
+                u8::from(style.diagonal_up),u8::from(style.diagonal_down)),1);
         let code=quick_xml::escape::escape(style.number_format.as_deref().unwrap_or("General"));
         let horizontal=style.horizontal_align.as_deref().unwrap_or("general");
         let vertical=style.vertical_align.as_deref().unwrap_or("bottom");
