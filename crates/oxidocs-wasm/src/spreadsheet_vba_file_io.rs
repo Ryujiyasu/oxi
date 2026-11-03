@@ -83,6 +83,7 @@ pub(super) struct SharedInputFormat {
     pub before_automatic: bool,
     pub before_recorded: bool,
     pub style_dxf: Option<(String,String)>,
+    pub style_pasted: bool,
 }
 
 #[derive(Clone)]
@@ -727,6 +728,37 @@ impl WorkbookFiles {
         }
     }
 
+    fn revision_font_color(style: &CellStyle) -> String {
+        let reference=style.font_reference.as_ref();
+        let tint=reference.and_then(|r|r.tint).filter(|v|*v!=0.0)
+            .map_or_else(String::new,|v|format!(" tint=\"{v}\""));
+        if let Some(theme)=reference.and_then(|r|r.theme) {return format!("<color theme=\"{theme}\"{tint}/>");}
+        if let Some(index)=reference.and_then(|r|r.indexed) {return format!("<color indexed=\"{index}\"{tint}/>");}
+        if reference.is_some_and(|r|r.automatic) {return format!("<color auto=\"1\"{tint}/>");}
+        style.font_color.as_deref().map_or_else(||"<color auto=\"1\"/>".into(),|value| {
+            let hex=value.trim_start_matches('#');let value=if hex.len()==6 {format!("FF{hex}")} else {hex.into()};
+            format!("<color rgb=\"{}\"{tint}/>",value.to_ascii_uppercase())
+        })
+    }
+
+    fn revision_border(style: &CellStyle, edges: &[&str], outline: bool) -> String {
+        let mut xml=if outline {"<border outline=\"0\">".to_string()} else {"<border>".to_string()};
+        for &tag in edges {
+            let edge=match tag {"left"=>&style.border_left,"right"=>&style.border_right,
+                "top"=>&style.border_top,_=>&style.border_bottom};
+            if let Some(edge)=edge {
+                xml.push_str(&format!("<{tag} style=\"{}\">",quick_xml::escape::escape(&edge.style)));
+                if let Some(color)=&edge.color {
+                    let color=color.trim_start_matches('#');
+                    let argb=if color.len()==6 {format!("FF{color}")} else {color.into()};
+                    xml.push_str(&format!("<color rgb=\"{}\"/>",argb.to_ascii_uppercase()));
+                } else {xml.push_str("<color indexed=\"64\"/>");}
+                xml.push_str(&format!("</{tag}>"));
+            } else {xml.push_str(&format!("<{tag}/>"));}
+        }
+        xml.push_str("</border>");xml
+    }
+
     fn revision_number_format(format: &str) -> Option<(u32,&str)> {
         // Revision format identities use Excel's history format table; they
         // are distinct from the built-in IDs written to styles.xml.
@@ -737,6 +769,8 @@ impl WorkbookFiles {
             "0%" => Some((13,"0%")),
             "0" | "0.0" | "0.00" | "0.000" | "#,##0" | "#,##0.00" => Some((4,format)),
             "0.00%" => Some((14,"0.00%")),
+            "@" => Some((30,"@")),
+            _ if format.strip_prefix("0.").is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|digit|digit==b'0')) => Some((4,format)),
             _ => None,
         }
     }
@@ -759,12 +793,13 @@ impl WorkbookFiles {
             } else if id!=0 { format_attributes=format!(" numFmtId=\"{id}\""); }
         }
         if let Some((before,after))=format.and_then(|held|held.style_dxf.as_ref()) {
-            format_attributes=" odxf=\"1\" dxf=\"1\"".into();
+            format_attributes=format!(" odxf=\"1\"{}{}",if after.is_empty() {""} else {" dxf=\"1\""},new_format.filter(|(id,_)|*id!=0)
+                .map_or_else(String::new,|(id,_)|format!(" numFmtId=\"{id}\"")));
             format_children.clear();
             if copy_only || format.is_none_or(|held|!held.before_recorded) {
                 format_children.push_str(&format!("<odxf>{before}</odxf>"));
             }
-            format_children.push_str(&format!("<ndxf>{after}</ndxf>"));
+            if !after.is_empty() {format_children.push_str(&format!("<ndxf>{after}</ndxf>"));}
         }
         let mut body=String::new();
         let mut col=column+1;let mut letters=Vec::new();
@@ -1164,7 +1199,7 @@ impl WorkbookHost<'_> {
         let before_recorded=self.file_io.shared_input_formats.contains_key(&key);
         let previous_format=self.file_io.shared_input_formats.insert(key,SharedInputFormat {
             sequence:self.file_io.shared_revision_sequence,before:format.clone(),after:format,
-            changed:false,before_automatic:self.file_io.shared_automatic_formats.contains(&key),before_recorded,style_dxf:None,
+            changed:false,before_automatic:self.file_io.shared_automatic_formats.contains(&key),before_recorded,style_dxf:None,style_pasted:false,
         });
         let held=self.cell_here(at.sheet,at.row,at.column);
         Some(SharedCellEdit {
@@ -1213,8 +1248,9 @@ impl WorkbookHost<'_> {
             ("u",before.underline,after.underline),("strike",before.strikethrough,after.strikethrough)] {
             if was==now {continue;}
             changed.insert(tag);
-            old_font.push_str(&if was {format!("<{tag}/>")} else {format!("<{tag} val=\"0\"/>")});
-            new_font.push_str(&if now {format!("<{tag}/>")} else {format!("<{tag} val=\"0\"/>")});
+            let off=if tag=="u" {"none"} else {"0"};
+            old_font.push_str(&if was {format!("<{tag}/>")} else {format!("<{tag} val=\"{off}\"/>")});
+            new_font.push_str(&if now {format!("<{tag}/>")} else {format!("<{tag} val=\"{off}\"/>")});
         }
         let color=|value: &str| {
             let hex=value.trim_start_matches('#');
@@ -1224,15 +1260,21 @@ impl WorkbookHost<'_> {
             ("sz",style.font_size.map(|v|v.to_string())),
             ("color",style.font_color.clone()),("name",style.font_name.clone()),
             ("family",style.font_family.map(|v|v.to_string())),("charset",style.font_charset.map(|v|v.to_string()))];
-        for ((tag,was),(_,now)) in font_values(&before).into_iter().zip(font_values(&after)) {
+        for (((tag,was),(_,now)),(_,normal)) in font_values(&before).into_iter().zip(font_values(&after)).zip(font_values(&default)) {
             if was==now {continue;}
             changed.insert(tag);
-            for (out,value) in [(&mut old_font,was),(&mut new_font,now)] {
+            // A differential font inherits unchanged Normal properties.
+            // In particular an old Normal size/face/color is omitted, while
+            // an explicitly nondefault old value must survive in odxf.
+            let old_value=if was==normal {None} else {was};
+            for (out,value,is_old) in [(&mut old_font,old_value,true),(&mut new_font,now,false)] {
+                if is_old && value.is_none() {continue;}
                 if tag=="color" {
                     out.push_str(&value.map_or_else(||"<color auto=\"1\"/>".into(),
                         |value|format!("<color rgb=\"{}\"/>",color(&value))));
                 } else if let Some(value)=value {
                     out.push_str(&format!("<{tag} val=\"{}\"/>",quick_xml::escape::escape(&value)));
+                    if tag=="name" {out.push_str("<scheme val=\"none\"/>");}
                 }
             }
         }
@@ -1264,6 +1306,33 @@ impl WorkbookHost<'_> {
                     |value|format!("<fill><patternFill patternType=\"solid\"><bgColor rgb=\"{}\"/></patternFill></fill>",color(value))));
             }
         }
+        let horizontal=before.horizontal_align.as_deref().unwrap_or("general")!=after.horizontal_align.as_deref().unwrap_or("general");
+        let vertical=before.vertical_align.as_deref().unwrap_or("bottom")!=after.vertical_align.as_deref().unwrap_or("bottom");
+        let wrap=before.wrap_text!=after.wrap_text;
+        let shrink=before.shrink_to_fit!=after.shrink_to_fit;
+        if horizontal || vertical || wrap || shrink {
+            for (out,style,is_old) in [(&mut old,&before,true),(&mut new,&after,false)] {
+                let mut attributes=String::new();
+                if horizontal {attributes.push_str(&format!(" horizontal=\"{}\"",style.horizontal_align.as_deref().unwrap_or("general")));}
+                // Native Excel's pasted revision DXF writes a missing new
+                // vertical alignment as top, even while its live VBA getter
+                // still returns bottom. The old DXF uses bottom. Keep this
+                // history encoding separate from the cell's actual alignment.
+                let v=style.vertical_align.as_deref().unwrap_or(if is_old {"bottom"} else {"top"});
+                attributes.push_str(&format!(" vertical=\"{v}\""));
+                if wrap {attributes.push_str(&format!(" wrapText=\"{}\"",u8::from(style.wrap_text)));}
+                if shrink {attributes.push_str(&format!(" shrinkToFit=\"{}\"",u8::from(style.shrink_to_fit)));}
+                out.push_str(&format!("<alignment{attributes}/>"));
+            }
+        }
+        let edges: Vec<_>=[("left",&before.border_left,&after.border_left),("right",&before.border_right,&after.border_right),
+            ("top",&before.border_top,&after.border_top),("bottom",&before.border_bottom,&after.border_bottom)]
+            .into_iter().filter_map(|(tag,was,now)|(was!=now).then_some(tag)).collect();
+        if !edges.is_empty() {
+            old.push_str(&WorkbookFiles::revision_border(&before,&edges,true));
+            new.push_str(&WorkbookFiles::revision_border(&after,&edges,true));
+        }
+        edit.format.style_pasted=true;
         edit.format.after=after.number_format.clone().unwrap_or_else(||"General".into());
         if !old.is_empty() || !new.is_empty() {
             self.file_io.shared_format_edits.push(SharedFormatEdit {
@@ -1288,6 +1357,7 @@ impl WorkbookHost<'_> {
             match format {
                 "General" => Some((0,"General")), "0" => Some((1,"0")),
                 "0.00" => Some((2,"0.00")), "#,##0" => Some((3,"#,##0")),
+                "@" => Some((30,"@")),
                 "#,##0.00" => Some((4,"#,##0.00")),
                 MONEY_FORMAT | "m/d/yyyy" | "0%" | "0.00%" => WorkbookFiles::revision_number_format(format),
                 _ => None,
@@ -1340,9 +1410,12 @@ impl WorkbookHost<'_> {
         if !self.file_io.shared || self.gone(receiver) || matches!(value,Value::Null) {return None;}
         let lower=name.to_ascii_lowercase();
         let (range,property)=if let Some(range)=self.range_font(receiver) {
-            (range,match lower.as_str() {"bold"=>"bold","italic"=>"italic","color"=>"fontcolor",_=>return None})
+            (range,match lower.as_str() {"bold"=>"bold","italic"=>"italic","color"|"colorindex"|"themecolor"|"tintandshade"=>"fontcolor",
+                "size"=>"fontsize","name"=>"fontname","themefont"=>"themefont","underline"=>"underline","strikethrough"=>"strike",_=>return None})
         } else if let Some(range)=self.range_interior(receiver) {
             (range,match lower.as_str() {"color"=>"fill",_=>return None})
+        } else if let Some((range,_))=self.range_borders(receiver) {
+            (range,match lower.as_str() {"linestyle"|"weight"|"color"|"colorindex"=>"border",_=>return None})
         } else {
             (self.range(receiver)?,match lower.as_str() {
                 "numberformat"|"numberformatlocal"=>"numberformat","horizontalalignment"=>"horizontal",
@@ -1370,29 +1443,100 @@ impl WorkbookHost<'_> {
                     sheet!=range.sheet || row<range.start_row || row>range.end_row || column<range.start_column || column>range.end_column);
                 (None,dxf)
             }
-            "bold"|"italic" => {
-                let (old,new,tag)=if property=="bold" {(before.bold,after.bold,"b")} else {(before.italic,after.italic,"i")};
+            "bold"|"italic"|"underline"|"strike" => {
+                let (old,new,tag)=match property {
+                    "bold" => (before.bold,after.bold,"b"), "italic" => (before.italic,after.italic,"i"),
+                    "underline" => (before.underline,after.underline,"u"),
+                    _ => (before.strikethrough,after.strikethrough,"strike"),
+                };
+                let off=if tag=="u" {"none"} else {"0"};
                 (Some(i32::MAX as u32),if old==new {String::new()} else if new {format!("<font><{tag}/></font>")}
-                    else {format!("<font><{tag} val=\"0\"/></font>")})
+                    else {format!("<font><{tag} val=\"{off}\"/></font>")})
             }
-            "fontcolor" => (Some(0),if before.font_color==after.font_color {String::new()} else {
-                after.font_color.as_deref().map_or_else(||"<font><color auto=\"1\"/></font>".into(),
-                    |value|format!("<font><color rgb=\"{}\"/></font>",color(value)))
+            "fontsize" => (Some(i32::MAX as u32),if before.font_size==after.font_size {String::new()} else {
+                after.font_size.map_or_else(String::new,|value|format!("<font><sz val=\"{value}\"/></font>"))
             }),
+            "fontname" => (Some(i32::MAX as u32),if before.latin_font_name()==after.latin_font_name()
+                && before.font_family==after.font_family && before.font_charset==after.font_charset {String::new()} else {
+                let mut font=String::from("<font>");
+                if let Some(name)=after.latin_font_name() {font.push_str(&format!("<name val=\"{}\"/>",quick_xml::escape::escape(name)));}
+                if before.font_family!=after.font_family {
+                    if let Some(family)=after.font_family {font.push_str(&format!("<family val=\"{family}\"/>"));}
+                }
+                if before.font_charset!=after.font_charset {
+                    if let Some(charset)=after.font_charset {font.push_str(&format!("<charset val=\"{charset}\"/>"));}
+                }
+                let scheme=after.font_reference.as_ref().and_then(|r|r.scheme.as_deref()).unwrap_or("none");
+                font.push_str(&format!("<scheme val=\"{}\"/></font>",quick_xml::escape::escape(scheme)));font
+            }),
+            "themefont" => {
+                let mut font=String::from("<font>");
+                if let Some(scheme)=after.font_reference.as_ref().and_then(|r|r.scheme.as_deref()).filter(|s|*s!="none") {
+                    if let Some(name)=after.latin_font_name() {font.push_str(&format!("<name val=\"{}\"/>",quick_xml::escape::escape(name)));}
+                    font.push_str(&format!("<scheme val=\"{}\"/>",quick_xml::escape::escape(scheme)));
+                }
+                font.push_str("</font>");(Some(0),font)
+            },
+            "fontcolor" => {
+                let old=WorkbookFiles::revision_font_color(&before);let new=WorkbookFiles::revision_font_color(&after);
+                (Some(0),if old==new {String::new()} else {format!("<font>{new}</font>")})
+            },
             "fill" => (Some(0),if before.bg_color==after.bg_color {String::new()} else {
                 after.bg_color.as_deref().map_or_else(||"<fill><patternFill patternType=\"none\"/></fill>".into(),
                     |value|format!("<fill><patternFill patternType=\"solid\"><bgColor rgb=\"{}\"/></patternFill></fill>",color(value)))
             }),
-            "horizontal" => (None,format!("<alignment horizontal=\"{}\"/>",after.horizontal_align.as_deref().unwrap_or("general"))),
-            "vertical" => (None,format!("<alignment vertical=\"{}\"/>",after.vertical_align.as_deref().unwrap_or("bottom"))),
-            "wrap" => (None,format!("<alignment wrapText=\"{}\"/>",u8::from(after.wrap_text))),
-            "shrink" => (None,format!("<alignment shrinkToFit=\"{}\"/>",u8::from(after.shrink_to_fit))),
+            "border" => (Some(0),WorkbookFiles::revision_border(&after,&["left","right","top","bottom"],false)),
+            "horizontal" => {
+                if before.horizontal_align.as_deref().unwrap_or("general")==after.horizontal_align.as_deref().unwrap_or("general") {return;}
+                (None,format!("<alignment horizontal=\"{}\"/>",after.horizontal_align.as_deref().unwrap_or("general")))
+            },
+            "vertical" => {
+                if before.vertical_align.as_deref().unwrap_or("bottom")==after.vertical_align.as_deref().unwrap_or("bottom") {return;}
+                (None,format!("<alignment vertical=\"{}\"/>",after.vertical_align.as_deref().unwrap_or("bottom")))
+            },
+            "wrap" => {
+                if before.wrap_text==after.wrap_text {return;}
+                (None,format!("<alignment wrapText=\"{}\"/>",u8::from(after.wrap_text)))
+            },
+            "shrink" => {
+                if before.shrink_to_fit==after.shrink_to_fit {return;}
+                (None,format!("<alignment shrinkToFit=\"{}\"/>",u8::from(after.shrink_to_fit)))
+            },
             _ => return,
         };
+        // A copy can retain an empty old-format record when a later
+        // explicit format replaces its pasted format before the real save.
+        if before!=after {
+            let within=|at: CellAddress|at.sheet==range.sheet && at.row>=range.start_row && at.row<=range.end_row
+                && at.column>=range.start_column && at.column<=range.end_column;
+            for (&(sheet,row,column),input) in &mut self.file_io.shared_input_formats {
+                if within(CellAddress {sheet,row,column}) && input.style_pasted && input.style_dxf.is_none() {
+                    input.style_dxf=Some((String::new(),String::new()));
+                }
+            }
+            for edit in &mut self.file_io.shared_cell_edits {
+                if within(edit.at) && edit.format.style_pasted && edit.format.style_dxf.is_none() {
+                    edit.format.style_dxf=Some((String::new(),String::new()));
+                }
+            }
+        }
         self.file_io.shared_revision_sequence=self.file_io.shared_revision_sequence.saturating_add(1);
         self.file_io.shared_format_edits.push(SharedFormatEdit {
             sequence:self.file_io.shared_revision_sequence,range,length,dxf,automatic:false,
         });
+    }
+
+    pub(super) fn record_shared_border_around(&mut self, range: CellRange, line: bool, colour: bool) {
+        if !self.file_io.shared {return;}
+        let at=range.first();
+        let style=self.cell_here(at.sheet,at.row,at.column).map(|cell|cell.style).unwrap_or_else(||self.template_style(at));
+        let dxf=WorkbookFiles::revision_border(&style,&["left","right","top","bottom"],true);
+        for length in line.then_some(Some(0)).into_iter().chain(colour.then_some(None)) {
+            self.file_io.shared_revision_sequence=self.file_io.shared_revision_sequence.saturating_add(1);
+            self.file_io.shared_format_edits.push(SharedFormatEdit {
+                sequence:self.file_io.shared_revision_sequence,range,length,dxf:dxf.clone(),automatic:false,
+            });
+        }
     }
 
     fn sync_links_for_save(&mut self) {

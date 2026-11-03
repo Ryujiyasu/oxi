@@ -570,6 +570,7 @@ struct FontInfo {
     color: Option<String>,
     name: Option<String>,
     latin_name: Option<String>,
+    reference: crate::ir::FontReference,
     charset: Option<i32>,
     family: Option<i32>,
 }
@@ -1268,6 +1269,15 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         if let Some(c) = parse_color_attr(&e, theme) {
                             current_font.color = Some(c);
                         }
+                        current_font.reference.theme = get_attr(&e, "theme").and_then(|v| v.parse().ok());
+                        current_font.reference.indexed = get_attr(&e, "indexed").and_then(|v| v.parse().ok());
+                        current_font.reference.automatic = is_true(get_attr(&e, "auto").as_deref());
+                        current_font.reference.tint = get_attr(&e, "tint").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
+                        if get_attr(&e, "rgb").is_some() {
+                            current_font.reference.theme = None;
+                            current_font.reference.indexed = None;
+                            current_font.reference.automatic = false;
+                        }
                     }
 
                     // Fill color 遯ｶ繝ｻlook for fgColor inside patternFill
@@ -1353,6 +1363,15 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                     "color" if in_font => {
                         if let Some(c) = parse_color_attr(&e, theme) {
                             current_font.color = Some(c);
+                        }
+                        current_font.reference.theme = get_attr(&e, "theme").and_then(|v| v.parse().ok());
+                        current_font.reference.indexed = get_attr(&e, "indexed").and_then(|v| v.parse().ok());
+                        current_font.reference.automatic = is_true(get_attr(&e, "auto").as_deref());
+                        current_font.reference.tint = get_attr(&e, "tint").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
+                        if get_attr(&e, "rgb").is_some() {
+                            current_font.reference.theme = None;
+                            current_font.reference.indexed = None;
+                            current_font.reference.automatic = false;
                         }
                     }
                     "fgColor" if in_fill => {
@@ -1480,6 +1499,9 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         if let Some(face) = face {
                             current_font.name = Some(face);
                         }
+                        current_font.reference.scheme = scheme;
+                        current_font.reference.latin_name = current_font.latin_name.clone()
+                            .filter(|name| Some(name) != current_font.name.as_ref());
                         ss.fonts.push(std::mem::take(&mut current_font));
                         in_font = false;
                     }
@@ -1627,6 +1649,7 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         strikethrough: font.strikethrough,
         font_size: font.size,
         font_name: font.name.clone(),
+        font_reference: (!font.reference.is_empty()).then(|| Box::new(font.reference.clone())),
         font_charset: font.charset,
         font_family: font.family,
         font_color: font.color,
@@ -5877,6 +5900,10 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
     Ok(Workbook {
         sheets,
         theme_colors: theme.colours.clone(),
+        theme_fonts: crate::ir::ThemeFonts {
+            major: theme.major_face.clone(), minor: theme.minor_face.clone(),
+            major_latin: theme.major_latin_face.clone(), minor_latin: theme.minor_latin_face.clone(),
+        },
         indexed_colors: theme.indexed.clone(),
         recalculation,
         calculation,

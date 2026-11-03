@@ -9518,11 +9518,29 @@ fn font_xml(style: &CellStyle) -> String {
     if let Some(size) = style.font_size {
         font.push_str(&format!("<sz val=\"{size}\"/>"));
     }
-    if let Some(color) = style.font_color.as_deref() {
-        font.push_str(&format!("<color rgb=\"FF{}\"/>", escape(color)));
+    let reference = style.font_reference.as_ref();
+    let tint = reference.and_then(|r| r.tint).filter(|v| *v != 0.0)
+        .map_or_else(String::new, |v| format!(" tint=\"{v}\""));
+    if let Some(theme) = reference.and_then(|r| r.theme) {
+        font.push_str(&format!("<color theme=\"{theme}\"{tint}/>"));
+    } else if let Some(index) = reference.and_then(|r| r.indexed) {
+        font.push_str(&format!("<color indexed=\"{index}\"{tint}/>"));
+    } else if reference.is_some_and(|r| r.automatic) {
+        font.push_str(&format!("<color auto=\"1\"{tint}/>"));
+    } else if let Some(color) = style.font_color.as_deref() {
+        font.push_str(&format!("<color rgb=\"FF{}\"{tint}/>", escape(color)));
     }
-    if let Some(name) = style.font_name.as_deref() {
+    if let Some(name) = style.latin_font_name() {
         font.push_str(&format!("<name val=\"{}\"/>", escape(name)));
+    }
+    if let Some(family) = style.font_family {
+        font.push_str(&format!("<family val=\"{family}\"/>"));
+    }
+    if let Some(charset) = style.font_charset.filter(|v| *v != 0) {
+        font.push_str(&format!("<charset val=\"{charset}\"/>"));
+    }
+    if let Some(scheme) = reference.and_then(|r| r.scheme.as_deref()).filter(|v| *v != "none") {
+        font.push_str(&format!("<scheme val=\"{}\"/>", escape(scheme)));
     }
     font.push_str("</font>");
     font
@@ -13007,6 +13025,28 @@ mod tests {
         let patched = patch_indexed_colors_xml(missing, &colors).unwrap();
         assert!(patched.find("</cellXfs>").unwrap() < patched.find("<colors>").unwrap());
         assert!(patched.find("</colors>").unwrap() < patched.find("<extLst").unwrap());
+    }
+
+    #[test]
+    fn editing_bold_preserves_theme_color_and_latin_font_identity() {
+        let bytes=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let mut editor=XlsxEditor::new(bytes).unwrap();
+        let initial=editor.workbook().sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+            .cells.iter().find(|c|c.col==0).unwrap().style.clone();
+        assert_eq!(initial.latin_font_name(),Some("Aptos Narrow"));
+        let reference=initial.font_reference.as_ref().unwrap();
+        assert_eq!(reference.scheme.as_deref(),Some("minor"));
+        assert_eq!(reference.theme,Some(1));
+        assert_eq!(editor.save().unwrap().as_slice(),bytes);
+        let mut changed=initial.clone();changed.bold=false;
+        editor.set_cell_style(0,1,0,changed);
+        let saved=editor.save().unwrap();
+        let reloaded=parse_xlsx(&saved).unwrap();
+        let actual=&reloaded.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+            .cells.iter().find(|c|c.col==0).unwrap().style;
+        assert!(!actual.bold);
+        assert_eq!(actual.latin_font_name(),Some("Aptos Narrow"));
+        assert_eq!(actual.font_reference,initial.font_reference);
     }
 
     #[test]

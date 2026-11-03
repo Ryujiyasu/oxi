@@ -6,6 +6,47 @@ use serde::{Deserialize, Serialize};
 
 pub type DefinedNameAttributes = std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>;
 
+/// Source font references retained alongside the resolved rendering face.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FontReference {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latin_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed: Option<u32>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub automatic: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tint: Option<f64>,
+}
+
+impl FontReference {
+    pub fn is_empty(&self) -> bool {
+        self.latin_name.is_none() && self.scheme.is_none() && self.theme.is_none()
+            && self.indexed.is_none() && !self.automatic && self.tint.is_none()
+    }
+}
+
+/// The resolved script and Latin faces of a workbook's two font schemes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ThemeFonts {
+    pub major: Option<String>,
+    pub minor: Option<String>,
+    pub major_latin: Option<String>,
+    pub minor_latin: Option<String>,
+}
+
+impl ThemeFonts {
+    pub fn is_empty(&self) -> bool {
+        self.major.is_none() && self.minor.is_none() && self.major_latin.is_none() && self.minor_latin.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
@@ -13,6 +54,8 @@ pub struct Workbook {
     /// light2, accents 1-6, hyperlink and followed hyperlink.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub theme_colors: Vec<String>,
+    #[serde(default, skip_serializing_if = "ThemeFonts::is_empty")]
+    pub theme_fonts: ThemeFonts,
     /// The workbook's indexed colour palette in OOXML order (`indexedColors`).
     /// VBA ColorIndex reads and writes depend on this palette; an empty list
     /// means the Excel default palette.
@@ -1667,6 +1710,10 @@ pub struct CellStyle {
     /// The typeface a cell asks for, when it names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_name: Option<String>,
+    /// Theme and color identities used by editing and automation; the
+    /// rendering face remains in font_name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_reference: Option<Box<FontReference>>,
     /// The charset the font record states beside the face, and the family.
     /// A workbook that asks for a face this machine has not got is answered
     /// from these two and not from the name, so both have to survive as far
@@ -1728,4 +1775,16 @@ pub struct CellStyle {
     /// It decides nothing on an unprotected sheet.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unlocked: bool,
+}
+
+impl CellStyle {
+    pub fn normalize_font_reference(&mut self) {
+        if self.font_reference.as_deref().is_some_and(FontReference::is_empty) {
+            self.font_reference=None;
+        }
+    }
+
+    pub fn latin_font_name(&self) -> Option<&str> {
+        self.font_reference.as_ref().and_then(|r| r.latin_name.as_deref()).or(self.font_name.as_deref())
+    }
 }
