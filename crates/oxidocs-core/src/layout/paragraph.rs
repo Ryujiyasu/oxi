@@ -1645,7 +1645,14 @@ impl<'a> ParagraphLayouter<'a> {
         }
         if (crate::env_flag!("OXI_WRAP_WORD_FIT")
                 || !crate::env_flag!("OXI_S1472_DISABLE"))
-            && !self.doc_body_has_real_cjk && body_para_index.is_some()
+            // OXI_WRAP_ROWPLAN_CJK (2026-11-03, default ON, opt-out _DISABLE): the
+            // mid-paragraph entry planner for CJK documents too. A Japanese body
+            // wraps the lines of the anchor paragraph that fall beside a square
+            // float exactly as a Latin one does (ja/creative__13152ea1's floating
+            // table +0.018, ja/administrative__05e3143c's girl picture +0.004); the
+            // 369-doc SSIM A/B changed 0 bytes with it on.
+            && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_WRAP_ROWPLAN_CJK_DISABLE"))
+            && body_para_index.is_some()
             && fragments.iter().all(|f| !f.0.chars().any(|c| matches!(c, '\t' | '\u{FFFC}')))
         {
             if let Some((bottom, reduction, shift)) = s758_band.or(future_wrap_band) {
@@ -3648,8 +3655,19 @@ impl<'a> ParagraphLayouter<'a> {
                             }
                         }
                     }
+                    // OXI_CUM_UNION_BOX (2026-11-03, default ON, opt-out _DISABLE): the
+                    // cursor basis takes the union box that line_height_for_line folds in
+                    // (largest ascent over largest descent): `_pb_latin_run_ea_lineh_gen.py`
+                    // PB_UD and `_pb_clnsp_mixed_union_gen.py` (UD デジタル 教科書体 NP-B
+                    // 10 + Arial 14, single): Word's next line drops 1.56; the line was
+                    // 17.62 here but a single-line paragraph advanced by Arial's 16.10.
+                    let cum_union = if crate::env_flag!("OXI_CUM_UNION_BOX_DISABLE") {
+                        0.0
+                    } else {
+                        self.line_union_box(first_line, &para.style, para_font_size)
+                    };
                     if s1363_site2 && s1363_box_max > 0.0 {
-                        s1363_box_max.max(self.cjk_baseline_union(first_line, &para.style, para_font_size))
+                        s1363_box_max.max(cum_union).max(self.cjk_baseline_union(first_line, &para.style, para_font_size))
                     } else if is_multiple_spacing
                         && (first_line.fragments.is_empty() || s902_all_ws)
                         && s805_hhea_max > 0.0
@@ -7503,10 +7521,25 @@ impl<'a> ParagraphLayouter<'a> {
                 // visible baseline either (para 18's 11pt trailing spaces pushed line 2's
                 // baseline down; Word keeps the 9pt visible pitch, 10.320pt measured).
                 let s1045_ma = self.s1045_height_drivers(&line.fragments, para_font_size);
+                // OXI_WS_BASELINE (2026-11-03, default ON, opt-out _DISABLE): a run that
+                // paints no glyph does not set the shared baseline either (S1298 already
+                // keeps it out of the line height). `_pb_grid_space_center_gen.py`: a
+                // 16 / 20pt «　» or a 16pt space beside 12pt text leaves Word's baseline
+                // where the 12pt line has it; ja/administrative__05e3143c's first body
+                // line (16pt «　» + 12pt) sat 1.4pt low.
+                // Typed-grid lines only: on a free line Word does let a larger «　» set
+                // the baseline (kojin_000505813's footnote: a 10.5pt «　» after the
+                // reference keeps the 8pt text 2.4pt lower than without it).
+                let ws_base = !crate::env_flag!("OXI_WS_BASELINE_DISABLE")
+                    && !page.doc_grid_no_type
+                    && para.style.snap_to_grid
+                    && grid_pitch.is_some_and(|p| p > 0.1)
+                    && LayoutEngine::s1298_has_visible(&line.fragments);
                 line.fragments
                     .iter()
                     .enumerate()
                     .filter(|(fi, f)| !LayoutEngine::s1045_skip(s1045_ma, *fi, f, para_font_size))
+                    .filter(|(_, f)| !(ws_base && LayoutEngine::s1298_glyphless(f)))
                     .map(|(_, f)| {
                         let fs = f.style.font_size.unwrap_or(para_font_size);
                         let a = self
@@ -7540,10 +7573,16 @@ impl<'a> ParagraphLayouter<'a> {
                 0.0
             } else {
                 let s1045_ma = self.s1045_height_drivers(&line.fragments, para_font_size);
+                let ws_base = !crate::env_flag!("OXI_WS_BASELINE_DISABLE")
+                    && !page.doc_grid_no_type
+                    && para.style.snap_to_grid
+                    && grid_pitch.is_some_and(|p| p > 0.1)
+                    && LayoutEngine::s1298_has_visible(&line.fragments);
                 line.fragments
                     .iter()
                     .enumerate()
                     .filter(|(fi, f)| !LayoutEngine::s1045_skip(s1045_ma, *fi, f, para_font_size))
+                    .filter(|(_, f)| !(ws_base && LayoutEngine::s1298_glyphless(f)))
                     .map(|(_, f)| {
                         let base = f.style.font_size.unwrap_or(para_font_size);
                         // The size the fragment is actually SET at: a super- or
@@ -7836,6 +7875,8 @@ impl<'a> ParagraphLayouter<'a> {
             // OXI_S706_DISABLE.
             let s706_on = !crate::env_flag!("OXI_S706_DISABLE");
             let mut run_bdr_acc: Option<(f32, f32, BorderDef)> = None;
+            // OXI_SHD_NATURAL_BOX: the bordered runs' natural box on this line (top, bottom).
+            let mut run_bdr_vbox: Option<(f32, f32)> = None;
 
             // S-TWOSEG: where this row crosses the float, and to what x.
             let two_seg_jump: Option<(usize, f32)> = match (row_two_segments, line.seg2_at) {
@@ -8024,7 +8065,23 @@ impl<'a> ParagraphLayouter<'a> {
                 // a no-type docGrid (S614 already places those via text_y_off).
                 // Render-only (text_y_off). Opt-out OXI_S691_DISABLE.
                 let win_sum = frag_metrics.win_ascent + frag_metrics.win_descent;
+                // OXI_S691_NATBOX_RETIRE (2026-11-03, default ON, opt-out _DISABLE): S691
+                // predates OXI_CJK_NATBOX, which now puts a single-spaced snapToGrid=0
+                // CJK line's text at the 83/64 box in text_y_off itself -- S691 then
+                // added the same excess again. `_pb_ftr_snap0_line_gen.py` (footer, ＭＳ
+                // 明朝 / HG創英角ﾎﾟｯﾌﾟ体 14, snapToGrid 0 under a lines / linesAndChars
+                // grid): Oxi 3.35pt low, 0 with snapToGrid 1 or no grid.
+                // ja/creative__13152ea1's footer +4.4.
+                let s691_retired = !crate::env_flag!("OXI_S691_NATBOX_RETIRE_DISABLE")
+                    && !crate::env_flag!("OXI_CJK_NATBOX_DISABLE")
+                    && para.style.list_marker.is_none()
+                    // the natbox branch's own scope: auto at any factor (single, or
+                    // OXI_MULT_TEXT_TOP above it), or atLeast 0
+                    && (matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                        || (para.style.line_spacing_rule.as_deref() == Some("atLeast")
+                            && para.style.line_spacing.map_or(false, |v| v <= 0.01)));
                 let baseline_adjust = if !crate::env_flag!("OXI_S691_DISABLE")
+                    && !s691_retired
                     && is_header_footer
                     && !para.style.snap_to_grid
                     && !page.doc_grid_no_type
@@ -8760,6 +8817,65 @@ impl<'a> ParagraphLayouter<'a> {
                         }
                     }
                 }
+                // OXI_SHD_NATURAL_BOX (2026-11-03, default ON, opt-out _DISABLE): a run's
+                // w:shd fill and w:bdr box cover the run's NATURAL line box around its
+                // own baseline -- not a grid / multiple line's full height; only an
+                // exact line fills the whole line. `_pb_run_bdr_box_gen.py` (ＭＳ 明朝 /
+                // BIZ UDPゴシック / Arial, 10.5 and 16pt; single, docGrid 36pt,
+                // multiple 2, exact 30): the yellow rect is baseline -1.03 / +0.27 em
+                // (BIZ, the 83/64 half lead each side), -1.01 / +0.29 (明朝), -0.938 /
+                // +0.21 (Arial: ascent + line gap / win descent) in every non-exact
+                // regime, the 30pt line under exact. ja/reports__5373dd8a's yellow
+                // headings (BIZ UDPゴシック 16 / 18 on a 36pt grid): Word 20.9 / 23.5pt
+                // tall, Oxi 36.
+                let shd_box = if !is_vert_frag
+                    && para.style.line_spacing_rule.as_deref() != Some("exact")
+                    && !crate::env_flag!("OXI_SHD_NATURAL_BOX_DISABLE")
+                    && (frag.style.run_border.is_some()
+                        || (frag.style.highlight.is_none() && frag.style.shading.is_some()))
+                {
+                    let m = &*self.metrics_for_text(&frag.text, &frag.style, &para.style);
+                    let fs = resolved_font_size;
+                    let baseline = el.baseline_offset.map(|b| el.y + b)
+                        .unwrap_or(el.y + el.text_y_off - 1.0 + m.baseline_ascent() * fs);
+                    let (a, d) = if m.is_cjk_83_64_font() {
+                        let half = (m.win_ascent + m.win_descent) * (83.0 / 64.0 - 1.0) * 0.5;
+                        (m.win_ascent + half, m.win_descent + half)
+                    } else {
+                        (m.baseline_ascent(), m.win_descent)
+                    };
+                    Some((baseline - a * fs, baseline + d * fs))
+                } else {
+                    None
+                };
+                if let Some((top, bottom)) = shd_box {
+                    if frag.style.run_border.is_some() {
+                        run_bdr_vbox = Some(run_bdr_vbox.map_or((top, bottom), |(t, b)| (t.min(top), b.max(bottom))));
+                    }
+                    if frag.style.highlight.is_none() {
+                        if let Some(ref shd) = frag.style.shading {
+                            let mut sel = LayoutElement::new(
+                                el.x,
+                                top,
+                                el.width,
+                                (bottom - top).max(0.0),
+                                LayoutContent::BoxRect {
+                                    fill: Some(if shd.starts_with('#') { shd.clone() } else { format!("#{}", shd) }),
+                                    stroke_color: None,
+                                    stroke_width: 0.0,
+                                    corner_radius: 0.0,
+                                },
+                            );
+                            if let Some(pi) = body_para_index {
+                                sel.paragraph_index = Some(pi);
+                            }
+                            elements.push(sel);
+                            if let LayoutContent::Text { ref mut highlight, .. } = el.content {
+                                *highlight = None;
+                            }
+                        }
+                    }
+                }
                 // Round 7: capture base element x/y BEFORE push (move).
                 // Used below to position the ruby annotation above the base.
                 let base_el_x = el.x - s1650_lead;
@@ -9084,12 +9200,14 @@ impl<'a> ParagraphLayouter<'a> {
                     },
                 ));
                 let w = (r - l).max(0.0);
+                let (bt, bh) = run_bdr_vbox.take()
+                    .map_or((cursor.visual_y, line_height), |(t, b)| (t, b - t));
                 if w > 0.0 {
                     elements.push(LayoutElement::new(
                         l,
-                        cursor.visual_y - sp,
+                        bt - sp,
                         w,
-                        line_height + 2.0 * sp,
+                        bh + 2.0 * sp,
                         LayoutContent::BoxRect {
                             fill: None,
                             stroke_color: col,

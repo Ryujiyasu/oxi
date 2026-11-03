@@ -582,8 +582,9 @@ unsafe fn render_watermark(
     let fam_w: Vec<u16> = fam.encode_utf16().chain(std::iter::once(0)).collect();
     let empty_w: Vec<u16> = "en-us".encode_utf16().chain(std::iter::once(0)).collect();
     let trial_size_dip = 100.0 * PT_TO_DIP;
+    let doc_coll = doc_font_collection(dwrite_factory);
     let format = dwrite_factory.CreateTextFormat(
-        PCWSTR(fam_w.as_ptr()), None,
+        PCWSTR(fam_w.as_ptr()), doc_coll.as_ref(),
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         trial_size_dip, PCWSTR(empty_w.as_ptr()))?;
     let text_w: Vec<u16> = text.encode_utf16().collect();
@@ -1199,8 +1200,29 @@ unsafe fn render_line(
     // Build a dashed stroke style when the border declares a dash art style.
     // Thin styles (S711b) use a FIXED-cadence CUSTOM dash; the heavy "Stroked"
     // art borders (S480) use the built-in cadence.
+    // OXI_TXBX_DASH (layout): "prst:<units,...>:<offset>" -- a DrawingML preset
+    // dash in multiples of the line width, continuing at <offset> widths.
+    let prst_dash: Option<(Vec<f32>, f32)> = style
+        .and_then(|st| st.strip_prefix("prst:"))
+        .and_then(|rest| {
+            let (pat, off) = rest.rsplit_once(':')?;
+            let units: Vec<f32> = pat.split(',').filter_map(|u| u.parse().ok()).collect();
+            (!units.is_empty()).then(|| (units, off.parse().unwrap_or(0.0)))
+        });
     let stroke_style: Option<ID2D1StrokeStyle> =
-        if let Some(dashes) = s711b_dash_units(style, width_pt) {
+        if let Some((units, offset)) = prst_dash {
+            let factory: ID2D1Factory = rt.GetFactory()?;
+            let props = D2D1_STROKE_STYLE_PROPERTIES {
+                startCap: D2D1_CAP_STYLE_FLAT,
+                endCap: D2D1_CAP_STYLE_FLAT,
+                dashCap: D2D1_CAP_STYLE_FLAT,
+                lineJoin: D2D1_LINE_JOIN_MITER,
+                miterLimit: 10.0,
+                dashStyle: D2D1_DASH_STYLE_CUSTOM,
+                dashOffset: offset,
+            };
+            factory.CreateStrokeStyle(&props, Some(&units)).ok()
+        } else if let Some(dashes) = s711b_dash_units(style, width_pt) {
             let factory: ID2D1Factory = rt.GetFactory()?;
             let props = D2D1_STROKE_STYLE_PROPERTIES {
                 startCap: D2D1_CAP_STYLE_FLAT,
@@ -1279,8 +1301,8 @@ unsafe fn dwrite_bold_is_simulated(
         return hit;
     }
     let mut ans = false;
-    let mut coll: Option<IDWriteFontCollection> = None;
-    if dwrite_factory.GetSystemFontCollection(&mut coll, BOOL(0)).is_ok() {
+    let mut coll: Option<IDWriteFontCollection> = doc_font_collection(dwrite_factory);
+    if coll.is_some() || dwrite_factory.GetSystemFontCollection(&mut coll, BOOL(0)).is_ok() {
         if let Some(c) = coll {
             let fw: Vec<u16> = font_family.encode_utf16().chain(std::iter::once(0)).collect();
             let mut idx = 0u32;
@@ -1305,6 +1327,68 @@ unsafe fn dwrite_bold_is_simulated(
     ans
 }
 
+/// OXI_DW_CLOUD_FONTS (2026-11-03, default ON, opt-out _DISABLE): the faces Word
+/// draws with include the Office cloud cache (%LOCALAPPDATA%\Microsoft\FontCache\
+/// 4\CloudFonts\<Family>\<id>.ttf) and the per-user font folder, which the layout
+/// already measures (core font::runtime, S1171) but DirectWrite's system
+/// collection does not list -- the text was laid out in the real face and drawn in
+/// a fallback. en/technical__014b42f2 (Poppins, a cloud font): Word's PDF embeds
+/// Poppins, Oxi drew Segoe-like fallback glyphs at Poppins positions. One
+/// collection = the system font set + those files; None on any error (= the
+/// system collection, as before).
+unsafe fn doc_font_collection(
+    dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+) -> Option<windows::Win32::Graphics::DirectWrite::IDWriteFontCollection> {
+    use windows::core::{Interface, PCWSTR};
+    use windows::Win32::Graphics::DirectWrite::*;
+    thread_local! {
+        static COLL: std::cell::RefCell<Option<Option<IDWriteFontCollection>>> =
+            std::cell::RefCell::new(None);
+    }
+    if let Some(hit) = COLL.with(|c| c.borrow().clone()) {
+        return hit;
+    }
+    let build = || -> Option<IDWriteFontCollection> {
+        if std::env::var_os("OXI_DW_CLOUD_FONTS_DISABLE").is_some() {
+            return None;
+        }
+        let local = std::env::var("LOCALAPPDATA").ok()?;
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        let cloud = std::path::Path::new(&local).join(r"Microsoft\FontCache\4\CloudFonts");
+        if let Ok(rd) = std::fs::read_dir(&cloud) {
+            for fam in rd.flatten() {
+                if let Ok(inner) = std::fs::read_dir(fam.path()) {
+                    files.extend(inner.flatten().map(|e| e.path()));
+                }
+            }
+        }
+        if let Ok(rd) = std::fs::read_dir(std::path::Path::new(&local).join(r"Microsoft\Windows\Fonts")) {
+            files.extend(rd.flatten().map(|e| e.path()));
+        }
+        files.retain(|p| p.extension().and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc")));
+        if files.is_empty() {
+            return None;
+        }
+        files.sort();
+        let f5: IDWriteFactory5 = dwrite_factory.cast().ok()?;
+        let builder: IDWriteFontSetBuilder1 = f5.CreateFontSetBuilder().ok()?;
+        builder.AddFontSet(&f5.GetSystemFontSet().ok()?).ok()?;
+        for path in &files {
+            let w: Vec<u16> = path.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+            if let Ok(file) = dwrite_factory.CreateFontFileReference(PCWSTR(w.as_ptr()), None) {
+                let _ = builder.AddFontFile(&file);
+            }
+        }
+        let set = builder.CreateFontSet().ok()?;
+        let coll = f5.CreateFontCollectionFromFontSet(&set).ok()?;
+        coll.cast::<IDWriteFontCollection>().ok()
+    };
+    let got = build();
+    COLL.with(|c| *c.borrow_mut() = Some(got.clone()));
+    got
+}
+
 unsafe fn dwrite_knows_family(
     dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
     font_family: &str,
@@ -1319,8 +1403,8 @@ unsafe fn dwrite_knows_family(
     if let Some(hit) = KNOWN.with(|k| k.borrow().get(font_family).copied()) {
         return hit;
     }
-    let mut coll: Option<IDWriteFontCollection> = None;
-    let ans = if dwrite_factory.GetSystemFontCollection(&mut coll, BOOL(0)).is_err() {
+    let mut coll: Option<IDWriteFontCollection> = doc_font_collection(dwrite_factory);
+    let ans = if coll.is_none() && dwrite_factory.GetSystemFontCollection(&mut coll, BOOL(0)).is_err() {
         true // cannot tell — leave the placement alone
     } else if let Some(c) = coll {
         let fw: Vec<u16> = font_family.encode_utf16().chain(std::iter::once(0)).collect();
@@ -1355,8 +1439,9 @@ unsafe fn font_ascent_pt(
     let style = if italic { DWRITE_FONT_STYLE_ITALIC } else { DWRITE_FONT_STYLE_NORMAL };
     let family_wide: Vec<u16> = font_family.encode_utf16().chain(std::iter::once(0)).collect();
     let locale_wide: Vec<u16> = "ja-jp".encode_utf16().chain(std::iter::once(0)).collect();
+    let doc_coll = doc_font_collection(dwrite_factory);
     let fmt = match dwrite_factory.CreateTextFormat(
-        PCWSTR(family_wide.as_ptr()), None, weight, style,
+        PCWSTR(family_wide.as_ptr()), doc_coll.as_ref(), weight, style,
         DWRITE_FONT_STRETCH_NORMAL, font_size_pt * PT_TO_DIP, PCWSTR(locale_wide.as_ptr())) {
         Ok(f) => f, Err(_) => return font_size_pt * 0.8,
     };
@@ -1626,6 +1711,12 @@ unsafe fn render_text(
         Some(w) => (render_family, w, bold),
         None => (font_family, weight, false),
     };
+    // OXI_UD_KYOKASHO_ALIAS: a renamed face drawn under its current family.
+    let ud_alias = oxidocs_core::font::legacy_face_alias(font_family);
+    let (font_family, weight) = match ud_alias {
+        Some((base, b)) => (base, if b || bold { DWRITE_FONT_WEIGHT_BOLD } else { DWRITE_FONT_WEIGHT_NORMAL }),
+        None => (font_family, weight),
+    };
     let family_wide: Vec<u16> = font_family.encode_utf16()
         .chain(std::iter::once(0)).collect();
     let locale_wide: Vec<u16> = "ja-jp".encode_utf16()
@@ -1659,9 +1750,10 @@ unsafe fn render_text(
     let faux_dx: f32 = std::env::var("OXI_FAUXBOLD_DX").ok()
         .and_then(|v| v.parse().ok()).unwrap_or(0.4_f32) * PT_TO_DIP;
 
+    let doc_coll = doc_font_collection(dwrite_factory);
     let format: IDWriteTextFormat = dwrite_factory.CreateTextFormat(
         PCWSTR(family_wide.as_ptr()),
-        None,
+        doc_coll.as_ref(),
         weight,
         style,
         DWRITE_FONT_STRETCH_NORMAL,
