@@ -732,7 +732,7 @@ impl XlsxEditor {
             for row in before.band_styles.rows.keys().chain(after.band_styles.rows.keys()).copied().collect::<std::collections::BTreeSet<_>>() {
                 let was = before.band_styles.rows.get(&row);
                 let now = after.band_styles.rows.get(&row);
-                if was != now { self.row_band_styles.insert((index, row), now.cloned()); }
+                if was != now { self.row_band_styles.insert((index, row), now.map(|style|reconcile_style_edit(was,style))); }
             }
             let columns: std::collections::BTreeSet<u32> = if before.band_styles.sheet != after.band_styles.sheet {
                 (0..16_384).collect()
@@ -742,14 +742,14 @@ impl XlsxEditor {
             for column in columns {
                 let was = before.band_styles.columns.get(&column).or(before.band_styles.sheet.as_ref());
                 let now = after.band_styles.columns.get(&column).or(after.band_styles.sheet.as_ref());
-                if was != now { self.column_band_styles.insert((index, column), now.cloned()); }
+                if was != now { self.column_band_styles.insert((index, column), now.map(|style|reconcile_style_edit(was,style))); }
             }
 
             for (&(row, col), cell) in &now {
                 let was = held.get(&(row, col)).map(|before| &before.style);
                 if was != Some(&cell.style) {
                     self.styles
-                        .insert((index, row, col), cell.style.clone());
+                        .insert((index, row, col), reconcile_style_edit(was,&cell.style));
                 }
             }
         }
@@ -803,7 +803,12 @@ impl XlsxEditor {
         col: u32,
         style: CellStyle,
     ) {
-        self.styles.insert((sheet_index, row, col), style);
+        let key=(sheet_index,row,col);
+        let before=self.styles.get(&key).or_else(||self.workbook.sheets.get(sheet_index)
+            .and_then(|sheet|sheet.rows.iter().find(|held|held.index==row))
+            .and_then(|row|row.cells.iter().find(|held|held.col==col)).map(|cell|&cell.style));
+        let style=reconcile_style_edit(before,&style);
+        self.styles.insert(key, style);
     }
 
     /// Holds `rows` at the top of the sheet and `cols` at the left while the
@@ -9503,6 +9508,33 @@ fn unique_threaded_guid(seed: &str, existing: &std::collections::HashSet<String>
     }
 }
 
+/// Public face/RGB edits may still carry the original font's provenance.
+/// Keep independently edited origins, and remove inherited ones only for
+/// the public field that changed.
+fn reconcile_style_edit(before: Option<&CellStyle>, after: &CellStyle) -> CellStyle {
+    let mut style=after.clone();
+    let Some(before)=before else {return style};
+    let name_origin=|value: &CellStyle|value.font_reference.as_ref()
+        .map(|r|(r.latin_name.clone(),r.scheme.clone()));
+    let color_origin=|value: &CellStyle|value.font_reference.as_ref()
+        .map(|r|(r.theme,r.indexed,r.automatic,r.tint));
+    let canonical_name=after.font_reference.as_ref().and_then(|r|r.latin_name.as_deref())
+        .is_some_and(|name|after.font_name.as_deref()==Some(name));
+    let name_changed=before.font_name!=after.font_name && !canonical_name
+        && name_origin(before)==name_origin(after);
+    let color_changed=before.font_color!=after.font_color && color_origin(before)==color_origin(after);
+    if let Some(reference)=style.font_reference.as_mut() {
+        if name_changed {reference.latin_name=None;reference.scheme=None;}
+        if color_changed {reference.theme=None;reference.indexed=None;reference.automatic=false;reference.tint=None;}
+    }
+    if name_changed {
+        if after.font_family==before.font_family {style.font_family=None;}
+        if after.font_charset==before.font_charset {style.font_charset=None;}
+    }
+    style.normalize_font_reference();
+    style
+}
+
 fn font_xml(style: &CellStyle) -> String {
     let mut font = String::from("<font>");
     if style.bold {
@@ -13027,6 +13059,52 @@ mod tests {
         let patched = patch_indexed_colors_xml(missing, &colors).unwrap();
         assert!(patched.find("</cellXfs>").unwrap() < patched.find("<colors>").unwrap());
         assert!(patched.find("</colors>").unwrap() < patched.find("<extLst").unwrap());
+    }
+
+    #[test]
+    fn explicit_font_edits_replace_inherited_name_and_color_origins() {
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        for whole_workbook in [false,true] {
+            let mut editor=XlsxEditor::new(original).unwrap();
+            let mut edited=editor.workbook().clone();
+            let cell=edited.sheets[0].rows.iter_mut().find(|r|r.index==1).unwrap()
+                .cells.iter_mut().find(|c|c.col==0).unwrap();
+            cell.style.font_name=Some("Meiryo".into());
+            cell.style.font_color=Some("0070C0".into());
+            cell.style.font_size=Some(18.0);
+            if whole_workbook {
+                editor.apply_workbook(&edited).unwrap();
+            } else {
+                editor.set_cell_style(0,1,0,cell.style.clone());
+            }
+            let saved=editor.save().unwrap();
+            let restored=parse_xlsx(&saved).unwrap();
+            let style=&restored.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+                .cells.iter().find(|c|c.col==0).unwrap().style;
+            assert_eq!(style.font_name.as_deref(),Some("Meiryo"));
+            assert_eq!(style.latin_font_name(),Some("Meiryo"));
+            assert_eq!(style.font_color.as_deref(),Some("0070C0"));
+            assert_eq!(style.font_size,Some(18.0));
+
+            let mut editor=XlsxEditor::new(&saved).unwrap();
+            let mut edited=editor.workbook().clone();
+            let cell=edited.sheets[0].rows.iter_mut().find(|r|r.index==1).unwrap()
+                .cells.iter_mut().find(|c|c.col==0).unwrap();
+            cell.style.font_name=None;
+            cell.style.font_color=None;
+            cell.style.font_size=Some(8.0);
+            if whole_workbook {
+                editor.apply_workbook(&edited).unwrap();
+            } else {
+                editor.set_cell_style(0,1,0,cell.style.clone());
+            }
+            let restored=parse_xlsx(&editor.save().unwrap()).unwrap();
+            let style=&restored.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+                .cells.iter().find(|c|c.col==0).unwrap().style;
+            assert_eq!(style.font_name,restored.default_style.font_name);
+            assert_eq!(style.font_color,None);
+            assert_eq!(style.font_size,Some(8.0));
+        }
     }
 
     #[test]
