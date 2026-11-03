@@ -86,7 +86,7 @@ Frozen 2026-11-03 (`pipeline_data/FROZEN_BLIND_J.md`) as the next unclaimed SHA-
 | eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.759 | 0.698 | 34 / 50 | 50 |
 | OfficeCLI 1.0.160 (`--render html`) | 0.753 | 0.483 | 23 / 50 | 50 |
 
-**Oxi is first in English, 0.003 ahead of ONLYOFFICE — inside the ±0.02 one sample carries — and places page breaks best (46 / 50).** Document by document the race is closer than the mean: ONLYOFFICE is nearer to Word on 29 of 50 documents and Oxi on 21; WordCraft wins 21 against Oxi's 29, LibreOffice 16 against 34. The worst Oxi document is at 0.352 — a one-page document Oxi spreads onto two, a defect, since LibreOffice scores it 0.813.
+**Oxi is first in English, 0.003 ahead of ONLYOFFICE — inside the ±0.02 one sample carries — and places page breaks best (46 / 50).** Document by document the race is closer than the mean: ONLYOFFICE is nearer to Word on 30 of 50 documents and Oxi on 20; WordCraft wins 23 against Oxi's 27, LibreOffice 16 against 34. The worst Oxi document is at 0.352 — a one-page document Oxi spreads onto two, a defect, since LibreOffice scores it 0.813.
 
 ### Japanese blind set — jaBlindJ50, 50 never-seen documents
 
@@ -106,7 +106,7 @@ Frozen 2026-11-03 by the same rule, **before** any measurement. The Japanese `te
 | OfficeCLI 1.0.160 (`--render html`) | 0.745 | 0.544 | 28 / 50 | 50 |
 | eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.744 | 0.701 | 37 / 50 | 50 |
 
-**Oxi is first in Japanese by 0.067 over ibisOffice and 0.085 over LibreOffice**, closer to Word than ibisOffice on 38 of 50 documents, than LibreOffice on 39, than ONLYOFFICE on 40 and than Polaris Office on 43. Its weak point is page breaks: the three worst Japanese documents (0.32–0.46) are one-page documents Oxi spreads onto two, and ten of the fifty score below 0.80 penalized.
+**Oxi is first in Japanese by 0.067 over ibisOffice and 0.085 over LibreOffice**, closer to Word than ibisOffice on 39 of 50 documents, than LibreOffice on 40, than ONLYOFFICE on 42 and than Polaris Office on 43. Its weak point is page breaks: the three worst Japanese documents (0.32–0.46) are one-page documents Oxi spreads onto two, and ten of the fifty score below 0.80 penalized.
 
 **Rankings do not transfer between languages.** ONLYOFFICE is second in English and eighth in Japanese; ibisOffice is eighth in English and second in Japanese. That is the whole reason for keeping a blind set per language, and for keeping both numbers on this page rather than the flattering one.
 
@@ -442,7 +442,7 @@ number is written down and a new one is frozen before the next release — and `
 project's stop condition rather than its finish line. Per-release detail: [CHANGELOG.md](CHANGELOG.md).
 
 - **0.8 — done:** Word-compatible .docx rendering; the measurement loop (dev gates + rotating blind benchmarks); .pptx and .xlsx rendering, formula engine and browser VBA host; PDF; round-trip editing; WASM + Canvas editor, CLI, desktop app, Python bindings
-- **0.9 — current:** the blind sets average 0.9 on common pages, and Oxi is first among eleven engines in both languages. Next: page breaks (the worst blind-J documents in both languages are one-page documents Oxi spreads onto two; six English and ten Japanese documents are below 0.80 penalized), the typical English document (ONLYOFFICE is closer to Word on 29 of 50), IME (Japanese/CJK input) and editor polish
+- **0.9 — current:** the blind sets average 0.9 on common pages, and Oxi is first among eleven engines in both languages. Next: page breaks (the worst blind-J documents in both languages are one-page documents Oxi spreads onto two; six English and ten Japanese documents are below 0.80 penalized), the typical English document (ONLYOFFICE is closer to Word on 30 of 50), IME (Japanese/CJK input) and editor polish
 - **1.0 — indistinguishable from Word:** no document in the corpus below 1.0. This is the falsifiable claim the whole loop exists to serve; counterexamples are the contribution most wanted
 - **Beyond 1.0 — format parity:** .odt rendering via DirectWrite, measured against a deterministic reference renderer with the same externally-gated loop; bidirectional .docx ↔ .odt at the IR level
 

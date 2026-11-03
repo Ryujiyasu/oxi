@@ -49,8 +49,8 @@ pages / penalized (missing pages score 0) / page counts equal to Word's.
 Common-page two-language mean 0.9078 → **0.9.0** (see "How versions are numbered": the
 penalized mean, 0.8887, is the 0.8.x definition). Oxi is first in both languages. In English
 the lead over ONLYOFFICE (0.003) is inside the ±0.02 one sample carries, and document by
-document ONLYOFFICE is closer to Word on 29 of 50; in Japanese Oxi leads ibisOffice by 0.067
-and is closer to Word than every other engine on at least 38 of 50 documents. Page breaks are
+document ONLYOFFICE is closer to Word on 30 of 50; in Japanese Oxi leads ibisOffice by 0.067
+and is closer to Word than every other engine on at least 39 of 50 documents. Page breaks are
 the weak point in both: the worst documents in each language are one-page documents Oxi
 spreads onto two.
 
