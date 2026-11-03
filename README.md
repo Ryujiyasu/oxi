@@ -4,9 +4,9 @@
 
 **Office documents, processed on your device.**
 
-Oxi is an open-source engine for viewing and editing Word, Excel and PowerPoint files. Built in Rust and WebAssembly, it brings document processing into a browser, a desktop app or your own application, without a document-processing server or a Microsoft Office installation.
+Oxi brings Word, Excel and PowerPoint documents into the applications where people work. It is an open-source engine for viewing and editing existing Office files, with document processing running on the user's device.
 
-The goal is to keep existing documents and workflows usable across platforms: page layout, Japanese typography, spreadsheet formulas and supported VBA. Compatibility is measured against Microsoft Office itself.
+Teams can use Oxi to add document handling to a business application, web service or desktop tool. The browser engine works without a Microsoft Office installation or a document-processing backend. Compatibility is measured against Microsoft Office itself.
 
 [Word demo](https://ryujiyasu.gitlab.io/oxi/docs.html) · [Excel preview](https://ryujiyasu.gitlab.io/oxi/sheets.html) · [PowerPoint preview](https://ryujiyasu.gitlab.io/oxi/slides.html) · [Benchmarks](#layout-accuracy-vs-microsoft-word) · [Get started](#quick-start) · [Contribute](#contributing)
 
@@ -15,16 +15,24 @@ The goal is to keep existing documents and workflows usable across platforms: pa
 > **Canonical repository:** [GitHub — Ryujiyasu/oxi](https://github.com/Ryujiyasu/oxi) (issues, pull requests, CI, releases).
 > The [GitLab repository](https://gitlab.com/Ryujiyasu/oxi) receives `main` from GitHub and exists to run the Pages job that serves the live demo.
 
+## Why It Matters
+
+Reports, forms, budgets and presentations carry work from one person or system to another. Opening the same file in different software can change its page breaks, tables or calculation results, creating more work to check the output.
+
+- **Bring documents into the workflow.** Add viewing and editing to the application people already use.
+- **Process files on the device.** The browser engine can handle documents without uploading them to a document-processing server.
+- **Keep existing document assets useful.** Oxi targets familiar file formats, Japanese page layout, spreadsheet formulas and supported Excel macros.
+
 ## What Oxi Does
 
 | Format | Capabilities |
 |--------|--------------|
-| **Word — `.docx`** | Paginated rendering, editing and PDF export, with Japanese typography as a primary target |
-| **Excel — `.xlsx` / `.xlsm`** | Spreadsheet rendering, formulas, editing and a browser VBA host for supported workbook operations |
-| **PowerPoint — `.pptx`** | Slide rendering and editing, measured against PowerPoint's own output |
-| **PDF** | Parsing, text extraction, generation and digital-signature support |
+| **Word — `.docx`** | View document pages, edit content and export PDF, with support for Japanese typography |
+| **Excel — `.xlsx` / `.xlsm`** | View and edit spreadsheets, recalculate formulas and run supported VBA macros |
+| **PowerPoint — `.pptx`** | View and edit slide decks |
+| **PDF** | Read and extract text, create PDFs and work with digital signatures |
 
-The same Rust engines power the browser editors, desktop app, CLI and language bindings. Available features depend on the build; the full browser suite is built with `--features suite`. Full Microsoft Office and VBA compatibility remains in progress.
+The same engines can be used in a browser, a desktop app or another application. Full Microsoft Office and VBA compatibility remains in progress; see the benchmarks below for the measured scope and [Quick Start](#quick-start) for available builds.
 
 ---
 
@@ -43,14 +51,6 @@ Three editors over one engine, recorded from the assembled desktop build — the
 **Oxislides — .pptx**
 
 ![A deck opening in Oxislides, moving slide to slide, then a title edited in place and realigned](docs/img/oxi-slides.gif)
-
----
-
-## Why Now
-
-An Office file can open successfully and still move a page break, shift a table or change a calculation. Those differences make existing documents expensive to move between products, and make a document viewer difficult to embed in another application.
-
-Oxi puts parsing, rendering, editing and supported spreadsheet execution into a reusable local engine. Its priorities are concrete: keep document processing on the user's device, make Japanese layout a first-class target, and measure compatibility against Word, Excel and PowerPoint.
 
 ---
 
