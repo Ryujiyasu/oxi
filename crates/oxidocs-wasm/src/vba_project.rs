@@ -575,7 +575,8 @@ pub(crate) fn convert_workbook_format(
 }
 
 /// Save edits to the source of an existing workbook VBA project. Unchanged
-/// source preserves the entire package byte-for-byte. The host code page has
+/// source preserves the entire package byte-for-byte, including LF/CRLF-only
+/// differences in the editor. The host code page has
 /// the same meaning as in `spreadsheet_vba_source`.
 #[wasm_bindgen]
 pub fn save_spreadsheet_vba_source(package: &[u8], source: &str, source_code_page: Option<u16>) -> Result<Vec<u8>, JsError> {
@@ -586,8 +587,12 @@ pub(crate) fn write_project_source(package: &[u8], source: &str, source_code_pag
     // The complete exported source can contain comments before a module's
     // Attribute marker. Keep an unchanged export byte-identical instead of
     // reparsing those comments as the preceding module's trailing text.
-    if !source.contains('\0') && read_project_source_with_code_page(package, source_code_page)?.as_deref() == Some(source) {
-        return Ok(package.to_vec());
+    if !source.contains('\0') {
+        if let Some(existing) = read_project_source_with_code_page(package, source_code_page)? {
+            if existing == source || existing.replace("\r\n", "\n") == source.replace("\r\n", "\n") {
+                return Ok(package.to_vec());
+            }
+        }
     }
     use std::io::{Cursor, Write};
     let Some((target, original)) = workbook_project_part(package)? else {
@@ -794,6 +799,28 @@ mod tests {
         output.write_all(b"opaque signature payload").unwrap();
         let signed = output.finish().unwrap().into_inner();
         assert_eq!(compact_project_storage(&signed).unwrap(), signed);
+    }
+
+    #[test]
+    fn source_line_endings_preserve_unchanged_package_bytes() {
+        let packages: [&[u8]; 3] = [
+            include_bytes!("../../../tests/fixtures/vba/save_calculation.xlsm"),
+            include_bytes!("../../../tests/fixtures/vba/save_copy_filename_shapes.xlsm"),
+            include_bytes!("../../../tests/fixtures/vba/save_copy_filename_leaves.xlsm"),
+        ];
+        for (index, package) in packages.iter().enumerate() {
+            let source = read_project_source(package).unwrap().unwrap();
+            let lines = source.replace("\r\n", "\n");
+            for ending in ["\n", "\r\n"] {
+                let text = lines.replace('\n', ending);
+                let written = write_project_source(package, &text, None).unwrap();
+                assert!(written == *package, "unchanged package {index}, ending {ending:?}");
+            }
+            let edited = format!("{lines}\n' Retain this source edit\n");
+            let written = write_project_source(package, &edited, None).unwrap();
+            assert!(written != *package);
+            assert!(read_project_source(&written).unwrap().unwrap().contains("' Retain this source edit"));
+        }
     }
 
     #[test]
