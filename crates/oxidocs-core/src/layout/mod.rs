@@ -8106,6 +8106,19 @@ impl LayoutEngine {
             }
         }
         if rows.len() < 2 { return None; }
+        // OXI_BALANCE_KEEP_COLBRK (2026-11-05, default ON, opt-out _DISABLE): an
+        // explicit column break already decides the split -- the balancer must not
+        // move rows across it. blind-J ja/reference__704212ae p7: «⏎col 担当課…»
+        // opens the right column in Word (70.0); the balancer carried the
+        // break-only line over with it and the right column started a line low.
+        if !crate::env_flag!("OXI_BALANCE_KEEP_COLBRK_DISABLE")
+            && rows.iter().flat_map(|r| r.2.iter())
+                .filter_map(|&j| elements[j].paragraph_index)
+                .any(|pi| matches!(blocks.get(pi), Some(Block::Paragraph(p))
+                    if p.runs.iter().any(|r| r.text.contains(''))))
+        {
+            return None;
+        }
         if crate::env_flag!("OXI_DBG_COL") {
             eprintln!("[BALANCE_IN] tail_gap={:.3} rows={:?}", tail_gap,
                 rows.iter().map(|r| (r.3, r.4)).collect::<Vec<_>>());
