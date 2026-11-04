@@ -783,6 +783,15 @@ fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
     if !shape.is_vml {
         return None;
     }
+    // OXI_VML_PATH: a freeform draws its own outline, filled or not.
+    if !shape.vml_path.is_empty() {
+        return Some(LayoutContent::VectorPath {
+            segs: shape.vml_path.clone(),
+            fill: shape.fill.clone(),
+            stroke_color: shape.stroke_width.map(|_| shape.stroke_color.clone().unwrap_or_else(|| "000000".to_string())),
+            stroke_width: shape.stroke_width.unwrap_or(0.0),
+        });
+    }
     let fill = shape.fill.as_deref()?;
     if !matches!(shape.shape_type.as_str(), "rect" | "roundRect") {
         return None;
@@ -3821,6 +3830,9 @@ thread_local! {
     pub(crate) static HF_PAGE_EVEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// OXI_HF_TXBX_NO_CHARGRID: set while a header / footer text box is laid out.
     static IN_HF_TEXT_BOX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// OXI_VERT_TCY: set while an eaVert text box lays out its columns -- the
+    /// measured scope (a tbRl body section is not probed).
+    pub(crate) static IN_VERT_TEXT_BOX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// S816 (2026-07-13): true once the document's FIRST IR section has been
     /// laid out. The page-top space-before suppression keys on
     /// `!pages.is_empty() || !current_elements.is_empty()`, but those vecs are
@@ -5208,6 +5220,26 @@ impl LayoutEngine {
                                 "lightGray" => Some("D3D3D3".into()),
                                 _ => Some(value.to_owned()),
                             };
+                        }
+                    }
+                }
+            }
+        }
+        // OXI_AUM_RENDER_MINCHO (2026-11-02, default ON, opt-out _DISABLE): where the
+        // layout already measured absent Arial Unicode MS as ＭＳ 明朝 (charset 80 /
+        // ja-language AUM run, OXI_AUM_CHARSET80_LATIN), draw it in ＭＳ 明朝 too --
+        // the renderers otherwise hand «Arial Unicode MS» to the system fallback and
+        // draw a sans face over the Mincho advances. en/forms__006c06b0: Word's PDF
+        // spans for every AUM paragraph are MS-Mincho.
+        if !crate::env_flag!("OXI_AUM_RENDER_MINCHO_DISABLE")
+            && crate::font::runtime::resolve("Arial Unicode MS", false, false).is_none()
+            && (self.doc_aum_ja_lang || self.aum_charset_80_absent())
+        {
+            for page in pages.iter_mut() {
+                for el in page.elements.iter_mut() {
+                    if let LayoutContent::Text { font_family: Some(f), .. } = &mut el.content {
+                        if f == "Arial Unicode MS" {
+                            *f = "ＭＳ 明朝".to_string();
                         }
                     }
                 }
@@ -6662,17 +6694,25 @@ impl LayoutEngine {
             let base_pt = self.resolve_font_size(&runs[k].style, para_style);
             let hps_pt = ruby_ir.hps_halfpt.map(|h| h as f32 / 2.0).unwrap_or(base_pt / 2.0);
             let ruby_metrics = &*self.metrics_for_text(&ruby_ir.text, &runs[k].style, para_style);
+            // OXI_RUBY_FIELD_SCALE: base and reading are both measured at the
+            // base run's character scale (Word writes the same w:w on both; the
+            // reading's own rPr is not kept in the IR).
+            let rf_scale = if crate::env_flag!("OXI_RUBY_FIELD_SCALE_DISABLE") {
+                1.0
+            } else {
+                runs[k].style.text_scale.map(|s| s / 100.0).filter(|s| *s > 0.0).unwrap_or(1.0)
+            };
             let ruby_w: f32 = ruby_ir
                 .text
                 .chars()
                 .map(|c| self.registry.char_width_pt_with_fallback(c, hps_pt, ruby_metrics))
-                .sum();
+                .sum::<f32>() * rf_scale;
             let mut base_w = 0.0_f32;
             for r in &runs[k..end] {
                 let m = &*self.metrics_for_text(&r.text, &r.style, para_style);
                 let fs = self.resolve_font_size(&r.style, para_style);
                 let chars = r.text.chars().count() as f32;
-                base_w += r.text.chars().map(|c| self.registry.char_width_pt_with_fallback(c, fs, m)).sum::<f32>();
+                base_w += r.text.chars().map(|c| self.registry.char_width_pt_with_fallback(c, fs, m)).sum::<f32>() * rf_scale;
                 if s1627 {
                     base_w += r.style.character_spacing.unwrap_or(0.0) * chars;
                 }
@@ -7394,7 +7434,7 @@ impl LayoutEngine {
                 .map(|a| a.map_or(top, |(_, _, y)| y)).collect();
             // A vertical section's bands divide the vertical axis; each band
             // retains the full physical text-area width.
-            let column_left = vec![left; page.blocks.len()];
+            let column_left = Self::vertical_column_origins(page, &block_starts);
             let mut drawings: Vec<(bool, u32, usize, Vec<LayoutElement>)> = Vec::new();
             for tb in &page.text_boxes {
                 if tb.inline { continue; }
@@ -7418,6 +7458,7 @@ impl LayoutEngine {
                 let target = Self::vertical_page_of(&block_starts, shape.anchor_block_index);
                 let ay = anchor_y.get(shape.anchor_block_index).copied().unwrap_or(top);
                 let (x, y) = Self::vertical_shape_origin(page, shape, ay);
+                let x = Self::vertical_shape_column_x(page, shape, x, column_left.get(shape.anchor_block_index).copied());
                 let content = shape_fill_boxrect(shape).unwrap_or_else(|| LayoutContent::PresetShape {
                     shape_type: shape.shape_type.clone(),
                     stroke_color: shape.stroke_color.clone(),
@@ -7513,7 +7554,7 @@ impl LayoutEngine {
         let top = page.margin.top;
         let left = page.margin.left;
         let anchor_y: Vec<f32> = starts.iter().map(|a| a.map_or(top, |(_, _, y)| y)).collect();
-        let column_left = vec![left; page.blocks.len()];
+        let column_left = Self::vertical_column_origins(page, starts);
         let page_of = |b: usize| Self::vertical_page_of(starts, b);
         let mut out: Vec<(usize, VertObstacle)> = Vec::new();
         let dbg = crate::env_flag!("OXI_DBG_VWRAP");
@@ -7566,10 +7607,122 @@ impl LayoutEngine {
         for (block, shape) in page.shapes.iter().map(|s| (s.anchor_block_index, s)).chain(para_shapes) {
             let Some(pos) = shape.position.as_ref() else { continue };
             let (x, y) = Self::vertical_shape_origin(page, shape, anchor_y.get(block).copied().unwrap_or(top));
+            let x = Self::vertical_shape_column_x(page, shape, x, column_left.get(block).copied());
             push(block, x, y, shape.width, shape.height, pos, shape.wrap_type.or(shape.anchor_wrap));
+        }
+        // OXI_VERTICAL_TABLE_OBSTACLE (2026-11-02, default ON, opt-out _DISABLE): a
+        // floating table is a square-wrapped obstacle to the vertical columns like
+        // any S1411 anchor, its keep-out being leftFromText / rightFromText /
+        // topFromText / bottomFromText. ja/reports__1fd371a8 (tbRl, 5 bands, table 1
+        // page-anchored over bands 2-3, Word COM per-paragraph Information(5/6)):
+        // band 2 keeps the three columns right of the table and walls the rest
+        // (no free height under it), band 3 keeps three and starts the columns
+        // left of it at 569.25 under the table; Oxi ran every column straight
+        // through, so the second float table's text anchor sat three columns left.
+        if !crate::env_flag!("OXI_VERTICAL_TABLE_OBSTACLE_DISABLE") {
+            for (blk, block) in page.blocks.iter().enumerate() {
+                let Block::Table(table) = block else { continue };
+                let Some(tp) = table.style.position.as_ref() else { continue };
+                let Some((x, y, w, h)) = self.vertical_float_table_box(page, blk, table, starts) else { continue };
+                if dbg {
+                    eprintln!("[VWRAP] table blk={} page={} x {:.1}..{:.1} y {:.1}..{:.1}", blk, page_of(blk), x, x + w, y, y + h);
+                }
+                out.push((blk, VertObstacle {
+                    x0: x - tp.left_from_text,
+                    x1: x + w + tp.right_from_text,
+                    y0: y - tp.top_from_text,
+                    y1: y + h + tp.bottom_from_text,
+                    wall: false,
+                }));
+            }
         }
         out.sort_by_key(|(b, _)| *b);
         out
+    }
+
+    /// The box a vertical page's floating table occupies -- the S1405 placement
+    /// (text-relative x from the next column's right edge, tbRl offsets running
+    /// left) with the height of the laid-out rows.
+    fn vertical_float_table_box(
+        &self,
+        page: &Page,
+        block_idx: usize,
+        table: &crate::ir::Table,
+        starts: &[Option<(usize, f32, f32)>],
+    ) -> Option<(f32, f32, f32, f32)> {
+        let pos = table.style.position.as_ref()?;
+        let page_w = page.size.width;
+        let page_h = page.size.height;
+        let left = page.margin.left;
+        let right = page_w - page.margin.right;
+        let top = page.margin.top;
+        let bottom = page_h - page.margin.bottom;
+        let content_h = (bottom - top).max(0.0);
+        let anchor = starts.iter().skip(block_idx + 1).flatten().next().copied()
+            .or_else(|| starts[..block_idx.min(starts.len())].iter().rev().flatten().next().copied())
+            .unwrap_or((0, right, top));
+        let mut placed = table.clone();
+        let table_width: f32 = self.resolve_table_col_widths_n(table, right - left, false).iter().sum();
+        if matches!(pos.h_anchor.as_deref(), None | Some("text")) && pos.h_align.is_none() {
+            let p = placed.style.position.as_mut().unwrap();
+            p.h_anchor = Some("page".to_owned());
+            p.x = anchor.1 - table_width - pos.x;
+        }
+        let bottom_aligned = pos.y_spec.as_deref() == Some("bottom")
+            && !matches!(pos.v_anchor.as_deref(), Some("text"));
+        let y = if bottom_aligned { 0.0 } else {
+            match pos.v_anchor.as_deref() {
+                Some("page") => pos.y,
+                Some("margin") => top + pos.y,
+                _ => anchor.2 + pos.y,
+            }
+        };
+        let mut cursor = LayoutCursor::new(y);
+        let mut float_pages = Vec::new();
+        let mut current = Vec::new();
+        let els = self.layout_table(
+            &placed, left, &mut cursor, right - left,
+            page.grid_line_pitch, page.grid_char_pitch, page.grid_char_cw_ratio,
+            if bottom_aligned { 0.0 } else { top },
+            if bottom_aligned { page_h } else { content_h },
+            page_w, page_h, &mut float_pages, &mut current,
+            Some(block_idx), page, false, None, None, 0.0, 0.0, false, None,
+        );
+        if !float_pages.is_empty() {
+            return None; // a float that splits across pages is left to the flow
+        }
+        let (mut x0, mut x1, mut y0, mut y1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+        // the rules alone: a cell may anchor its own drawings outside the table
+        for e in current.iter().chain(els.iter()) {
+            if let LayoutContent::TableBorder { x1: bx1, y1: by1, x2: bx2, y2: by2, .. } = &e.content {
+                x0 = x0.min(bx1.min(*bx2)); x1 = x1.max(bx1.max(*bx2));
+                y0 = y0.min(by1.min(*by2)); y1 = y1.max(by1.max(*by2));
+            }
+        }
+        if x0 > x1 || y0 > y1 { return None; }
+        let dy = if bottom_aligned {
+            (if pos.v_anchor.as_deref() == Some("page") { page_h } else { bottom }) - cursor.cursor_y
+        } else { 0.0 };
+        Some((x0, y0 + dy, x1 - x0, y1 - y0))
+    }
+
+    /// OXI_VERTICAL_COLUMN_ORIGIN (2026-11-02, default ON, opt-out _DISABLE): in a
+    /// tbRl section a drawing's `positionH relativeFrom="column"` offset is taken
+    /// from the RIGHT edge of its anchor paragraph's vertical line, not from the
+    /// left margin. ja/reports__1fd371a8 (A4 tbRl, 5 bands, Word PDF + COM
+    /// Information(5)): «四角形6» anchor line 91.5..109.5, offset -15.55 -> 93.95
+    /// (Word 93); «四角形1» line 55.5..73.5, -39.55 -> 33.95 (Word 33.6);
+    /// «長方形3» page-2 line 55.5..73.5, -25.3 -> 48.2 (Word 48). Oxi took 54 + offset.
+    fn vertical_column_origins(page: &Page, starts: &[Option<(usize, f32, f32)>]) -> Vec<f32> {
+        let left = page.margin.left;
+        if crate::env_flag!("OXI_VERTICAL_COLUMN_ORIGIN_DISABLE") {
+            return vec![left; page.blocks.len()];
+        }
+        (0..page.blocks.len())
+            .map(|b| starts.get(b).copied().flatten()
+                .or_else(|| starts.iter().skip(b + 1).flatten().next().copied())
+                .map_or(left, |(_, x, _)| x))
+            .collect()
     }
 
     /// S1411: the page a block starts on; a block that never took a column
@@ -7583,6 +7736,16 @@ impl LayoutEngine {
             return *p;
         }
         starts.iter().skip(blk).flatten().next().map_or(0, |(p, _, _)| *p)
+    }
+
+    /// OXI_VERTICAL_COLUMN_ORIGIN for a shape: an unaligned column-relative
+    /// offset moves from the left margin to the anchor line's right edge.
+    fn vertical_shape_column_x(page: &Page, shape: &crate::ir::Shape, x: f32, col: Option<f32>) -> f32 {
+        match (shape.position.as_ref(), col) {
+            (Some(pos), Some(col)) if pos.h_align.is_none()
+                && matches!(pos.h_relative.as_deref(), None | Some("column")) => x - page.margin.left + col,
+            _ => x,
+        }
     }
 
     /// S1411: a page shape's top-left from its anchor position (the horizontal
@@ -8495,11 +8658,22 @@ cells={} pitch={:.2} text={:?}",
                             _ => 0.0,
                         }
                     } else { 0.0 };
+                    // OXI_VERT_TCY: a 縦中横 run wider than the column widens it
+                    // (`_pb_tcy_vert_gen.py`: «２４» 36pt -> a 72pt column, the other
+                    // characters centred on it).
+                    let tcy_w = if crate::env_flag!("OXI_VERT_TCY_DISABLE") || !IN_VERT_TEXT_BOX.with(|c| c.get()) { 0.0 } else {
+                        segs.iter().filter(|(ri, _)| para.runs[*ri].style.vert_in_horz).map(|(ri, t)| {
+                            let st = &para.runs[*ri].style;
+                            let fs = self.resolve_font_size(st, &para.style);
+                            t.chars().map(|c| self.metrics_for_char_in(c, false, st, &para.style).char_width_em(c) * fs)
+                                .sum::<f32>() * st.text_scale.unwrap_or(100.0) / 100.0
+                        }).fold(0.0f32, f32::max)
+                    };
                     if let (Some(a), Some(b)) = (segs.first(), segs.last()) {
                         cols.push(VertColumn {
                             recipe,
                             text: segs.iter().map(|(_, s)| s.as_str()).collect(),
-                            pitch: col_pitch(a.0, b.0),
+                            pitch: col_pitch(a.0, b.0).max(tcy_w),
                             segs,
                             top: line_start + jc_shift,
                             blank: false,
@@ -8673,6 +8847,38 @@ cells={} pitch={:.2} text={:?}",
         } else { x };
         for (ri, text) in &col.segs {
             let run = &para.runs[*ri];
+            // OXI_VERT_TCY (2026-11-03, default ON, opt-out _DISABLE): a 縦中横 run
+            // (eastAsianLayout w:vert) in vertical text is ONE horizontal unit: its
+            // natural (w-scaled) width centred on the column, its em box centred in
+            // the face's natural line box, which is what it advances down the column.
+            // `_pb_tcy_vert_gen.py` (eaVert box, ＭＳ ゴシック 20 / 36, «２４» «12»
+            // «１２３», w 100 / 88, vertCompress 0 / 1 -- the latter changes
+            // nothing): «２４» at 36pt is 72 (63.4 at w 88) wide, advances 46.68 =
+            // 83/64 em with 5.34 above and below its em box; at 20pt 25.9.
+            // ja/reports__542222d0's «２４春闘だ！» stacked the 2 and the 4.
+            if run.style.vert_in_horz && !text.is_empty() && !crate::env_flag!("OXI_VERT_TCY_DISABLE")
+                && IN_VERT_TEXT_BOX.with(|c| c.get()) {
+                let fs = self.resolve_font_size(&run.style, &para.style);
+                let fam = self
+                    .resolve_font_family_for_text(text, &run.style, &para.style)
+                    .map(|s| s.to_string());
+                let scale = run.style.text_scale.unwrap_or(100.0) / 100.0;
+                let w: f32 = text.chars()
+                    .map(|c| self.metrics_for_char_in(c, false, &run.style, &para.style).char_width_em(c) * fs)
+                    .sum::<f32>() * scale;
+                let adv = self.vert_tcy_advance(text, &run.style, &para.style, fs);
+                let mut el = self.vertical_line_element(
+                    text.clone(), x + col.pitch / 2.0 - w / 2.0, cy + (adv - fs) / 2.0, w, fs, fs, 0.0,
+                    &fam, &run.style, &para_style, recipe.block_idx,
+                );
+                if let LayoutContent::Text { ref mut is_vertical, .. } = el.content {
+                    *is_vertical = false;
+                }
+                el.text_y_off = 1.0;
+                out.push(el);
+                cy += adv;
+                continue;
+            }
             let seg_start = cy;
             let ruby_out = out.len();
             let fs = self.resolve_font_size(&run.style, &para.style);
@@ -8826,6 +9032,17 @@ cells={} pitch={:.2} text={:?}",
     /// Build one vertical-line Text element (is_vertical=true). The renderer
     /// stacks `text`'s chars downward from `y`, each centred in [x, x+w].
     #[allow(clippy::too_many_arguments)]
+    /// OXI_VERT_TCY: how far a 縦中横 run advances down a vertical column -- its
+    /// face's natural line box (win box x 83/64 for the 83/64 faces).
+    pub(crate) fn vert_tcy_advance(&self, text: &str, style: &RunStyle, para_style: &ParagraphStyle, fs: f32) -> f32 {
+        let m = &*self.metrics_for_text(text, style, para_style);
+        if m.is_cjk_83_64_font() {
+            (m.win_ascent + m.win_descent) * fs * (83.0 / 64.0)
+        } else {
+            m.natural_line_height_hhea(fs)
+        }
+    }
+
     fn vertical_line_element(
         &self,
         text: String,
@@ -8986,10 +9203,19 @@ cells={} pitch={:.2} text={:?}",
             } else {
                 text_box.width
             };
+            // OXI_ALIGN_EFFEXT (2026-11-03, default ON, opt-out _DISABLE): an aligned
+            // box is aligned with its wp:effectExtent margins around it -- the file's
+            // values, whether or not an effect is drawn; posOffset boxes ignore them.
+            // `_pb_align_effext_gen.py` (200 x 80 box, extent l2 t9 r5 b3pt, margin):
+            // left 56 = 54 + 2, center 196.15, right 336.3 = edge - 200 - 5, top 81,
+            // center 383.95, bottom 686.9 = edge - 80 - 3; a shadow with a zero extent
+            // aligns the bare box. ja/reports__5373dd8a's masthead (l1.5 t9): Word
+            // (55.5, 81), Oxi (54, 72).
+            let (el, er) = if crate::env_flag!("OXI_ALIGN_EFFEXT_DISABLE") { (0.0, 0.0) } else { (pos.eff_l, pos.eff_r) };
             match align.as_str() {
-                "left" => ref_left,
-                "center" => ref_left + (ref_width - align_w) / 2.0,
-                "right" => ref_left + ref_width - align_w,
+                "left" => ref_left + el,
+                "center" => ref_left + (ref_width - align_w - el - er) / 2.0 + el,
+                "right" => ref_left + ref_width - align_w - er,
                 _ => ref_left,
             }
         } else {
@@ -8997,6 +9223,15 @@ cells={} pitch={:.2} text={:?}",
                 Some("page") => pos.x,
                 Some("column") => anchor_col_left + pos.x,
                 Some("margin") | Some("character") => page.margin.left + pos.x,
+                // OXI_TXBX_MARGIN_AREA (2026-11-02, default ON, opt-out _DISABLE): the
+                // OOXML values are «leftMargin» / «rightMargin» (ST_RelFromH); only the
+                // «…Area» spellings were matched, so a leftMargin-relative box took
+                // the left margin + offset. ja/creative__8048e30f's numbered badges
+                // (leftMargin +24.75): Word x 25, Oxi 115. Floating images already
+                // read both spellings.
+                Some("leftMargin") if !crate::env_flag!("OXI_TXBX_MARGIN_AREA_DISABLE") => pos.x,
+                Some("rightMargin") if !crate::env_flag!("OXI_TXBX_MARGIN_AREA_DISABLE") =>
+                    (page.size.width - page.margin.right) + pos.x,
                 Some("leftMarginArea") => pos.x,
                 Some("rightMarginArea") => (page.size.width - page.margin.right) + pos.x,
                 _ => page.margin.left + pos.x,
@@ -9017,10 +9252,11 @@ cells={} pitch={:.2} text={:?}",
                     ref_height = page.size.height - page.margin.top - page.margin.bottom;
                 }
             }
+            let (et, eb) = if crate::env_flag!("OXI_ALIGN_EFFEXT_DISABLE") { (0.0, 0.0) } else { (pos.eff_t, pos.eff_b) };
             match align.as_str() {
-                "top" => ref_top,
-                "center" => ref_top + (ref_height - text_box.height) / 2.0,
-                "bottom" => ref_top + ref_height - text_box.height,
+                "top" => ref_top + et,
+                "center" => ref_top + (ref_height - text_box.height - et - eb) / 2.0 + et,
+                "bottom" => ref_top + ref_height - text_box.height - eb,
                 _ => ref_top,
             }
         } else {
@@ -9034,6 +9270,9 @@ cells={} pitch={:.2} text={:?}",
                     anchor_y + pos.y
                 }
                 Some("margin") => page.margin.top + pos.y,
+                Some("topMargin") if !crate::env_flag!("OXI_TXBX_MARGIN_AREA_DISABLE") => pos.y,
+                Some("bottomMargin") if !crate::env_flag!("OXI_TXBX_MARGIN_AREA_DISABLE") =>
+                    (page.size.height - page.margin.bottom) + pos.y,
                 Some("topMarginArea") => pos.y,
                 Some("bottomMarginArea") => (page.size.height - page.margin.bottom) + pos.y,
                 _ => page.margin.top + pos.y,
@@ -9235,7 +9474,15 @@ cells={} pitch={:.2} text={:?}",
             if !is_inline_sig && !anchor_is_table {
                 for vs in &text_box.vector_shapes {
                     let (vx, vy) = (abs_x + vs.x, abs_y + vs.y);
-                    if vs.is_line {
+                    if let Some(ref data) = vs.image {
+                        // OXI_VML_GROUP_MEMBERS: a picture member over its box
+                        elements.push(LayoutElement::new(vx, vy, vs.w, vs.h, LayoutContent::Image {
+                            data: data.as_ref().clone(),
+                            content_type: None,
+                            crop: None,
+                            rotation: 0.0,
+                        }));
+                    } else if vs.is_line {
                         elements.push(LayoutElement::new(
                             vx,
                             vy,
@@ -9321,6 +9568,57 @@ cells={} pitch={:.2} text={:?}",
                     } else { None },
                     stroke_width: if has_border { text_box.stroke_width.unwrap_or(1.0) } else { 0.0 },
                 }));
+        } else if let (Some([a1, a2, a3]), true) = (text_box.callout, has_fill || has_border) {
+            // OXI_TXBX_CALLOUT: the ECMA wedge(Round)RectCallout outline — the tail
+            // tip at the centre + (adj1 w, adj2 h), its base on the edge the tip
+            // leans past (|dy| > |dx| h/w -> top / bottom) at 2/12..5/12 or
+            // 7/12..10/12 of that edge; corner radius adj3 of the shorter side.
+            // ja/administrative__05e3143c's «角丸四角形吹き出し 4» came out a square box.
+            use crate::ir::PathSeg;
+            let (w, h) = (text_box.width.max(0.01), text_box.height.max(0.01));
+            let (dx, dy) = (w * a1 / 100000.0, h * a2 / 100000.0);
+            let (xp, yp) = (w / 2.0 + dx, h / 2.0 + dy);
+            let dz = dy.abs() - (dx * h / w).abs();
+            let (x1, x2) = if dx > 0.0 { (w * 7.0 / 12.0, w * 10.0 / 12.0) } else { (w * 2.0 / 12.0, w * 5.0 / 12.0) };
+            let (y1, y2) = if dy > 0.0 { (h * 7.0 / 12.0, h * 10.0 / 12.0) } else { (h * 2.0 / 12.0, h * 5.0 / 12.0) };
+            let pick = |c: bool, a: f32, b: f32| if c { a } else { b };
+            // ECMA: xl/yl (left), xt/yt (top), xr/yr (right), xb/yb (bottom)
+            let (xl, yl) = (pick(dz > 0.0, 0.0, pick(dx > 0.0, 0.0, xp)), pick(dz > 0.0, y1, pick(dx > 0.0, y1, yp)));
+            let (xt, yt) = (pick(dz > 0.0, pick(dy > 0.0, x1, xp), x1), pick(dz > 0.0, pick(dy > 0.0, 0.0, yp), 0.0));
+            let (xr, yr) = (pick(dz > 0.0, w, pick(dx > 0.0, xp, w)), pick(dz > 0.0, y1, pick(dx > 0.0, yp, y1)));
+            let (xb, yb) = (pick(dz > 0.0, pick(dy > 0.0, xp, x1), x1), pick(dz > 0.0, pick(dy > 0.0, yp, h), h));
+            let r = (w.min(h) * a3 / 100000.0).max(0.0);
+            let k = 0.552_284_8 * r;
+            let n = |x: f32, y: f32| (x / w, y / h);
+            let mut segs: Vec<PathSeg> = Vec::new();
+            let mv = |v: &mut Vec<PathSeg>, x: f32, y: f32| { let (a, b) = n(x, y); v.push(PathSeg::M(a, b)); };
+            let ln = |v: &mut Vec<PathSeg>, x: f32, y: f32| { let (a, b) = n(x, y); v.push(PathSeg::L(a, b)); };
+            let cu = |v: &mut Vec<PathSeg>, p: [f32; 6]| {
+                let (a, b) = n(p[0], p[1]); let (c, d) = n(p[2], p[3]); let (e, f) = n(p[4], p[5]);
+                v.push(PathSeg::C(a, b, c, d, e, f));
+            };
+            mv(&mut segs, 0.0, r);
+            if r > 0.0 { cu(&mut segs, [0.0, r - k, r - k, 0.0, r, 0.0]); }
+            ln(&mut segs, x1, 0.0); ln(&mut segs, xt, yt); ln(&mut segs, x2, 0.0);
+            ln(&mut segs, w - r, 0.0);
+            if r > 0.0 { cu(&mut segs, [w - r + k, 0.0, w, r - k, w, r]); }
+            ln(&mut segs, w, y1); ln(&mut segs, xr, yr); ln(&mut segs, w, y2);
+            ln(&mut segs, w, h - r);
+            if r > 0.0 { cu(&mut segs, [w, h - r + k, w - r + k, h, w - r, h]); }
+            ln(&mut segs, x2, h); ln(&mut segs, xb, yb); ln(&mut segs, x1, h);
+            ln(&mut segs, r, h);
+            if r > 0.0 { cu(&mut segs, [r - k, h, 0.0, h - r + k, 0.0, h - r]); }
+            ln(&mut segs, 0.0, y2); ln(&mut segs, xl, yl); ln(&mut segs, 0.0, y1);
+            segs.push(PathSeg::Z);
+            elements.push(LayoutElement::new(abs_x, abs_y, w, h,
+                LayoutContent::VectorPath {
+                    segs,
+                    fill: text_box.fill.clone(),
+                    stroke_color: if has_border {
+                        text_box.stroke_color.clone().or_else(|| Some("000000".to_string()))
+                    } else { None },
+                    stroke_width: if has_border { text_box.stroke_width.unwrap_or(1.0) } else { 0.0 },
+                }));
         } else if has_fill || has_border {
             let fill_hex = text_box.fill.as_ref().map(|f| {
                 if f.starts_with('#') {
@@ -9330,6 +9628,129 @@ cells={} pitch={:.2} text={:?}",
                 }
             });
             let cr = text_box.corner_radius.unwrap_or(0.0);
+            let sw = if has_border { text_box.stroke_width.unwrap_or(1.0) } else { 0.0 };
+            // OXI_TXBX_SHADOW (parser): the silhouette -- outline included -- moved by
+            // the shadow offset, under the box. BoxRect has no alpha, so the colour is
+            // laid over white (the page), as Word's 40% black over paper reads 154.
+            if let Some((dx, dy, ref col, alpha)) = text_box.outer_shadow {
+                let (r, g, b) = {
+                    let h = col.trim_start_matches('#');
+                    let c = |i: usize| u8::from_str_radix(h.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0) as f32;
+                    (c(0), c(2), c(4))
+                };
+                let mix = |v: f32| (255.0 - alpha.clamp(0.0, 1.0) * (255.0 - v)).round() as u8;
+                let grow = sw / 2.0;
+                elements.push(LayoutElement::new(
+                    abs_x - grow + dx,
+                    abs_y - grow + dy,
+                    text_box.width + 2.0 * grow,
+                    text_box.height + 2.0 * grow,
+                    LayoutContent::BoxRect {
+                        fill: Some(format!("#{:02X}{:02X}{:02X}", mix(r), mix(g), mix(b))),
+                        stroke_color: None,
+                        stroke_width: 0.0,
+                        corner_radius: if cr > 0.0 { cr + grow } else { 0.0 },
+                    },
+                ));
+            }
+            // OXI_TXBX_CMPD (2026-11-03, default ON, opt-out _DISABLE): a compound
+            // outline is bands across the line width w, measured from its outer edge
+            // (w/2 outside the box edge). `_pb_shape_cmpd_shadow_gen.py`, w 6 and 3:
+            // dbl 1/3 gap 1/3; thickThin 0.6 gap 0.2 0.2; thinThick 0.2 gap 0.2 0.6;
+            // tri 1/6 gap 1/6 2/6 gap 1/6 1/6. ja/reports__5373dd8a's page frames
+            // (5.25pt thickThin) drew one solid 5.25pt line.
+            let bands: &[(f32, f32)] = match text_box.outline_cmpd.as_deref() {
+                _ if !has_border || crate::env_flag!("OXI_TXBX_CMPD_DISABLE") => &[],
+                Some("dbl") => &[(0.0, 1.0 / 3.0), (2.0 / 3.0, 1.0)],
+                Some("thickThin") => &[(0.0, 0.6), (0.8, 1.0)],
+                Some("thinThick") => &[(0.0, 0.2), (0.4, 1.0)],
+                Some("tri") => &[(0.0, 1.0 / 6.0), (2.0 / 6.0, 4.0 / 6.0), (5.0 / 6.0, 1.0)],
+                _ => &[],
+            };
+            let stroke_hex = text_box
+                .stroke_color
+                .as_ref()
+                .map(|c| if c.starts_with('#') { c.clone() } else { format!("#{}", c) })
+                .or_else(|| Some("#000000".to_string()));
+            // OXI_TXBX_DASH (2026-11-03, default ON, opt-out _DISABLE): a square box's
+            // a:prstDash outline, one continuous pattern from the top-left corner
+            // clockwise (Word's PDF strokes the rect as one path). ja/administrative__0ba21b0c:
+            // the two 1.5pt dashDot frames, Word dash array [6 4.5 1.5 4.5] = [4 3 1 3] x w;
+            // Oxi drew them solid. Patterns in units of the width: ECMA-376 20.1.10.48.
+            let dash_units: Option<&[f32]> = match text_box.outline_dash.as_deref() {
+                _ if !has_border || cr > 0.0 || !bands.is_empty()
+                    || crate::env_flag!("OXI_TXBX_DASH_DISABLE") => None,
+                Some("dash") => Some(&[4.0, 3.0]),
+                Some("dashDot") => Some(&[4.0, 3.0, 1.0, 3.0]),
+                Some("lgDash") => Some(&[8.0, 3.0]),
+                Some("lgDashDot") => Some(&[8.0, 3.0, 1.0, 3.0]),
+                Some("lgDashDotDot") => Some(&[8.0, 3.0, 1.0, 3.0, 1.0, 3.0]),
+                Some("sysDash") => Some(&[3.0, 1.0]),
+                Some("sysDot") => Some(&[1.0, 1.0]),
+                Some("sysDashDot") => Some(&[3.0, 1.0, 1.0, 1.0]),
+                Some("sysDashDotDot") => Some(&[3.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+                Some("dot") => Some(&[1.0, 3.0]),
+                _ => None,
+            };
+            if let Some(units) = dash_units {
+                elements.push(LayoutElement::new(
+                    abs_x,
+                    abs_y,
+                    text_box.width,
+                    text_box.height,
+                    LayoutContent::BoxRect { fill: fill_hex.clone(), stroke_color: None, stroke_width: 0.0, corner_radius: 0.0 },
+                ));
+                let pat = units.iter().map(|u| format!("{u}")).collect::<Vec<_>>().join(",");
+                let (x0, y0, x1, y1) = (abs_x, abs_y, abs_x + text_box.width, abs_y + text_box.height);
+                let h = sw / 2.0;
+                // each side runs w/2 past both corners so the joins are filled; the
+                // pattern offset (in widths) carries on from the previous side.
+                let sides = [
+                    (x0 - h, y0, x1 + h, y0),
+                    (x1, y0 - h, x1, y1 + h),
+                    (x1 + h, y1, x0 - h, y1),
+                    (x0, y1 + h, x0, y0 - h),
+                ];
+                let mut run = -0.5f32;
+                for (k, &(ax, ay, bx, by)) in sides.iter().enumerate() {
+                    let len = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+                    elements.push(LayoutElement::new(
+                        ax.min(bx), ay.min(by), (bx - ax).abs(), (by - ay).abs(),
+                        LayoutContent::TableBorder {
+                            x1: ax, y1: ay, x2: bx, y2: by,
+                            color: stroke_hex.clone(),
+                            width: sw,
+                            style: Some(format!("prst:{pat}:{:.4}", run.rem_euclid(units.iter().sum::<f32>()))),
+                        },
+                    ));
+                    let _ = k;
+                    run += (len - sw) / sw.max(0.01);
+                }
+            } else if !bands.is_empty() {
+                elements.push(LayoutElement::new(
+                    abs_x,
+                    abs_y,
+                    text_box.width,
+                    text_box.height,
+                    LayoutContent::BoxRect { fill: fill_hex.clone(), stroke_color: None, stroke_width: 0.0, corner_radius: cr },
+                ));
+                for &(a, b) in bands {
+                    // inward distance of the band's centre from the box edge
+                    let off = -sw / 2.0 + (a + b) * sw / 2.0;
+                    elements.push(LayoutElement::new(
+                        abs_x + off,
+                        abs_y + off,
+                        (text_box.width - 2.0 * off).max(0.0),
+                        (text_box.height - 2.0 * off).max(0.0),
+                        LayoutContent::BoxRect {
+                            fill: None,
+                            stroke_color: stroke_hex.clone(),
+                            stroke_width: (b - a) * sw,
+                            corner_radius: if cr > 0.0 { (cr - off).max(0.0) } else { 0.0 },
+                        },
+                    ));
+                }
+            } else {
             elements.push(LayoutElement::new(
                 abs_x,
                 abs_y,
@@ -9360,6 +9781,7 @@ cells={} pitch={:.2} text={:?}",
                     corner_radius: cr,
                 },
             ));
+            }
         }
 
         // 3. Clip region — TextBox content is clipped to the box sideways; below
@@ -9413,6 +9835,9 @@ cells={} pitch={:.2} text={:?}",
         // roundRect corner pushes the inscribed text area inward by r·(1−cos 45°) ≈ 0.293r per side.
         let corner_inset = text_box
             .corner_radius
+            // OXI_TXBX_CALLOUT: the callout's text rectangle is inset like a
+            // roundRect's, by its own adj3 corner (ECMA il = dx1 x 29289 / 100000).
+            .or_else(|| text_box.callout.map(|[_, _, a3]| text_box.width.min(text_box.height) * a3 / 100000.0))
             .map(|r| r * (1.0 - std::f32::consts::FRAC_1_SQRT_2))
             .unwrap_or(0.0);
         // S761 (2026-07-08): the preset-geometry text rectangle applies on ALL
@@ -9463,6 +9888,7 @@ cells={} pitch={:.2} text={:?}",
             box_page.section_grid_runs.clear();
             box_page.grid_char_runs.clear();
             box_page.doc_grid_lines_and_chars = false;
+            IN_VERT_TEXT_BOX.with(|c| c.set(true));
             let (recipes, columns) = self.vertical_section_columns(
                 &box_page, 0, box_page.blocks.len(), height,
                 self.default_font_size.max(1.0), true,
@@ -9482,6 +9908,7 @@ cells={} pitch={:.2} text={:?}",
                     abs_y + inset_t + v_corner_inset + outline,
                 ));
             }
+            IN_VERT_TEXT_BOX.with(|c| c.set(false));
             elements.push(LayoutElement::new(abs_x, abs_y, text_box.width,
                 text_box.height, LayoutContent::ClipEnd));
             return elements;
@@ -9917,6 +10344,12 @@ cells={} pitch={:.2} text={:?}",
                     LayoutContent::BoxRect { .. }
                     | LayoutContent::ClipStart
                     | LayoutContent::ClipEnd => {}
+                    // the box's own outline (ellipse / callout background) is not content
+                    LayoutContent::VectorPath { .. }
+                        if (el.x - abs_x).abs() < 0.01 && (el.y - abs_y).abs() < 0.01
+                            && (el.width - text_box.width).abs() < 0.01
+                            && (el.height - text_box.height).abs() < 0.01
+                            && !crate::env_flag!("OXI_TXBX_CALLOUT_DISABLE") => {}
                     _ => {
                         if el.y < min_y {
                             min_y = el.y;
@@ -9928,7 +10361,19 @@ cells={} pitch={:.2} text={:?}",
                     }
                 }
             }
-            if min_y < max_y {
+            // OXI_TXBX_CTR_FLOW (2026-11-03, default ON, opt-out _DISABLE): Word centres
+            // (or bottom-aligns) the LAID-OUT paragraphs -- empty ones, the first
+            // paragraph's before and the last one's after included -- not their ink;
+            // content taller than the box stays top-aligned. `_pb_txbx_ctr_content_gen.py`
+            // (200pt box, anchor ctr, Calibri 11, 13.38pt lines): 2 trailing empty
+            // paragraphs lift the text 13.44, 24pt after on the last 12, 24pt before
+            // on the first lowers it 12, 20 trailing empties top-align it.
+            // ja/reports__5373dd8a p2: a frame whose text ends in 34 empty paragraphs
+            // was centred on its ink and drawn 4.9pt low.
+            if !crate::env_flag!("OXI_TXBX_CTR_FLOW_DISABLE") {
+                cursor.cursor_y + if txbx_after_on { txbx_prev_after } else { 0.0 }
+                    - (abs_y + inset_t + v_corner_inset)
+            } else if min_y < max_y {
                 max_y - min_y
             } else {
                 cursor.cursor_y - (abs_y + inset_t + v_corner_inset)
@@ -9944,11 +10389,34 @@ cells={} pitch={:.2} text={:?}",
             for el in elements.iter_mut() {
                 match &el.content {
                     LayoutContent::BoxRect { .. } | LayoutContent::ClipStart => {}
+                    // OXI_TXBX_DASH: the dashed outline's sides are the box, not content
+                    LayoutContent::TableBorder { style: Some(st), .. } if st.starts_with("prst:") => {}
+                    LayoutContent::VectorPath { .. }
+                        if (el.x - abs_x).abs() < 0.01 && (el.y - abs_y).abs() < 0.01
+                            && (el.width - text_box.width).abs() < 0.01
+                            && (el.height - text_box.height).abs() < 0.01
+                            && !crate::env_flag!("OXI_TXBX_CALLOUT_DISABLE") => {}
                     _ => {
                         el.y += v_shift;
                     }
                 }
             }
+        }
+
+        // OXI_TXBX_OVERFLOW_MID (2026-11-03, default ON, opt-out _DISABLE): of the lines
+        // running past a text box (S1644 draws them), Word draws only those whose
+        // vertical MIDDLE is at or above the box's inner bottom (height - bIns), whatever
+        // vertOverflow says. `_pb_txbx_overflow_clip_gen.py` (18pt exact lines, bIns
+        // 0 / 3.6 / 10, box heights 92..120 in 2pt steps, overflow / clip / ellipsis):
+        // every arm's last drawn line is the last whose middle clears the inner bottom.
+        // ja/reference__22761439's two 660pt column boxes of «○○○» lines: Word stops at
+        // 804 / 811, Oxi ran them on to 1100 across the footer.
+        if !crate::env_flag!("OXI_TXBX_OVERFLOW_MID_DISABLE") && !text_box.vertical_text {
+            let inner_bottom = abs_y + text_box.height - inset_b - v_corner_inset;
+            elements.retain(|el| match &el.content {
+                LayoutContent::Text { .. } => el.y + el.height / 2.0 <= inner_bottom + 0.01,
+                _ => true,
+            });
         }
 
         // S662 (2026-06-24): bodyPr@compatLnSpc="1" textbox text vertical DY.
@@ -10047,6 +10515,27 @@ cells={} pitch={:.2} text={:?}",
                     _ => None,
                 }))
             }
+            // OXI_CLNSP_UNION (2026-11-03, default ON, opt-out _DISABLE): a line that
+            // mixes faces takes the union of their chain boxes -- the largest ascent
+            // over the largest descent -- not the box of its largest run alone.
+            // `_pb_clnsp_mixed_union_gen.py` (compatLnSpc 1, UD デジタル 教科書体 NP-B
+            // 10 + Arial 14, auto / atLeast 0): Word's next line drops 1.56 when the
+            // UD run leads the Arial one (the same growth as a body line);
+            // ja/administrative__0ba21b0c's framed «～個人懇談会～Reunião de pais e mestres».
+            let clnsp_union = !crate::env_flag!("OXI_CLNSP_UNION_DISABLE");
+            fn clnsp_line_faces(elements: &[LayoutElement], idxs: &[usize]) -> Vec<(String, f32)> {
+                let mut out: Vec<(String, f32)> = Vec::new();
+                for &i in idxs {
+                    if let LayoutContent::Text { font_family: Some(f), font_size, text, .. } = &elements[i].content {
+                        let symbolic = matches!(f.as_str(), "Symbol" | "Wingdings" | "Wingdings 2" | "Wingdings 3")
+                            || text.chars().all(|c| ('\u{E000}'..='\u{F8FF}').contains(&c) || c.is_whitespace());
+                        if !symbolic && !out.iter().any(|(g, z)| g == f && (*z - *font_size).abs() < 0.01) {
+                            out.push((f.clone(), *font_size));
+                        }
+                    }
+                }
+                out
+            }
             // group text elements into lines by y
             use std::collections::BTreeMap;
             let mut lines: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
@@ -10123,8 +10612,12 @@ cells={} pitch={:.2} text={:?}",
                         .get(line_no)
                         .map(|(r, v, sb, a, sh)| (r.clone(), *v, *sb, *a, *sh))
                         .unwrap_or((None, None, 0.0, 0.0, (0.0, 0.0)));
-                    let (asc, desc) =
-                        self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs));
+                    let (asc, desc) = if clnsp_union {
+                        self.clnsp_line_box_union(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs),
+                            &clnsp_line_faces(&elements, idxs))
+                    } else {
+                        self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs))
+                    };
                     let (asc, desc) = (asc + sh_t, desc + sh_b);
                     let cur_base = {
                         let i0 = idxs[0];
@@ -10191,7 +10684,12 @@ cells={} pitch={:.2} text={:?}",
                         .first()
                         .map(|(r, v, _, _, sh)| (r.clone(), *v, sh.0))
                         .unwrap_or((None, None, 0.0));
-                    self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs0)).0 + sh_t
+                    if clnsp_union {
+                        self.clnsp_line_box_union(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs0),
+                            &clnsp_line_faces(&elements, idxs0)).0 + sh_t
+                    } else {
+                        self.clnsp_line_box(rule.as_deref(), val, fs, clnsp_line_face(&elements, idxs0)).0 + sh_t
+                    }
                 };
                 let mode = std::env::var("OXI_CLNSP_ANCHOR").unwrap_or_default();
                 let anchor = if mode == "mean" {
@@ -11931,6 +12429,21 @@ cells={} pitch={:.2} text={:?}",
     /// footer's own height, before the bottom-margin clamp -- the height the
     /// footer is painted at (OXI_FTR_TBL_PAINT_DIST).
     fn s755_footer_geom_stack(&self, blocks: &[Block], page: &Page) -> (f32, bool, f32) {
+        // OXI_NEGBOTTOM_FOOTER (2026-11-02, default ON, opt-out _DISABLE): a negative
+        // bottom margin is absolute -- the footer never pushes the body up.
+        // `_pb_negbottom_footer_gen.py` (80 exact 12pt lines, footer 510): bottom
+        // -284 holds 62 lines with 0, 1 or 3 footer lines (last line 817.1 over the
+        // footer at 778.8..); +284 holds 61 / 61 / 59; -1134 holds 59 for all three.
+        // ja/correspondence__04a3e3e1 (bottom -284, page-number footer): Word runs
+        // page 1 to 825.7, Oxi pushed two empty paragraphs and the page-2 box down.
+        if page.margin_bottom_negative && !crate::env_flag!("OXI_NEGBOTTOM_FOOTER_DISABLE") {
+            let (_, _, stack) = self.s755_footer_geom_stack_inner(blocks, page);
+            return (page.margin.bottom, false, stack);
+        }
+        self.s755_footer_geom_stack_inner(blocks, page)
+    }
+
+    fn s755_footer_geom_stack_inner(&self, blocks: &[Block], page: &Page) -> (f32, bool, f32) {
         // S894 (2026-07-17, default ON, opt-out OXI_S894_DISABLE): an
         // INK-FREE footer (only empty/whitespace paragraphs — no text, no
         // table, no image/drawing) reserves the BOTTOM MARGIN ONLY, like no
@@ -14190,6 +14703,18 @@ cells={} pitch={:.2} text={:?}",
         if style == "none" || style == "nil" {
             return 0.0;
         }
+        // OXI_CELL_COMPOUND_BORDER (2026-11-02, default ON, opt-out _DISABLE): every
+        // compound / art-like style takes the paragraph-border extent law
+        // (pbdr_stroke_extent; double 3w and triple 5w are unchanged by it).
+        // `_pb_cell_compound_border_gen.py` (one-cell table, top border on
+        // tcBorders and on tblBorders, COM Information(6) of the cell text):
+        // dashDotStroked 3 / 3 / 3 at sz 4 / 12 / 24, thinThickSmallGap 2.25 / 3 / 4.5,
+        // threeDEmboss 2.25 / 3 / 6 (0.75-quantised readings of w + 1.5 and
+        // max(2w, w + 1.5)); single w, double 3w. ja/administrative__0ba21b0c: a
+        // dashDotStroked sz4 row top, Word's text 3pt under it, Oxi 0.5.
+        if !crate::env_flag!("OXI_CELL_COMPOUND_BORDER_DISABLE") {
+            return crate::layout::paragraph::pbdr_stroke_extent(style, width);
+        }
         width
             * match style {
                 "double" => 3.0,
@@ -15978,6 +16503,58 @@ cells={} pitch={:.2} text={:?}",
         self.ruby_expansion_for_runs(&para.runs, fs, &para.style)
     }
 
+    /// OXI_LINE_UNION_BOX: the line's union box -- the largest ascent over the
+    /// largest descent about the shared baseline, 83/64 faces centred -- or 0.0
+    /// when the line carries no 83/64 face or a run that the plain fold cannot
+    /// size (position, emphasis, run border, 縦中横, inline object).
+    pub(crate) fn line_union_box(&self, line: &Line, para_style: &ParagraphStyle, para_font_size: f32) -> f32 {
+        if !crate::env_flag!("OXI_LINE_UNION_BOX_DISABLE")
+            && line.fragments.iter().any(|f| {
+                !f.text.trim().is_empty()
+                    && self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font()
+            })
+        {
+            let (mut ua, mut ud) = (0.0_f32, 0.0_f32);
+            let mut plain = true;
+            for frag in &line.fragments {
+                if Self::s1298_glyphless(frag) || frag.text.trim().is_empty() {
+                    continue;
+                }
+                if frag.style.position.is_some() || frag.style.emphasis_mark.is_some()
+                    || frag.style.run_border.is_some() || frag.style.vert_in_horz
+                    || frag.style.inline_object_image.is_some()
+                {
+                    plain = false;
+                    break;
+                }
+                let fs = frag.style.font_size.unwrap_or(para_font_size);
+                let m = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
+                // Exact faces: the union is measured, not pixel-rounded (a Segoe UI
+                // Symbol ✔ beside BIZ UD明朝 12pt is 12.95 + 3.22 = 16.17 in Word;
+                // the rounded sets gave 15.94, under the symbol face's own 15.96).
+                let (a, d) = if m.is_cjk_83_64_font() {
+                    let win = (m.win_ascent + m.win_descent) * fs;
+                    let nat = win * (83.0 / 64.0);
+                    let a = m.win_ascent * fs + (nat - win) * 0.5;
+                    (a, nat - a)
+                } else {
+                    // the face's no-grid line (the S1119 fold's own measure: Cambria
+                    // Math 21.09 at 18pt), not its hhea/win box -- Cambria Math's
+                    // 5.6-em hhea box opened a 9pt non-breaking hyphen's line 40pt
+                    let a = m.baseline_ascent() * fs;
+                    let nat = m.word_line_height_no_grid(fs);
+                    (a, (nat - a).max(0.0))
+                };
+                ua = ua.max(a + self.symbol_chain_extra(&frag.text, m, fs));
+                ud = ud.max(d);
+            }
+            if plain {
+                return ua + ud;
+            }
+        }
+        0.0
+    }
+
     fn cjk_baseline_union(&self, line: &Line, para_style: &ParagraphStyle, para_font_size: f32) -> f32 {
         if crate::env_flag!("OXI_CJK_BASELINE_UNION_DISABLE") {
             return 0.0;
@@ -16184,8 +16761,19 @@ cells={} pitch={:.2} text={:?}",
             let s1305 = !para_style.snap_to_grid
                 && !crate::env_flag!("OXI_S1305_DISABLE")
                 && !crate::env_flag!("OXI_S1306_DISABLE");
+            // OXI_ATL0_EMPTY_ASCII (2026-11-03, default ON, opt-out _DISABLE): a
+            // `line=0 atLeast` line does not snap to a typed grid, so its EMPTY line is
+            // sized like a no-grid one -- by the mark's ASCII face. `_pb_empty_atl0_typed_grid_gen.py`
+            // (slice of ja/administrative__05e3143c, docGrid lines 360, docDefaults
+            // Century / ＭＳ 明朝 10.5): empty, bordered-mark and anchor-only paragraphs
+            // all add 12.60 (Century), 13.56 once the mark names ascii ＭＳ 明朝;
+            // Oxi added ＭＳ 明朝's 13.61 to every arm.
+            let atl0_ascii = para_style.line_spacing_rule.as_deref() == Some("atLeast")
+                && para_style.line_spacing.map_or(false, |v| v == 0.0)
+                && !crate::env_flag!("OXI_ATL0_EMPTY_ASCII_DISABLE");
             let s949_ascii = grid_pitch.is_none()
                 || s1305
+                || atl0_ascii
                 || (grid_no_type
                     && !self.doc_body_has_real_cjk
                     && !crate::env_flag!("OXI_S949_DISABLE"));
@@ -16518,49 +17106,9 @@ cells={} pitch={:.2} text={:?}",
         // (max ascent + max descent about the shared baseline, 83/64 faces centred)
         // feeds the line ADVANCE here; mix_split's 23.03 is reached by neither
         // fold alone.
-        if !crate::env_flag!("OXI_LINE_UNION_BOX_DISABLE")
-            && line.fragments.iter().any(|f| {
-                !f.text.trim().is_empty()
-                    && self.metrics_for_text(&f.text, &f.style, para_style).is_cjk_83_64_font()
-            })
-        {
-            let (mut ua, mut ud) = (0.0_f32, 0.0_f32);
-            let mut plain = true;
-            for frag in &line.fragments {
-                if Self::s1298_glyphless(frag) || frag.text.trim().is_empty() {
-                    continue;
-                }
-                if frag.style.position.is_some() || frag.style.emphasis_mark.is_some()
-                    || frag.style.run_border.is_some() || frag.style.vert_in_horz
-                    || frag.style.inline_object_image.is_some()
-                {
-                    plain = false;
-                    break;
-                }
-                let fs = frag.style.font_size.unwrap_or(para_font_size);
-                let m = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
-                // Exact faces: the union is measured, not pixel-rounded (a Segoe UI
-                // Symbol ✔ beside BIZ UD明朝 12pt is 12.95 + 3.22 = 16.17 in Word;
-                // the rounded sets gave 15.94, under the symbol face's own 15.96).
-                let (a, d) = if m.is_cjk_83_64_font() {
-                    let win = (m.win_ascent + m.win_descent) * fs;
-                    let nat = win * (83.0 / 64.0);
-                    let a = m.win_ascent * fs + (nat - win) * 0.5;
-                    (a, nat - a)
-                } else {
-                    // the face's no-grid line (the S1119 fold's own measure: Cambria
-                    // Math 21.09 at 18pt), not its hhea/win box -- Cambria Math's
-                    // 5.6-em hhea box opened a 9pt non-breaking hyphen's line 40pt
-                    let a = m.baseline_ascent() * fs;
-                    let nat = m.word_line_height_no_grid(fs);
-                    (a, (nat - a).max(0.0))
-                };
-                ua = ua.max(a + self.symbol_chain_extra(&frag.text, m, fs));
-                ud = ud.max(d);
-            }
-            if plain && ua + ud > max_combined {
-                max_combined = ua + ud;
-            }
+        let union_box = self.line_union_box(line, para_style, para_font_size);
+        if union_box > max_combined {
+            max_combined = union_box;
         }
         let run_base = if !crate::env_flag!("OXI_S1361_DISABLE") && max_combined > 0.0 {
             max_combined
@@ -16813,7 +17361,10 @@ cells={} pitch={:.2} text={:?}",
                     && (grid_pitch.is_none() || grid_no_type)
                     && !crate::env_flag!("OXI_S887_DISABLE")
                 {
-                    return hhea_natural_max.max(val);
+                    // OXI_ATLEAST0_UNION: a CJK run on the line still unions its box
+                    // in (a text box in a Latin-bodied document reaches here).
+                    let union_floor = if crate::env_flag!("OXI_ATLEAST0_UNION_DISABLE") { 0.0 } else { union_box };
+                    return hhea_natural_max.max(val).max(union_floor);
                 }
                 if val == 0.0 {
                     // S1145 (2026-08-16, opt-out OXI_S1145_DISABLE): R55's
@@ -16842,8 +17393,16 @@ cells={} pitch={:.2} text={:?}",
                     // Info6's 0.75; hhea x 83/64 would be 21.8 / 24.9 / 29.1 / 33.2.
                     // educational__0214ac95: three 14pt empties (AR P丸ゴシック体E,
                     // which Word substitutes with 游ゴシック) drifted +5.5 each.
+                    // OXI_ATLEAST0_UNION (2026-11-03, default ON, opt-out _DISABLE): a
+                    // `line=0 atLeast` line is the natural line, so a mixed line takes the
+                    // same union box (largest ascent over largest descent, 83/64 faces
+                    // centred) as the auto line. `_pb_latin_run_ea_lineh_gen.py` PB_UD
+                    // (UD デジタル 教科書体 NP-B 10 + Arial 14): Word grows the line 1.56
+                    // under auto and atLeast 0 alike; Oxi grew it under auto only (16.1).
+                    // ja/administrative__0ba21b0c's framed heading «～個人懇談会～Reunião…».
+                    let union_floor = if crate::env_flag!("OXI_ATLEAST0_UNION_DISABLE") { 0.0 } else { union_box };
                     if hhea_natural_max > 0.0 && !crate::env_flag!("OXI_S1145_DISABLE") {
-                        return if dominant_cjk_83_64 {
+                        return union_floor.max(if dominant_cjk_83_64 {
                             if s1322_win_natural > 0.0
                                 && !crate::env_flag!("OXI_S1322_DISABLE")
                             {
@@ -16857,7 +17416,7 @@ cells={} pitch={:.2} text={:?}",
                             }
                         } else {
                             hhea_natural_max
-                        };
+                        });
                     }
                     return base;
                 }
@@ -18719,9 +19278,25 @@ cells={} pitch={:.2} text={:?}",
                                     .is_cjk_83_64_font()
                             });
                         if s1354 {
+                            // OXI_GRID_WS_CENTER (2026-11-03, default ON, opt-out _DISABLE): a
+                            // whitespace-only run does not size the box Word centres in the
+                            // grid cell(s). `_pb_grid_space_center_gen.py` (slice of
+                            // ja/administrative__05e3143c, lines grid 18pt, 12pt text): a 16pt
+                            // «　» before or after it, a 16pt ASCII space, a 20pt «　» all leave
+                            // the baseline where the 12pt line has it; a 16pt «さ» moves it.
+                            // Only when a visible run is itself a CJK 83/64 face: a Latin line
+                            // whose one CJK-face run is its whitespace keeps that run's box
+                            // (db9ca183's «(Example of citation…)» dropped 5pt without it).
+                            let ws_skip = !crate::env_flag!("OXI_GRID_WS_CENTER_DISABLE")
+                                && line.fragments.iter().any(|f| {
+                                    !f.text.trim().is_empty()
+                                        && self.metrics_for_text(&f.text, &f.style, para_style)
+                                            .is_cjk_83_64_font()
+                                });
                             let line_fs = line
                                 .fragments
                                 .iter()
+                                .filter(|f| !(ws_skip && f.text.trim().is_empty()))
                                 .filter(|f| {
                                     self.metrics_for_text(&f.text, &f.style, para_style)
                                         .is_cjk_83_64_font()
@@ -18742,6 +19317,7 @@ cells={} pitch={:.2} text={:?}",
                             let line_box = if !crate::env_flag!("OXI_S1354_WINBOX_DISABLE") {
                                 line.fragments
                                     .iter()
+                                    .filter(|f| !(ws_skip && f.text.trim().is_empty()))
                                     .map(|f| {
                                         let m = &*self.metrics_for_text(&f.text, &f.style, para_style);
                                         if m.is_cjk_83_64_font() {
@@ -20332,12 +20908,22 @@ cells={} pitch={:.2} text={:?}",
             && self.balance_single_byte_double_byte_width
             && self.compress_punctuation;
         // S1082 estimate mirror of the render-loop gate.
-        let s1082_cell_shrink = !self.doc_body_has_real_cjk
+        let s1082_cell_shrink = (!self.doc_body_has_real_cjk
+            || (!crate::env_flag!("OXI_LATIN_PARA_SHRINK_DISABLE")
+                && para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk))))
             && self.compat_mode >= 15
             && self.compat_mode_explicit
             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
             && !crate::env_flag!("OXI_S1082_DISABLE")
             && !crate::env_flag!("OXI_S825_DISABLE");
+        // OXI_CELL_S1585_GAP estimate mirror (see table_fit.rs).
+        let cell_s1585_gap = self.doc_body_has_real_cjk
+            && self.compat_mode >= 15
+            && self.compat_mode_explicit
+            && grid_char_pitch.is_none()
+            && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+            && !crate::env_flag!("OXI_CELL_S1585_GAP_DISABLE")
+            && !crate::env_flag!("OXI_S1585_DISABLE");
         // S1174 estimate mirror -- must match the render loop or pagination and
         // drawing disagree about how many lines a cell holds.
         // Estimate mirror of the corrected gate: alignment first, compatibility second.
@@ -20750,6 +21336,26 @@ cells={} pitch={:.2} text={:?}",
                             .map(|c| c.natural_advance)
                             .sum::<f32>())
                             * 0.25
+                    } else {
+                        0.0
+                    };
+                let effective_wrap = effective_wrap
+                    + if cell_s1585_gap && kinsoku::is_cjk(ch) && ch != '\u{3000}' {
+                        let solid = |c: char| kinsoku::is_cjk(c) && c != '\u{3000}';
+                        let mut g = 0usize;
+                        let mut prev: Option<char> = None;
+                        for c in current_line_chars.iter().chain(buf_chars.iter())
+                            .map(|c| c.ch).chain(std::iter::once(ch))
+                        {
+                            if let Some(a) = prev {
+                                if (solid(a) && c.is_ascii_alphanumeric())
+                                    || (a.is_ascii_alphanumeric() && solid(c)) {
+                                    g += 1;
+                                }
+                            }
+                            prev = Some(c);
+                        }
+                        if g == 0 { 0.0 } else { 1.5 * (font_size / 4.0) * g as f32 / (g as f32 + 2.0) }
                     } else {
                         0.0
                     };
@@ -23033,6 +23639,9 @@ cells={} pitch={:.2} text={:?}",
                 self.cellpair_active() && para.runs.iter().any(|r| !r.text.trim().is_empty());
             let ignore_ascii_spaces = in_cell && !self.doc_body_has_real_cjk
                 && para.runs.iter().any(|r| !r.text.trim().is_empty());
+            // OXI_CELL_WS_HEIGHT estimate mirror (see table_fit.rs).
+            let cell_ws_est = in_cell && !crate::env_flag!("OXI_CELL_WS_HEIGHT_DISABLE")
+                && para.runs.iter().any(|r| r.text.chars().any(|c| !c.is_whitespace()));
             // S986 (Task reports__00253cd4): a bookmark anchor is metadata, not
             // glyph content. The parser makes an empty default-styled anchor Run
             // for `<w:bookmarkStart>`; in a CELL it was folded into
@@ -23097,6 +23706,11 @@ cells={} pitch={:.2} text={:?}",
                 }
                 if ignore_ascii_spaces && !run.text.is_empty()
                     && run.text.chars().all(|c| c == ' ' || c == '\t')
+                {
+                    continue;
+                }
+                if cell_ws_est && !run.text.is_empty()
+                    && run.text.chars().all(|c| c == ' ' || c == '\u{3000}')
                 {
                     continue;
                 }
@@ -23252,6 +23866,19 @@ cells={} pitch={:.2} text={:?}",
                 {
                     metrics.natural_line_height_hhea(font_size) * eff_ls.unwrap_or(1.0)
                 } else { lh };
+                // OXI_EST_RUN_BORDER (2026-11-03, default ON, opt-out _DISABLE): S1453's
+                // run-border growth (twice the drawn width + space) in the estimate too --
+                // the line emitter has it, the estimate did not, so a footer stack built
+                // from the estimate sat 1pt short and drew a bordered footer line low.
+                // `_pb_ftr_snap0_line_gen.py` bdr arms (w:bdr sz 4 on a 14pt footer line):
+                // Word 0.72 above the plain arm, Oxi 0.50 below it (+1.02 in every grid /
+                // snap arm). ja/creative__13152ea1's footer.
+                let lh = if !in_cell
+                    && !matches!(eff_lr, Some("exact"))
+                    && !crate::env_flag!("OXI_EST_RUN_BORDER_DISABLE")
+                {
+                    lh + 2.0 * Self::run_border_height_pad(&run.style)
+                } else { lh };
                 s1099_lhs.push((s1099_ri, lh));
                 if lh > max_line_height {
                     max_line_height = lh;
@@ -23382,6 +24009,18 @@ cells={} pitch={:.2} text={:?}",
                     let extra = max_line_height * (1.0 - 1.0 / factor);
                     max_line_height = object_h + extra;
                 }
+            }
+            // OXI_CELL_SHADOW_LINE estimate mirror (see table_fit.rs): every line of a
+            // shadowed cell paragraph grows by the shadow's extents.
+            if in_cell
+                && (grid_pitch.is_none() || para.style.line_spacing_rule.as_deref() == Some("atLeast"))
+                && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto") | Some("atLeast"))
+                && !(para.style.line_spacing_rule.as_deref() == Some("atLeast")
+                    && max_line_height <= para.style.line_spacing.unwrap_or(0.0) + 0.01)
+                && !crate::env_flag!("OXI_CELL_SHADOW_LINE_DISABLE")
+            {
+                let (t, b) = self.text_shadow_ext(para.runs.iter().map(|r| (&r.style, r.text.as_str())), &para.style);
+                max_line_height += t + b;
             }
             // S1099 (2026-08-08, default ON, opt-out `OXI_S1099_DISABLE`): the "max_lh x
             // line_count" model over-counts when the TALLEST run is a single
@@ -23717,6 +24356,37 @@ cells={} pitch={:.2} text={:?}",
     /// (24.72, old 15.49); first baselines of Arial / Calibri / TNR within 0.1.
     /// Word gives the same results with and without compatLnSpc (compat 12/14/15,
     /// typed grid too).
+    /// OXI_CLNSP_UNION: the chain box of a line carrying several faces -- each
+    /// face's natural (ascent, descent), unioned about the shared baseline, then
+    /// the line rule applied to the union as `clnsp_line_box` applies it to one.
+    pub(crate) fn clnsp_line_box_union(
+        &self,
+        rule: Option<&str>,
+        val: Option<f32>,
+        fs: f32,
+        face: Option<String>,
+        faces: &[(String, f32)],
+    ) -> (f32, f32) {
+        if faces.len() < 2 || matches!(rule, Some("exact")) {
+            return self.clnsp_line_box(rule, val, fs, face);
+        }
+        let (mut a, mut d) = self.clnsp_line_box(None, None, fs, face.clone());
+        for (f, z) in faces {
+            let (fa, fd) = self.clnsp_line_box(None, None, *z, Some(f.clone()));
+            a = a.max(fa);
+            d = d.max(fd);
+        }
+        let font_law = !crate::env_flag!("OXI_CLNSP_FONT_LAW_DISABLE");
+        match (rule, val) {
+            (Some("atLeast"), Some(v)) => ((a + d).max(v) - d, d),
+            (_, v) if font_law => {
+                let mult = v.filter(|v| *v > 0.0).unwrap_or(1.0);
+                (a, (a + d) * mult - a)
+            }
+            _ => (a, d),
+        }
+    }
+
     pub(crate) fn clnsp_line_box(
         &self,
         rule: Option<&str>,

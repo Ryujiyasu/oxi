@@ -1067,6 +1067,7 @@ impl OoxmlParser {
                     footer_even: footer_even.clone(),
                     title_pg: section.properties.title_pg,
                     even_odd_hf,
+                    hf_text_boxes: hf_text_boxes.clone(),
                 });
                 last.section_grid_runs.push(crate::ir::SectionGridRun {
                         block_start: last.blocks.len(),
@@ -1206,6 +1207,7 @@ impl OoxmlParser {
                     footer_even: footer_even.clone(),
                     title_pg: section.properties.title_pg,
                     even_odd_hf,
+                    hf_text_boxes: hf_text_boxes.clone(),
                 }];
                 // S735: seed the grid-run list with the first section's pitch.
                 let grid_runs = vec![(0usize, section.properties.grid_line_pitch)];
@@ -1215,6 +1217,7 @@ impl OoxmlParser {
                     size: section.properties.page_size,
                     margin: section.properties.margin,
                     margin_top_negative: section.properties.margin_top_negative,
+                    margin_bottom_negative: section.properties.margin_bottom_negative,
                     grid_line_pitch: section.properties.grid_line_pitch,
                     grid_char_pitch: section.properties.grid_char_pitch,
                     grid_char_space_raw: section.properties.grid_char_space_raw,
@@ -3229,6 +3232,7 @@ fn parse_body(
         page_size: sectionless_page,
         margin: sectionless_margin,
         margin_top_negative: false,
+        margin_bottom_negative: false,
         grid_line_pitch: sectionless_grid,
         grid_char_pitch: None,
         grid_char_space_raw: None,
@@ -8047,6 +8051,9 @@ fn parse_drawing(
     let mut font_ref_color: Option<String> = None;
     let mut stroke_color: Option<String> = None;
     let mut stroke_width: Option<f32> = None;
+    let mut stroke_cmpd: Option<String> = None;
+    let mut stroke_dash: Option<String> = None;
+    let mut outer_shadow: Option<(f32, f32, String, f32)> = None;
     let mut shape_text_blocks: Vec<Block> = Vec::new();
     let mut rotation: Option<f32> = None;
     let mut flip_h = false;
@@ -8057,6 +8064,7 @@ fn parse_drawing(
     let mut has_no_fill = false;
     let mut has_no_stroke = false;
     let mut corner_radius_adj: Option<f32> = None; // avLst adj value (0-100000 scale)
+    let mut shape_adj_map: Vec<(String, f32)> = Vec::new(); // OXI_TXBX_CALLOUT
     let mut gradient_stops: Vec<GradientStop> = Vec::new();
     let mut gradient_angle: Option<f32> = None;
     // Text body insets (from bodyPr lIns/rIns/tIns/bIns, in EMU)
@@ -8324,6 +8332,67 @@ fn parse_drawing(
                             }
                         }
                     }
+                    // OXI_TXBX_SHADOW (2026-11-03, default ON, opt-out _DISABLE): an outer
+                    // shadow is the shape's silhouette (outline included) moved dist
+                    // along dir (clockwise from +x, y down), in its colour at its
+                    // alpha; with blurRad the 50% edge stays on that silhouette.
+                    // `_pb_shape_cmpd_shadow_gen.py`: dist 9 at 315/45/135/0 deg ->
+                    // (+-6.36, +-6.36) / (9, 0); alpha 40% black over white -> 154.
+                    // ja/reports__5373dd8a's masthead roundRect.
+                    "outerShdw" if !crate::env_flag!("OXI_TXBX_SHADOW_DISABLE") => {
+                        let (mut dist, mut dir) = (0.0f32, 0.0f32);
+                        for attr in e.attributes().flatten() {
+                            let v = String::from_utf8_lossy(&attr.value).parse::<f32>().unwrap_or(0.0);
+                            match local_name(attr.key.as_ref()).as_str() {
+                                "dist" => dist = v / 12700.0,
+                                "dir" => dir = v / 60000.0,
+                                _ => {}
+                            }
+                        }
+                        let (mut col, mut alpha) = (String::from("000000"), 1.0f32);
+                        let mut sd = 1;
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Start(se)) | Ok(Event::Empty(se)) if {
+                                    let sl = local_name(se.name().as_ref());
+                                    matches!(sl.as_str(), "srgbClr" | "schemeClr" | "prstClr" | "sysClr" | "alpha")
+                                } => {
+                                    let sl = local_name(se.name().as_ref());
+                                    for attr in se.attributes().flatten() {
+                                        let k = local_name(attr.key.as_ref());
+                                        let v = String::from_utf8_lossy(&attr.value).to_string();
+                                        match (sl.as_str(), k.as_str()) {
+                                            ("srgbClr", "val") => col = v,
+                                            ("sysClr", "lastClr") => col = v,
+                                            ("schemeClr", "val") => {
+                                                if let Some(h) = ctx.theme.resolve(&v) { col = h.clone(); }
+                                            }
+                                            ("prstClr", "val") => {
+                                                col = if v == "white" { "FFFFFF".into() } else { "000000".into() };
+                                            }
+                                            ("alpha", "val") => alpha = v.parse::<f32>().unwrap_or(100000.0) / 100000.0,
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                Ok(Event::Start(_)) => sd += 1,
+                                Ok(Event::End(se)) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if sl == "outerShdw" { break; }
+                                    if !matches!(sl.as_str(), "srgbClr" | "schemeClr" | "prstClr" | "sysClr" | "alpha") {
+                                        sd -= 1;
+                                        if sd == 0 { break; }
+                                    }
+                                }
+                                Ok(Event::Eof) | Err(_) => break,
+                                _ => {}
+                            }
+                        }
+                        let a = dir.to_radians();
+                        outer_shadow = Some((dist * a.cos(), dist * a.sin(), col, alpha));
+                        // We consumed outerShdw's End, decrement outer depth
+                        depth -= 1;
+                    }
                     // Shape line as Start element — may contain srgbClr child
                     "ln" => {
                         // S839: per-shape capture of THIS a:ln's values (the
@@ -8332,6 +8401,10 @@ fn parse_drawing(
                         let mut s839_ln_nofill = false;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
+                            if key == "cmpd" {
+                                let v = String::from_utf8_lossy(&attr.value).to_string();
+                                stroke_cmpd = (v != "sng").then_some(v);
+                            }
                             if key == "w" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 stroke_width = val.parse::<f32>().ok().map(|v| v / 12700.0);
@@ -8429,6 +8502,13 @@ fn parse_drawing(
                                                 }
                                             }
                                         }
+                                    } else if sl == "prstDash" {
+                                        for attr in se.attributes().flatten() {
+                                            if local_name(attr.key.as_ref()) == "val" {
+                                                let v = String::from_utf8_lossy(&attr.value).to_string();
+                                                stroke_dash = (v != "solid").then_some(v);
+                                            }
+                                        }
                                     } else if sl == "noFill" {
                                         s839_ln_nofill = true;
                                         has_no_stroke = true;
@@ -8467,6 +8547,91 @@ fn parse_drawing(
                         // We consumed ln's End, decrement outer depth
                         depth -= 1;
                     }
+                    // OXI_PATT_MEAN (2026-11-02, default ON, opt-out _DISABLE): a
+                    // percentage pattern (<a:pattFill prst="pct10">) is foreground
+                    // ink on N% of the cells. Neither renderer draws hatches, and the
+                    // fgClr's colour reached the plain-fill arms below as a SOLID fill
+                    // -- ja/reports__1fd371a8's masthead (pct10, windowText on window)
+                    // came out solid black and hid its black title. Paint the
+                    // area-weighted mean, as the gradient arm does (dml::average).
+                    // Other presets have no density in their name and keep the old path.
+                    "pattFill" if !crate::env_flag!("OXI_PATT_MEAN_DISABLE")
+                        && e.attributes().flatten().any(|a| local_name(a.key.as_ref()) == "prst"
+                            && String::from_utf8_lossy(&a.value).starts_with("pct")) =>
+                    {
+                        let pct = e.attributes().flatten()
+                            .find(|a| local_name(a.key.as_ref()) == "prst")
+                            .and_then(|a| String::from_utf8_lossy(&a.value)[3..].parse::<f32>().ok())
+                            .unwrap_or(50.0)
+                            .clamp(0.0, 100.0) / 100.0;
+                        let mut fg: Option<String> = None;
+                        let mut bg: Option<String> = None;
+                        let mut slot = 0u8; // 1 = fgClr, 2 = bgClr
+                        let mut pf_depth = 1;
+                        loop {
+                            let (se, start) = match reader.read_event() {
+                                Ok(Event::Start(se)) => (se.into_owned(), true),
+                                Ok(Event::Empty(se)) => (se.into_owned(), false),
+                                Ok(Event::End(se)) => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if sl == "fgClr" || sl == "bgClr" { slot = 0; }
+                                    pf_depth -= 1;
+                                    if pf_depth == 0 { break; }
+                                    continue;
+                                }
+                                Ok(Event::Eof) => break,
+                                _ => continue,
+                            };
+                            let sl = local_name(se.name().as_ref());
+                            match sl.as_str() {
+                                "fgClr" | "bgClr" => {
+                                    if start {
+                                        slot = if sl == "fgClr" { 1 } else { 2 };
+                                        pf_depth += 1;
+                                    }
+                                }
+                                "srgbClr" | "sysClr" | "schemeClr" if slot != 0 => {
+                                    let key = if sl == "sysClr" { "lastClr" } else { "val" };
+                                    let raw = se.attributes().flatten()
+                                        .find(|a| local_name(a.key.as_ref()) == key)
+                                        .map(|a| String::from_utf8_lossy(&a.value).to_string());
+                                    let base = match (sl.as_str(), raw) {
+                                        ("schemeClr", Some(v)) => ctx.theme.resolve(&v).cloned(),
+                                        (_, v) => v,
+                                    };
+                                    let color = match (base, start) {
+                                        (Some(b), true) => Some(parse_color_modifiers(reader, &b, &sl)),
+                                        (Some(b), false) => Some(b),
+                                        (None, true) => {
+                                            // skip the unresolved element's children
+                                            let _ = parse_color_modifiers(reader, "000000", &sl);
+                                            None
+                                        }
+                                        (None, false) => None,
+                                    };
+                                    if slot == 1 { fg = color.or(fg); } else { bg = color.or(bg); }
+                                }
+                                _ => {
+                                    if start { pf_depth += 1; }
+                                }
+                            }
+                        }
+                        let rgb = |h: &str| u32::from_str_radix(h.get(..6)?, 16).ok()
+                            .map(|v| [(v >> 16) as f32, ((v >> 8) & 0xFF) as f32, (v & 0xFF) as f32]);
+                        let f = fg.as_deref().and_then(rgb).unwrap_or([0.0; 3]);
+                        let b = bg.as_deref().and_then(rgb).unwrap_or([255.0; 3]);
+                        let mix = |i: usize| (f[i] * pct + b[i] * (1.0 - pct)).round().clamp(0.0, 255.0) as u32;
+                        let mean = format!("{:02X}{:02X}{:02X}", mix(0), mix(1), mix(2));
+                        if let Some(wsp) = s839_wsp.as_mut() {
+                            if wsp.fill.is_none() && !wsp.no_fill {
+                                wsp.fill = Some(mean.clone());
+                            }
+                        }
+                        if shape_fill.is_none() && !has_no_fill {
+                            shape_fill = Some(mean);
+                        }
+                        depth -= 1; // consumed pattFill End
+                    }
                     // Gradient fill
                     "gradFill" => {
                         let mut gf_depth = 1;
@@ -8492,11 +8657,46 @@ fn parse_drawing(
                                                     val.parse::<f32>().ok().map(|v| v / 60000.0);
                                             }
                                         }
+                                    } else if matches!(sl.as_str(), "schemeClr" | "srgbClr" | "sysClr")
+                                        && current_gs_pos.is_some()
+                                        && !crate::env_flag!("OXI_SHAPE_GRAD_MEAN_DISABLE")
+                                    {
+                                        // OXI_SHAPE_GRAD_MEAN: a stop colour with modifiers
+                                        // (<a:schemeClr val="accent1"><a:tint .../>) is a
+                                        // Start element; the loop read only empty srgbClr.
+                                        let key = if sl == "sysClr" { "lastClr" } else { "val" };
+                                        let raw = se.attributes().flatten()
+                                            .find(|a| local_name(a.key.as_ref()) == key)
+                                            .map(|a| String::from_utf8_lossy(&a.value).to_string());
+                                        let base = match (sl.as_str(), raw) {
+                                            ("schemeClr", Some(v)) => ctx.theme.resolve(&v).cloned(),
+                                            (_, v) => v,
+                                        };
+                                        if let Some(base) = base {
+                                            let color = parse_color_modifiers(reader, &base, &sl);
+                                            gradient_stops.push(GradientStop {
+                                                position: current_gs_pos.unwrap_or(0.0),
+                                                color,
+                                            });
+                                            gf_depth -= 1; // its End was consumed
+                                        }
                                     }
                                 }
                                 Ok(Event::Empty(se)) => {
                                     let sl = local_name(se.name().as_ref());
-                                    if sl == "srgbClr" {
+                                    if sl == "schemeClr" && current_gs_pos.is_some()
+                                        && !crate::env_flag!("OXI_SHAPE_GRAD_MEAN_DISABLE")
+                                    {
+                                        let base = se.attributes().flatten()
+                                            .find(|a| local_name(a.key.as_ref()) == "val")
+                                            .and_then(|a| ctx.theme.resolve(&String::from_utf8_lossy(&a.value)).cloned());
+                                        if let Some(color) = base {
+                                            gradient_stops.push(GradientStop {
+                                                position: current_gs_pos.unwrap_or(0.0),
+                                                color,
+                                            });
+                                        }
+                                    } else if sl == "srgbClr" {
                                         if let Some(pos) = current_gs_pos {
                                             for attr in se.attributes().flatten() {
                                                 if local_name(attr.key.as_ref()) == "val" {
@@ -8687,6 +8887,17 @@ fn parse_drawing(
                             match reader.read_event() {
                                 Ok(Event::Start(se)) => {
                                     let sl = local_name(se.name().as_ref());
+                                    // OXI_TXBX_TABLE (2026-11-02, default ON, opt-out _DISABLE):
+                                    // a table inside a text box is a table. This loop read only
+                                    // <w:p>, so every cell paragraph surfaced as a box-level
+                                    // paragraph -- ja/reports__542222d0's 給与格差 table (5 x 5
+                                    // in the framed box) printed one value per line down the box.
+                                    if sl == "tbl" && !crate::env_flag!("OXI_TXBX_TABLE_DISABLE") {
+                                        if let Ok(t) = parse_table(reader, ctx, styles) {
+                                            txbx_blocks.push(Block::Table(t));
+                                        }
+                                        continue;
+                                    }
                                     if sl == "p" {
                                         if let Ok(pr) =
                                             parse_paragraph(reader, ctx, styles, false, false, None)
@@ -9277,6 +9488,21 @@ fn parse_drawing(
                                 corner_radius_adj = Some(val);
                             }
                         }
+                        {
+                            let mut nm = None;
+                            let mut v = None;
+                            for attr in e.attributes().flatten() {
+                                match local_name(attr.key.as_ref()).as_str() {
+                                    "name" => nm = Some(String::from_utf8_lossy(&attr.value).to_string()),
+                                    "fmla" => v = String::from_utf8_lossy(&attr.value).strip_prefix("val ")
+                                        .and_then(|t| t.trim().parse::<f32>().ok()),
+                                    _ => {}
+                                }
+                            }
+                            if let (Some(nm), Some(v)) = (nm, v) {
+                                shape_adj_map.push((nm, v));
+                            }
+                        }
                         if let Some(wsp) = s839_wsp.as_mut() {
                             let mut nm = None;
                             let mut v = None;
@@ -9469,6 +9695,10 @@ fn parse_drawing(
                     "ln" => {
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
+                            if key == "cmpd" {
+                                let v = String::from_utf8_lossy(&attr.value).to_string();
+                                stroke_cmpd = (v != "sng").then_some(v);
+                            }
                             if key == "w" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 stroke_width = val.parse::<f32>().ok().map(|v| v / 12700.0);
@@ -9746,6 +9976,10 @@ fn parse_drawing(
                                     anchor_block_index: 0,
                                     corner_radius: None,
                                     ellipse: false,
+            callout: None,
+            outline_cmpd: None,
+            outer_shadow: None,
+            outline_dash: None,
                                     inset_left: text_inset_left,
                                     inset_right: text_inset_right,
                                     inset_top: text_inset_top,
@@ -9786,6 +10020,7 @@ fn parse_drawing(
                                     stroke_width: w.ln_w.unwrap_or(0.75).max(0.25),
                                     is_line: is_line && !s1120_curve,
                                     path: s1120_path,
+                                    image: None,
                                 });
                             }
                         }
@@ -9863,6 +10098,10 @@ fn parse_drawing(
                                     anchor_block_index: 0,
                                     corner_radius: None,
                                     ellipse: false,
+            callout: None,
+            outline_cmpd: None,
+            outer_shadow: None,
+            outline_dash: None,
                                     inset_left: Some(0.0),
                                     inset_right: Some(0.0),
                                     inset_top: Some(0.0),
@@ -10001,6 +10240,16 @@ fn parse_drawing(
     let stroke_color_saved = stroke_color.clone();
     let stroke_width_saved = stroke_width;
 
+    // OXI_SHAPE_GRAD_MEAN (2026-11-02, default ON, opt-out _DISABLE): neither
+    // renderer paints a gradient, so a gradient-only shape drew no fill at all.
+    // Paint the stops' mean colour, as the SmartArt and chart parsers already do
+    // (dml::average). ja/creative__13152ea1: the rotated roundRect behind the
+    // ✓ list (accent1 tint 66% / 44.5% / 23.5%) came out white.
+    if shape_fill.is_none() && !has_no_fill && !gradient_stops.is_empty()
+        && !crate::env_flag!("OXI_SHAPE_GRAD_MEAN_DISABLE")
+    {
+        shape_fill = super::dml::average(gradient_stops.iter().map(|g| g.color.clone()));
+    }
     // A picture's unpainted geometry is not a second drawing. Keep standalone
     // invisible objects, which can still reserve inline flow space.
     let shape_type = if image.is_some() && has_no_fill && has_no_stroke
@@ -10012,6 +10261,7 @@ fn parse_drawing(
     // Build shape if we detected a preset geometry
     let shape = if let Some(ref st) = shape_type {
         Some(Shape {
+            vml_path: Vec::new(),
             shape_type: st.clone(),
             width,
             height,
@@ -10146,6 +10396,29 @@ fn parse_drawing(
             (t - 90.0).abs() < 0.5 || (t - 270.0).abs() < 0.5
         });
     let (tb_width, tb_height) = if upright_turn { (height, width) } else { (width, height) };
+    // OXI_UPRIGHT_TURN_INSETS (2026-11-03, default ON, opt-out _DISABLE): Word sets
+    // the text in the UNTURNED inner rectangle with its sides swapped, centred where
+    // that rectangle's centre is in unturned axes: left (t+b+l-r)/2, top (l+r+t-b)/2,
+    // right (t+b-l+r)/2, bottom (l+r-t+b)/2, the same at 90 and 270.
+    // `_pb_upright_turn_insets_gen.py` (100 x 300 rect turned to 300 x 100, insets
+    // 2/10/20/30 -> left 11.06, top 0.95; one inset of 20 at a time, left- and
+    // right-aligned text: every edge to 0.1). ja/creative__13152ea1's turned
+    // roundRect (7.2 / 3.6 defaults -> left 3.6, top 7.2): Oxi used tIns / lIns as
+    // they stand and put every line 3.6pt right of and 3.7pt above Word's.
+    // [left, top, right, bottom].
+    let turned_insets: Option<[f32; 4]> = if upright_turn
+        && std::env::var_os("OXI_UPRIGHT_TURN_INSETS_DISABLE").is_none()
+    {
+        let (l, t, r, b) = (
+            text_inset_left.unwrap_or(7.2),
+            text_inset_top.unwrap_or(3.6),
+            text_inset_right.unwrap_or(7.2),
+            text_inset_bottom.unwrap_or(3.6),
+        );
+        Some([(t + b + l - r) / 2.0, (l + r + t - b) / 2.0, (t + b - l + r) / 2.0, (l + r - t + b) / 2.0])
+    } else {
+        None
+    };
     let turned_position = position.as_ref().map(|p| {
         let mut p = p.clone();
         if upright_turn {
@@ -10246,11 +10519,26 @@ fn parse_drawing(
             // OXI_TXBX_ELLIPSE (2026-10-30, default ON, opt-out _DISABLE)
             ellipse: shape_type.as_deref() == Some("ellipse")
                 && std::env::var_os("OXI_TXBX_ELLIPSE_DISABLE").is_none(),
-            inset_left: text_inset_left,
-            inset_right: text_inset_right,
-            inset_top: text_inset_top,
+            outline_cmpd: stroke_cmpd.clone(),
+            outer_shadow: outer_shadow.clone(),
+            outline_dash: stroke_dash.clone(),
+            // OXI_TXBX_CALLOUT (2026-11-03, default ON, opt-out _DISABLE)
+            callout: match shape_type.as_deref() {
+                Some(p @ ("wedgeRoundRectCallout" | "wedgeRectCallout"))
+                    if !crate::env_flag!("OXI_TXBX_CALLOUT_DISABLE") =>
+                {
+                    let g = |n: &str, d: f32| shape_adj_map.iter().rev()
+                        .find(|(k, _)| k == n).map_or(d, |(_, v)| *v);
+                    Some([g("adj1", -20833.0), g("adj2", 62500.0),
+                        if p == "wedgeRoundRectCallout" { g("adj3", 16667.0) } else { 0.0 }])
+                }
+                _ => None,
+            },
+            inset_left: turned_insets.map_or(text_inset_left, |i| Some(i[0])),
+            inset_right: turned_insets.map_or(text_inset_right, |i| Some(i[2])),
+            inset_top: turned_insets.map_or(text_inset_top, |i| Some(i[1])),
             auto_fit: text_auto_fit,
-            inset_bottom: text_inset_bottom,
+            inset_bottom: turned_insets.map_or(text_inset_bottom, |i| Some(i[3])),
             // S535: an inline canvas text_box must stay RENDER-ONLY — without
             // an explicit WrapType::None the table wrap-below rule (layout
             // ~2415) fires on its new synthetic position and pushes following
@@ -10452,6 +10740,84 @@ fn vml_group_member(e: &quick_xml::events::BytesStart) -> Option<crate::ir::Vect
         stroke_width: if stroked { stroke_width } else { 0.0 },
         is_line: false,
         path: Vec::new(),
+        image: None,
+    })
+}
+
+/// OXI_VML_GROUP_MEMBERS: a VML group member's style box (left/top/width/height in
+/// group units), or None when hidden.
+fn vml_member_box(e: &quick_xml::events::BytesStart) -> Option<[f32; 4]> {
+    let mut b = [0.0f32; 4];
+    for attr in e.attributes().flatten() {
+        if local_name(attr.key.as_ref()) == "style" {
+            let val = String::from_utf8_lossy(&attr.value).to_string();
+            for part in val.split(';') {
+                let (k, v) = match part.split_once(':') { Some(kv) => kv, None => continue };
+                let n = v.trim().parse::<f32>().unwrap_or(0.0);
+                match k.trim() {
+                    "left" => b[0] = n,
+                    "top" => b[1] = n,
+                    "width" => b[2] = n,
+                    "height" => b[3] = n,
+                    "visibility" if v.trim() == "hidden" => return None,
+                    _ => {}
+                }
+            }
+        }
+    }
+    Some(b)
+}
+
+/// OXI_VML_GROUP_MEMBERS: a group member's line or freeform path outline in group
+/// units. A v:line spans from -> to; a v:shape path is drawn over its own
+/// coordorigin / coordsize mapped onto its style box.
+fn vml_group_stroke_member(e: &quick_xml::events::BytesStart, local: &str) -> Option<crate::ir::VectorShape> {
+    let attr = |n: &str| e.attributes().flatten()
+        .find(|a| local_name(a.key.as_ref()) == n)
+        .map(|a| String::from_utf8_lossy(&a.value).to_string());
+    let stroked = !matches!(attr("stroked").as_deref(), Some("f" | "false"));
+    let stroke = stroked.then(|| attr("strokecolor").map(|c| vml_color_token(&c)).unwrap_or_else(|| "000000".to_string()));
+    let stroke_width = if stroked { attr("strokeweight").and_then(|w| parse_css_length_opt(&w)).unwrap_or(0.75) } else { 0.0 };
+    let pair = |s: Option<String>| -> Option<(f32, f32)> {
+        let s = s?;
+        let mut it = s.split(',').map(|t| t.trim().parse::<f32>().unwrap_or(0.0));
+        Some((it.next()?, it.next().unwrap_or(0.0)))
+    };
+    if local == "line" {
+        let (x1, y1) = pair(attr("from"))?;
+        let (x2, y2) = pair(attr("to"))?;
+        return Some(crate::ir::VectorShape {
+            x: x1, y: y1, w: x2 - x1, h: y2 - y1,
+            fill: None, stroke, stroke_width, is_line: true, path: Vec::new(), image: None,
+        });
+    }
+    let path = attr("path")?;
+    let b = vml_member_box(e)?;
+    if b[2] <= 0.0 || b[3] <= 0.0 {
+        return None;
+    }
+    let (ox, oy) = pair(attr("coordorigin")).unwrap_or((0.0, 0.0));
+    let (cw, ch) = pair(attr("coordsize")).unwrap_or((b[2], b[3]));
+    if cw <= 0.0 || ch <= 0.0 {
+        return None;
+    }
+    use crate::ir::PathSeg;
+    let nx = |x: f32| (x - ox) / cw;
+    let ny = |y: f32| (y - oy) / ch;
+    let segs: Vec<PathSeg> = parse_vml_path(&path, (1.0, 1.0)).into_iter().map(|s| match s {
+        PathSeg::M(x, y) => PathSeg::M(nx(x), ny(y)),
+        PathSeg::L(x, y) => PathSeg::L(nx(x), ny(y)),
+        PathSeg::C(a, b2, c, d, x, y) => PathSeg::C(nx(a), ny(b2), nx(c), ny(d), nx(x), ny(y)),
+        other => other,
+    }).collect();
+    if segs.is_empty() {
+        return None;
+    }
+    let filled = matches!(attr("filled").as_deref(), Some("t" | "true"));
+    Some(crate::ir::VectorShape {
+        x: b[0], y: b[1], w: b[2], h: b[3],
+        fill: if filled { attr("fillcolor").map(|c| vml_color_token(&c)) } else { None },
+        stroke, stroke_width, is_line: false, path: segs, image: None,
     })
 }
 
@@ -10475,6 +10841,10 @@ fn vml_shape_text_box(sh: &Shape) -> TextBox {
         anchor_block_index: 0,
         corner_radius: None,
         ellipse: false,
+            callout: None,
+            outline_cmpd: None,
+            outer_shadow: None,
+            outline_dash: None,
         inset_left: Some(7.2),
         inset_right: Some(7.2),
         inset_top: Some(3.6),
@@ -10500,6 +10870,7 @@ fn parse_vml_pict(
     styles: &StyleSheet,
 ) -> Result<DrawingResult, ParseError> {
     let mut shape_type = None;
+    let mut vml_path_attr: Option<String> = None;
     let mut shape_wrap = None;
     let mut shape_wrap_points: Vec<(f32, f32)> = Vec::new();
     let mut shape_coord_size = (21600.0_f32, 21600.0_f32);
@@ -10561,24 +10932,57 @@ fn parse_vml_pict(
     let vml_group_rects_on = std::env::var_os("OXI_VML_GROUP_RECTS_DISABLE").is_none();
     let mut vml_group_coord: (f32, f32, f32, f32) = (0.0, 0.0, 0.0, 0.0);
     let mut vml_group_rects: Vec<crate::ir::VectorShape> = Vec::new();
+    // OXI_VML_GROUP_MEMBERS (2026-11-03, default ON, opt-out _DISABLE): the outer
+    // group's line / freeform / picture members join its rects (document order), and
+    // its text-box members become positioned children. ja/reports__619945ca's chart
+    // (a VML group of 11 dashed grid lines, 9 freeform polylines, 146 picture bars
+    // with their 144 outline rects and two legend text boxes): Oxi stretched the LAST
+    // bar tile over the whole 427 x 254pt group and dropped the rest.
+    let vml_group_members_on = vml_group_rects_on
+        && std::env::var_os("OXI_VML_GROUP_MEMBERS_DISABLE").is_none();
+    let mut grp_member_open: Option<([f32; 4], usize)> = None;
+    let mut grp_image_rids: Vec<(usize, [f32; 4], String)> = Vec::new();
+    let mut grp_texts: Vec<([f32; 4], Vec<Block>, Option<[f32; 4]>)> = Vec::new();
+    let mut grp_member_count = 0usize;
     // S852: an inline VML horizontal rule (<v:rect o:hr="t" .../>). Word draws
     // it on its OWN line (a full-width gray divider). Marked here so parse_run
     // routes it to the run style (reserve a line + draw the rule) instead of a
     // generic inline Shape (which the layout skips because position is None).
     let mut is_hr = false;
+    // OXI_VML_ABS_TXBX: <v:textbox inset="l,t,r,b"> (VML default 7.2,3.6,7.2,3.6).
+    let mut vml_tb_inset: Option<[f32; 4]> = None;
 
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 depth += 1;
+                if local == "textbox" {
+                    if let Some(v) = e.attributes().flatten()
+                        .find(|a| local_name(a.key.as_ref()) == "inset")
+                        .map(|a| String::from_utf8_lossy(&a.value).to_string())
+                    {
+                        let d = [7.2f32, 3.6, 7.2, 3.6];
+                        let mut out = d;
+                        for (k, t) in v.split(',').take(4).enumerate() {
+                            if let Some(x) = parse_css_length_opt(t.trim()) { out[k] = x; }
+                        }
+                        vml_tb_inset = Some(out);
+                    }
+                }
                 match local.as_str() {
                     // VML text box content — consume all paragraphs inside
                     "txbxContent" => {
                         loop {
                             match reader.read_event() {
                                 Ok(Event::Start(se)) => {
-                                    if local_name(se.name().as_ref()) == "p" {
+                                    if local_name(se.name().as_ref()) == "tbl"
+                                        && !crate::env_flag!("OXI_TXBX_TABLE_DISABLE")
+                                    {
+                                        if let Ok(t) = parse_table(reader, ctx, styles) {
+                                            text_blocks.push(Block::Table(t));
+                                        }
+                                    } else if local_name(se.name().as_ref()) == "p" {
                                         if let Ok(pr) =
                                             parse_paragraph(reader, ctx, styles, false, false, None)
                                         {
@@ -10705,9 +11109,19 @@ fn parse_vml_pict(
                         if vml_group_rects_on && group_depth == 1 && local == "rect" {
                             vml_group_rects.extend(vml_group_member(&e));
                         }
+                        if vml_group_members_on && group_depth == 1 {
+                            grp_member_count += 1;
+                            if matches!(local.as_str(), "line" | "shape") {
+                                vml_group_rects.extend(vml_group_stroke_member(&e, &local));
+                            }
+                            grp_member_open = vml_member_box(&e).map(|b| (b, text_blocks.len()));
+                        }
                         // Check VML type attribute for preset shape identification
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
+                            if key == "path" && local == "shape" {
+                                vml_path_attr = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
                             if key == "wrapcoords" || key == "coordsize" {
                                 let values: Vec<f32> = String::from_utf8_lossy(&attr.value)
                                     .split(|c: char| c.is_whitespace() || c == ',')
@@ -10817,10 +11231,10 @@ fn parse_vml_pict(
                                     }
                                 }
                                 "fillcolor" => {
-                                    fill_color = Some(val.trim_start_matches('#').to_string())
+                                    fill_color = Some(vml_color_token(&val))
                                 }
                                 "strokecolor" => {
-                                    stroke_color_val = Some(val.trim_start_matches('#').to_string())
+                                    stroke_color_val = Some(vml_color_token(&val))
                                 }
                                 "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
                                 "stroked" => {
@@ -10887,6 +11301,11 @@ fn parse_vml_pict(
                                 rel_id = Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
+                        if vml_group_members_on && group_depth == 1 {
+                            if let (Some((b, _)), Some(rid)) = (grp_member_open, rel_id.clone()) {
+                                grp_image_rids.push((vml_group_rects.len(), b, rid));
+                            }
+                        }
                     }
                     "fill" => {
                         for attr in e.attributes().flatten() {
@@ -10905,7 +11324,7 @@ fn parse_vml_pict(
                             let val = String::from_utf8_lossy(&attr.value).to_string();
                             match key.as_str() {
                                 "color" => {
-                                    stroke_color_val = Some(val.trim_start_matches('#').to_string())
+                                    stroke_color_val = Some(vml_color_token(&val))
                                 }
                                 "weight" => stroke_width_val = parse_css_length_opt(&val),
                                 "on" => {
@@ -10947,8 +11366,17 @@ fn parse_vml_pict(
                         if vml_group_rects_on && group_depth == 1 && local == "rect" {
                             vml_group_rects.extend(vml_group_member(&e));
                         }
+                        if vml_group_members_on && group_depth == 1 {
+                            grp_member_count += 1;
+                            if matches!(local.as_str(), "line" | "shape") {
+                                vml_group_rects.extend(vml_group_stroke_member(&e, &local));
+                            }
+                        }
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
+                            if key == "path" && local == "shape" {
+                                vml_path_attr = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
                             if key == "wrapcoords" || key == "coordsize" {
                                 let values: Vec<f32> = String::from_utf8_lossy(&attr.value)
                                     .split(|c: char| c.is_whitespace() || c == ',')
@@ -11056,10 +11484,10 @@ fn parse_vml_pict(
                                     }
                                 }
                                 "fillcolor" => {
-                                    fill_color = Some(val.trim_start_matches('#').to_string())
+                                    fill_color = Some(vml_color_token(&val))
                                 }
                                 "strokecolor" => {
-                                    stroke_color_val = Some(val.trim_start_matches('#').to_string())
+                                    stroke_color_val = Some(vml_color_token(&val))
                                 }
                                 "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
                                 "stroked" => {
@@ -11120,6 +11548,15 @@ fn parse_vml_pict(
                 let local = local_name(e.name().as_ref());
                 if local == "pict" && depth == 0 {
                     break;
+                }
+                if vml_group_members_on && group_depth == 1
+                    && matches!(local.as_str(), "shape" | "rect" | "oval" | "roundrect")
+                {
+                    if let Some((b, start)) = grp_member_open.take() {
+                        if text_blocks.len() > start {
+                            grp_texts.push((b, text_blocks[start..].to_vec(), vml_tb_inset));
+                        }
+                    }
                 }
                 if local == "group" && group_depth > 0 {
                     group_depth -= 1;
@@ -11242,6 +11679,7 @@ fn parse_vml_pict(
         None
     };
 
+    let vml_had_imagedata = rel_id.is_some();
     // Build image if we have a blip reference
     let image = if let Some(rid) = rel_id {
         let data = ctx.media.get(&rid).cloned().unwrap_or_default();
@@ -11310,11 +11748,83 @@ fn parse_vml_pict(
     // is a header group of 20 full-width row rects and 21 5.5pt column-gap rects,
     // white-filled with a 0.5pt #00008b outline; the later gap rects' fill cuts the
     // row lines, which is what leaves the double rule between the columns.
-    if vml_group_rects.len() >= 2 && is_absolute && image.is_none() && text_blocks.is_empty()
+    let grp_members_path = vml_group_members_on
+        && grp_member_count >= 2
+        && (!grp_image_rids.is_empty() || !grp_texts.is_empty() || vml_group_rects.len() >= 2);
+    if ((vml_group_rects.len() >= 2 && image.is_none() && text_blocks.is_empty()) || grp_members_path)
+        && is_absolute
         && group_width > 0.0 && group_height > 0.0 && vml_group_coord.2 > 0.0 && vml_group_coord.3 > 0.0
     {
         let (ox, oy, cw, ch) = vml_group_coord;
         let (sx, sy) = (group_width / cw, group_height / ch);
+        let mut vml_group_rects = vml_group_rects;
+        if grp_members_path {
+            // pictures go back in at their document position (z-order)
+            for (idx, b, rid) in grp_image_rids.into_iter().rev() {
+                if let Some(data) = ctx.media.get(&rid) {
+                    if b[2] > 0.0 && b[3] > 0.0 {
+                        vml_group_rects.insert(idx.min(vml_group_rects.len()), crate::ir::VectorShape {
+                            x: b[0], y: b[1], w: b[2], h: b[3],
+                            fill: None, stroke: None, stroke_width: 0.0, is_line: false, path: Vec::new(),
+                            image: Some(std::sync::Arc::new(data.clone())),
+                        });
+                    }
+                }
+            }
+        }
+        let grp_children: Vec<TextBox> = grp_texts.drain(..).map(|(b, blocks, inset)| {
+            let ins = inset.unwrap_or([7.2, 3.6, 7.2, 3.6]);
+            TextBox {
+                wrap_polygon: Vec::new(),
+                text_outline_inset: 0.0,
+                vertical_text: false,
+                blocks,
+                inline: false,
+                font_ref_color: None,
+                auto_fit: false,
+                width: b[2] * sx,
+                height: b[3] * sy,
+                position: Some(FloatingPosition {
+                    flow_page_offset: 0,
+                    flow_boundary_offset: 0,
+                    flow_source: None,
+                    x: (b[0] - ox) * sx,
+                    y: (b[1] - oy) * sy,
+                    h_relative: None,
+                    v_relative: None,
+                    h_align: None,
+                    v_align: None,
+                    dist_l: None,
+                    dist_r: None, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
+                }),
+                border: false,
+                stroke_color: None,
+                stroke_width: None,
+                fill: None,
+                anchor_block_index: 0,
+                corner_radius: None,
+                ellipse: false,
+                callout: None,
+                outline_cmpd: None,
+                outer_shadow: None,
+                outline_dash: None,
+                inset_left: Some(ins[0]),
+                inset_right: Some(ins[2]),
+                inset_top: Some(ins[1]),
+                inset_bottom: Some(ins[3]),
+                wrap_type: Some(WrapType::None),
+                v_text_anchor: None,
+                relative_height: 0,
+                behind_doc: false,
+                vert_overflow: None,
+                compat_line_spacing: false,
+                vector_shapes: Vec::new(),
+                host_break_after: false,
+                children: Vec::new(),
+                body_wrap_none: false,
+                children_on_line: false,
+            }
+        }).collect();
         let vector_shapes = vml_group_rects.into_iter().map(|mut v| {
             v.x = (v.x - ox) * sx;
             v.y = (v.y - oy) * sy;
@@ -11340,6 +11850,10 @@ fn parse_vml_pict(
             anchor_block_index: 0,
             corner_radius: None,
             ellipse: false,
+            callout: None,
+            outline_cmpd: None,
+            outer_shadow: None,
+            outline_dash: None,
             inset_left: None,
             inset_right: None,
             inset_top: None,
@@ -11351,6 +11865,86 @@ fn parse_vml_pict(
             vert_overflow: None,
             compat_line_spacing: false,
             vector_shapes,
+            host_break_after: false,
+            children: grp_children,
+            body_wrap_none: false,
+            children_on_line: false,
+        });
+        return Ok(DrawingResult {
+            symbol_text: None,
+            image: None,
+            shape: None,
+            text_box,
+        });
+    }
+    // OXI_VML_ABS_TXBX (2026-11-02, default ON, opt-out _DISABLE): an ABSOLUTE
+    // VML text box (pure VML, no DrawingML alternate) draws its box and text at
+    // its style position -- the "separate S746b render task" above, until now
+    // dropped. ja/educational__066d1d57: «Text Box 2» (the 原稿は A4 サイズ note,
+    // filled="f" stroked="f") and «Text Box 3» (the 1.5pt-framed 本文2段組み box)
+    // anchored text-relative to the section-break paragraph, margin-top
+    // -177.8 / -168.85; Word draws both at the page top, Oxi drew neither.
+    // mso-position-*-relative:text is the column / the anchor paragraph.
+    if is_absolute
+        && !text_blocks.is_empty()
+        && width > 0.0
+        && height > 0.0
+        && image.is_none()
+        && !crate::env_flag!("OXI_VML_ABS_TXBX_DISABLE")
+    {
+        let mut pos = vml_position.clone().unwrap_or(FloatingPosition {
+            flow_page_offset: 0,
+            flow_boundary_offset: 0,
+            flow_source: None,
+            x: margin_left,
+            y: margin_top,
+            h_relative: vml_h_relative.clone(),
+            v_relative: vml_v_relative.clone(),
+            h_align: vml_h_align.clone(),
+            v_align: vml_v_align.clone(),
+            dist_l: vml_dist_l,
+            dist_r: vml_dist_r, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
+        });
+        let map_rel = |r: Option<String>, text_as: &str| match r.as_deref() {
+            None | Some("text") => Some(text_as.to_string()),
+            _ => r,
+        };
+        pos.h_relative = map_rel(pos.h_relative.take(), "column");
+        pos.v_relative = map_rel(pos.v_relative.take(), "paragraph");
+        let inset = vml_tb_inset.unwrap_or([7.2, 3.6, 7.2, 3.6]);
+        let text_box = Some(TextBox {
+            wrap_polygon: Vec::new(),
+            text_outline_inset: 0.0,
+            vertical_text: false,
+            blocks: text_blocks,
+            inline: false,
+            font_ref_color: None,
+            auto_fit: false,
+            width,
+            height,
+            position: Some(pos),
+            border: !no_stroke,
+            stroke_color: if no_stroke { None } else { stroke_color_val.or(Some("000000".to_string())) },
+            stroke_width: if no_stroke { None } else { stroke_width_val.or(Some(0.75)) },
+            fill: if no_fill { None } else { fill_color.or(Some("FFFFFF".to_string())) },
+            anchor_block_index: 0,
+            corner_radius: if shape_type.as_deref() == Some("roundRect") { Some(3.0) } else { None },
+            ellipse: false,
+            callout: None,
+            outline_cmpd: None,
+            outer_shadow: None,
+            outline_dash: None,
+            inset_left: Some(inset[0]),
+            inset_top: Some(inset[1]),
+            inset_right: Some(inset[2]),
+            inset_bottom: Some(inset[3]),
+            wrap_type: Some(shape_wrap.unwrap_or(WrapType::None)),
+            v_text_anchor: v_text_anchor.clone(),
+            relative_height: 0,
+            behind_doc: vml_negative_z,
+            vert_overflow: None,
+            compat_line_spacing: false,
+            vector_shapes: Vec::new(),
             host_break_after: false,
             children: Vec::new(),
             body_wrap_none: false,
@@ -11413,6 +12007,10 @@ fn parse_vml_pict(
                 None
             },
             ellipse: false,
+            callout: None,
+            outline_cmpd: None,
+            outer_shadow: None,
+            outline_dash: None,
             inset_left: None,
             inset_right: None,
             inset_top: None,
@@ -11462,12 +12060,37 @@ fn parse_vml_pict(
             text_box,
         });
     }
+    let vml_path = vml_path_attr.as_deref()
+        .filter(|_| !crate::env_flag!("OXI_VML_PATH_DISABLE"))
+        .map(|p| parse_vml_path(p, shape_coord_size))
+        .unwrap_or_default();
+    // OXI_VML_RECT_DEFAULT_FILL (2026-11-03, default ON, opt-out _DISABLE): a VML
+    // rect with no fillcolor is filled WHITE (the VML default, as filled="t" with
+    // fillcolor white) -- the fill-less Shape fell to the outline-only preset path,
+    // which drew nothing without a stroke colour. ja/forms__01dc1d6c's page frames
+    // (<v:rect> with only an empty <v:textbox>, z-index < 0): Word fills white and
+    // strokes 0.75pt black (PDF: fs 0.75, fill 1.0, stroke 0.0); Oxi drew neither.
+    // (a picture shape -- v:shape + v:imagedata -- is not a drawn rect: golden
+    // harassmanual's full-page frame image was painted over in white, -0.0135)
+    let vml_rect_default_fill = !no_fill
+        && fill_color.is_none()
+        && image.is_none()
+        && !vml_had_imagedata
+        && matches!(shape_type.as_deref(), Some("rect" | "roundRect"))
+        && !crate::env_flag!("OXI_VML_RECT_DEFAULT_FILL_DISABLE");
     let shape = shape_type.as_ref().map(|st| Shape {
+        vml_path: vml_path.clone(),
         shape_type: st.clone(),
         width,
         height,
         position: vml_position,
-        fill: if no_fill { None } else { fill_color.clone() },
+        fill: if no_fill {
+            None
+        } else if vml_rect_default_fill {
+            Some("FFFFFF".to_string())
+        } else {
+            fill_color.clone()
+        },
         stroke_color: if no_stroke { None } else { stroke_color_val },
         stroke_width: if no_stroke {
             None
@@ -11497,6 +12120,94 @@ fn parse_vml_pict(
         shape,
         text_box: None,
     })
+}
+
+/// OXI_VML_PATH (2026-11-02): a VML colour attribute is «#rrggbb», a name, or
+/// either with a trailing «[index]» (fillcolor="#a5a5a5 [2092]"). The suffix was
+/// kept, the hex no longer parsed, and the renderers painted black.
+fn vml_color_token(val: &str) -> String {
+    let base = val.split_whitespace().next().unwrap_or("").trim_start_matches('#');
+    if crate::env_flag!("OXI_VML_PATH_DISABLE") {
+        return val.trim_start_matches('#').to_string();
+    }
+    match base.to_ascii_lowercase().as_str() {
+        "black" => "000000".to_string(),
+        "white" => "FFFFFF".to_string(),
+        "gray" | "grey" => "808080".to_string(),
+        "silver" => "C0C0C0".to_string(),
+        "red" => "FF0000".to_string(),
+        "blue" => "0000FF".to_string(),
+        "green" => "008000".to_string(),
+        "yellow" => "FFFF00".to_string(),
+        h if h.len() == 3 && h.chars().all(|c| c.is_ascii_hexdigit()) =>
+            h.chars().flat_map(|c| [c, c]).collect::<String>().to_uppercase(),
+        _ => base.to_string(),
+    }
+}
+
+/// OXI_VML_PATH (2026-11-02, default ON, opt-out _DISABLE): a VML freeform's
+/// `path` (m / l / r / t / c / v / x / e; an omitted number is 0) as an outline
+/// normalized over `coordsize`. ja/educational__066d1d57's «屈折矢印 2» (a bent-up
+/// arrow drawn as a freeform, fill #a5a5a5) came out as a black bounding box.
+/// An unsupported command returns no outline, so the shape keeps its old box.
+fn parse_vml_path(path: &str, size: (f32, f32)) -> Vec<crate::ir::PathSeg> {
+    use crate::ir::PathSeg;
+    let (w, h) = (size.0.max(1.0), size.1.max(1.0));
+    let mut out = Vec::new();
+    let (mut x, mut y) = (0.0f32, 0.0f32);
+    let mut chars = path.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() || c == ',' { chars.next(); continue; }
+        if !c.is_ascii_alphabetic() { return Vec::new(); }
+        // one letter, except the two-letter families (nf ns ae al at ar wa wr qx qy qb ha..hi)
+        let mut cmd = String::new();
+        chars.next();
+        cmd.push(c);
+        if matches!(c, 'n' | 'a' | 'w' | 'q' | 'h') {
+            if let Some(&c2) = chars.peek() {
+                if c2.is_ascii_alphabetic() { cmd.push(c2); chars.next(); }
+            }
+        }
+        let mut raw = String::new();
+        while let Some(&c) = chars.peek() {
+            if c.is_ascii_alphabetic() { break; }
+            raw.push(c);
+            chars.next();
+        }
+        let raw = raw.trim();
+        let nums: Vec<f32> = if raw.is_empty() { Vec::new() } else {
+            raw.split(|c: char| c == ',' || c.is_whitespace())
+                .map(|t| if t.is_empty() { Some(0.0) } else { t.parse::<f32>().ok() })
+                .collect::<Option<Vec<f32>>>().unwrap_or_else(|| vec![f32::NAN])
+        };
+        if nums.iter().any(|v| v.is_nan()) { return Vec::new(); }
+        let n = |px: f32, py: f32| (px / w, py / h);
+        match cmd.as_str() {
+            "m" | "t" | "l" | "r" => {
+                if nums.len() % 2 != 0 || nums.is_empty() { return Vec::new(); }
+                for (k, p) in nums.chunks_exact(2).enumerate() {
+                    if matches!(cmd.as_str(), "t" | "r") { x += p[0]; y += p[1]; } else { x = p[0]; y = p[1]; }
+                    let (nx, ny) = n(x, y);
+                    if matches!(cmd.as_str(), "m" | "t") && k == 0 { out.push(PathSeg::M(nx, ny)); } else { out.push(PathSeg::L(nx, ny)); }
+                }
+            }
+            "c" | "v" => {
+                if nums.len() % 6 != 0 || nums.is_empty() { return Vec::new(); }
+                for p in nums.chunks_exact(6) {
+                    let (ox, oy) = if cmd == "v" { (x, y) } else { (0.0, 0.0) };
+                    let (a, b) = n(ox + p[0], oy + p[1]);
+                    let (c2, d) = n(ox + p[2], oy + p[3]);
+                    x = ox + p[4]; y = oy + p[5];
+                    let (e2, f) = n(x, y);
+                    out.push(PathSeg::C(a, b, c2, d, e2, f));
+                }
+            }
+            "x" => out.push(PathSeg::Z),
+            "e" | "nf" | "ns" => {}
+            _ => return Vec::new(),
+        }
+    }
+    out
 }
 
 /// Parse CSS-like length value (e.g. "200pt", "2in", "100.5px")
@@ -14429,6 +15140,7 @@ struct SectionProperties {
     margin: Margin,
     /// S1267: `w:pgMar/@top` was negative (see Page::margin_top_negative).
     margin_top_negative: bool,
+    margin_bottom_negative: bool,
     /// Document grid line pitch in points (from w:docGrid w:linePitch, twips/20)
     grid_line_pitch: Option<f32>,
     /// Character grid pitch in points (for linesAndChars mode)
@@ -14484,6 +15196,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
     let mut saw_pg_sz = false;
     let mut margin = Margin::default();
     let mut margin_top_negative = false;
+    let mut margin_bottom_negative = false;
     let mut grid_line_pitch: Option<f32> = None;
     let mut grid_char_pitch: Option<f32> = None;
     let mut char_space_section: Option<i32> = None;
@@ -14773,6 +15486,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                                         // lines on page 1 for bottom -568/-284/0/+284/+1134,
                                         // i.e. -284 and +284 are indistinguishable.
                                         margin.bottom = if s1267 { to_pt(v.abs()) } else { to_pt(v) };
+                                        margin_bottom_negative = s1267 && v < 0.0;
                                     }
                                 }
                                 "left" => {
@@ -15075,6 +15789,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
         page_size,
         margin,
         margin_top_negative,
+        margin_bottom_negative,
         grid_line_pitch,
         grid_char_pitch,
         grid_char_space_raw: char_space_section,
@@ -15428,7 +16143,29 @@ fn parse_header_footer_xml(
                                             in_footer || std::env::var_os("OXI_HEADER_INLINE_OBJECTS").is_some(),
                                             !in_footer,
                                         )?;
+                                        // OXI_HF_SDT_DRAWINGS (2026-11-03, default ON, opt-out _DISABLE):
+                                        // a paragraph inside a header/footer content control keeps
+                                        // its drawings, as the plain-paragraph arm keeps them (S759
+                                        // floating pictures, the header/footer text boxes). The
+                                        // "Page Numbers (Bottom of Page)" gallery wraps the whole
+                                        // footer in an sdt: en/policies__0066a548's footer -- five
+                                        // logos and a grey band anchored beside the PAGE field --
+                                        // drew only the number.
+                                        let sdt_drawings = !crate::env_flag!("OXI_HF_SDT_DRAWINGS_DISABLE");
+                                        let mut pr = pr;
+                                        if sdt_drawings {
+                                            let mut tbs = std::mem::take(&mut pr.text_boxes);
+                                            for tb in &mut tbs {
+                                                tb.anchor_block_index = blocks.len();
+                                            }
+                                            HF_TEXT_BOXES.with(|v| v.borrow_mut().extend(tbs));
+                                        }
                                         blocks.push(Block::Paragraph(pr.paragraph));
+                                        if sdt_drawings {
+                                            for img in pr.floating_images {
+                                                blocks.push(Block::Image(img));
+                                            }
+                                        }
                                     } else if content_depth > 0 && sl == "tbl" {
                                         let table = parse_table(&mut reader, ctx, styles)?;
                                         blocks.push(Block::Table(table));

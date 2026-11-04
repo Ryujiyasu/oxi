@@ -1794,6 +1794,23 @@ fn parse_style_definition(
                                 }
                             }
                         }
+                        // OXI_STYLE_TEXT_SCALE (2026-11-03, default ON, opt-out _DISABLE): a
+                        // style's character scale (w:w) reaches the runs that inherit it.
+                        // This inline parser had no arm for it, so the scale was only ever
+                        // honoured on a run's own rPr. ja/administrative__05e3143c's
+                        // «【生徒の感想より】» (style «Body Text 2» w:w 200, run 9pt): Word draws
+                        // it double width (PDF span size 12.73 = 9 x sqrt 2), Oxi at 100%.
+                        "w" if !crate::env_flag!("OXI_STYLE_TEXT_SCALE_DISABLE") => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    run_style.text_scale = val.parse::<f32>().ok();
+                                    if run_style.text_scale.is_some() {
+                                        has_run_style = true;
+                                    }
+                                }
+                            }
+                        }
                         // Round 29: vertAlign for character styles. The
                         // "footnote reference" character style sets
                         // <w:vertAlign w:val="superscript"/>. Without this
