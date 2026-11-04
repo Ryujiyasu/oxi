@@ -22047,7 +22047,11 @@ impl<'a> WorkbookHost<'a> {
     /// worked out here -- only the breaks the text carries -- which is the
     /// one thing this falls short of Excel on.
     fn auto_fit_rows(&mut self, range: CellRange) -> Result<Value, String> {
-        self.fit_rows(range, false)
+        let result = self.fit_rows(range, false)?;
+        for row in &mut self.workbook.sheets[range.sheet].rows {
+            if (range.start_row..=range.end_row).contains(&row.index) { row.hidden = false; }
+        }
+        Ok(result)
     }
 
     fn fit_rows(&mut self, range: CellRange, preserve_vertical_height: bool) -> Result<Value, String> {
@@ -22094,6 +22098,7 @@ impl<'a> WorkbookHost<'a> {
             let mut px = base_px;
             let mut retained_px = base_px;
             let mut one_line_fonts = Vec::new();
+            let mut unmodeled_position = false;
             // A medium or thick rule along the top or the bottom of the row
             // takes a pixel of room each: measured, a row whose cell wears a
             // thick bottom border fits at 26 pixels, 19.5, where 25 is the
@@ -22158,12 +22163,39 @@ impl<'a> WorkbookHost<'a> {
                 let font_px = if lines == 1.0 { shared_line.unwrap_or(font_px) } else { font_px };
                 px = px.max(f32::from(font_px) * lines);
                 if lines == 1.0 {
-                    one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic, wrapped_anchor));
+                    if cell.style.font_position.is_some()
+                        || cell.runs.iter().any(|run| run.vert_align.as_deref()
+                            .is_some_and(|position| position != "baseline")) {
+                        unmodeled_position = true;
+                    }
+                    let text_units = cell_text_of(cell).len();
+                    if cell.runs.is_empty() || text_units == 0 {
+                        one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic, wrapped_anchor));
+                    } else {
+                        let mut covered_units = 0;
+                        for run in &cell.runs {
+                            if run.text.is_empty() { continue; }
+                            covered_units += run.text.encode_utf16().count();
+                            let run_face = if run.dressed {
+                                run.font_reference.as_ref().and_then(|font| font.latin_name.as_deref())
+                                    .or(run.font.as_deref()).unwrap_or(cell_face)
+                            } else { cell_face };
+                            let run_size = if run.dressed { run.size.unwrap_or(cell_size) } else { cell_size };
+                            let bold = if run.dressed { run.bold } else { cell.style.bold };
+                            let italic = if run.dressed { run.italic } else { cell.style.italic };
+                            one_line_fonts.push((run_face, run_size, bold, italic, wrapped_anchor));
+                        }
+                        if covered_units < text_units {
+                            one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic, wrapped_anchor));
+                        }
+                    }
                 } else {
                     retained_px = retained_px.max(f32::from(font_px) * lines);
                 }
             }
-            if let Some((height, _)) = font_row_line_box(&face, size, one_line_fonts) {
+            if unmodeled_position {
+                px = px.max(row.height.unwrap_or(sheet.default_row_height) / 0.75);
+            } else if let Some((height, _)) = font_row_line_box(&face, size, one_line_fonts) {
                 px = retained_px.max(f32::from(height));
             }
             px += f32::from(u8::from(thick_top)) + f32::from(u8::from(thick_bottom));
@@ -34226,6 +34258,7 @@ impl Host for WorkbookHost<'_> {
                 };
                 self.set_range_style(range, |_, style| style.bold = value)?;
                 self.redress_runs(range, |dress| dress.bold = value);
+                self.refit_rows(range)?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("italic") {
@@ -34234,6 +34267,7 @@ impl Host for WorkbookHost<'_> {
                 };
                 self.set_range_style(range, |_, style| style.italic = value)?;
                 self.redress_runs(range, |dress| dress.italic = value);
+                self.refit_rows(range)?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("size") {
@@ -75288,6 +75322,8 @@ End Function"#;
             for action in [
                 "Range(\"A1\").Font.Name = \"Meiryo\"",
                 "Range(\"A1\").Font.Size = 20",
+                "Range(\"A1\").Font.Bold = True",
+                "Range(\"A1\").Font.Italic = True",
                 "Rows(1).AutoFit",
                 "Columns(\"A:B\").AutoFit",
             ] {
@@ -75341,6 +75377,101 @@ End Function"#;
             assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
                 Value::Double(18.0), "{address}");
         }
+    }
+
+
+    #[test]
+    fn font_weight_and_slant_refit_automatic_rows() {
+        for (face, size, property, value, expected) in [
+            ("Arial", 11.0, "Bold", true, 15.0),
+            ("Arial", 11.0, "Bold", false, 14.25),
+            ("Courier New", 8.0, "Italic", true, 12.0),
+            ("Courier New", 8.0, "Italic", false, 11.25),
+        ] {
+            for fixed in [false, true] {
+                let mut book = workbook();
+                book.default_style.font_name = Some("Arial".to_string());
+                book.default_style.font_size = Some(8.0);
+                book.default_style.font_reference = None;
+                book.sheets[0].rows.clear();
+                book.sheets[0].normal_font = Some(("Arial".to_string(), 8.0));
+                book.sheets[0].column_width_font = Some("Arial".to_string());
+                book.sheets[0].default_row_height = 11.25;
+                let before = if value { "False" } else { "True" };
+                let after = if value { "True" } else { "False" };
+                let pin = if fixed { "Rows(1).RowHeight = 30\n" } else { "" };
+                let module = parse_module(&format!(
+                    "Public Function Probe() As Double\n\
+                     Range(\"A1\").Font.Name = \"{face}\"\n\
+                     Range(\"A1\").Font.Size = {size}\n\
+                     Range(\"A1\").Font.{property} = {before}\n\
+                     Range(\"A1\").Value2 = \"M\"\n\
+                     Rows(1).AutoFit\n{pin}\
+                     Range(\"A1\").Font.{property} = {after}\n\
+                     Probe = Rows(1).RowHeight\nEnd Function\n"
+                )).unwrap();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                    Value::Double(if fixed { 30.0 } else { expected }));
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_character_sizes_fit_before_and_after_a_font_change() {
+        for (first, second) in [(12, 72), (72, 12)] {
+            for merged in [false, true] {
+                let mut book = workbook();
+                book.default_style.font_name = Some("Arial".to_string());
+                book.default_style.font_size = Some(8.0);
+                book.default_style.font_reference = None;
+                book.sheets[0].rows.clear();
+                book.sheets[0].normal_font = Some(("Arial".to_string(), 8.0));
+                book.sheets[0].column_width_font = Some("Arial".to_string());
+                book.sheets[0].default_row_height = 11.25;
+                let merge = if merged { "Range(\"A1:B1\").WrapText = True\nRange(\"A1:B1\").Merge\n" } else { "" };
+                let module = parse_module(&format!(
+                    "Public Function Probe() As Double\n\
+                     Range(\"A1:B1\").Font.Name = \"Arial\"\n\
+                     Range(\"A1:B1\").Font.Size = 12\n{merge}\
+                     Range(\"A1\").Font.Size = {first}\n\
+                     Range(\"A1\").Value2 = \"MM\"\n\
+                     Range(\"A1\").Characters(2, 1).Font.Size = {second}\n\
+                     Rows(1).AutoFit\n\
+                     Range(\"A1\").Font.Bold = True\n\
+                     Probe = Rows(1).RowHeight\nEnd Function\n"
+                )).unwrap();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                    Value::Double(if merged { 30.0 } else { 90.75 }));
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_auto_fit_unhides_but_a_font_change_does_not() {
+        let mut book = workbook();
+        book.default_style.font_name = Some("Arial".to_string());
+        book.default_style.font_size = Some(8.0);
+        book.default_style.font_reference = None;
+        book.sheets[0].rows.clear();
+        book.sheets[0].normal_font = Some(("Arial".to_string(), 8.0));
+        book.sheets[0].column_width_font = Some("Arial".to_string());
+        book.sheets[0].default_row_height = 11.25;
+        let module = parse_module(
+            "Public Function Probe() As Double\n\
+             Range(\"A1\").Font.Name = \"Arial\"\n\
+             Range(\"A1\").Font.Size = 11\n\
+             Range(\"A1\").Value2 = \"M\"\n\
+             Rows(1).Hidden = True\n\
+             Range(\"A1\").Font.Bold = True\n\
+             If Not Rows(1).Hidden Then\nProbe = -1\nExit Function\nEnd If\n\
+             Rows(1).AutoFit\n\
+             If Rows(1).Hidden Then\nProbe = -2\nElse\nProbe = Rows(1).RowHeight\nEnd If\n\
+             End Function\n"
+        ).unwrap();
+        let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+        assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(), Value::Double(15.0));
     }
 
     /// What a filter counts as a match.

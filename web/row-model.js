@@ -240,12 +240,31 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance, font
     ? [sheet.column_width_font || sheet.normal_font[0], sheet.normal_font[1]] : null;
   const aggregateLines = !!fontRowHeightOf && !!normal;
   const lineFonts = [];
+  const richFontsOf = (cell, face, size, anchor) => {
+    const style = cell.style || {};
+    if (!cell.runs?.length || !cellText(cell)) return [[face, size, !!style.bold, !!style.italic, anchor]];
+    const fonts = [];
+    let covered = 0;
+    for (const run of cell.runs) {
+      if (!run.text) continue;
+      covered += run.text.length;
+      fonts.push(run.dressed
+        ? [run.font_reference?.latin_name || run.font || face, run.size ?? size, !!run.bold, !!run.italic, anchor]
+        : [face, size, !!style.bold, !!style.italic, anchor]);
+    }
+    if (covered < cellText(cell).length) fonts.push([face, size, !!style.bold, !!style.italic, anchor]);
+    return fonts;
+  };
   for (const cell of row.cells || []) {
     const face = cell.style?.font_reference?.latin_name || cell.style?.font_name || 'Calibri';
     const size = cell.style?.font_size || 11;
+    const rich = !!cell.runs?.length;
+    if (aggregateLines && (cell.style?.font_position || cell.runs?.some(run =>
+      run.vert_align && run.vert_align !== 'baseline'))) return { ...fallback(), parts };
     let px = heightOf(face, size, null,
       !!cell.style?.bold, !!cell.style?.italic);
-    if (px === undefined) return { ...fallback(), parts };
+    if (px === undefined && !(aggregateLines && rich)) return { ...fallback(), parts };
+    px ??= 0;
     const where = mergeAt(sheet, index, cell.col);
     const text = cellText(cell);
     let lines = 1;
@@ -274,7 +293,7 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance, font
     } else {
       what = `${columnName(cell.col)} holds one line of ${face} ${size}`;
     }
-    if (lines === 1 && normal) {
+    if (lines === 1 && normal && !(aggregateLines && rich)) {
       const shared = heightOf(face, size, normal, !!cell.style?.bold,
         !!cell.style?.italic, !!where?.anchor && !!cell.style?.wrap_text);
       if (shared === undefined) return { ...fallback(), parts };
@@ -282,9 +301,9 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance, font
     }
     const wrappedAnchor = !!where?.anchor && !!cell.style?.wrap_text;
     if (lines === 1) {
-      lineFonts.push([face, size, !!cell.style?.bold, !!cell.style?.italic, wrappedAnchor]);
+      lineFonts.push(...richFontsOf(cell, face, size, wrappedAnchor));
     }
-    const asked = aggregateLines && wrappedAnchor ? 0 : lines * px;
+    const asked = aggregateLines && lines === 1 && (wrappedAnchor || rich) ? 0 : lines * px;
     parts.push({ kind: 'cell', px: asked, column: cell.col, what });
     raise = Math.max(raise, asked);
   }
