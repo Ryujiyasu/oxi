@@ -72,7 +72,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'widthForPixels', 'setWidth', 'dropCut',
   'padFor', 'fitWidth', 'fitColumn', 'shownText', 'rule', 'wearRules', 'findNext',
   'span', 'mergesMet', 'setMerges', 'wearMerge',
-  'wearFace', 'wearSize', 'wearInk', 'agreedOn',
+  'wearFace', 'wearSize', 'wearInk', 'wearFill', 'agreedOn',
   'calcCost',
   'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight',
   'holdPanes', 'freezeHere', 'bandsOf', 'onScreen',
@@ -305,7 +305,7 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
          change, undo, redo, unsaved, forget, rule, wearRules, findNext,
          wearMerge, merged, mergesMet,
-         wearFace, wearSize, wearInk, agreedOn,
+         wearFace, wearSize, wearInk, wearFill, agreedOn,
          calcCost, shapeBook };
 `));
 
@@ -1629,23 +1629,124 @@ is('without a date format they are numbers, and step by the gap',
 const bandPainter = await import('data:text/javascript,' + encodeURIComponent(`
 const geom = {lastRow: 2, lastCol: 1, cols: [0, 10, 20], tops: [0, 0, 10, 20], covered: new Map()};
 const boxOf = (row, col) => ({left: geom.cols[col], right: geom.cols[col + 1], top: geom.tops[row], bottom: geom.tops[row + 1]});
-const dressed = (row, col, style) => style;
-const tint = (color, fallback) => color ? '#' + color : fallback;
+let book = null;
+const conditional = new Map();
+const fillColorCache = { palette: '', colors: new Map() };
+const fillPatterns = new WeakMap();
+let colorCalls = 0;
+let finalSmoothing = null;
+// The independent Native image comparison exercises the WASM color resolver.
+// This isolated canvas test supplies RGB and palette results for the brush.
+const vbaProjectApi = {resolve_spreadsheet_color(reference, palette, fallback) {
+  colorCalls++;
+  return reference.rgb || palette.indexed_colors[reference.indexed] || fallback;
+}};
+class OffscreenCanvas {
+  constructor(width, height) {
+    this.width = width; this.height = height;
+    this.pixels = Array(width * height).fill(null);
+  }
+  getContext() {
+    const tile = this;
+    return {fillStyle: '', fillRect(x, y, width, height) {
+      for (let row = y; row < y + height; row++) {
+        for (let col = x; col < x + width; col++) tile.pixels[row * tile.width + col] = this.fillStyle;
+      }
+    }};
+  }
+}
+${liftBinding('FILL_MASKS')}
+${lift('dressed')}
+${lift('tint')}
+${lift('fillColor')}
+${lift('paintCellFill')}
 const ruleOf = () => null;
 const indentStep = () => 0;
 const shownText = () => '';
 ${lift('paintCells')}
 export function paint(sheet) {
   const fills = [];
-  const ink = {fillStyle: '', fillRect(x, y, w, h) { fills.push([x, y, w, h, this.fillStyle]); },
+  const ink = {fillStyle: '', imageSmoothingEnabled: true, fillRect(x, y, w, h) {
+      if (typeof this.fillStyle === 'object') this.fillStyle.smoothingOnFill = this.imageSmoothingEnabled;
+      fills.push([x, y, w, h, this.fillStyle]);
+    },
+    createPattern(tile, repeat) { if (repeat !== 'repeat') throw Error('pattern must repeat'); return {pixels: tile.pixels}; },
     beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, setLineDash() {}};
   paintCells(ink, sheet, {x0: 0, x1: 20, y0: 0, y1: 20, dx: 0, dy: 0}, {w: 20, h: 20});
+  finalSmoothing = ink.imageSmoothingEnabled;
   return fills.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
-}`));
+}
+export function palette(colors) { book = {indexed_colors: colors}; }
+export function calls() { return colorCalls; }
+export function smoothing() { return finalSmoothing; }
+export function rule(over) { conditional.clear(); if (over) conditional.set('0,0', over); }
+`));
 is('canvas paints band formatting on empty cells and keeps an explicit cell style',
   bandPainter.paint({rows: [{index: 1, cells: [{col: 0, style: {bg_color: '0000FF'}}]}],
     band_styles: {rows: [[1, {bg_color: 'FF0000'}]], columns: [[0, {bg_color: '00FF00'}]]}}),
   [[0, 0, 10, 10, '#0000FF'], [10, 0, 10, 10, '#FF0000'], [0, 10, 10, 10, '#00FF00']]);
+// Native screen-format range images use these foreground pixel rows.
+const nativeTiles = {
+  mediumGray: ['#.#.#.#.', '.#.#.#.#'],
+  darkGray: ['###.###.', '#.###.##'],
+  lightGray: ['#...#...', '..#...#.'],
+  darkHorizontal: ['########', '########', '........', '........'],
+  darkVertical: ['##..##..'],
+  darkDown: ['##..##..', '.##..##.', '..##..##', '#..##..#'],
+  darkUp: ['..##..##', '.##..##.', '##..##..', '#..##..#'],
+  darkGrid: ['#..##..#', '.##..##.', '.##..##.', '#..##..#'],
+  darkTrellis: ['########', '.##..##.', '########', '#..##..#'],
+  lightHorizontal: ['########', '........', '........', '........'],
+  lightVertical: ['#...#...'],
+  lightDown: ['#...#...', '.#...#..', '..#...#.', '...#...#'],
+  lightUp: ['...#...#', '..#...#.', '.#...#..', '#...#...'],
+  lightGrid: ['########', '#...#...', '#...#...', '#...#...'],
+  lightTrellis: ['#...#...', '.#.#.#.#', '..#...#.', '.#.#.#.#'],
+  gray125: ['#...#...', '........', '..#...#.', '........'],
+  gray0625: ['#.......', '........', '....#...', '........'],
+};
+const paintedFill = (style) => bandPainter.paint({rows: [{index: 1, cells: [{col: 0, style}]}]});
+for (const [pattern, tile] of Object.entries(nativeTiles)) {
+  const paint = paintedFill({bg_color: '0000FF', pattern_fill: {pattern, foreground: {rgb: 'FFFF0000'}}})[0][4];
+  const rows = Array.from({length: 8}, (_, y) => Array.from({length: 8}, (_, x) => {
+    const pixel = paint.pixels[y * 8 + x];
+    return pixel === '#FF0000' ? '#' : pixel === '#0000FF' ? '.' : '?';
+  }).join(''));
+  is('canvas repeats the Native ' + pattern + ' tile', rows, Array.from({length: 8}, (_, y) => tile[y % tile.length]));
+}
+is('explicit no-fill ignores retained colors', paintedFill({bg_color: 'FF0000', pattern_fill: {pattern: 'none'}}), []);
+is('solid fill can resolve an original color reference',
+  paintedFill({pattern_fill: {pattern: 'solid', foreground: {rgb: 'FF123456'}}})[0][4], '#123456');
+const paletteStyle = {pattern_fill: {pattern: 'mediumGray', foreground: {indexed: 0}}};
+is('pattern pixels are painted without interpolation', paintedFill(paletteStyle)[0][4].smoothingOnFill, false);
+is('painting restores smoothing for subsequent images', bandPainter.smoothing(), true);
+bandPainter.palette(['FF102030']);
+is('pattern foreground uses the workbook palette', paintedFill(paletteStyle)[0][4].pixels[0], '#102030');
+const callsBefore = bandPainter.calls();
+paintedFill(paletteStyle);
+is('repainting reuses resolved colors', bandPainter.calls(), callsBefore);
+bandPainter.palette(['FF405060']);
+is('changing the palette invalidates the color cache', paintedFill(paletteStyle)[0][4].pixels[0], '#405060');
+bandPainter.rule({bg_color: '00FF00'});
+is('a conditional solid fill replaces a patterned cell fill', paintedFill(paletteStyle)[0][4], '#00FF00');
+bandPainter.rule(null);
+
+grid.forget();
+grid.seed(1, 0, 'pattern');
+grid.select(1, 0, 1, 0);
+grid.sheetOf().rows[0].cells[0].style = {bg_color: '0000FF', pattern_fill: {pattern: 'darkDown', foreground: {rgb: 'FFFF0000'}}};
+grid.wearFill(null);
+is('No fill removes the pattern as well as its background', grid.styleAt(1, 0), {bg_color: null, pattern_fill: null});
+grid.undo();
+is('undo restores the original pattern', grid.styleAt(1, 0).pattern_fill.pattern, 'darkDown');
+grid.redo();
+is('redo clears the pattern again', grid.styleAt(1, 0).pattern_fill, null);
+grid.undo();
+grid.wearFill('123456');
+is('a new background color retains the pattern', grid.styleAt(1, 0).pattern_fill.pattern, 'darkDown');
+is('a new background color retains its original foreground', grid.styleAt(1, 0).pattern_fill.foreground, {rgb: 'FFFF0000'});
+is('the new pattern background has a new RGB origin', grid.styleAt(1, 0).pattern_fill.background, {rgb: 'FF123456'});
+
 grid.forget();
 grid.sheetOf().band_styles = {rows: [[2, {bg_color: 'FF0000'}]], columns: [[1, {bg_color: '00FF00'}]]};
 grid.select(2, 25, 2, 25);

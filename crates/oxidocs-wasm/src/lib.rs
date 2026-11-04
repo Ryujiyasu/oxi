@@ -132,6 +132,40 @@ pub fn parse_spreadsheet(data: &[u8]) -> Result<JsValue, JsError> {
     serde_wasm_bindgen::to_value(&workbook).map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Resolve a cell color for display using the workbook's theme and palette.
+/// The fallback supplies the foreground/background role of automatic colors.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn resolve_spreadsheet_color(reference: JsValue, palette: JsValue, fallback: &str) -> Result<Option<String>, JsError> {
+    #[derive(Deserialize)]
+    struct Palette {
+        #[serde(default)]
+        theme_colors: Vec<String>,
+        #[serde(default)]
+        indexed_colors: Vec<String>,
+    }
+    let mut reference: oxicells_core::ir::CellColorReference = serde_wasm_bindgen::from_value(reference)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    let palette: Palette = serde_wasm_bindgen::from_value(palette)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    if reference.rgb.is_none() {
+        let automatic = reference.automatic && reference.theme.is_none() && reference.indexed.is_none();
+        let base = match reference.indexed {
+            Some(64) => Some("000000"),
+            Some(65) => Some("FFFFFF"),
+            _ if automatic => Some(fallback.trim_start_matches('#')),
+            _ => None,
+        };
+        if let Some(base) = base {
+            if base.len() != 6 || !base.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(JsError::new("An automatic cell color requires a six-digit RGB fallback"));
+            }
+            reference.rgb = Some(base.to_owned());
+        }
+    }
+    Ok(oxicells_core::parser::resolve_cell_color_reference(&reference, &palette.theme_colors, &palette.indexed_colors))
+}
+
 #[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn parse_presentation(data: &[u8]) -> Result<JsValue, JsError> {

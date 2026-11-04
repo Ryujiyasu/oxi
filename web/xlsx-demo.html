@@ -1119,6 +1119,88 @@ function breakLines(font, text, room) {
   return held;
 }
 
+const FILL_MASKS = Object.freeze({
+  mediumGray: [0xAA, 0x55],
+  darkGray: [0xEE, 0xBB],
+  lightGray: [0x88, 0x22],
+  darkHorizontal: [0xFF, 0xFF, 0, 0],
+  darkVertical: [0xCC],
+  darkDown: [0xCC, 0x66, 0x33, 0x99],
+  darkUp: [0x33, 0x66, 0xCC, 0x99],
+  darkGrid: [0x99, 0x66, 0x66, 0x99],
+  darkTrellis: [0xFF, 0x66, 0xFF, 0x99],
+  lightHorizontal: [0xFF, 0, 0, 0],
+  lightVertical: [0x88],
+  lightDown: [0x88, 0x44, 0x22, 0x11],
+  lightUp: [0x11, 0x22, 0x44, 0x88],
+  lightGrid: [0xFF, 0x88, 0x88, 0x88],
+  lightTrellis: [0x88, 0x55, 0x22, 0x55],
+  gray125: [0x88, 0, 0x22, 0],
+  gray0625: [0x80, 0, 0x08, 0],
+});
+const fillPatterns = new WeakMap();
+const fillColorCache = { palette: '', colors: new Map() };
+
+/** Resolve original color references, including tint, with the importer's rules. */
+function fillColor(reference, fallback) {
+  if (!reference) return fallback;
+  const palette = {theme_colors: book?.theme_colors || [], indexed_colors: book?.indexed_colors || []};
+  const paletteKey = JSON.stringify(palette);
+  if (fillColorCache.palette !== paletteKey) {
+    fillColorCache.palette = paletteKey;
+    fillColorCache.colors.clear();
+  }
+  const key = JSON.stringify([reference, fallback]);
+  if (!fillColorCache.colors.has(key)) {
+    if (fillColorCache.colors.size >= 512) fillColorCache.colors.clear();
+    fillColorCache.colors.set(key, tint(vbaProjectApi.resolve_spreadsheet_color(reference, palette, fallback), fallback));
+  }
+  return fillColorCache.colors.get(key);
+}
+
+/** A fill's repeated bitmap shares an origin across neighboring cells. */
+function paintCellFill(ink, style, box) {
+  if (!style) return;
+  const fill = style.pattern_fill;
+  if (fill?.pattern === 'none') return;
+  const mask = FILL_MASKS[fill?.pattern];
+  if (!mask) {
+    const shade = style.bg_color || (fill?.pattern === 'solid' ? fillColor(fill.foreground, '#FFFFFF') : null);
+    if (!shade) return;
+    ink.fillStyle = tint(shade, '#FFFFFF');
+  } else {
+    const background = style.bg_color ? tint(style.bg_color, '#FFFFFF') : fillColor(fill.background, '#FFFFFF');
+    const foreground = fillColor(fill.foreground, '#000000');
+    let cache = fillPatterns.get(ink);
+    if (!cache) { cache = new Map(); fillPatterns.set(ink, cache); }
+    const key = JSON.stringify([fill.pattern, foreground, background]);
+    let pattern = cache.get(key);
+    if (!pattern) {
+      const tile = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(8, 8) : document.createElement('canvas');
+      tile.width = tile.height = 8;
+      const brush = tile.getContext('2d');
+      if (!brush) return;
+      brush.fillStyle = background;
+      brush.fillRect(0, 0, 8, 8);
+      brush.fillStyle = foreground;
+      for (let y = 0; y < 8; y += 1) {
+        for (let x = 0; x < 8; x += 1) {
+          if (mask[y % mask.length] & (0x80 >> x)) brush.fillRect(x, y, 1, 1);
+        }
+      }
+      pattern = ink.createPattern(tile, 'repeat');
+      if (!pattern) return;
+      if (cache.size >= 256) cache.clear();
+      cache.set(key, pattern);
+    }
+    ink.fillStyle = pattern;
+  }
+  const smoothing = ink.imageSmoothingEnabled;
+  if (mask) ink.imageSmoothingEnabled = false;
+  ink.fillRect(box.left, box.top, box.right - box.left, box.bottom - box.top);
+  if (mask) ink.imageSmoothingEnabled = smoothing;
+}
+
 /** A stored colour, which may or may not carry an alpha byte in front. */
 function tint(hex, fallback) {
   if (!hex) return fallback;
@@ -1805,11 +1887,7 @@ function paintCells(ink, sheet, band, view) {
   }
 
   for (const held of drawn) {
-    const shade = held.cell.style && held.cell.style.bg_color;
-    if (!shade) continue;
-    ink.fillStyle = tint(shade, '#FFFFFF');
-    ink.fillRect(held.box.left, held.box.top,
-      held.box.right - held.box.left, held.box.bottom - held.box.top);
+    paintCellFill(ink, held.cell.style, held.box);
   }
 
   // The grid Excel shows behind a sheet, which is not part of the sheet.
@@ -2717,7 +2795,15 @@ const noFillButton = document.getElementById('nofill');
 
 /// Colour every cell in the selection, or take the colour off with `null`.
 function wearFill(colour) {
-  restyle((was) => ({ ...was, bg_color: colour }));
+  restyle((was) => {
+    const fill = was?.pattern_fill;
+    if (colour === null || !fill || fill.pattern === 'none') {
+      return { ...was, bg_color: colour, pattern_fill: null };
+    }
+    const part = fill.pattern === 'solid' ? 'foreground' : 'background';
+    const rgb = 'FF' + String(colour).replace(/^#/, '').slice(-6).toUpperCase();
+    return { ...was, bg_color: colour, pattern_fill: { ...fill, [part]: { rgb } } };
+  });
 }
 
 /// Show the selection's colour, when they agree on one.
@@ -4312,6 +4398,7 @@ function dressed(row, col, style) {
   for (const part of ['font_color', 'bg_color', 'bold', 'italic', 'underline', 'number_format']) {
     if (over[part] !== undefined && over[part] !== null) held[part] = over[part];
   }
+  if (over.bg_color !== undefined && over.bg_color !== null) held.pattern_fill = null;
   return held;
 }
 
