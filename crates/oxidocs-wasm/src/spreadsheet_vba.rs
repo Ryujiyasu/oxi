@@ -13875,7 +13875,7 @@ impl<'a> WorkbookHost<'a> {
             .collect();
         for row in rows {
             let band = CellRange { sheet, start_row: row, end_row: row, start_column: 0, end_column: MAX_WORKSHEET_COLUMN };
-            self.auto_fit_rows(band)?;
+            self.fit_rows(band, true)?;
         }
         Ok(())
     }
@@ -22037,13 +22037,15 @@ impl<'a> WorkbookHost<'a> {
     /// worked out here -- only the breaks the text carries -- which is the
     /// one thing this falls short of Excel on.
     fn auto_fit_rows(&mut self, range: CellRange) -> Result<Value, String> {
-        use oxicells_core::row_defaults::{font_default_row_px, font_line_box};
+        self.fit_rows(range, false)
+    }
+
+    fn fit_rows(&mut self, range: CellRange, refitting: bool) -> Result<Value, String> {
+        use oxicells_core::row_defaults::{font_cell_line_box, font_default_row_px, font_line_box};
         let sheet_index = range.sheet;
         // A formula written a moment ago is fitted by its answer: measured,
         // =REPT("ab ",10) set to wrap asks four lines.
-        if self.holds_formula(self.cut_to_contents(range)?) {
-            self.recalculate();
-        }
+        self.settle(self.cut_to_contents(range)?);
         // A merged cell is passed over: measured, a long wrapped text merged
         // across A1:B1 leaves the row at 18.75.
         let merged: Vec<CellRange> = self
@@ -22054,9 +22056,9 @@ impl<'a> WorkbookHost<'a> {
         let (face, size) = {
             let sheet = &self.workbook.sheets[sheet_index];
             match sheet.normal_font.clone() {
-                Some(font) => font,
+                Some((font, size)) => (sheet.column_width_font.clone().unwrap_or(font), size),
                 None => (
-                    self.workbook.default_style.font_name.clone().unwrap_or_else(|| "Calibri".to_string()),
+                    self.workbook.default_style.latin_font_name().unwrap_or("Calibri").to_string(),
                     self.workbook.default_style.font_size.unwrap_or(11.0),
                 ),
             }
@@ -22091,10 +22093,16 @@ impl<'a> WorkbookHost<'a> {
             let thick_bottom = row.cells.iter().any(|cell| heavy(&cell.style.border_bottom));
             for cell in &row.cells {
                 let at = CellAddress { sheet: sheet_index, row: row.index, column: cell.col };
-                if merged.iter().any(|merge| range_contains(*merge, CellRange::single(at))) {
-                    continue;
+                let merge = merged.iter().find(|merge| range_contains(**merge, CellRange::single(at)));
+                if let Some(merge) = merge {
+                    if merge.start_row != merge.end_row {
+                        if refitting {
+                            px = px.max(row.height.unwrap_or(sheet.default_row_height) / 0.75);
+                        }
+                        continue;
+                    }
                 }
-                let cell_face = cell.style.font_name.as_deref().unwrap_or(&face);
+                let cell_face = cell.style.latin_font_name().unwrap_or(&face);
                 let cell_size = cell.style.font_size.unwrap_or(size);
                 // A bold line stands in its own box: measured, two bold
                 // lines of 游ゴシック 11 ask 36 and six 144 -- 24 pixels each
@@ -22104,7 +22112,11 @@ impl<'a> WorkbookHost<'a> {
                 } else {
                     None
                 };
-                let font_px = line_px
+                let shared_line = font_cell_line_box(cell_face, cell_size, cell.style.bold, cell.style.italic,
+                    &face, size, merge.is_some() && cell.style.wrap_text).map(|(height, _)| height);
+                let own_line = font_cell_line_box(cell_face, cell_size, cell.style.bold, cell.style.italic,
+                    "", 0.0, false).map(|(height, _)| height);
+                let font_px = own_line.or(line_px)
                     .or_else(|| font_default_row_px(cell_face, cell_size))
                     .unwrap_or_else(|| base_px.round() as u16);
                 // A wrapped cell takes a line for each piece its text breaks
@@ -22112,7 +22124,7 @@ impl<'a> WorkbookHost<'a> {
                 // "the quick brown fox jumps over" asks four lines (75), a
                 // 34-letter word five, and fifteen kana four.
                 // A number is never broken over lines.
-                let lines = if cell.style.wrap_text && !matches!(cell.value, CellValue::Number(_)) {
+                let lines = if merge.is_none() && cell.style.wrap_text && !matches!(cell.value, CellValue::Number(_)) {
                     // Each level of indent takes twelve pixels of the room,
                     // and bold wants two more than its glyphs: measured,
                     // forty "a"s ask 8, 10, 14 and 20 lines at levels 0-3.
@@ -22128,6 +22140,7 @@ impl<'a> WorkbookHost<'a> {
                 } else {
                     1.0
                 };
+                let font_px = if lines == 1.0 { shared_line.unwrap_or(font_px) } else { font_px };
                 px = px.max(f32::from(font_px) * lines);
             }
             px += f32::from(u8::from(thick_top)) + f32::from(u8::from(thick_bottom));
@@ -22142,9 +22155,7 @@ impl<'a> WorkbookHost<'a> {
     fn auto_fit_columns(&mut self, range: CellRange) -> Result<Value, String> {
         // A formula written a moment ago is fitted by its answer, which
         // Excel has already worked out.
-        if self.holds_formula(self.cut_to_contents(range)?) {
-            self.recalculate();
-        }
+        self.settle(self.cut_to_contents(range)?);
         // `Cells.EntireColumn.AutoFit` fits every column there is; only the
         // ones with something in them can change.
         let last_used = self.workbook.sheets[range.sheet]
@@ -34181,6 +34192,9 @@ impl Host for WorkbookHost<'_> {
                 self.redress_runs(range,|dress| {
                     dress.set_name(named.clone());
                 });
+                if !changed.is_empty() {
+                    self.refit_rows(range)?;
+                }
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("bold") {
@@ -75241,6 +75255,35 @@ End Function"#;
             assert_eq!(style.latin_font_name(),Some(name));
             assert_eq!(style.font_family,Some(2));
             assert!(style.font_reference.as_ref().and_then(|reference|reference.scheme.as_ref()).is_none());
+        }
+    }
+
+    #[test]
+    fn font_formatting_keeps_cached_volatile_answers() {
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        for manual in [false,true] {
+            for action in [
+                "Range(\"A1\").Font.Name = \"Meiryo\"",
+                "Range(\"A1\").Font.Size = 20",
+                "Rows(1).AutoFit",
+                "Columns(\"A:B\").AutoFit",
+            ] {
+                let mut book=oxicells_core::parse_xlsx(original).unwrap();
+                let row=book.sheets[0].rows.iter_mut().find(|row|row.index==1).unwrap();
+                let mut cached=row.cells[0].clone();
+                cached.col=1;cached.value=CellValue::Number(0.25);
+                cached.formula=Some("RAND()".to_string());cached.formula_utf16=None;
+                cached.array_block=None;cached.spill=Default::default();cached.runs.clear();
+                row.cells.retain(|cell|cell.col!=1);row.cells.push(cached);
+                row.cells.sort_by_key(|cell|cell.col);
+                let calculation=if manual {-4135} else {-4105};
+                let module=parse_module(&format!(
+                    "Public Function Probe() As Double\nApplication.Calculation = {calculation}\n{action}\nProbe = Range(\"B1\").Value2\nEnd Function\n"
+                )).unwrap();
+                let mut host=WorkbookHost::new(&mut book,0).unwrap();
+                assert_eq!(execute_with_host(&module,"Probe",vec![],&mut host).unwrap(),
+                    Value::Double(0.25),"{action}, manual={manual}");
+            }
         }
     }
 

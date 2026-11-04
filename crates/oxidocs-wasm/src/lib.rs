@@ -755,6 +755,23 @@ pub fn row_height_px(face: &str, size: f32) -> Option<u16> {
     oxicells_core::row_defaults::font_default_row_px(face, size)
 }
 
+/// A cell's line height including the sheet's Normal font, in 96-dpi pixels.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn cell_row_height_px(
+    face: &str,
+    size: f32,
+    bold: bool,
+    italic: bool,
+    normal_face: &str,
+    normal_size: f32,
+    merged_wrap: bool,
+) -> Option<u16> {
+    oxicells_core::row_defaults::font_cell_line_box(
+        face, size, bold, italic, normal_face, normal_size, merged_wrap,
+    ).map(|(height, _)| height)
+}
+
 /// Strikeout offset above the baseline and stroke thickness, in 96-dpi pixels.
 /// An unmeasured face returns an empty vector.
 #[cfg(feature = "suite")]

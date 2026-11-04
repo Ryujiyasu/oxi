@@ -525,7 +525,7 @@ import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-setti
 import * as vbaProjectApi from './oxidocs_wasm.js';
 // The row model is the renderer's own, written out once in JS: what the grid
 // draws and what the row heights are measured with cannot drift apart.
-import { explainRow, mayBreak } from './row-model.js';
+import { explainRow, mayBreak, rememberRowHeight } from './row-model.js';
 
 // The two editors beside this one have spoken both languages for a while and
 // this one spoke neither, which is the sort of gap a suite is judged on.
@@ -831,12 +831,14 @@ function fitColumn(col) {
  * row and every question is a crossing into the engine.
  */
 const rowHeights = new Map();
-function rowHeightOf(face, size) {
-  const key = `${face}|${size}`;
+function rowHeightOf(face, size, normal = null, bold = false, italic = false, mergedWrap = false) {
+  const key = `${face}|${size}|${normal?.join('|') || ''}|${bold}|${italic}|${mergedWrap}`;
   if (!rowHeights.has(key)) {
     let px;
     try {
-      px = row_height_px(face || '', size);
+      px = normal || bold || italic ? vbaProjectApi.cell_row_height_px(
+        face || '', size, bold, italic, normal?.[0] || '', normal?.[1] || 0, mergedWrap)
+        : row_height_px(face || '', size);
     } catch {
       px = undefined;
     }
@@ -1335,9 +1337,11 @@ function layout() {
       // needed, and Excel works it out again — so this does too, by the rules
       // the renderer measures rows with.
       try {
-        px = explainRow({
+        const measured = explainRow({
           sheet, index, row, columns: cols, heightOf: rowHeightOf, advance: step,
-        }).px;
+        });
+        px = measured.px;
+        rememberRowHeight(sheet, row, measured);
       } catch {
         px = Math.trunc(((row && row.height) || sheet.default_row_height || 15) * 96 / 72);
       }

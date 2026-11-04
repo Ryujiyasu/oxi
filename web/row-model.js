@@ -158,7 +158,7 @@ export function blankHeight(sheet, heightOf, merged, recorded) {
   }
   if (next < 16384) bare.push([next, 16383]);
   if (sheet.normal_font && bare.some(([a, b]) => free(a, b))) {
-    raise(sheet.normal_font[0], sheet.normal_font[1]);
+    raise(sheet.column_width_font || sheet.normal_font[0], sheet.normal_font[1]);
   }
   return { px: tallest, unknown };
 }
@@ -237,15 +237,18 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance }) {
 
   let raise = 0;
   for (const cell of row.cells || []) {
-    const face = cell.style?.font_name || 'Calibri';
+    const face = cell.style?.font_reference?.latin_name || cell.style?.font_name || 'Calibri';
     const size = cell.style?.font_size || 11;
-    const px = heightOf(face, size);
+    const normal = sheet.normal_font
+      ? [sheet.column_width_font || sheet.normal_font[0], sheet.normal_font[1]] : null;
+    let px = heightOf(face, size, null,
+      !!cell.style?.bold, !!cell.style?.italic);
     if (px === undefined) return { ...fallback(), parts };
     const where = mergeAt(sheet, index, cell.col);
     const text = cellText(cell);
     let lines = 1;
     let what;
-    if (where && (where.rows > 0 || !where.anchor)) {
+    if (where && where.rows > 0) {
       parts.push({
         kind: 'cell', px: 0, column: cell.col,
         what: `a merge across rows holds ${columnName(cell.col)} — it asks for nothing`,
@@ -268,6 +271,12 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance }) {
       what = `${columnName(cell.col)} wraps ${lines} line${lines > 1 ? 's' : ''} of ${face} ${size}`;
     } else {
       what = `${columnName(cell.col)} holds one line of ${face} ${size}`;
+    }
+    if (lines === 1 && normal) {
+      const shared = heightOf(face, size, normal, !!cell.style?.bold,
+        !!cell.style?.italic, !!where && !!cell.style?.wrap_text);
+      if (shared === undefined) return { ...fallback(), parts };
+      px = shared;
     }
     const asked = lines * px;
     parts.push({ kind: 'cell', px: asked, column: cell.col, what });
@@ -292,3 +301,12 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance }) {
 }
 
 export { columnName };
+
+/// Keep the computed automatic height available to save and VBA execution.
+export function rememberRowHeight(sheet, row, measured) {
+  if (!row || row.custom_height || row.hidden || measured.note
+      || !Number.isFinite(measured.px)) return;
+  const height = measured.px * 0.75;
+  if (height === sheet.default_row_height) delete row.height;
+  else row.height = height;
+}
