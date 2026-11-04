@@ -755,6 +755,107 @@ pub fn row_height_px(face: &str, size: f32) -> Option<u16> {
     oxicells_core::row_defaults::font_default_row_px(face, size)
 }
 
+/// Strikeout offset above the baseline and stroke thickness, in 96-dpi pixels.
+/// An unmeasured face returns an empty vector.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn spreadsheet_strikeout(face: &str, size: f32, bold: bool, italic: bool) -> Vec<f32> {
+    if !size.is_finite() || size <= 0.0 {
+        return Vec::new();
+    }
+    let pixels = (size * 96.0 / 72.0).round();
+    if !pixels.is_finite() || pixels < 1.0 || pixels > f32::from(u16::MAX) {
+        return Vec::new();
+    }
+    if let Some(metrics) = oxidocs_core::font::font_device_metrics(face, bold, italic, pixels as u16) {
+        return vec![f32::from(metrics.strikeout_offset), f32::from(metrics.strikeout_thickness)];
+    }
+    match oxidocs_core::font::font_strikeout(face, bold, italic) {
+        Some((offset, thickness)) => {
+            vec![(offset * pixels).round(), (thickness * pixels).round().max(1.0)]
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Measured character advances in 96-dpi pixels, or an empty vector if unavailable.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn spreadsheet_glyph_advances(face: &str, size: f32, bold: bool, italic: bool, text: &str) -> Vec<u16> {
+    if !size.is_finite() || size <= 0.0 {
+        return Vec::new();
+    }
+    let pixels = (size * 96.0 / 72.0).round();
+    if !pixels.is_finite() || pixels < 1.0 || pixels > f32::from(u16::MAX) {
+        return Vec::new();
+    }
+    let Some(metrics) = oxidocs_core::font::font_device_metrics(face, bold, italic, pixels as u16) else {
+        return Vec::new();
+    };
+    text.chars().map(|character| metrics.advance(character)).collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
+}
+
+/// Font family and character set used by Font.Name; -1 denotes absent metadata.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn spreadsheet_font_metadata(face: &str) -> Vec<i32> {
+    let (family, charset) = spreadsheet_vba::requested_font_metadata(face);
+    vec![family.unwrap_or(-1), charset.unwrap_or(-1)]
+}
+
+/// Device height, ascent, descent, internal/external leading and strikeout offset/thickness.
+/// All values are 96-dpi pixels; an unmeasured face/size returns an empty vector.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn spreadsheet_font_metrics(face: &str, size: f32, bold: bool, italic: bool) -> Vec<u16> {
+    if !size.is_finite() || size <= 0.0 {
+        return Vec::new();
+    }
+    let pixels = (size * 96.0 / 72.0).round();
+    if !pixels.is_finite() || pixels < 1.0 || pixels > f32::from(u16::MAX) {
+        return Vec::new();
+    }
+    let Some(metrics) = oxidocs_core::font::font_device_metrics(face, bold, italic, pixels as u16) else {
+        return Vec::new();
+    };
+    vec![metrics.height, metrics.ascent, metrics.descent, metrics.internal_leading,
+        metrics.external_leading, metrics.strikeout_offset, metrics.strikeout_thickness]
+}
+
+#[cfg(all(test, feature = "suite"))]
+mod spreadsheet_device_font_tests {
+    use super::*;
+
+    #[test]
+    fn measured_advances_and_strokes_match_native_font_samples() {
+        assert_eq!(spreadsheet_glyph_advances("Arial", 12.0, false, true, "MM12"), vec![14, 14, 9, 9]);
+        assert_eq!(spreadsheet_glyph_advances("Aptos Narrow", 11.0, false, false, "M12"), vec![11, 7, 7]);
+        assert_eq!(spreadsheet_strikeout("Calibri", 24.0, true, true), vec![8.0, 3.0]);
+        assert_eq!(spreadsheet_font_metrics("Arial", 12.0, false, false), vec![18, 15, 3, 2, 1, 4, 1]);
+    }
+
+    #[test]
+    fn unavailable_metrics_do_not_substitute_another_face() {
+        for size in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::MAX] {
+            assert!(spreadsheet_glyph_advances("Arial", size, false, false, "M").is_empty());
+            assert!(spreadsheet_font_metrics("Arial", size, false, false).is_empty());
+            assert!(spreadsheet_strikeout("Arial", size, false, false).is_empty());
+        }
+        assert!(spreadsheet_glyph_advances("Oxi unmeasured device font", 12.0, false, false, "M").is_empty());
+        assert!(spreadsheet_glyph_advances("Arial", 12.0, false, false, "\u{0301}").is_empty());
+    }
+
+    #[test]
+    fn font_name_metadata_reuses_the_vba_classification() {
+        assert_eq!(spreadsheet_font_metadata("Courier New"), vec![3, -1]);
+        assert_eq!(spreadsheet_font_metadata("Meiryo"), vec![-1, -1]);
+        assert_eq!(spreadsheet_font_metadata("メイリオ"), vec![3, 128]);
+        assert_eq!(spreadsheet_font_metadata("Aptos Narrow"), vec![2, -1]);
+        assert_eq!(spreadsheet_font_metadata("Oxi unclassified font"), vec![-1, -1]);
+    }
+}
+
 /// Recalculate every formula in a workbook and hand the workbook back.
 ///
 /// The browser holds a sheet as this IR while it is being edited, so this is

@@ -38,6 +38,8 @@ mod catalog;
 mod gdi_widths;
 pub(crate) use catalog::{CatalogGlyphMetrics, glyph_metrics as catalog_glyph_metrics, glyph_corner_kern as catalog_glyph_corner_kern, glyph_face_metrics as catalog_glyph_face_metrics, glyph_rule_thickness as catalog_glyph_rule_thickness, glyph_strikeout as catalog_glyph_strikeout};
 pub use catalog::{MissingCatalogMember, take_missing_members as take_missing_catalog_members, register_member as register_catalog_member};
+pub use catalog::glyph_strikeout as font_strikeout;
+pub use catalog::{DeviceFontMetrics, glyph_device_metrics as font_device_metrics, glyph_device_metadata as font_device_metadata};
 pub mod shape;
 pub mod math_constants;
 pub mod math_glyphs;

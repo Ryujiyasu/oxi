@@ -72,7 +72,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'widthForPixels', 'setWidth', 'dropCut',
   'padFor', 'fitWidth', 'fitColumn', 'shownText', 'rule', 'wearRules', 'findNext',
   'span', 'mergesMet', 'setMerges', 'wearMerge',
-  'wearFace', 'wearSize', 'wearInk', 'wearFill', 'agreedOn',
+  'faceOf', 'wearFace', 'wearSize', 'wearInk', 'wearFill', 'agreedOn',
   'calcCost',
   'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight',
   'holdPanes', 'freezeHere', 'bandsOf', 'onScreen',
@@ -164,6 +164,10 @@ const markConditional = () => {};
 // Working out formulas is the engine's job and has its own test; here it only
 // has to not happen, so that what a cell holds is exactly what was typed.
 const recompute = () => {};
+const vbaProjectApi = {spreadsheet_font_metadata(name) {
+  return name === 'メイリオ' ? [3, 128] : name === 'Century' ? [1, -1]
+    : name === 'Courier New' ? [3, -1] : name === 'Arial' ? [2, -1] : [-1, -1];
+}};
 const cellAt = () => null;
 const tableNow = () => null;
 const describeCell = () => {};
@@ -481,6 +485,24 @@ grid.wearFace('Century');
 grid.select(1, 0, 1, 1);
 is('and one that does not says nothing at all',
   grid.agreedOn('font_name'), null);
+
+grid.forget();
+const themedFont = {font_name: 'Yu Gothic', font_family: 2, font_charset: 128,
+  font_reference: {latin_name: 'Arial', scheme: 'minor', theme: 3}};
+grid.put(1, 0, 'a', themedFont);
+grid.select(1, 0, 1, 0);
+is('the font picker reads the theme Latin name', grid.agreedOn('font_name'), 'Arial');
+grid.wearFace('Arial');
+is('choosing the current Latin name preserves its theme association',
+  grid.styleAt(1, 0).font_reference, themedFont.font_reference);
+grid.wearFace('Courier New');
+is('a new face replaces the effective font name', grid.styleAt(1, 0).font_name, 'Courier New');
+is('the new face uses the shared family classification', grid.styleAt(1, 0).font_family, 3);
+is('the old face character set is cleared', grid.styleAt(1, 0).font_charset, undefined);
+is('a new name clears theme font identity while preserving its color',
+  grid.styleAt(1, 0).font_reference, {theme: 3});
+grid.undo();
+is('undo restores the complete theme font identity', grid.styleAt(1, 0), themedFont);
 
 
 // ── Cells drawn as one ───────────────────────────────────────────────────────
@@ -1634,12 +1656,20 @@ const conditional = new Map();
 const fillColorCache = { palette: '', colors: new Map() };
 const fillPatterns = new WeakMap();
 let colorCalls = 0;
+let strikeCalls = [];
+let textCalls = [];
 let finalSmoothing = null;
 // The independent Native image comparison exercises the WASM color resolver.
 // This isolated canvas test supplies RGB and palette results for the brush.
 const vbaProjectApi = {resolve_spreadsheet_color(reference, palette, fallback) {
   colorCalls++;
   return reference.rgb || palette.indexed_colors[reference.indexed] || fallback;
+}, spreadsheet_strikeout(face, size, bold, italic) {
+  strikeCalls.push([face, size, bold, italic]);
+  return face === 'Unmeasured' ? [] : [4, 1];
+}, spreadsheet_glyph_advances(face, size, bold, italic, text) {
+  return face === 'Unmeasured' ? [] : Array.from(text,
+    letter => letter === '0' ? 9 : italic && letter === 'M' ? 14 : 13);
 }};
 class OffscreenCanvas {
   constructor(width, height) {
@@ -1662,16 +1692,31 @@ ${lift('fillColor')}
 ${lift('paintCellFill')}
 const ruleOf = () => null;
 const indentStep = () => 0;
-const shownText = () => '';
+const shownText = cell => cell.text || '';
+const isNumber = () => false;
+const measurer = () => ({font: '', measureText: text => ({width: text === '0' ? 9 : 13})});
+const advances = new Map();
+${lift('faceOf')}
+${lift('fontOf')}
+${lift('cellTextMetrics')}
+${lift('paintCellText')}
+${lift('advance')}
+${lift('inkWidth')}
+${lift('gutters')}
+const breakLines = (font, text) => text.split('\\n');
 ${lift('paintCells')}
 export function paint(sheet) {
+  strikeCalls = [];
+  textCalls = [];
   const fills = [];
   const ink = {fillStyle: '', imageSmoothingEnabled: true, fillRect(x, y, w, h) {
       if (typeof this.fillStyle === 'object') this.fillStyle.smoothingOnFill = this.imageSmoothingEnabled;
       fills.push([x, y, w, h, this.fillStyle]);
     },
     createPattern(tile, repeat) { if (repeat !== 'repeat') throw Error('pattern must repeat'); return {pixels: tile.pixels}; },
-    beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, setLineDash() {}};
+    beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, setLineDash() {},
+    save() {}, restore() {}, rect() {}, clip() {},
+    fillText(text, x, y) { textCalls.push([text, x, y, this.font]); }};
   paintCells(ink, sheet, {x0: 0, x1: 20, y0: 0, y1: 20, dx: 0, dy: 0}, {w: 20, h: 20});
   finalSmoothing = ink.imageSmoothingEnabled;
   return fills.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
@@ -1679,12 +1724,55 @@ export function paint(sheet) {
 export function palette(colors) { book = {indexed_colors: colors}; }
 export function calls() { return colorCalls; }
 export function smoothing() { return finalSmoothing; }
+export function strikes() { return strikeCalls; }
+export function text() { return textCalls; }
 export function rule(over) { conditional.clear(); if (over) conditional.set('0,0', over); }
 `));
 is('canvas paints band formatting on empty cells and keeps an explicit cell style',
   bandPainter.paint({rows: [{index: 1, cells: [{col: 0, style: {bg_color: '0000FF'}}]}],
     band_styles: {rows: [[1, {bg_color: 'FF0000'}]], columns: [[0, {bg_color: '00FF00'}]]}}),
   [[0, 0, 10, 10, '#0000FF'], [10, 0, 10, 10, '#FF0000'], [0, 10, 10, 10, '#00FF00']]);
+// Native 12pt Arial uses a one-pixel stroke four pixels above the baseline.
+// The real WASM metrics are compared independently with Native images; this
+// canvas harness checks that painting requests the effective face/style and
+// applies the result to each text line, including stacked writing.
+const strikeStyle = {font_name: 'Arial', font_size: 12, strikethrough: true};
+const strikeSheet = style => ({rows: [{index: 1, cells: [{col: 0, text: 'M', style}]}]});
+is('a strike follows the text baseline and advance',
+  bandPainter.paint(strikeSheet(strikeStyle)), [[4, 1, 13, 1, '#000000']]);
+is('strike metrics use the effective cell font', bandPainter.strikes(), [['Arial', 12, false, false]]);
+bandPainter.paint({rows: [1, 2].map(index => ({index, cells: [{col: 0, text: 'M', style: strikeStyle}]}))});
+is('equal fonts share one metrics request within a repaint', bandPainter.strikes().length, 1);
+bandPainter.paint(strikeSheet({...strikeStyle, bold: true, italic: true}));
+is('strike metrics select bold and italic faces', bandPainter.strikes(), [['Arial', 12, true, true]]);
+is('an unmeasured face does not borrow another font stroke',
+  bandPainter.paint(strikeSheet({...strikeStyle, font_name: 'Unmeasured'})), []);
+is('switching strike off draws no stroke', bandPainter.paint(strikeSheet({...strikeStyle, strikethrough: false})), []);
+is('an undecorated cell does not query strike metrics', bandPainter.strikes(), []);
+const stackedStrike = strikeSheet({...strikeStyle, stacked_text: true});
+stackedStrike.rows[0].cells[0].text = 'MM';
+is('stacked writing strikes each glyph', bandPainter.paint(stackedStrike).length, 2);
+const wrappedStrike = strikeSheet({...strikeStyle, wrap_text: true});
+wrappedStrike.rows[0].cells[0].text = 'M\nM';
+is('wrapped writing strikes each line', bandPainter.paint(wrappedStrike).length, 2);
+const italicStrike = strikeSheet({...strikeStyle, italic: true});
+italicStrike.rows[0].cells[0].text = 'MM';
+is('a strike uses measured device advances instead of browser widths',
+  bandPainter.paint(italicStrike), [[4, 1, 28, 1, '#000000']]);
+is('the painted glyphs use those same advances',
+  bandPainter.text().map(call => call.slice(0, 3)), [['M', 4, 5], ['M', 18, 5]]);
+bandPainter.paint(strikeSheet({...strikeStyle, font_name: 'Yu Gothic',
+  font_reference: {latin_name: 'Arial', scheme: 'minor'}}));
+is('the theme Latin face is used for strike metrics', bandPainter.strikes()[0][0], 'Arial');
+is('the Latin face leads the canvas font stack', bandPainter.text()[0][3].startsWith('16px "Arial",'), true);
+const complexText = strikeSheet(strikeStyle);
+complexText.rows[0].cells[0].text = '\u0628\u0628';
+bandPainter.paint(complexText);
+is('complex script retains the browser shaping run', bandPainter.text().map(call => call[0]), ['\u0628\u0628']);
+const unknownText = strikeSheet({...strikeStyle, font_name: 'Unmeasured'});
+unknownText.rows[0].cells[0].text = 'MM';
+bandPainter.paint(unknownText);
+is('an unmeasured font retains its shaping run', bandPainter.text().map(call => call[0]), ['MM']);
 // Native screen-format range images use these foreground pixel rows.
 const nativeTiles = {
   mediumGray: ['#.#.#.#.', '.#.#.#.#'],
