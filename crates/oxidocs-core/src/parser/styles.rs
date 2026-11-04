@@ -473,7 +473,22 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
     } else if !child.page_break_before && parent.page_break_before {
         child.page_break_before = true;
     }
-    if !child.contextual_spacing && parent.contextual_spacing {
+    // OXI_CTX_STYLE_VAL0 (2026-11-04, default ON, opt-out _DISABLE): the same
+    // three-state rule for contextualSpacing. blind-J en/administrative__008d98e2:
+    // Heading4 is basedOn ListParagraph (contextualSpacing on) and sets
+    // `<w:contextualSpacing w:val="0"/>` + after=240 -- Word spaces the (A)..(G)
+    // items 12pt apart; the OR turned the child's explicit off back on and the
+    // items ran together from p6 on (pages 7-13 at SSIM 0.65-0.70).
+    if std::env::var_os("OXI_CTX_STYLE_VAL0_DISABLE").is_none() {
+        if !child.has_explicit_contextual_spacing {
+            if parent.has_explicit_contextual_spacing {
+                child.contextual_spacing = parent.contextual_spacing;
+                child.has_explicit_contextual_spacing = true;
+            } else if parent.contextual_spacing {
+                child.contextual_spacing = true;
+            }
+        }
+    } else if !child.contextual_spacing && parent.contextual_spacing {
         child.contextual_spacing = true;
     }
     // S675: before/afterAutospacing is NOT inherited — Word applies it only when
@@ -1329,6 +1344,7 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                 }
             }
             style.contextual_spacing = enabled;
+            style.has_explicit_contextual_spacing = true;
         }
         "keepNext" => {
             // CT_OnOff: val="0"/"false"/"off" disables (S633).
@@ -1856,6 +1872,7 @@ fn parse_style_definition(
                                 }
                             }
                             style.contextual_spacing = enabled;
+                            style.has_explicit_contextual_spacing = true;
                         }
                         "spacing" => {
                             let mut line_val: Option<f32> = None;
