@@ -24,10 +24,20 @@ const legacyCount = corpus.groups.length;
 const variantCount = variants.groups.length;
 const scalarCount = scalar.groups.length;
 const groups = await Promise.all([...corpus.groups, ...variants.groups, ...scalar.groups, ...directoryOutputs.groups].map(async group => {
-    const sourceBytes = await readFile(path.join(fixture, group.source));
+    const checkoutSource = await readFile(path.join(fixture, group.source));
     const bytes = await readFile(path.join(fixture, group.package));
-    assert.equal(sha(sourceBytes), group.source_sha256);
-    assert.equal(sha(bytes), group.package_sha256);
+    assert.equal(sha(bytes), group.package_sha256, group.package);
+    // Git may change line endings in a text fixture. Keep the exact measured
+    // source hash, including exported projects with mixed module line endings.
+    const lf = checkoutSource.toString('utf8').replaceAll('\r\n', '\n');
+    const forms = [checkoutSource, Buffer.from(lf), Buffer.from(lf.replaceAll('\n', '\r\n'))];
+    let sourceBytes = forms.find(value => sha(value) === group.source_sha256);
+    if (!sourceBytes) {
+        const exported = wasm.spreadsheet_vba_source(bytes);
+        assert.equal(exported.replaceAll('\r\n', '\n'), lf, group.source);
+        sourceBytes = Buffer.from(exported);
+    }
+    assert.equal(sha(sourceBytes), group.source_sha256, group.source);
     return {...group, sourceText: sourceBytes.toString('utf8'), bytes};
 }));
 const seed = group => {
