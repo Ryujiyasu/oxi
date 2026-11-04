@@ -6694,17 +6694,25 @@ impl LayoutEngine {
             let base_pt = self.resolve_font_size(&runs[k].style, para_style);
             let hps_pt = ruby_ir.hps_halfpt.map(|h| h as f32 / 2.0).unwrap_or(base_pt / 2.0);
             let ruby_metrics = &*self.metrics_for_text(&ruby_ir.text, &runs[k].style, para_style);
+            // OXI_RUBY_FIELD_SCALE: base and reading are both measured at the
+            // base run's character scale (Word writes the same w:w on both; the
+            // reading's own rPr is not kept in the IR).
+            let rf_scale = if crate::env_flag!("OXI_RUBY_FIELD_SCALE_DISABLE") {
+                1.0
+            } else {
+                runs[k].style.text_scale.map(|s| s / 100.0).filter(|s| *s > 0.0).unwrap_or(1.0)
+            };
             let ruby_w: f32 = ruby_ir
                 .text
                 .chars()
                 .map(|c| self.registry.char_width_pt_with_fallback(c, hps_pt, ruby_metrics))
-                .sum();
+                .sum::<f32>() * rf_scale;
             let mut base_w = 0.0_f32;
             for r in &runs[k..end] {
                 let m = &*self.metrics_for_text(&r.text, &r.style, para_style);
                 let fs = self.resolve_font_size(&r.style, para_style);
                 let chars = r.text.chars().count() as f32;
-                base_w += r.text.chars().map(|c| self.registry.char_width_pt_with_fallback(c, fs, m)).sum::<f32>();
+                base_w += r.text.chars().map(|c| self.registry.char_width_pt_with_fallback(c, fs, m)).sum::<f32>() * rf_scale;
                 if s1627 {
                     base_w += r.style.character_spacing.unwrap_or(0.0) * chars;
                 }

@@ -9932,9 +9932,20 @@ impl<'a> ParagraphLayouter<'a> {
                     // natural base + furigana overhang needs. 0/corpus docs use ruby
                     // (greenfield-dormant) → byte-identical gate. Opt-out
                     // OXI_S654_DISABLE.
+                    // OXI_RUBY_ATL0_NOSNAP (2026-11-04, default ON, opt-out _DISABLE): a
+                    // `line=0 atLeast` line does not snap to the grid, with or without
+                    // ruby; its furigana adds the plain expansion. blind-J
+                    // ja/creative__9aa11078 (lines grid 18, HG丸ｺﾞｼｯｸM-PRO 22 under 11pt
+                    // ruby, raise 21): Word's pitch is 38.45 (28.53 + 9.9), Oxi snapped
+                    // 38.9 up to three cells, 54. `_pb_empty_atl0_typed_grid_gen.py`'s
+                    // control arm shows the same line rule off the grid without ruby.
+                    let atl0_free = para.style.line_spacing_rule.as_deref() == Some("atLeast")
+                        && para.style.line_spacing.map_or(false, |v| v == 0.0)
+                        && !crate::env_flag!("OXI_RUBY_ATL0_NOSNAP_DISABLE");
                     let typed_grid = para.style.snap_to_grid
                         && grid_pitch.map_or(false, |p| p > 0.0)
                         && !page.doc_grid_no_type
+                        && !atl0_free
                         && !crate::env_flag!("OXI_S654_DISABLE");
                     if typed_grid {
                         let pitch = grid_pitch.unwrap();

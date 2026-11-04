@@ -1969,9 +1969,30 @@ impl<'a> LineBreaker<'a> {
                 flush_word!(style);
                 let cs_field = style.character_spacing.unwrap_or(0.0);
                 let m_field = self.metrics_for_text(text, style, para_style);
+                // OXI_RUBY_FIELD_SCALE (2026-11-04, default ON, opt-out _DISABLE): the
+                // field's base glyphs take the run's character scale (w:w) and, under
+                // balanceSingleByteDoubleByteWidth, the doubled spacing on full-width
+                // glyphs, as everywhere else. `_pb_ruby_scale_gen.py` (slice of blind-J
+                // ja/creative__9aa11078, «図書館» HGS創英角ﾎﾟｯﾌﾟ体 b 28 under «としょかん»):
+                // Word's field is 55.46 / 61.46 / 67.46 at w 66 and spacing 0 / 1 / 2pt,
+                // 84.38 / 90.38 / 96.38 at w 100; Oxi drew 87.33 for every w.
+                let rf_scale = !crate::env_flag!("OXI_RUBY_FIELD_SCALE_DISABLE");
+                let scale_field = if rf_scale {
+                    style.text_scale.map(|s| s / 100.0).filter(|s| *s > 0.0).unwrap_or(1.0)
+                } else {
+                    1.0
+                };
                 let cw: f32 = text
                     .chars()
-                    .map(|c| self.registry.char_width_pt_with_fallback(c, font_size, &m_field) + cs_field)
+                    .map(|c| {
+                        let g = self.registry.char_width_pt_with_fallback(c, font_size, &m_field);
+                        let dbl = rf_scale
+                            && self.balance_single_byte_double_byte_width
+                            && !style.ruby_spread
+                            && crate::font::is_fullwidth(c)
+                            && g >= 0.98 * font_size;
+                        g * scale_field + cs_field * if dbl { 2.0 } else { 1.0 }
+                    })
                     .sum();
                 let cw_tw = pt_to_tw(cw);
                 if (if vertical { current_capw_tw } else { current_width_tw }) + cw_tw > available_tw
