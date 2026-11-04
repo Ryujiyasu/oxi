@@ -6758,15 +6758,20 @@ impl<'a> ParagraphLayouter<'a> {
                 && line.fragments.iter().any(|f| f.text.chars().any(|c| !c.is_whitespace()))
             {
                 let mut trail = 0.0f32;
+                // A wordWrap-off paragraph sets «　» like text (it wraps as text too),
+                // so a trailing one keeps its width: 2ea81a8441cc / d1e8ac8fd1cc /
+                // index-14/17/20 (jc right, «…日　», «法人番号：　　　　») all keep it in
+                // Word, and the first ALIGN_TRAIL_WS cost them 0.0016-0.0038.
+                let hangs = |c: char| c.is_whitespace() && !(c == '\u{3000}' && !para.style.word_wrap);
                 for f in line.fragments.iter().rev() {
                     if f.tab_alignment.is_some() {
                         break;
                     }
-                    if !f.text.is_empty() && f.text.chars().all(|c| c.is_whitespace()) {
+                    if !f.text.is_empty() && f.text.chars().all(hangs) {
                         trail += f.width;
                         continue;
                     }
-                    let ws: Vec<char> = f.text.chars().rev().take_while(|c| c.is_whitespace()).collect();
+                    let ws: Vec<char> = f.text.chars().rev().take_while(|&c| hangs(c)).collect();
                     if !ws.is_empty() {
                         let fs = f.style.font_size.unwrap_or(para_font_size);
                         let scale = f.style.text_scale.unwrap_or(100.0) / 100.0;
