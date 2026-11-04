@@ -4674,7 +4674,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 {
                                     // A centered segment cannot consume the separating space
                                     // after preceding text when it is clamped leftward.
-                                    let separator = if s885_cw_before_jump > 0.0 {
+                                    // OXI_CENTER_TAB_NO_SEP (2026-11-04, default ON, opt-out
+                                    // _DISABLE): it can -- Word draws the clamped tab with zero
+                                    // width. _pb_center_tab_sep_gen.py (blind-J en/policies__
+                                    // 00d4d26d footer, «…2025 ⇥ … Review Date: 8th July 2026»):
+                                    // with or without a space before the tab, with or without the
+                                    // segment's leading spaces, the next glyph starts where the
+                                    // previous one ends (200.24 -> 200.21); the kept separator
+                                    // wrapped «2026» (Word ends 1.5pt short of the margin).
+                                    let separator = if s885_cw_before_jump > 0.0
+                                        && crate::env_flag!("OXI_CENTER_TAB_NO_SEP_DISABLE")
+                                    {
                                         pt_to_tw(latin_metrics.char_width_pt(' ', font_size))
                                     } else { 0 };
                                     Some((current_width_tw, (pt_to_tw(w) - separator).max(0)))
