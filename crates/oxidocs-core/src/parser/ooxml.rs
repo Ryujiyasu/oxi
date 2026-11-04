@@ -17003,10 +17003,21 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
     }
     if std::env::var_os("OXI_S1444_DISABLE").is_none() {
         for (name, info) in &document.styles.font_table {
+            // OXI_SIG_AUTO_CALIBRI (2026-11-04, default ON, opt-out _DISABLE): family
+            // `auto` with a signature takes Calibri, not Cambria. Measured inside a
+            // complete document (`_pb_missing_face_fallback_gen.py`, slice of blind-J
+            // en/correspondence__00f9eabae): every `auto` arm -- PANOSE 02 00.. or
+            // none, pitch variable or default, usb1 00000001 or S1444's own
+            // 10000000 -- is drawn in Calibri; roman stays Cambria. 00f9eabae's
+            // body face «Twinkl Cursive Looped» (auto, sig) is Calibri in Word.
+            let auto_calibri = !crate::env_flag!("OXI_SIG_AUTO_CALIBRI_DISABLE");
             let cambria_family = matches!(
                 info.family.as_deref(),
-                Some("roman") | Some("modern") | Some("decorative") | Some("auto")
-            );
+                Some("roman") | Some("modern") | Some("decorative")
+            ) || (info.family.as_deref() == Some("auto")
+                // charset 00 only (what the probe measured): en/creative__0218b9df's
+                // «Aharoni» (auto, sig, charset B1 Hebrew) keeps Cambria and its PASS.
+                && !(auto_calibri && matches!(info.charset.as_deref(), None | Some("00"))));
             if info.code_page_range.is_some()
                 && !cambria_family
                 && !registry.supports_family(name)
@@ -17036,6 +17047,34 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
     }
     if alias.is_empty() {
         return;
+    }
+    // OXI_ALIAS_DOC_DEFAULTS (2026-11-04, default ON, opt-out _DISABLE): the
+    // document defaults take the substitution too -- the engine reads its default
+    // faces (empty-paragraph marks, the autospace gate) from them. blind-J
+    // ja/reports__75ebb654: docDefaults «Kaiti TC» (charset 88, not installed) ->
+    // Microsoft JhengHei for every run, but the header's empty paragraph was still
+    // measured in the registry's Cambria (14.25 vs Word's 20.76 line) and the body
+    // started 12.65pt high on every page.
+    if std::env::var_os("OXI_ALIAS_DOC_DEFAULTS_DISABLE").is_none() {
+        // Only faces the metrics registry cannot size at all (its unknown-face
+        // fallback is not a CJK face): ja/policies__07543a6b's theme eastAsia
+        // «ＭＳ Ｐゴシック» is in the map (charset 80) yet installed and known, and
+        // re-pointing the defaults at Yu Gothic cost its strict PASS.
+        let unknown: std::collections::HashMap<String, String> = alias
+            .iter()
+            .filter(|(name, _)| {
+                !registry.supports_family(name) && !registry.get(name).is_cjk_83_64_font()
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        if !unknown.is_empty() {
+            if let Some(rs) = document.styles.doc_default_run_style.as_mut() {
+                resolve_alias_run_style(rs, &unknown);
+            }
+            if let Some(rs) = document.styles.app_default_run_style.as_mut() {
+                resolve_alias_run_style(rs, &unknown);
+            }
+        }
     }
     for page in &mut document.pages {
         resolve_alias_blocks(&mut page.blocks, &alias);

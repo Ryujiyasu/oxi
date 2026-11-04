@@ -5704,7 +5704,19 @@ impl LayoutEngine {
             crate::env_flag!("OXI_AUTOSPACE_DD_EA_DISABLE")
                 || self.default_font_family_east_asia.as_deref().is_some_and(|f|
                     crate::font::shape::family_covers(f, '\u{672C}')
-                        || self.registry.get(f).is_cjk_83_64_font())
+                        || self.registry.get(f).is_cjk_83_64_font()
+                        // OXI_AUTOSPACE_MISSING_EA (2026-11-04, default ON, opt-out
+                        // _DISABLE): a default eastAsia face that is not installed
+                        // in a document whose body is CJK is replaced by a CJK face,
+                        // and the autospace stays. blind-J ja/reports__75ebb654
+                        // (docDefaults «Kaiti TC», zh-TW, body Chinese): Word draws
+                        // Microsoft JhengHei with the 1/4-em gap at every CJK|Latin
+                        // seam («日本 Medpeer», «於 2024»); the registry's Cambria
+                        // fallback turned the gate off.
+                        || (self.doc_body_has_real_cjk
+                            && !crate::env_flag!("OXI_AUTOSPACE_MISSING_EA_DISABLE")
+                            && crate::font::runtime::resolve(f, false, false).is_none()
+                            && !self.registry.supports_family(f)))
         })
     }
 
