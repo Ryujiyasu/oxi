@@ -80,6 +80,24 @@ jobs:
         with:
           workspaces: crates/oxi-desktop
 
+      # The bundle takes the engine from docs/, which stopped being committed
+      # when the Pages job started building the site's own copy (6fe04a56), so
+      # a fresh checkout has none. Build it here, with the font catalog baked
+      # in rather than fetched (the site build's external-font-catalog), since
+      # the app has no server to fetch it from.
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Build the engine into docs/
+        shell: bash
+        run: |
+          rustup target add wasm32-unknown-unknown
+          (cd crates/oxidocs-wasm && wasm-pack build --target web --release -- --features suite)
+          cp crates/oxidocs-wasm/pkg/oxidocs_wasm.js crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm docs/
+          ls -la docs/oxidocs_wasm_bg.wasm
+
       - name: Build and attach to a draft release
         id: build
         # Apple's timestamp service is reached over the network while the

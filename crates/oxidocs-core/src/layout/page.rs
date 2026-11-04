@@ -11037,7 +11037,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // behind the body like the rest of the header layer, each anchored to
             // the header/footer block it was parsed in (tops recorded below).
             super::HF_PAGE_EVEN.with(|c| c.set((first_logical as usize + page_idx) % 2 == 0));
-            let hf_draw = s1553_run.is_none() && !page.hf_text_boxes.is_empty();
+            // OXI_S1553_HF_BOXES (2026-11-03, default ON, opt-out _DISABLE): a page under a
+            // merged continuous section draws ITS run's header/footer text boxes; the
+            // S1553 path drew none. en/policies__0066a548 (two sections, the second
+            // continuous, inheriting the first's footer): the footer's green band
+            // (wps rect, 703.2..725.7 in Word) appeared only with one section.
+            let s1553_boxes = !crate::env_flag!("OXI_S1553_HF_BOXES_DISABLE");
+            let hf_boxes: &Vec<(u8, crate::ir::TextBox)> = match s1553_run {
+                Some(r) if s1553_boxes => &r.hf_text_boxes,
+                _ => &page.hf_text_boxes,
+            };
+            let hf_draw = (s1553_run.is_none() || s1553_boxes) && !hf_boxes.is_empty();
             let hf_variant = |base: u8| -> u8 {
                 if s755_on && hs_title_pg && s755_pno == 1 {
                     base + 1
@@ -11053,7 +11063,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let col_x = vec![page.margin.left; tops.len()];
                 let mut out = Vec::new();
                 super::IN_HF_TEXT_BOX.with(|c| c.set(true));
-                for (_, tb) in page.hf_text_boxes.iter().filter(|(c, _)| *c == code) {
+                for (_, tb) in hf_boxes.iter().filter(|(c, _)| *c == code) {
                     let mut tb = tb.clone();
                     tb.anchor_block_index = tb.anchor_block_index.min(tops.len() - 1);
                     // OXI_HDR_IMG_JC: an INLINE header text box sits where its
@@ -11608,6 +11618,30 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             previous_after = para.style.space_after.unwrap_or(0.0);
                         }
                         hf_prev_after = para.style.space_after.unwrap_or(0.0);
+                    } else if let (Block::Image(img), true) = (block, !crate::env_flag!("OXI_FTR_FLOAT_IMG_DISABLE")) {
+                        // OXI_FTR_FLOAT_IMG (2026-11-03, default ON, opt-out _DISABLE): a
+                        // FLOATING footer picture (wp:anchor) is painted, as the header's
+                        // S759 arm paints its own; this loop had no Image arm, so a footer's
+                        // logos never drew. A paragraph-relative anchor counts from its host
+                        // paragraph -- the nearest footer paragraph before it (S1268b's
+                        // header rule). en/policies__0066a548: five column/paragraph-relative
+                        // logos in the one footer paragraph (with OXI_HF_SDT_DRAWINGS).
+                        if img.position.is_some() {
+                            let me = hf_ftr_tops.len().saturating_sub(1);
+                            let host_top = (0..me).rev()
+                                .find(|&j| matches!(ftr_blocks.get(j), Some(Block::Paragraph(_))))
+                                .and_then(|j| hf_ftr_tops.get(j).copied())
+                                .unwrap_or(cy.cursor_y);
+                            let (ax, ay) = self.resolve_floating_image_position(img, page, &[], host_top);
+                            lp.elements.push(LayoutElement::new(
+                                ax, ay, img.width, img.height,
+                                LayoutContent::Image {
+                                    data: img.data.clone(), rotation: img.rotation,
+                                    content_type: img.content_type.clone(),
+                                    crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
+                                },
+                            ));
+                        }
                     } else if let Block::Table(tbl) = block {
                         if image_flow { cy.advance(previous_after); previous_after = 0.0; previous_para = None; }
                         else if hf_tbl_after && tbl.style.position.is_none() { cy.advance(hf_prev_after); }
