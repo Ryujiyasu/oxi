@@ -4218,6 +4218,18 @@ fn parse_paragraph_with_inline_images_impl(
                                                 sdt_open += 1;
                                             }
                                             "sdtContent" => {}
+                                            // OXI_SDT_RUN_WRAPPERS (2026-11-04, default ON, opt-out
+                                            // _DISABLE): run containers inside the control are as
+                                            // transparent as the control -- an inserted revision, a
+                                            // hyperlink, a smart tag. blind-J en/educational__0079c94e:
+                                            // a Google-Docs `<w:sdt><w:sdtContent><w:ins>` around a
+                                            // HYPERLINK field in a table cell -- Word draws the URL on two
+                                            // lines, Oxi skipped the whole <w:ins> and the cell came out
+                                            // a line short (the row split one line late on every page).
+                                            // Deleted text (del / moveFrom) stays skipped.
+                                            "ins" | "moveTo" | "hyperlink" | "smartTag" | "customXml"
+                                            | "fldSimple" | "dir" | "bdo"
+                                                if std::env::var_os("OXI_SDT_RUN_WRAPPERS_DISABLE").is_none() => {}
                                             "r" => {
                                                 let (parsed_runs, dr) = parse_run(
                                                     reader,
