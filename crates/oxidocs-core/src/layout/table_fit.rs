@@ -7152,6 +7152,10 @@ impl<'a> TableFitLayouter<'a> {
                                                 &para.runs, run_idx, s586_ci,
                                                 line_x + buf_w, effective_wrap,
                                             ).unwrap_or(would_overflow);
+                                            let would_overflow = LayoutEngine::cell_ruby_unit_overflow(
+                                                &para.runs[run_idx], s586_ci, cw,
+                                                line_x + buf_w, effective_wrap,
+                                            ).unwrap_or(would_overflow);
                                             if !is_space
                                                 && would_overflow
                                                 && !(current_line.is_empty() && buf.is_empty())

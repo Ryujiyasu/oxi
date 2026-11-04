@@ -6759,6 +6759,27 @@ impl LayoutEngine {
         }
     }
 
+    /// OXI_CELL_RUBY_UNIT (2026-11-04, default ON, opt-out _DISABLE): the cell
+    /// wrapper's S1314b -- a ruby field never breaks inside its base; the whole
+    /// field moves when it does not fit. blind-J ja/administrative__1fc69a4f p1
+    /// calendar cell: «ボランティア|講座(こうざ)→P4» -- Word wraps before 講座,
+    /// Oxi split 講|座 and paid a second ruby-height line (+3.96pt on the row;
+    /// the table ended at 819.0 vs Word 815.4 and the paragraph after it went to
+    /// page 2, every later element 12pt low). Single-run fields of full-width
+    /// characters (equal advances: `cw` × count is the base width).
+    fn cell_ruby_unit_overflow(
+        run: &Run, char_idx: usize, cw: f32, occupied: f32, capacity: f32,
+    ) -> Option<bool> {
+        if !run.style.ruby_field || crate::env_flag!("OXI_CELL_RUBY_UNIT_DISABLE") {
+            return None;
+        }
+        let n = run.text.chars().count();
+        if n < 2 || !run.text.chars().all(crate::font::is_fullwidth) {
+            return None;
+        }
+        Some(char_idx == 0 && occupied + cw * n as f32 > capacity + 0.01)
+    }
+
     fn fit_text_cell_overflow(
         runs: &[Run], run_idx: usize, char_idx: usize, occupied: f32, capacity: f32,
     ) -> Option<bool> {
@@ -21638,6 +21659,9 @@ cells={} pitch={:.2} text={:?}",
                 };
                 let would_overflow = Self::fit_text_cell_overflow(
                     &para.runs, fit_run_idx, s1017_i, line_x + buf_w, effective_wrap,
+                ).unwrap_or(would_overflow);
+                let would_overflow = Self::cell_ruby_unit_overflow(
+                    run, s1017_i, cw, line_x + buf_w, effective_wrap,
                 ).unwrap_or(would_overflow);
                 if !is_space && would_overflow && !(!line_nonempty && !buf_nonempty) {
                     if kinsoku::is_line_start_prohibited(ch)
