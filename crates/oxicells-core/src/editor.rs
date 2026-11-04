@@ -732,7 +732,7 @@ impl XlsxEditor {
             for row in before.band_styles.rows.keys().chain(after.band_styles.rows.keys()).copied().collect::<std::collections::BTreeSet<_>>() {
                 let was = before.band_styles.rows.get(&row);
                 let now = after.band_styles.rows.get(&row);
-                if was != now { self.row_band_styles.insert((index, row), now.map(|style|reconcile_style_edit(was,style))); }
+                if was != now { self.row_band_styles.insert((index, row), now.map(|style|reconcile_style_edit(was,style,&self.workbook.theme_colors,&self.workbook.indexed_colors))); }
             }
             let columns: std::collections::BTreeSet<u32> = if before.band_styles.sheet != after.band_styles.sheet {
                 (0..16_384).collect()
@@ -742,14 +742,14 @@ impl XlsxEditor {
             for column in columns {
                 let was = before.band_styles.columns.get(&column).or(before.band_styles.sheet.as_ref());
                 let now = after.band_styles.columns.get(&column).or(after.band_styles.sheet.as_ref());
-                if was != now { self.column_band_styles.insert((index, column), now.map(|style|reconcile_style_edit(was,style))); }
+                if was != now { self.column_band_styles.insert((index, column), now.map(|style|reconcile_style_edit(was,style,&self.workbook.theme_colors,&self.workbook.indexed_colors))); }
             }
 
             for (&(row, col), cell) in &now {
                 let was = held.get(&(row, col)).map(|before| &before.style);
                 if was != Some(&cell.style) {
                     self.styles
-                        .insert((index, row, col), reconcile_style_edit(was,&cell.style));
+                        .insert((index, row, col), reconcile_style_edit(was,&cell.style,&self.workbook.theme_colors,&self.workbook.indexed_colors));
                 }
             }
         }
@@ -807,7 +807,8 @@ impl XlsxEditor {
         let before=self.styles.get(&key).or_else(||self.workbook.sheets.get(sheet_index)
             .and_then(|sheet|sheet.rows.iter().find(|held|held.index==row))
             .and_then(|row|row.cells.iter().find(|held|held.col==col)).map(|cell|&cell.style));
-        let style=reconcile_style_edit(before,&style);
+        let mut style=reconcile_style_edit(before,&style,&self.workbook.theme_colors,&self.workbook.indexed_colors);
+        record_style_edits(before,&mut style);
         self.styles.insert(key, style);
     }
 
@@ -9511,13 +9512,44 @@ fn unique_threaded_guid(seed: &str, existing: &std::collections::HashSet<String>
 /// Public face/RGB edits may still carry the original font's provenance.
 /// Keep independently edited origins, and remove inherited ones only for
 /// the public field that changed.
-fn reconcile_style_edit(before: Option<&CellStyle>, after: &CellStyle) -> CellStyle {
+fn record_style_edits(before:Option<&CellStyle>,after:&mut CellStyle) {
+    use crate::ir::{CellFormatComponent as Part,CellFormatReference};
+    if before.is_some_and(|before|after.format_reference.is_some() && before.format_reference!=after.format_reference) {return;}
+    let default=CellStyle::default();let before=before.unwrap_or(&default);
+    let changes=[
+        (font_xml(before)!=font_xml(after),Part::Font),
+        (fill_xml(before)!=fill_xml(after),Part::Fill),
+        (border_xml(before)!=border_xml(after),Part::Border),
+        (before.number_format!=after.number_format,Part::NumberFormat),
+        ((&before.horizontal_align,&before.vertical_align,before.indent,before.wrap_text,before.shrink_to_fit,before.stacked_text,before.text_rotation,before.justify_last_line,before.reading_order)
+            !=(&after.horizontal_align,&after.vertical_align,after.indent,after.wrap_text,after.shrink_to_fit,after.stacked_text,after.text_rotation,after.justify_last_line,after.reading_order),Part::Alignment),
+        (before.unlocked!=after.unlocked || before.formula_hidden!=after.formula_hidden,Part::Protection),
+    ];
+    if !changes.iter().any(|(changed,_)|*changed) {return;}
+    let inherited=before.format_reference.clone();
+    let reference=after.format_reference.get_or_insert_with(||inherited.unwrap_or_else(||
+        Box::new(CellFormatReference::for_style(0))));
+    for (changed,part) in changes {if changed {reference.mark(part);}}
+}
+
+fn reconcile_style_edit(before: Option<&CellStyle>, after: &CellStyle,
+    theme_colors: &[String], indexed_colors: &[String]) -> CellStyle {
     let mut style=after.clone();
+    // An editing view can have been reopened from a newer save than the
+    // package being patched. Its display color still records legacy edits.
+    if after.pattern_fill.as_deref().is_some_and(|fill| {
+        let color=if fill.pattern=="solid" {fill.foreground.as_ref()} else {fill.background.as_ref()};
+        color.and_then(|color|crate::parser::resolve_cell_color_reference(
+            color,theme_colors,indexed_colors))!=after.bg_color
+    }) {
+        style.pattern_fill=None;
+    }
     let Some(before)=before else {return style};
+    if before.bg_color!=after.bg_color && before.pattern_fill==after.pattern_fill {style.pattern_fill=None;}
     let name_origin=|value: &CellStyle|value.font_reference.as_ref()
         .map(|r|(r.latin_name.clone(),r.scheme.clone()));
     let color_origin=|value: &CellStyle|value.font_reference.as_ref()
-        .map(|r|(r.theme,r.indexed,r.automatic,r.tint));
+        .map(|r|(r.rgb.clone(),r.theme,r.indexed,r.automatic,r.implicit_automatic,r.tint));
     let canonical_name=after.font_reference.as_ref().and_then(|r|r.latin_name.as_deref())
         .is_some_and(|name|after.font_name.as_deref()==Some(name));
     let name_changed=before.font_name!=after.font_name && !canonical_name
@@ -9525,7 +9557,7 @@ fn reconcile_style_edit(before: Option<&CellStyle>, after: &CellStyle) -> CellSt
     let color_changed=before.font_color!=after.font_color && color_origin(before)==color_origin(after);
     if let Some(reference)=style.font_reference.as_mut() {
         if name_changed {reference.latin_name=None;reference.scheme=None;}
-        if color_changed {reference.theme=None;reference.indexed=None;reference.automatic=false;reference.tint=None;}
+        if color_changed {reference.rgb=None;reference.theme=None;reference.indexed=None;reference.automatic=false;reference.implicit_automatic=false;reference.tint=None;}
     }
     if name_changed {
         if after.font_family==before.font_family {style.font_family=None;}
@@ -9548,26 +9580,28 @@ fn font_xml(style: &CellStyle) -> String {
     if style.italic {
         font.push_str("<i/>");
     }
-    if style.underline {
-        font.push_str("<u/>");
+    if let Some(kind)=style.effective_underline_kind() {
+        match kind {
+            crate::ir::CellUnderlineKind::Single => font.push_str("<u/>"),
+            _ => font.push_str(&format!("<u val=\"{}\"/>",kind.as_str())),
+        }
     }
     if style.strikethrough {
         font.push_str("<strike/>");
+    }
+    if let Some(position)=style.font_position {
+        font.push_str(&format!("<vertAlign val=\"{}\"/>",position.as_str()));
     }
     if let Some(size) = style.font_size {
         font.push_str(&format!("<sz val=\"{size}\"/>"));
     }
     let reference = style.font_reference.as_ref();
-    let tint = reference.and_then(|r| r.tint).filter(|v| *v != 0.0)
-        .map_or_else(String::new, |v| format!(" tint=\"{v}\""));
-    if let Some(theme) = reference.and_then(|r| r.theme) {
-        font.push_str(&format!("<color theme=\"{theme}\"{tint}/>"));
-    } else if let Some(index) = reference.and_then(|r| r.indexed) {
-        font.push_str(&format!("<color indexed=\"{index}\"{tint}/>"));
-    } else if reference.is_some_and(|r| r.automatic) {
-        font.push_str(&format!("<color auto=\"1\"{tint}/>"));
-    } else if let Some(color) = style.font_color.as_deref() {
-        font.push_str(&format!("<color rgb=\"FF{}\"{tint}/>", escape(color)));
+    let color=reference.and_then(|reference|reference.color_reference()).or_else(||style.font_color.as_deref().map(|rgb| {
+        let rgb=rgb.trim_start_matches('#');
+        crate::ir::CellColorReference {rgb:Some(if rgb.len()==6 {format!("FF{rgb}")} else {rgb.into()}),..Default::default()}
+    }));
+    if !reference.is_some_and(|r|r.implicit_automatic) {
+        if let Some(color)=color.as_ref() {font.push_str(&cell_fill_color_xml("color",Some(color),None));}
     }
     if let Some(name) = style.latin_font_name() {
         font.push_str(&format!("<name val=\"{}\"/>", escape(name)));
@@ -9585,7 +9619,58 @@ fn font_xml(style: &CellStyle) -> String {
     font
 }
 
+/// Serialize cell paint, including the color roles used by revision records.
+fn cell_color_tint_xml(tint: f64) -> String {
+    if tint.abs()<0.1 && tint!=0.0 {
+        let value=format!("{tint:.16E}");
+        let (mantissa,exponent)=value.split_once('E').unwrap_or((&value,"0"));
+        format!("{}E{exponent}",mantissa.trim_end_matches('0').trim_end_matches('.'))
+    } else {
+        format!("{tint:.17}").trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+pub fn cell_fill_color_xml(tag: &str, value: Option<&crate::ir::CellColorReference>, fallback: Option<u32>) -> String {
+        let Some(value)=value else {
+            return fallback.map_or_else(String::new,|index|format!("<{tag} indexed=\"{index}\"/>"));
+        };
+        let mut attributes=String::new();
+        if let Some(rgb)=value.rgb.as_deref() {attributes.push_str(&format!(" rgb=\"{}\"",escape(rgb)));}
+        if let Some(theme)=value.theme {attributes.push_str(&format!(" theme=\"{theme}\""));}
+        if let Some(index)=value.indexed {attributes.push_str(&format!(" indexed=\"{index}\""));}
+        if value.automatic {attributes.push_str(" auto=\"1\"");}
+        if let Some(tint)=value.tint.filter(|v|*v!=0.0) {attributes.push_str(&format!(" tint=\"{}\"",cell_color_tint_xml(tint)));}
+        format!("<{tag}{attributes}/>")
+}
+
+/// Serialize a fill while retaining the distinct revision color roles.
+pub fn cell_fill_xml(fill: &crate::ir::CellFill, revision: bool) -> String {
+    let mut foreground=fill.foreground.clone();
+    let mut background=fill.background.clone();
+    if !revision && fill.pattern!="solid" && fill.pattern!="none" {
+        let automatic=|color: &crate::ir::CellColorReference,index|color.indexed==Some(index)
+            && color.rgb.is_none() && color.theme.is_none();
+        let tinted_pattern=foreground.as_ref().and_then(|color|color.tint).is_some_and(|tint|tint!=0.0);
+        if foreground.as_ref().is_some_and(|color|automatic(color,64) && color.tint.unwrap_or(0.0)==0.0) {
+            foreground=None;
+        }
+        if background.as_ref().is_some_and(|color|automatic(color,65)) {
+            background=if tinted_pattern {Some(crate::ir::CellColorReference {indexed:Some(65),..Default::default()})}
+                else {None};
+        }
+    }
+    let (foreground,background)=if revision && fill.pattern=="solid" {
+        (background.as_ref(),foreground.as_ref())
+    } else {(foreground.as_ref(),background.as_ref())};
+    let foreground=cell_fill_color_xml("fgColor",foreground,revision.then_some(64));
+    let background=cell_fill_color_xml("bgColor",background,revision.then_some(65));
+    let pattern=escape(&fill.pattern);
+    if foreground.is_empty() && background.is_empty() {format!("<fill><patternFill patternType=\"{pattern}\"/></fill>")}
+    else {format!("<fill><patternFill patternType=\"{pattern}\">{foreground}{background}</patternFill></fill>")}
+}
+
 fn fill_xml(style: &CellStyle) -> String {
+    if let Some(fill)=style.pattern_fill.as_deref() {return cell_fill_xml(fill,false);}
     match style.bg_color.as_deref() {
         Some(color) => format!(
             "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF{}\"/><bgColor indexed=\"64\"/></patternFill></fill>",
@@ -9629,15 +9714,25 @@ fn xf_xml(
     fill_id: u32,
     border_id: u32,
 ) -> String {
-    let mut xf = format!(
-        "<xf numFmtId=\"{number_format_id}\" fontId=\"{font_id}\" fillId=\"{fill_id}\" borderId=\"{border_id}\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\""
-    );
-    if number_format_id != 0 {
-        xf.push_str(" applyNumberFormat=\"1\"");
+    let reference=style.format_reference.as_deref();
+    let mut xf=format!("<xf numFmtId=\"{number_format_id}\" fontId=\"{font_id}\" fillId=\"{fill_id}\" borderId=\"{border_id}\"");
+    if let Some(parent)=reference.map_or(Some(0),|r|r.style_id) {
+        xf.push_str(&format!(" xfId=\"{parent}\""));
     }
-    if style.quote_prefix {
-        xf.push_str(" quotePrefix=\"1\"");
+    let legacy=reference.is_none();
+    for (name,value,implicit) in [
+        ("applyNumberFormat",reference.and_then(|r|r.number_format),number_format_id!=0),
+        ("applyFont",reference.and_then(|r|r.font),true),
+        ("applyFill",reference.and_then(|r|r.fill),true),
+        ("applyBorder",reference.and_then(|r|r.border),true),
+        ("applyAlignment",reference.and_then(|r|r.alignment),false),
+        ("applyProtection",reference.and_then(|r|r.protection),style.unlocked || style.formula_hidden),
+    ] {
+        if let Some(value)=value.or_else(||(legacy && implicit).then_some(true)) {
+            xf.push_str(&format!(" {name}=\"{}\"",u8::from(value)));
+        }
     }
+    if style.quote_prefix {xf.push_str(" quotePrefix=\"1\"");}
     // Everything an `<alignment>` can say goes in one element, so it is built
     // up rather than written from the first part that happens to be set. Wrap,
     // indent and the vertical part were read all along and never written: a
@@ -9659,11 +9754,30 @@ fn xf_xml(
     if style.indent > 0 {
         alignment.push_str(&format!(" indent=\"{}\"", style.indent));
     }
-    if alignment.is_empty() {
+    if style.stacked_text {
+        alignment.push_str(" textRotation=\"255\"");
+    } else if let Some(angle) = style.text_rotation.filter(|angle|*angle!=0) {
+        let encoded = if angle<0 {90-angle} else {angle};
+        alignment.push_str(&format!(" textRotation=\"{encoded}\""));
+    }
+    if style.justify_last_line {
+        alignment.push_str(" justifyLastLine=\"1\"");
+    }
+    match style.reading_order {
+        crate::ir::CellReadingOrder::Contextual => {}
+        crate::ir::CellReadingOrder::LeftToRight => alignment.push_str(" readingOrder=\"1\""),
+        crate::ir::CellReadingOrder::RightToLeft => alignment.push_str(" readingOrder=\"2\""),
+    }
+    let mut protection = String::new();
+    if style.unlocked { protection.push_str(" locked=\"0\""); }
+    if style.formula_hidden { protection.push_str(" hidden=\"1\""); }
+    if alignment.is_empty() && protection.is_empty() {
         xf.push_str("/>");
     } else {
-        xf.push_str(" applyAlignment=\"1\">");
-        xf.push_str(&format!("<alignment{alignment}/>"));
+        if legacy && !alignment.is_empty() {xf.push_str(" applyAlignment=\"1\"");}
+        xf.push('>');
+        if !alignment.is_empty() {xf.push_str(&format!("<alignment{alignment}/>"));}
+        if !protection.is_empty() {xf.push_str(&format!("<protection{protection}/>"));}
         xf.push_str("</xf>");
     }
     xf
@@ -11238,6 +11352,88 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cell_format_attribute_presence_survives_roundtrip() {
+        let bytes=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let mut workbook=crate::parse_xlsx_preserving_values(bytes).unwrap();
+        let reference=crate::ir::CellFormatReference {
+            style_id:Some(0),font:Some(false),border:Some(false),
+            number_format:Some(false),alignment:Some(true),..Default::default()
+        };
+        let cell=workbook.sheets[0].rows.iter_mut().find(|r|r.index==1).unwrap()
+            .cells.iter_mut().find(|c|c.col==0).unwrap();
+        cell.style.bold=false;
+        cell.style.format_reference=Some(Box::new(reference.clone()));
+        let mut editor=super::XlsxEditor::new(bytes).unwrap();
+        editor.apply_workbook(&workbook).unwrap();
+        let saved=editor.save().unwrap();
+        let mut archive=oxidocs_common::archive::OoxmlArchive::new(&saved).unwrap();
+        let styles=archive.read_part("xl/styles.xml").unwrap();
+        assert!(styles.contains(r#"xfId="0" applyNumberFormat="0" applyFont="0" applyBorder="0" applyAlignment="1""#));
+        let restored=crate::parse_xlsx_preserving_values(&saved).unwrap();
+        let cell=restored.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+            .cells.iter().find(|c|c.col==0).unwrap();
+        // Reopening imports the saved record afresh: redundant raw bits
+        // disappear even though explicit bits were retained in the save.
+        let imported=crate::ir::CellFormatReference::for_style(0);
+        assert_eq!(cell.style.format_reference.as_deref(),Some(&imported));
+        assert!(!cell.style.bold);
+    }
+
+    #[test]
+    fn public_style_edits_mark_the_changed_component() {
+        let bytes=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let workbook=crate::parse_xlsx_preserving_values(bytes).unwrap();
+        let cell=workbook.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+            .cells.iter().find(|c|c.col==0).unwrap();
+        let mut style=cell.style.clone();
+        let mut expected=style.format_reference.as_deref().unwrap().clone();
+        style.bg_color=Some("00FF00".into());
+        expected.mark(crate::ir::CellFormatComponent::Fill);
+        let mut editor=super::XlsxEditor::new(bytes).unwrap();
+        editor.set_cell_style(0,1,0,style);
+        let restored=crate::parse_xlsx_preserving_values(&editor.save().unwrap()).unwrap();
+        let cell=restored.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+            .cells.iter().find(|c|c.col==0).unwrap();
+        assert_eq!(cell.style.bg_color.as_deref(),Some("00FF00"));
+        assert_eq!(cell.style.format_reference.as_deref(),Some(&expected));
+
+        // Apply a reopened editing view to the original package. Clearing its
+        // display color must override paint metadata inherited from that view.
+        for color in [
+            crate::ir::CellColorReference {rgb:Some("FF00FF00".into()),..Default::default()},
+            crate::ir::CellColorReference {theme:Some(4),tint:Some(0.4),..Default::default()},
+            crate::ir::CellColorReference {indexed:Some(3),tint:Some(-0.25),..Default::default()},
+        ] {
+            let mut painted=cell.style.clone();
+            painted.bg_color=crate::parser::resolve_cell_color_reference(
+                &color,&workbook.theme_colors,&workbook.indexed_colors);
+            assert!(painted.bg_color.is_some());
+            painted.pattern_fill=Some(Box::new(crate::ir::CellFill {
+                pattern:"solid".into(),foreground:Some(color),background:None,
+            }));
+            painted.border_bottom=Some(crate::ir::BorderLine {style:"thick".into(),color:None});
+            let mut editor=super::XlsxEditor::new(bytes).unwrap();
+            editor.set_cell_style(0,1,0,painted);
+            let intermediate=editor.save().unwrap();
+            let mut edited=crate::parse_xlsx_preserving_values(&intermediate).unwrap();
+            let target=edited.sheets[0].rows.iter_mut().find(|r|r.index==1).unwrap()
+                .cells.iter_mut().find(|c|c.col==0).unwrap();
+            assert!(target.style.bg_color.is_some());
+            assert!(target.style.pattern_fill.is_some());
+            target.style.bg_color=None;
+            let mut editor=super::XlsxEditor::new(bytes).unwrap();
+            editor.apply_workbook(&edited).unwrap();
+            let output=editor.save().unwrap();
+            let restored=crate::parse_xlsx_preserving_values(&output).unwrap();
+            let target=restored.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+                .cells.iter().find(|c|c.col==0).unwrap();
+            assert_eq!(target.style.bg_color,None,"reopened fill removal");
+            assert_eq!(target.style.pattern_fill,None,"removed paint metadata");
+            assert_eq!(target.style.border_bottom.as_ref().unwrap().style,"thick");
+        }
+    }
+
     #[test]
     fn worksheet_drawings_are_direct_children_even_with_nested_extensions() {
         let xml = "<worksheet><conditionalFormatting><cfRule><extLst/></cfRule></conditionalFormatting><pageMargins/><extLst/></worksheet>";

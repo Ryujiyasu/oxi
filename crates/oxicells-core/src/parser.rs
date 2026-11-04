@@ -48,19 +48,6 @@ fn is_true(value: Option<&str>) -> bool {
     matches!(value, Some("1") | Some("true"))
 }
 
-/// Whether a cell format applies a part of itself, rather than taking that
-/// part from the named style it is built on.
-///
-/// Absent is not the same as `0` here. Excel leaves the flag off when the
-/// format's own value is the one to use, and writes `applyFont="0"` when it
-/// is not 遯ｶ繝ｻa cell that draws its blue underline from the Hyperlink style
-/// says so explicitly. Writers that are not Excel commonly leave every flag
-/// off while still naming a font on each cell, and reading absent as "do not
-/// apply" throws that font away and draws the whole sheet in the workbook's
-/// default face.
-fn unless_denied(value: Option<&str>) -> bool {
-    !matches!(value, Some("0") | Some("false"))
-}
 use oxidocs_common::xml_utils::{get_attr, local_name};
 
 use crate::ir::{
@@ -243,6 +230,8 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
                     }
                     "color" if in_run_props => {
                         let reference=current_run.font_reference.get_or_insert_with(Default::default);
+                        reference.rgb=get_attr(&e,"rgb");
+                        reference.implicit_automatic=false;
                         reference.theme=get_attr(&e,"theme").and_then(|v|v.parse().ok());
                         reference.indexed=get_attr(&e,"indexed").and_then(|v|v.parse().ok());
                         reference.automatic=is_true(get_attr(&e,"auto").as_deref());
@@ -583,6 +572,8 @@ struct FontInfo {
     bold: bool,
     italic: bool,
     underline: bool,
+    underline_kind: Option<crate::ir::CellUnderlineKind>,
+    font_position: Option<crate::ir::CellFontPosition>,
     strikethrough: bool,
     size: Option<f32>,
     color: Option<String>,
@@ -596,6 +587,7 @@ struct FontInfo {
 #[derive(Debug, Clone, Default)]
 struct FillInfo {
     bg_color: Option<String>,
+    pattern_fill: crate::ir::CellFill,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -609,26 +601,32 @@ struct BorderInfo {
     down: bool,
 }
 
+fn xf_format_reference(element: &quick_xml::events::BytesStart<'_>) -> crate::ir::CellFormatReference {
+    let flag=|name| get_attr(element,name).map(|value|matches!(value.as_str(),"1"|"true"));
+    crate::ir::CellFormatReference {
+        style_id:get_attr(element,"xfId").and_then(|value|value.parse().ok()),
+        number_format:flag("applyNumberFormat"),font:flag("applyFont"),
+        fill:flag("applyFill"),border:flag("applyBorder"),
+        alignment:flag("applyAlignment"),protection:flag("applyProtection"),
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct XfRecord {
+    format_reference: crate::ir::CellFormatReference,
     num_fmt_id: u32,
     font_id: usize,
     fill_id: usize,
     border_id: usize,
-    /// The named style this format is built on, and whether it overrides each
-    /// part of it. A cell format that does not apply its own font wears the
-    /// font of the style it names 遯ｶ繝ｻthat is how Excel dresses a hyperlink.
-    style_id: Option<usize>,
-    applies_font: bool,
-    applies_fill: bool,
-    applies_border: bool,
-    applies_number_format: bool,
     horizontal_align: Option<String>,
     vertical_align: Option<String>,
     indent: u32,
     wrap_text: bool,
     stacked_text: bool,
+    text_rotation: Option<i32>,
+    justify_last_line: bool,
     shrink_to_fit: bool,
+    reading_order: crate::ir::CellReadingOrder,
     /// `quotePrefix="1"`: the entry was typed behind an apostrophe.
     quote_prefix: bool,
     /// Whether the cell may still be edited once its sheet is protected.
@@ -636,6 +634,7 @@ struct XfRecord {
     /// typed into, so the negative is the one worth holding: it keeps this
     /// struct right when it is built from its own default.
     unlocked: bool,
+    formula_hidden: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -895,55 +894,102 @@ fn parse_theme_xml(xml: &str) -> Theme {
     theme
 }
 
-/// Moves a colour toward white or black, the way a theme tint does. Only how
-/// light it is changes; its hue and how saturated it is do not, which is why
-/// this goes through HSL rather than nudging each channel.
-fn tinted(hex: &str, tint: f32) -> String {
-    let Ok(value) = u32::from_str_radix(hex, 16) else {
-        return hex.to_string();
-    };
-    let channel = |shift: u32| ((value >> shift) & 0xFF) as f32 / 255.0;
-    let (red, green, blue) = (channel(16), channel(8), channel(0));
-    let high = red.max(green).max(blue);
-    let low = red.min(green).min(blue);
-    let lum = (high + low) / 2.0;
-    let span = high - low;
-    let sat = if span == 0.0 {
-        0.0
-    } else if lum < 0.5 {
-        span / (high + low)
-    } else {
-        span / (2.0 - high - low)
-    };
-    let hue = if span == 0.0 {
-        0.0
-    } else if high == red {
-        (((green - blue) / span) % 6.0 + 6.0) % 6.0
-    } else if high == green {
-        (blue - red) / span + 2.0
-    } else {
-        (red - green) / span + 4.0
-    };
+/// Convert a tint to the color step stored by spreadsheet applications.
+pub fn quantise_cell_tint(tint: f64) -> f64 {
+    if !tint.is_finite() {return 0.0;}
+    let scaled=tint.clamp(-1.0,1.0)*32767.0;
+    let step=if (scaled-scaled.round()).abs()<1.0e-8 {scaled.round()} else {scaled.trunc()};
+    step/32767.0
+}
 
+/// Resolve a cell RGB color using its stored tint precision and HLS rounding.
+pub fn tint_cell_color(hex: &str, tint: f64) -> String {
+    let tint=quantise_cell_tint(tint);
+    if tint==0.0 {return hex.to_string();}
+    let Ok(rgb)=i64::from_str_radix(hex,16) else {return hex.to_string();};
+    let packed=((rgb & 0xff)<<16) | (rgb & 0xff00) | ((rgb>>16)&0xff);
+    let color=tinted_cell_color_value(packed,tint);
+    format!("{:02X}{:02X}{:02X}",color & 0xff,(color>>8)&0xff,(color>>16)&0xff)
+}
+
+fn tinted_cell_color_value(colour: i64, tint: f64) -> i64 {
+    const HLSMAX: i64 = 240;
+    const RGBMAX: i64 = 255;
+    // No tint, no round trip: the conversion is lossy, and Excel hands the
+    // theme colour back exactly.
+    if tint == 0.0 {
+        return colour;
+    }
+    let (r, g, b) = (colour & 0xff, (colour >> 8) & 0xff, (colour >> 16) & 0xff);
+    let cmax = r.max(g).max(b);
+    let cmin = r.min(g).min(b);
+    let lightness = ((cmax + cmin) * HLSMAX + RGBMAX) / (2 * RGBMAX);
+    let (hue, saturation) = if cmax == cmin {
+        (0, 0)
+    } else {
+        let saturation = if lightness <= HLSMAX / 2 {
+            ((cmax - cmin) * HLSMAX + (cmax + cmin) / 2) / (cmax + cmin)
+        } else {
+            ((cmax - cmin) * HLSMAX + (2 * RGBMAX - cmax - cmin) / 2) / (2 * RGBMAX - cmax - cmin)
+        };
+        let delta = |channel: i64| ((cmax - channel) * (HLSMAX / 6) + (cmax - cmin) / 2) / (cmax - cmin);
+        let (red, green, blue) = (delta(r), delta(g), delta(b));
+        let mut hue = if r == cmax {
+            blue - green
+        } else if g == cmax {
+            HLSMAX / 3 + red - blue
+        } else {
+            2 * HLSMAX / 3 + green - red
+        };
+        if hue < 0 {
+            hue += HLSMAX;
+        }
+        if hue > HLSMAX {
+            hue -= HLSMAX;
+        }
+        (hue, saturation)
+    };
     let moved = if tint < 0.0 {
-        lum * (1.0 + tint)
+        lightness as f64 * (1.0 + tint)
     } else {
-        lum * (1.0 - tint) + tint
+        (lightness as f64 * (1.0 - tint)).floor()
+            + HLSMAX as f64 - (HLSMAX as f64 * (1.0 - tint)).floor()
     };
+    let lightness = (moved.floor() as i64).clamp(0, HLSMAX);
+    if saturation == 0 {
+        let grey = ((lightness * RGBMAX + HLSMAX / 2) / HLSMAX).clamp(0, RGBMAX);
+        return grey | (grey << 8) | (grey << 16);
+    }
+    let magic2 = if lightness <= HLSMAX / 2 {
+        (lightness * (HLSMAX + saturation) + HLSMAX / 2) / HLSMAX
+    } else {
+        lightness + saturation - (lightness * saturation + HLSMAX / 2) / HLSMAX
+    };
+    let magic1 = 2 * lightness - magic2;
+    let hue_to_rgb = |mut hue: i64| -> i64 {
+        if hue < 0 {
+            hue += HLSMAX;
+        }
+        if hue > HLSMAX {
+            hue -= HLSMAX;
+        }
+        if hue < HLSMAX / 6 {
+            magic1 + ((magic2 - magic1) * hue + HLSMAX / 12) / (HLSMAX / 6)
+        } else if hue < HLSMAX / 2 {
+            magic2
+        } else if hue < 2 * HLSMAX / 3 {
+            magic1 + ((magic2 - magic1) * (2 * HLSMAX / 3 - hue) + HLSMAX / 12) / (HLSMAX / 6)
+        } else {
+            magic1
+        }
+    };
+    let channel = |hue: i64| ((hue_to_rgb(hue) * RGBMAX + HLSMAX / 2) / HLSMAX).clamp(0, RGBMAX);
+    let (red, green, blue) = (channel(hue + HLSMAX / 3), channel(hue), channel(hue - HLSMAX / 3));
+    red | (green << 8) | (blue << 16)
+}
 
-    let chroma = (1.0 - (2.0 * moved - 1.0).abs()) * sat;
-    let second = chroma * (1.0 - ((hue % 2.0) - 1.0).abs());
-    let (red, green, blue) = match hue as u32 {
-        0 => (chroma, second, 0.0),
-        1 => (second, chroma, 0.0),
-        2 => (0.0, chroma, second),
-        3 => (0.0, second, chroma),
-        4 => (second, 0.0, chroma),
-        _ => (chroma, 0.0, second),
-    };
-    let base = moved - chroma / 2.0;
-    let byte = |part: f32| (((part + base).clamp(0.0, 1.0) * 255.0).round() as u32).min(255);
-    format!("{:02X}{:02X}{:02X}", byte(red), byte(green), byte(blue))
+fn tinted(hex: &str, tint: f32) -> String {
+    tint_cell_color(hex,f64::from(tint))
 }
 
 /// The colours a workbook may name by number rather than by value.
@@ -979,6 +1025,7 @@ fn resolve_run_font_references(runs: &mut [crate::ir::TextRun], theme: &Theme) {
         let color=reference.theme.map(|v|v.to_string());
         let indexed=reference.indexed.map(|v|v.to_string());
         let tint=reference.tint.map(|v|v.to_string());
+        if let Some(v)=reference.rgb.as_deref() {element.push_attribute(("rgb",v));}
         if let Some(v)=color.as_deref() {element.push_attribute(("theme",v));}
         if let Some(v)=indexed.as_deref() {element.push_attribute(("indexed",v));}
         if let Some(v)=tint.as_deref() {element.push_attribute(("tint",v));}
@@ -995,25 +1042,46 @@ fn resolve_run_font_references(runs: &mut [crate::ir::TextRun], theme: &Theme) {
     }
 }
 
+fn cell_color_reference(e: &quick_xml::events::BytesStart) -> crate::ir::CellColorReference {
+    crate::ir::CellColorReference {
+        rgb:get_attr(e,"rgb"),theme:get_attr(e,"theme").and_then(|v|v.parse().ok()),
+        indexed:get_attr(e,"indexed").and_then(|v|v.parse().ok()),
+        tint:get_attr(e,"tint").and_then(|v|v.parse::<f64>().ok()).filter(|v|v.is_finite()),
+        automatic:is_true(get_attr(e,"auto").as_deref()),
+    }
+}
+
+/// Resolve the rendering color with the same theme and palette rules as import.
+/// The original color reference remains authoritative when writing the file.
+pub fn resolve_cell_color_reference(reference: &crate::ir::CellColorReference,
+    theme_colors: &[String], indexed_colors: &[String]) -> Option<String> {
+    let mut theme=Theme::default();
+    if !theme_colors.is_empty() {theme.colours=theme_colors.to_vec();}
+    theme.indexed=indexed_colors.to_vec();
+    let mut element=quick_xml::events::BytesStart::new("color");
+    let rgb=reference.rgb.as_deref();
+    let named=reference.theme.map(|value|value.to_string());
+    let indexed=reference.indexed.map(|value|value.to_string());
+    let tint=reference.tint.map(|value|value.to_string());
+    if let Some(rgb)=rgb {element.push_attribute(("rgb",rgb));}
+    if let Some(named)=named.as_deref() {element.push_attribute(("theme",named));}
+    if let Some(indexed)=indexed.as_deref() {element.push_attribute(("indexed",indexed));}
+    if let Some(tint)=tint.as_deref() {element.push_attribute(("tint",tint));}
+    if reference.automatic {element.push_attribute(("auto","1"));}
+    parse_color_attr(&element,&theme)
+}
+
 fn parse_color_attr(e: &quick_xml::events::BytesStart, theme: &Theme) -> Option<String> {
-    if let Some(rgb) = get_attr(e, "rgb") {
-        // Strip leading alpha if 8-char hex
-        let hex = if rgb.len() == 8 { &rgb[2..] } else { &rgb };
-        return Some(hex.to_string());
-    }
-    if let Some(index) = get_attr(e, "indexed").and_then(|at| at.parse::<usize>().ok()) {
-        return indexed_colour(index, theme);
-    }
-    let index = get_attr(e, "theme")?.parse::<usize>().ok()?;
-    let named = theme.colour(index)?;
-    let tint = get_attr(e, "tint")
-        .and_then(|value| value.parse::<f32>().ok())
-        .unwrap_or(0.0);
-    Some(if tint == 0.0 {
-        named.to_string()
+    let color=if let Some(rgb)=get_attr(e,"rgb") {
+        if rgb.len()==8 {rgb[2..].to_string()} else {rgb}
+    } else if let Some(index)=get_attr(e,"indexed").and_then(|value|value.parse::<usize>().ok()) {
+        indexed_colour(index,theme)?
     } else {
-        tinted(named, tint)
-    })
+        theme.colour(get_attr(e,"theme")?.parse::<usize>().ok()?)?.to_string()
+    };
+    let tint=get_attr(e,"tint").and_then(|value|value.parse::<f64>().ok())
+        .filter(|value|value.is_finite()).unwrap_or(0.0);
+    Some(tint_cell_color(&color,tint))
 }
 
 /// The palette a workbook states in place of Excel's own, empty when it
@@ -1136,7 +1204,235 @@ fn parse_dxfs(xml: &str, theme: &Theme) -> Vec<crate::ir::DiffStyle> {
     held
 }
 
+// Importing a workbook reconciles stored application bits with the component
+// definitions. Later explicit edits keep their own application bits.
+#[derive(Clone, Debug, Default)]
+struct ImportedStyleElement {
+    start: usize,
+    end: usize,
+    name: String,
+    attributes: std::collections::BTreeMap<String, String>,
+    children: Vec<ImportedStyleElement>,
+    text: String,
+}
+
+impl ImportedStyleElement {
+    fn child(&self, name: &str) -> Option<&Self> {
+        self.children.iter().find(|child| child.name == name)
+    }
+
+    fn id(&self, name: &str) -> usize {
+        self.attributes.get(name).and_then(|value| value.parse().ok()).unwrap_or(0)
+    }
+
+    fn component(&self) -> ImportedStyleComponent {
+        let mut attributes: Vec<_> = self.attributes.iter().filter_map(|(name, value)| {
+            if name == "xmlns" || name.starts_with("xmlns:") {
+                return None;
+            }
+            let value = match (self.name.as_str(), name.as_str(), value.as_str()) {
+                ("alignment", "horizontal", "general")
+                | ("alignment", "vertical", "bottom")
+                | ("alignment", "wrapText" | "shrinkToFit" | "justifyLastLine", "0" | "false")
+                | ("alignment", "indent" | "relativeIndent" | "readingOrder" | "textRotation", "0")
+                | ("protection", "locked", "1" | "true")
+                | ("protection", "hidden", "0" | "false") => return None,
+                (_, "val", "true") if self.boolean_font_property() => "1",
+                (_, "val", "false") if self.boolean_font_property() => "0",
+                _ => value,
+            };
+            Some((name.clone(), value.to_string()))
+        }).collect();
+        if self.boolean_font_property() && !self.attributes.contains_key("val") {
+            attributes.push(("val".into(), "1".into()));
+        }
+        if self.name == "u" && !self.attributes.contains_key("val") {
+            attributes.push(("val".into(), "single".into()));
+        }
+        attributes.sort();
+        let mut children: Vec<_> = self.children.iter().map(Self::component).collect();
+        children.sort();
+        ImportedStyleComponent {
+            name: self.name.clone(),
+            attributes,
+            children,
+            text: self.text.clone(),
+        }
+    }
+
+    fn boolean_font_property(&self) -> bool {
+        matches!(self.name.as_str(), "b" | "i" | "strike" | "outline" | "shadow" | "condense" | "extend")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ImportedStyleComponent {
+    name: String,
+    attributes: Vec<(String, String)>,
+    children: Vec<ImportedStyleComponent>,
+    text: String,
+}
+
+fn imported_style_elements(events: &[Event<'_>]) -> Result<Option<ImportedStyleElement>, XlsxError> {
+    let mut stack: Vec<ImportedStyleElement> = Vec::new();
+    let mut root = None;
+    for (index, event) in events.iter().enumerate() {
+        match event {
+            Event::Start(tag) | Event::Empty(tag) => {
+                let attributes = tag.attributes().map(|attribute| {
+                    let attribute = attribute.map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                    let name = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
+                    let value = attribute.unescape_value()?.into_owned();
+                    Ok((name, value))
+                }).collect::<Result<_, XlsxError>>()?;
+                let node = ImportedStyleElement {
+                    start: index,
+                    end: index,
+                    name: String::from_utf8_lossy(tag.local_name().as_ref()).into_owned(),
+                    attributes,
+                    ..Default::default()
+                };
+                if matches!(event, Event::Start(_)) {
+                    stack.push(node);
+                } else if let Some(parent) = stack.last_mut() {
+                    parent.children.push(node);
+                } else {
+                    root = Some(node);
+                }
+            }
+            Event::End(_) => {
+                let Some(mut node) = stack.pop() else {
+                    return Err(XlsxError::InvalidData("Unexpected styles closing element".into()));
+                };
+                node.end = index;
+                if let Some(parent) = stack.last_mut() {
+                    parent.children.push(node);
+                } else {
+                    root = Some(node);
+                }
+            }
+            Event::Text(text) => {
+                if let Some(node) = stack.last_mut() {
+                    let text = text.unescape()?;
+                    if !text.trim().is_empty() {
+                        node.text.push_str(&text);
+                    }
+                }
+            }
+            Event::CData(text) => {
+                if let Some(node) = stack.last_mut() {
+                    node.text.push_str(&String::from_utf8_lossy(text.as_ref()));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(root)
+}
+
+/// Reconcile application flags when a package is first imported.
+///
+/// Comparison uses the complete XML definitions, including properties the
+/// rendering IR does not yet expose. Runtime setters must not call this:
+/// explicitly assigning even an unchanged value has separate save semantics.
+pub fn import_styles_xml(xml: &str) -> Result<String, XlsxError> {
+    reconcile_imported_styles_xml(xml, true)
+}
+
+fn reconcile_imported_styles_xml(xml: &str, normalize_normal_font: bool) -> Result<String, XlsxError> {
+    use quick_xml::Writer;
+    const FLAGS: [&str; 6] = ["applyNumberFormat", "applyFont", "applyFill", "applyBorder", "applyAlignment", "applyProtection"];
+    let mut reader = Reader::from_str(xml);
+    let mut events = Vec::new();
+    loop {
+        let event = reader.read_event()?.into_owned();
+        if matches!(event, Event::Eof) { break; }
+        events.push(event);
+    }
+    let Some(root) = imported_style_elements(&events)? else { return Ok(xml.to_string()); };
+    let Some(cell_xfs) = root.child("cellXfs") else { return Ok(xml.to_string()); };
+    let Some(style_xfs) = root.child("cellStyleXfs") else { return Ok(xml.to_string()); };
+    let mut parents = style_xfs.children.clone();
+    let mut replacements = HashMap::new();
+    // The default cell font supplies Normal's font on import. Other Normal
+    // components remain those of its named-style definition.
+    if let (Some(normal), Some(default)) = (parents.first_mut(), cell_xfs.children.first()) {
+        let font_id = default.attributes.get("fontId").map(String::as_str).unwrap_or("0");
+        normal.attributes.insert("fontId".into(), font_id.to_string());
+        if let (true, Event::Start(tag) | Event::Empty(tag)) = (normalize_normal_font, &events[normal.start]) {
+            let mut updated = tag.clone();
+            updated.clear_attributes();
+            for attribute in tag.attributes() {
+                let attribute = attribute.map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                if attribute.key.as_ref() != b"fontId" { updated.push_attribute(attribute); }
+            }
+            updated.push_attribute(("fontId", font_id));
+            replacements.insert(normal.start, if matches!(events[normal.start], Event::Empty(_)) {
+                Event::Empty(updated)
+            } else { Event::Start(updated) });
+        }
+    }
+    let definitions = |section: &str, index: usize| {
+        root.child(section).and_then(|section| section.children.get(index)).map(ImportedStyleElement::component)
+    };
+    let different_definition = |section: &str, left: usize, right: usize| {
+        if left == right { return false; }
+        match (definitions(section, left), definitions(section, right)) {
+            (Some(left), Some(right)) => left != right,
+            _ => true,
+        }
+    };
+    let component = |xf: &ImportedStyleElement, name: &str| {
+        xf.child(name).map(ImportedStyleElement::component).unwrap_or_else(|| ImportedStyleComponent {
+            name: name.into(), attributes: Vec::new(), children: Vec::new(), text: String::new(),
+        })
+    };
+    let number_format = |xf: &ImportedStyleElement| {
+        let id = xf.id("numFmtId") as u32;
+        root.child("numFmts").and_then(|section| section.children.iter().find(|format| format.id("numFmtId") == id as usize))
+            .and_then(|format| format.attributes.get("formatCode").cloned())
+            .or_else(|| builtin_number_format(id).map(str::to_string))
+            .unwrap_or_else(|| format!("#{id}"))
+    };
+    for xf in &cell_xfs.children {
+        let Some(parent) = parents.get(xf.id("xfId")) else { continue; };
+        let differs = [
+            number_format(xf) != number_format(parent),
+            different_definition("fonts", xf.id("fontId"), parent.id("fontId")),
+            different_definition("fills", xf.id("fillId"), parent.id("fillId")),
+            different_definition("borders", xf.id("borderId"), parent.id("borderId")),
+            component(xf, "alignment") != component(parent, "alignment"),
+            component(xf, "protection") != component(parent, "protection"),
+        ];
+        let (Event::Start(tag) | Event::Empty(tag)) = &events[xf.start] else { continue; };
+        let mut updated = tag.clone();
+        updated.clear_attributes();
+        for attribute in tag.attributes() {
+            let attribute = attribute.map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            if !FLAGS.iter().any(|name| attribute.key.as_ref() == name.as_bytes()) {
+                updated.push_attribute(attribute);
+            }
+        }
+        for (flag, differs) in FLAGS.into_iter().zip(differs) {
+            if differs { updated.push_attribute((flag, "1")); }
+        }
+        replacements.insert(xf.start, if matches!(events[xf.start], Event::Empty(_)) {
+            Event::Empty(updated)
+        } else { Event::Start(updated) });
+    }
+    let mut writer = Writer::new(Vec::new());
+    for (index, event) in events.into_iter().enumerate() {
+        writer.write_event(replacements.remove(&index).unwrap_or(event))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    }
+    String::from_utf8(writer.into_inner()).map_err(|error| XlsxError::InvalidData(error.to_string()))
+}
+
 fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
+    // Keep the source Normal font for column metrics until serialization.
+    // Imported application flags still compare against the effective font.
+    let imported = reconcile_imported_styles_xml(xml, false)?;
+    let xml = imported.as_str();
     let mut reader = Reader::from_str(xml);
     let mut ss = StyleSheet::default();
 
@@ -1194,6 +1490,23 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         in_font = true;
                         current_font = FontInfo::default();
                     }
+                    "u" if in_font => {
+                        let val = get_attr(&e, "val");
+                        current_font.underline = !matches!(val.as_deref(),Some("0")|Some("none"));
+                        current_font.underline_kind = match val.as_deref() {
+                            Some("double") => Some(crate::ir::CellUnderlineKind::Double),
+                            Some("singleAccounting") => Some(crate::ir::CellUnderlineKind::SingleAccounting),
+                            Some("doubleAccounting") => Some(crate::ir::CellUnderlineKind::DoubleAccounting),
+                            _ => None,
+                        };
+                    }
+                    "vertAlign" if in_font => {
+                        current_font.font_position = match get_attr(&e,"val").as_deref() {
+                            Some("superscript") => Some(crate::ir::CellFontPosition::Superscript),
+                            Some("subscript") => Some(crate::ir::CellFontPosition::Subscript),
+                            _ => None,
+                        };
+                    }
                     "fill" if section == Section::Fills => {
                         in_fill = true;
                         current_fill = FillInfo::default();
@@ -1228,22 +1541,14 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             vertical_align: None,
                             wrap_text: false,
                             stacked_text: false,
+                            text_rotation: None,
+                            justify_last_line: false,
                             shrink_to_fit: false,
+                            reading_order: crate::ir::CellReadingOrder::Contextual,
                             quote_prefix: is_true(get_attr(&e, "quotePrefix").as_deref()),
-                            style_id: get_attr(&e, "xfId").and_then(|v| v.parse().ok()),
-                            applies_font: unless_denied(
-                                get_attr(&e, "applyFont").as_deref(),
-                            ),
-                            applies_fill: unless_denied(
-                                get_attr(&e, "applyFill").as_deref(),
-                            ),
-                            applies_border: unless_denied(
-                                get_attr(&e, "applyBorder").as_deref(),
-                            ),
-                            applies_number_format: unless_denied(
-                                get_attr(&e, "applyNumberFormat").as_deref(),
-                            ),
+                            format_reference: xf_format_reference(&e),
                             unlocked: false,
+                            formula_hidden: false,
                         };
                     }
                     "alignment" if in_xf => {
@@ -1258,14 +1563,26 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         // characters stand one above the next.
                         current_xf.stacked_text =
                             get_attr(&e, "textRotation").as_deref() == Some("255");
+                        current_xf.text_rotation = match get_attr(&e, "textRotation").and_then(|value|value.parse::<i32>().ok()) {
+                            Some(angle @ 1..=90) => Some(angle),
+                            Some(angle @ 91..=180) => Some(90-angle),
+                            _ => None,
+                        };
+                        current_xf.justify_last_line = is_true(get_attr(&e, "justifyLastLine").as_deref());
                         current_xf.shrink_to_fit =
                             is_true(get_attr(&e, "shrinkToFit").as_deref());
+                        current_xf.reading_order = match get_attr(&e, "readingOrder").as_deref() {
+                            Some("1") => crate::ir::CellReadingOrder::LeftToRight,
+                            Some("2") => crate::ir::CellReadingOrder::RightToLeft,
+                            _ => crate::ir::CellReadingOrder::Contextual,
+                        };
                     }
                     // <protection locked="0"/> 遯ｶ繝ｻthe cells a protected sheet
                     // still lets a person type into.
                     "protection" if in_xf => {
                         current_xf.unlocked =
                             matches!(get_attr(&e, "locked").as_deref(), Some("0") | Some("false"));
+                        current_xf.formula_hidden = is_true(get_attr(&e, "hidden").as_deref());
                     }
 
                     // Inside a border element, parse child elements with style attr
@@ -1319,6 +1636,8 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         if let Some(c) = parse_color_attr(&e, theme) {
                             current_font.color = Some(c);
                         }
+                        current_font.reference.rgb = get_attr(&e, "rgb");
+                        current_font.reference.implicit_automatic = false;
                         current_font.reference.theme = get_attr(&e, "theme").and_then(|v| v.parse().ok());
                         current_font.reference.indexed = get_attr(&e, "indexed").and_then(|v| v.parse().ok());
                         current_font.reference.automatic = is_true(get_attr(&e, "auto").as_deref());
@@ -1331,9 +1650,15 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                     }
 
                     // Fill color 遯ｶ繝ｻlook for fgColor inside patternFill
-                    "fgColor" if in_fill => {
-                        if let Some(c) = parse_color_attr(&e, theme) {
-                            current_fill.bg_color = Some(c);
+                    "patternFill" if in_fill => {
+                        current_fill.pattern_fill.pattern=get_attr(&e,"patternType").unwrap_or_else(||"none".into());
+                    }
+                    "fgColor" | "bgColor" if in_fill => {
+                        let foreground=name=="fgColor";
+                        if foreground {current_fill.pattern_fill.foreground=Some(cell_color_reference(&e));}
+                        else {current_fill.pattern_fill.background=Some(cell_color_reference(&e));}
+                        if foreground==(current_fill.pattern_fill.pattern=="solid") {
+                            current_fill.bg_color=parse_color_attr(&e,theme);
                         }
                     }
 
@@ -1343,6 +1668,13 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
             Event::Empty(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    "font" if section == Section::Fonts => ss.fonts.push(FontInfo::default()),
+                    "fill" if section == Section::Fills => ss.fills.push(FillInfo::default()),
+                    "border" if section == Section::Borders => ss.borders.push(BorderInfo {
+                        up: is_true(get_attr(&e, "diagonalUp").as_deref()),
+                        down: is_true(get_attr(&e, "diagonalDown").as_deref()),
+                        ..BorderInfo::default()
+                    }),
                     "cellStyle" => {
                         if let Some(name)=get_attr(&e,"name") {
                             let index=get_attr(&e,"xfId").and_then(|v|v.parse::<usize>().ok()).unwrap_or(0);
@@ -1371,12 +1703,21 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         current_font.italic = val.as_deref() != Some("0");
                     }
                     "u" if in_font => {
-                        // <u/> underlines; <u val="none"/> does not.
                         let val = get_attr(&e, "val");
-                        current_font.underline = !matches!(
-                            val.as_deref(),
-                            Some("0") | Some("none")
-                        );
+                        current_font.underline = !matches!(val.as_deref(),Some("0")|Some("none"));
+                        current_font.underline_kind = match val.as_deref() {
+                            Some("double") => Some(crate::ir::CellUnderlineKind::Double),
+                            Some("singleAccounting") => Some(crate::ir::CellUnderlineKind::SingleAccounting),
+                            Some("doubleAccounting") => Some(crate::ir::CellUnderlineKind::DoubleAccounting),
+                            _ => None,
+                        };
+                    }
+                    "vertAlign" if in_font => {
+                        current_font.font_position = match get_attr(&e,"val").as_deref() {
+                            Some("superscript") => Some(crate::ir::CellFontPosition::Superscript),
+                            Some("subscript") => Some(crate::ir::CellFontPosition::Subscript),
+                            _ => None,
+                        };
                     }
                     "strike" if in_font => {
                         // <strike/> strikes the writing through;
@@ -1422,6 +1763,8 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         if let Some(c) = parse_color_attr(&e, theme) {
                             current_font.color = Some(c);
                         }
+                        current_font.reference.rgb = get_attr(&e, "rgb");
+                        current_font.reference.implicit_automatic = false;
                         current_font.reference.theme = get_attr(&e, "theme").and_then(|v| v.parse().ok());
                         current_font.reference.indexed = get_attr(&e, "indexed").and_then(|v| v.parse().ok());
                         current_font.reference.automatic = is_true(get_attr(&e, "auto").as_deref());
@@ -1432,9 +1775,15 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             current_font.reference.automatic = false;
                         }
                     }
-                    "fgColor" if in_fill => {
-                        if let Some(c) = parse_color_attr(&e, theme) {
-                            current_fill.bg_color = Some(c);
+                    "patternFill" if in_fill => {
+                        current_fill.pattern_fill.pattern=get_attr(&e,"patternType").unwrap_or_else(||"none".into());
+                    }
+                    "fgColor" | "bgColor" if in_fill => {
+                        let foreground=name=="fgColor";
+                        if foreground {current_fill.pattern_fill.foreground=Some(cell_color_reference(&e));}
+                        else {current_fill.pattern_fill.background=Some(cell_color_reference(&e));}
+                        if foreground==(current_fill.pattern_fill.pattern=="solid") {
+                            current_fill.bg_color=parse_color_attr(&e,theme);
                         }
                     }
                     // Self-closing border sides: <left style="thin"/>
@@ -1472,14 +1821,26 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         // characters stand one above the next.
                         current_xf.stacked_text =
                             get_attr(&e, "textRotation").as_deref() == Some("255");
+                        current_xf.text_rotation = match get_attr(&e, "textRotation").and_then(|value|value.parse::<i32>().ok()) {
+                            Some(angle @ 1..=90) => Some(angle),
+                            Some(angle @ 91..=180) => Some(90-angle),
+                            _ => None,
+                        };
+                        current_xf.justify_last_line = is_true(get_attr(&e, "justifyLastLine").as_deref());
                         current_xf.shrink_to_fit =
                             is_true(get_attr(&e, "shrinkToFit").as_deref());
+                        current_xf.reading_order = match get_attr(&e, "readingOrder").as_deref() {
+                            Some("1") => crate::ir::CellReadingOrder::LeftToRight,
+                            Some("2") => crate::ir::CellReadingOrder::RightToLeft,
+                            _ => crate::ir::CellReadingOrder::Contextual,
+                        };
                     }
                     // <protection locked="0"/> 遯ｶ繝ｻthe cells a protected sheet
                     // still lets a person type into.
                     "protection" if in_xf => {
                         current_xf.unlocked =
                             matches!(get_attr(&e, "locked").as_deref(), Some("0") | Some("false"));
+                        current_xf.formula_hidden = is_true(get_attr(&e, "hidden").as_deref());
                     }
                     "xf" if section == Section::CellXfs
                         || section == Section::CellStyleXfs =>
@@ -1503,22 +1864,14 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             vertical_align: None,
                             wrap_text: false,
                             stacked_text: false,
+                            text_rotation: None,
+                            justify_last_line: false,
                             shrink_to_fit: false,
+                            reading_order: crate::ir::CellReadingOrder::Contextual,
                             quote_prefix: is_true(get_attr(&e, "quotePrefix").as_deref()),
-                            style_id: get_attr(&e, "xfId").and_then(|v| v.parse().ok()),
-                            applies_font: unless_denied(
-                                get_attr(&e, "applyFont").as_deref(),
-                            ),
-                            applies_fill: unless_denied(
-                                get_attr(&e, "applyFill").as_deref(),
-                            ),
-                            applies_border: unless_denied(
-                                get_attr(&e, "applyBorder").as_deref(),
-                            ),
-                            applies_number_format: unless_denied(
-                                get_attr(&e, "applyNumberFormat").as_deref(),
-                            ),
+                            format_reference: xf_format_reference(&e),
                             unlocked: false,
+                            formula_hidden: false,
                         };
                         if section == Section::CellStyleXfs {
                             ss.cell_style_xfs.push(xf);
@@ -1651,21 +2004,11 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
 }
 
 fn resolve_xf_style(xf: &XfRecord, stylesheet: &StyleSheet) -> CellStyle {
-    // A cell format that does not apply a part of itself wears that part from
-    // the named style it is built on. This is how a hyperlink gets its blue
-    // underline: the cell's own format names no font at all.
-    let parent = xf
-        .style_id
-        .and_then(|id| stylesheet.cell_style_xfs.get(id));
-    let inherited = |applies: bool, own: usize, from: fn(&XfRecord) -> usize| {
-        match (applies, parent) {
-            (false, Some(parent)) => from(parent),
-            _ => own,
-        }
-    };
-    let font_id = inherited(xf.applies_font, xf.font_id, |xf| xf.font_id);
-    let fill_id = inherited(xf.applies_fill, xf.fill_id, |xf| xf.fill_id);
-    let border_id = inherited(xf.applies_border, xf.border_id, |xf| xf.border_id);
+    // Component identifiers select the stored definitions. Keep application
+    // flags separately for later style edits and serialization.
+    let font_id = xf.font_id;
+    let fill_id = xf.fill_id;
+    let border_id = xf.border_id;
 
     let mut font = stylesheet.fonts.get(font_id).cloned().unwrap_or_default();
     // A font record that names no face, or no size, is not asking for the
@@ -1683,6 +2026,9 @@ fn resolve_xf_style(xf: &XfRecord, stylesheet: &StyleSheet) -> CellStyle {
             font.size = font.size.or(normal.size);
         }
     }
+    if font.color.is_none() && font.reference.color_reference().is_none() {
+        font.reference.implicit_automatic=true;
+    }
     let fill = stylesheet.fills.get(fill_id).cloned().unwrap_or_default();
     let border = stylesheet
         .borders
@@ -1691,10 +2037,7 @@ fn resolve_xf_style(xf: &XfRecord, stylesheet: &StyleSheet) -> CellStyle {
         .unwrap_or_default();
 
     // Resolve number format
-    let num_fmt_id = match (xf.applies_number_format, parent) {
-        (false, Some(parent)) => parent.num_fmt_id,
-        _ => xf.num_fmt_id,
-    };
+    let num_fmt_id = xf.num_fmt_id;
     let number_format = if num_fmt_id == 0 {
         None // General 遯ｶ繝ｻno explicit format needed
     } else if let Some(custom) = stylesheet.num_fmts.get(&num_fmt_id) {
@@ -1704,9 +2047,12 @@ fn resolve_xf_style(xf: &XfRecord, stylesheet: &StyleSheet) -> CellStyle {
     };
 
     CellStyle {
+        format_reference: Some(Box::new(xf.format_reference.clone())),
         bold: font.bold,
         italic: font.italic,
         underline: font.underline,
+        underline_kind: font.underline_kind,
+        font_position: font.font_position,
         strikethrough: font.strikethrough,
         font_size: font.size,
         font_name: font.name.clone(),
@@ -1715,15 +2061,20 @@ fn resolve_xf_style(xf: &XfRecord, stylesheet: &StyleSheet) -> CellStyle {
         font_family: font.family,
         font_color: font.color,
         bg_color: fill.bg_color,
+        pattern_fill: (fill.pattern_fill.pattern!="none" || fill.pattern_fill.foreground.is_some() || fill.pattern_fill.background.is_some()).then(||Box::new(fill.pattern_fill)),
         number_format,
         horizontal_align: xf.horizontal_align.clone(),
         indent: xf.indent,
         vertical_align: xf.vertical_align.clone(),
         wrap_text: xf.wrap_text,
         stacked_text: xf.stacked_text,
+        text_rotation: xf.text_rotation,
+        justify_last_line: xf.justify_last_line,
         shrink_to_fit: xf.shrink_to_fit,
+        reading_order: xf.reading_order,
         quote_prefix: xf.quote_prefix,
         unlocked: xf.unlocked,
+        formula_hidden: xf.formula_hidden,
         border_top: border.top.clone(),
         border_bottom: border.bottom.clone(),
         border_left: border.left.clone(),
@@ -5977,9 +6328,8 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                 vec![("Normal".to_string(),0,Some(0))]
             } else {stylesheet.named_styles.clone()};
             records.into_iter().filter_map(|(name,index,builtin_id)| {
-                let mut xf=stylesheet.cell_style_xfs.get(index)?.clone();
-                xf.style_id=None;
-                Some(crate::ir::NamedCellStyle {name,builtin_id,number_format_id:xf.num_fmt_id,style:resolve_xf_style(&xf,&stylesheet)})
+                let xf=stylesheet.cell_style_xfs.get(index)?;
+                Some(crate::ir::NamedCellStyle {name,builtin_id,number_format_id:xf.num_fmt_id,source_id:index as u32,style:resolve_xf_style(xf,&stylesheet)})
             }).collect()
         },
         defined_names,
@@ -6327,14 +6677,9 @@ mod tests {
         assert_eq!(parse_range_ref("A1"), None);
     }
 
-    /// A cell format that names a font and says nothing about applying it is
-    /// using that font. Only an explicit `applyFont="0"` sends the reader to
-    /// the named style the format is built on 遯ｶ繝ｻwhich is how a hyperlink keeps
-    /// its blue underline. Files written by anything other than Excel
-    /// routinely leave every flag off, so reading absent as "do not apply"
-    /// draws whole workbooks in the wrong face.
+    /// Cell font selection and saved application flags remain independent.
     #[test]
-    fn a_font_is_applied_unless_the_format_denies_it() {
+    fn a_cell_font_identifier_is_used_even_when_application_is_disabled() {
         let xml = r##"<?xml version="1.0"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <fonts count="3">
@@ -6357,7 +6702,121 @@ mod tests {
         assert_eq!(named.font_name.as_deref(), Some("ＭＳ ゴシック"));
         assert_eq!(named.font_size, Some(10.0));
         let denied = resolve_cell_style(2, &sheet);
-        assert!(denied.underline, "should wear the style's own font");
+        assert!(!denied.underline);
+        assert_eq!(denied.font_name.as_deref(), Some("Calibri"));
+        assert_eq!(denied.font_color, None);
+        let reference = denied.format_reference.as_ref().unwrap();
+        assert_eq!(reference.style_id, Some(1));
+        assert_eq!(reference.font, Some(true));
+    }
+
+    #[test]
+    fn empty_style_components_keep_their_indices() {
+        let xml = r##"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="2"><font/><font><name val="Consolas"/><sz val="12"/></font></fonts>
+<fills count="2"><fill/><fill><patternFill patternType="solid"><fgColor rgb="FFFF0000"/></patternFill></fill></fills>
+<borders count="2"><border/><border><left style="thin"><color rgb="FF0000FF"/></left></border></borders>
+<cellStyleXfs count="1"><xf fontId="0" fillId="0" borderId="0" numFmtId="0"/></cellStyleXfs>
+<cellXfs count="1"><xf fontId="1" fillId="1" borderId="1" numFmtId="0" xfId="0"/></cellXfs>
+</styleSheet>"##;
+        let sheet = parse_styles_xml(xml, &Theme::default()).unwrap();
+        assert_eq!(sheet.fonts.len(), 2);
+        assert_eq!(sheet.fills.len(), 2);
+        assert_eq!(sheet.borders.len(), 2);
+        let cell = resolve_cell_style(0, &sheet);
+        assert_eq!(cell.font_name.as_deref(), Some("Consolas"));
+        assert_eq!(cell.font_size, Some(12.0));
+        assert_eq!(cell.bg_color.as_deref(), Some("FF0000"));
+        assert_eq!(cell.border_left.as_ref().map(|line| line.style.as_str()), Some("thin"));
+        assert_eq!(cell.border_left.as_ref().and_then(|line| line.color.as_deref()), Some("0000FF"));
+    }
+
+    #[test]
+    fn imported_application_flags_compare_complete_components() {
+        let flags = ["applyFont", "applyFill", "applyBorder", "applyNumberFormat", "applyAlignment", "applyProtection"];
+        for normal in [false, true] {
+            for raw_flag in [None, Some("0"), Some("1")] {
+                for kind in 0..8 {
+                    let changed = |component| kind == component || kind == 7;
+                    let applications = raw_flag.map(|value| flags.iter()
+                        .map(|name| format!(r#"{name}="{value}""#)).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+                    let parent_id = usize::from(!normal);
+                    let parent = format!(r#"<xf fontId="{}" fillId="{}" borderId="{}" numFmtId="{}">{}{}</xf>"#,
+                        usize::from(changed(1)), usize::from(changed(2)), usize::from(changed(3)),
+                        if changed(4) {2} else {0},
+                        if changed(5) {r#"<alignment horizontal="right" vertical="top" wrapText="1" indent="2"/>"#} else {""},
+                        if changed(6) {r#"<protection locked="0" hidden="1"/>"#} else {""});
+                    let parents = if normal { parent } else {
+                        format!(r#"<xf fontId="0" fillId="0" borderId="0" numFmtId="0"/>{parent}"#)
+                    };
+                    let xml = format!(r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts><font><name val="Calibri"/><sz val="11"/></font><font><name val="Arial"/><sz val="15"/></font></fonts>
+<fills><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF00FF00"/></patternFill></fill></fills>
+<borders><border/><border><left style="double"><color rgb="FFFF0000"/></left></border></borders>
+<cellStyleXfs>{parents}</cellStyleXfs>
+<cellXfs><xf fontId="0" fillId="0" borderId="0" numFmtId="0" xfId="0"/>
+<xf fontId="0" fillId="0" borderId="0" numFmtId="0" xfId="{parent_id}" {applications}/></cellXfs></styleSheet>"#);
+                    let imported = import_styles_xml(&xml).unwrap();
+                    assert_eq!(import_styles_xml(&imported).unwrap(), imported);
+                    let sheet = parse_styles_xml(&xml, &Theme::default()).unwrap();
+                    let reference = &sheet.cell_xfs[1].format_reference;
+                    let actual = [reference.font, reference.fill, reference.border, reference.number_format, reference.alignment, reference.protection];
+                    for (index, actual) in actual.into_iter().enumerate() {
+                        let expected = (changed(index + 1) && !(normal && index == 0)).then_some(true);
+                        assert_eq!(actual, expected, "normal={normal}, raw={raw_flag:?}, kind={kind}, flag={}", flags[index]);
+                    }
+                }
+            }
+        }
+        // These properties are not all present in CellStyle. Import must
+        // compare their XML rather than silently dropping their differences.
+        let xml = r#"<styleSheet><fonts><font/></fonts><fills><fill/></fills><borders><border/></borders>
+<cellStyleXfs><xf/></cellStyleXfs><cellXfs><xf/><xf><alignment textRotation="45" readingOrder="2"/><protection hidden="1"/></xf></cellXfs></styleSheet>"#;
+        let styles = parse_styles_xml(xml, &Theme::default()).unwrap();
+        assert_eq!(styles.cell_xfs[1].format_reference.alignment, Some(true));
+        assert_eq!(styles.cell_xfs[1].format_reference.protection, Some(true));
+    }
+
+    #[test]
+    fn cell_components_use_their_own_identifiers_across_application_flags() {
+        let flags = ["applyFont", "applyFill", "applyBorder", "applyNumberFormat", "applyAlignment", "applyProtection"];
+        let identifiers = ["fontId", "fillId", "borderId", "numFmtId"];
+        for missing in [false, true] {
+            for kind in 0..8 {
+                let omitted = missing.then(|| identifiers[kind / 2]);
+                let ids = identifiers.iter().filter(|name| Some(**name) != omitted)
+                    .map(|name| format!(r#"{name}="0""#)).collect::<Vec<_>>().join(" ");
+                let applications = flags.iter().enumerate().map(|(index, name)| {
+                    let enabled = if missing { index != kind / 2 || kind % 2 == 1 } else { kind != 6 && kind != index };
+                    format!(r#"{name}="{}""#, u8::from(enabled))
+                }).collect::<Vec<_>>().join(" ");
+                let xml = format!(r##"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="2"><font><name val="Calibri"/><sz val="11"/></font><font><name val="Arial"/><sz val="15"/><b/><color rgb="FF0000FF"/></font></fonts>
+<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF00FF00"/></patternFill></fill></fills>
+<borders count="2"><border/><border><left style="double"><color rgb="FFFF0000"/></left></border></borders>
+<cellStyleXfs count="2"><xf fontId="0" fillId="0" borderId="0" numFmtId="0"/><xf fontId="1" fillId="1" borderId="1" numFmtId="2"><alignment horizontal="right" vertical="top" wrapText="1" indent="2"/><protection locked="0" hidden="1"/></xf></cellStyleXfs>
+<cellXfs count="1"><xf {ids} xfId="1" {applications}><alignment horizontal="left" vertical="bottom" wrapText="0"/><protection locked="1" hidden="0"/></xf></cellXfs>
+<cellStyles count="2"><cellStyle name="Normal" xfId="0" builtinId="0"/><cellStyle name="ProbeInheritance" xfId="1"/></cellStyles>
+</styleSheet>"##);
+                let styles = parse_styles_xml(&xml, &Theme::default()).unwrap();
+                let actual = resolve_cell_style(0, &styles);
+                assert_eq!(actual.font_name.as_deref(), Some("Calibri"), "missing={missing}, kind={kind}");
+                assert_eq!(actual.font_size, Some(11.0));
+                assert!(!actual.bold);
+                assert_eq!(actual.font_color, None);
+                assert_eq!(actual.bg_color, None);
+                assert_eq!(actual.border_left, None);
+                assert_eq!(actual.number_format, None);
+                assert_eq!(actual.horizontal_align.as_deref(), Some("left"));
+                assert_eq!(actual.vertical_align.as_deref(), Some("bottom"));
+                assert!(!actual.wrap_text);
+                assert!(!actual.unlocked);
+                let reference = actual.format_reference.as_ref().unwrap();
+                assert_eq!(reference.style_id, Some(1));
+                let stored = [reference.font, reference.fill, reference.border, reference.number_format, reference.alignment, reference.protection];
+                assert_eq!(stored, [Some(true); 6]);
+            }
+        }
     }
 
     /// A face the machine has not got is answered from the two numbers beside

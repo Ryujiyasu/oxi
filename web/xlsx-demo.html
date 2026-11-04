@@ -525,7 +525,7 @@ import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-setti
 import * as vbaProjectApi from './oxidocs_wasm.js';
 // The row model is the renderer's own, written out once in JS: what the grid
 // draws and what the row heights are measured with cannot drift apart.
-import { explainRow, mayBreak } from './row-model.js';
+import { explainRow, mayBreak, rememberRowHeight } from './row-model.js';
 
 // The two editors beside this one have spoken both languages for a while and
 // this one spoke neither, which is the sort of gap a suite is judged on.
@@ -831,12 +831,14 @@ function fitColumn(col) {
  * row and every question is a crossing into the engine.
  */
 const rowHeights = new Map();
-function rowHeightOf(face, size) {
-  const key = `${face}|${size}`;
+function rowHeightOf(face, size, normal = null, bold = false, italic = false, mergedWrap = false) {
+  const key = `${face}|${size}|${normal?.join('|') || ''}|${bold}|${italic}|${mergedWrap}`;
   if (!rowHeights.has(key)) {
     let px;
     try {
-      px = row_height_px(face || '', size);
+      px = normal || bold || italic ? vbaProjectApi.cell_row_height_px(
+        face || '', size, bold, italic, normal?.[0] || '', normal?.[1] || 0, mergedWrap)
+        : row_height_px(face || '', size);
     } catch {
       px = undefined;
     }
@@ -1031,12 +1033,48 @@ function measurer() {
   return measurer.pen ||= document.createElement('canvas').getContext('2d');
 }
 
+/** The Latin face, separate from the theme's East Asian companion. */
+function faceOf(style) {
+  return style?.font_reference?.latin_name || style?.font_name
+    || book?.default_style?.font_reference?.latin_name
+    || book?.default_style?.font_name || 'Calibri';
+}
+
 /** The face a cell wears, written the way a canvas wants it. */
 function fontOf(style, size) {
   const points = size ?? style?.font_size ?? book?.default_style?.font_size ?? 11;
-  const face = style?.font_name || book?.default_style?.font_name || 'Calibri';
+  const face = faceOf(style);
+  const companion = style?.font_name || book?.default_style?.font_name;
+  const fallback = companion && companion !== face ? `"${companion}", ` : '';
   return `${style?.italic ? 'italic ' : ''}${style?.bold ? '700 ' : ''}` +
-    `${Math.round(points * 96 / 72)}px "${face}", "Yu Gothic", sans-serif`;
+    `${Math.round(points * 96 / 72)}px "${face}", ${fallback}"Yu Gothic", sans-serif`;
+}
+
+/** Keep measured advances separate from browser shaping for complex scripts. */
+function cellTextMetrics(style, text, font) {
+  const letters = Array.from(text);
+  const simple = letters.every(letter => {
+    const code = letter.codePointAt(0);
+    return code >= 0x20 && code <= 0xFF;
+  });
+  const advances = simple ? vbaProjectApi.spreadsheet_glyph_advances(
+    faceOf(style), style?.font_size ?? book?.default_style?.font_size ?? 11,
+    !!style?.bold, !!style?.italic, text) : [];
+  if (advances.length === letters.length) {
+    return {letters, advances, width: advances.reduce((sum, value) => sum + value, 0)};
+  }
+  return {letters, advances: null, width: inkWidth(font, text)};
+}
+
+function paintCellText(ink, text, x, baseline, measured) {
+  if (measured.advances === null) {
+    ink.fillText(text, x, baseline);
+    return;
+  }
+  for (let index = 0; index < measured.letters.length; index += 1) {
+    ink.fillText(measured.letters[index], x, baseline);
+    x += measured.advances[index];
+  }
 }
 
 const advances = new Map();
@@ -1117,6 +1155,88 @@ function breakLines(font, text, room) {
     }
   }
   return held;
+}
+
+const FILL_MASKS = Object.freeze({
+  mediumGray: [0xAA, 0x55],
+  darkGray: [0xEE, 0xBB],
+  lightGray: [0x88, 0x22],
+  darkHorizontal: [0xFF, 0xFF, 0, 0],
+  darkVertical: [0xCC],
+  darkDown: [0xCC, 0x66, 0x33, 0x99],
+  darkUp: [0x33, 0x66, 0xCC, 0x99],
+  darkGrid: [0x99, 0x66, 0x66, 0x99],
+  darkTrellis: [0xFF, 0x66, 0xFF, 0x99],
+  lightHorizontal: [0xFF, 0, 0, 0],
+  lightVertical: [0x88],
+  lightDown: [0x88, 0x44, 0x22, 0x11],
+  lightUp: [0x11, 0x22, 0x44, 0x88],
+  lightGrid: [0xFF, 0x88, 0x88, 0x88],
+  lightTrellis: [0x88, 0x55, 0x22, 0x55],
+  gray125: [0x88, 0, 0x22, 0],
+  gray0625: [0x80, 0, 0x08, 0],
+});
+const fillPatterns = new WeakMap();
+const fillColorCache = { palette: '', colors: new Map() };
+
+/** Resolve original color references, including tint, with the importer's rules. */
+function fillColor(reference, fallback) {
+  if (!reference) return fallback;
+  const palette = {theme_colors: book?.theme_colors || [], indexed_colors: book?.indexed_colors || []};
+  const paletteKey = JSON.stringify(palette);
+  if (fillColorCache.palette !== paletteKey) {
+    fillColorCache.palette = paletteKey;
+    fillColorCache.colors.clear();
+  }
+  const key = JSON.stringify([reference, fallback]);
+  if (!fillColorCache.colors.has(key)) {
+    if (fillColorCache.colors.size >= 512) fillColorCache.colors.clear();
+    fillColorCache.colors.set(key, tint(vbaProjectApi.resolve_spreadsheet_color(reference, palette, fallback), fallback));
+  }
+  return fillColorCache.colors.get(key);
+}
+
+/** A fill's repeated bitmap shares an origin across neighboring cells. */
+function paintCellFill(ink, style, box) {
+  if (!style) return;
+  const fill = style.pattern_fill;
+  if (fill?.pattern === 'none') return;
+  const mask = FILL_MASKS[fill?.pattern];
+  if (!mask) {
+    const shade = style.bg_color || (fill?.pattern === 'solid' ? fillColor(fill.foreground, '#FFFFFF') : null);
+    if (!shade) return;
+    ink.fillStyle = tint(shade, '#FFFFFF');
+  } else {
+    const background = style.bg_color ? tint(style.bg_color, '#FFFFFF') : fillColor(fill.background, '#FFFFFF');
+    const foreground = fillColor(fill.foreground, '#000000');
+    let cache = fillPatterns.get(ink);
+    if (!cache) { cache = new Map(); fillPatterns.set(ink, cache); }
+    const key = JSON.stringify([fill.pattern, foreground, background]);
+    let pattern = cache.get(key);
+    if (!pattern) {
+      const tile = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(8, 8) : document.createElement('canvas');
+      tile.width = tile.height = 8;
+      const brush = tile.getContext('2d');
+      if (!brush) return;
+      brush.fillStyle = background;
+      brush.fillRect(0, 0, 8, 8);
+      brush.fillStyle = foreground;
+      for (let y = 0; y < 8; y += 1) {
+        for (let x = 0; x < 8; x += 1) {
+          if (mask[y % mask.length] & (0x80 >> x)) brush.fillRect(x, y, 1, 1);
+        }
+      }
+      pattern = ink.createPattern(tile, 'repeat');
+      if (!pattern) return;
+      if (cache.size >= 256) cache.clear();
+      cache.set(key, pattern);
+    }
+    ink.fillStyle = pattern;
+  }
+  const smoothing = ink.imageSmoothingEnabled;
+  if (mask) ink.imageSmoothingEnabled = false;
+  ink.fillRect(box.left, box.top, box.right - box.left, box.bottom - box.top);
+  if (mask) ink.imageSmoothingEnabled = smoothing;
 }
 
 /** A stored colour, which may or may not carry an alpha byte in front. */
@@ -1217,9 +1337,11 @@ function layout() {
       // needed, and Excel works it out again — so this does too, by the rules
       // the renderer measures rows with.
       try {
-        px = explainRow({
+        const measured = explainRow({
           sheet, index, row, columns: cols, heightOf: rowHeightOf, advance: step,
-        }).px;
+        });
+        px = measured.px;
+        rememberRowHeight(sheet, row, measured);
       } catch {
         px = Math.trunc(((row && row.height) || sheet.default_row_height || 15) * 96 / 72);
       }
@@ -1805,11 +1927,7 @@ function paintCells(ink, sheet, band, view) {
   }
 
   for (const held of drawn) {
-    const shade = held.cell.style && held.cell.style.bg_color;
-    if (!shade) continue;
-    ink.fillStyle = tint(shade, '#FFFFFF');
-    ink.fillRect(held.box.left, held.box.top,
-      held.box.right - held.box.left, held.box.bottom - held.box.top);
+    paintCellFill(ink, held.cell.style, held.box);
   }
 
   // The grid Excel shows behind a sheet, which is not part of the sheet.
@@ -1871,6 +1989,13 @@ function paintCells(ink, sheet, band, view) {
   }
 
   const indent = indentStep();
+  const strikes = new Map();
+  const measuredText = new Map();
+  const measure = (style, text, font) => {
+    const key = `${font}|${text}`;
+    if (!measuredText.has(key)) measuredText.set(key, cellTextMetrics(style, text, font));
+    return measuredText.get(key);
+  };
   for (const held of drawn) {
     const covered = geom.covered.get(`${held.row},${held.cell.col}`);
     if (covered && !covered.anchor) continue;
@@ -1880,6 +2005,16 @@ function paintCells(ink, sheet, band, view) {
     const box = held.box;
     const style = cell.style || {};
     const font = fontOf(style);
+    let strike;
+    if (style.strikethrough) {
+      if (!strikes.has(font)) {
+        strikes.set(font, vbaProjectApi.spreadsheet_strikeout(
+          faceOf(style),
+          style.font_size ?? book?.default_style?.font_size ?? 11,
+          !!style.bold, !!style.italic));
+      }
+      strike = strikes.get(font);
+    }
     const room = gutters(font);
     const pushed = indent * (style.indent || 0);
     const numeric = isNumber(cell);
@@ -1912,19 +2047,25 @@ function paintCells(ink, sheet, band, view) {
     if (style.stacked_text) {
       let at = down + size;
       for (const letter of text) {
-        ink.fillText(letter, box.left + (box.right - box.left - inkWidth(font, letter)) / 2, at);
+        const measured = measure(style, letter, font);
+        const width = measured.width;
+        const x = box.left + (box.right - box.left - width) / 2;
+        paintCellText(ink, letter, x, at, measured);
+        if (strike?.length === 2) ink.fillRect(x, at - strike[0], width, strike[1]);
         at += line;
       }
     } else {
       lines.forEach((one, step) => {
-        const ran = inkWidth(font, one);
+        const measured = measure(style, one, font);
+        const ran = measured.width;
         const spot = placed === 'right' ? right - ran
           : placed === 'center' || placed === 'centre' || placed === 'centerContinuous'
             ? left + (wide - ran) / 2
             : left;
         const base = down + line * step + Math.round(size * .92);
-        ink.fillText(one, spot, base);
+        paintCellText(ink, one, spot, base, measured);
         if (style.underline) ink.fillRect(spot, base + 2, ran, 1);
+        if (strike?.length === 2) ink.fillRect(spot, base - strike[0], ran, strike[1]);
       });
     }
     ink.restore();
@@ -2717,7 +2858,15 @@ const noFillButton = document.getElementById('nofill');
 
 /// Colour every cell in the selection, or take the colour off with `null`.
 function wearFill(colour) {
-  restyle((was) => ({ ...was, bg_color: colour }));
+  restyle((was) => {
+    const fill = was?.pattern_fill;
+    if (colour === null || !fill || fill.pattern === 'none') {
+      return { ...was, bg_color: colour, pattern_fill: null };
+    }
+    const part = fill.pattern === 'solid' ? 'foreground' : 'background';
+    const rgb = 'FF' + String(colour).replace(/^#/, '').slice(-6).toUpperCase();
+    return { ...was, bg_color: colour, pattern_fill: { ...fill, [part]: { rgb } } };
+  });
 }
 
 /// Show the selection's colour, when they agree on one.
@@ -2841,10 +2990,10 @@ const autoInkButton = document.getElementById('autoink');
 function facesUsed() {
   const seen = [];
   const add = (name) => { if (name && !seen.includes(name)) seen.push(name); };
-  add((book.default_style || {}).font_name);
+  add(faceOf(book.default_style));
   for (const sheet of book.sheets) {
     for (const line of sheet.rows) {
-      for (const cell of line.cells) add(cell.style.font_name);
+      for (const cell of line.cells) add(faceOf(cell.style));
     }
   }
   return seen;
@@ -2863,7 +3012,25 @@ function sayFaces() {
 
 /** Set the selection in a named face, or hand it back to the standard one. */
 function wearFace(name) {
-  restyle((was) => ({ ...was, font_name: name.trim() || null }));
+  const face = name.trim() || null;
+  restyle((was) => {
+    if (face && faceOf(was) === face) return was;
+    const style = { ...was, font_name: face };
+    const metadata = vbaProjectApi.spreadsheet_font_metadata(face || '');
+    for (const [index, part] of ['font_family', 'font_charset'].entries()) {
+      if (metadata[index] >= 0) style[part] = metadata[index];
+      else delete style[part];
+    }
+    if (face || was?.font_reference) {
+      const reference = { ...was?.font_reference };
+      if (face) reference.latin_name = face;
+      else delete reference.latin_name;
+      delete reference.scheme;
+      if (Object.keys(reference).length) style.font_reference = reference;
+      else delete style.font_reference;
+    }
+    return style;
+  });
 }
 
 /**
@@ -2890,7 +3057,9 @@ function agreedOn(part) {
   let agree = true;
   eachInRegion((row, col) => {
     const held = heldAt(row, col);
-    const worn = (held ? held.style : bandStyleAt(sheetNow(), row, col))?.[part] ?? null;
+    const style = held ? held.style : bandStyleAt(sheetNow(), row, col);
+    const worn = (part === 'font_name'
+      ? style?.font_reference?.latin_name || style?.font_name : style?.[part]) ?? null;
     if (seen === null) seen = worn;
     else if (seen !== worn) agree = false;
   });
@@ -2908,7 +3077,7 @@ function sayFace() {
   // A cell that names neither is set in the workbook's own font, so that is
   // what the boxes show rather than nothing: it is what the cell IS in.
   if (faceBox && document.activeElement !== faceBox) {
-    faceBox.value = agreedOn('font_name') ?? standard.font_name ?? '';
+    faceBox.value = agreedOn('font_name') ?? faceOf(standard);
   }
   if (sizeBox && document.activeElement !== sizeBox) {
     const points = agreedOn('font_size') ?? standard.font_size ?? null;
@@ -4312,6 +4481,7 @@ function dressed(row, col, style) {
   for (const part of ['font_color', 'bg_color', 'bold', 'italic', 'underline', 'number_format']) {
     if (over[part] !== undefined && over[part] !== null) held[part] = over[part];
   }
+  if (over.bg_color !== undefined && over.bg_color !== null) held.pattern_fill = null;
   return held;
 }
 

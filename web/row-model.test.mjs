@@ -7,7 +7,7 @@
 //! Every number below came from a COM or PDF measurement of Excel itself, not
 //! from reading this code back to itself. Run with `node web/row-model.test.mjs`.
 
-import { countLines, mayBreak, explainRow, sheetDefault } from './row-model.js';
+import { countLines, mayBreak, explainRow, sheetDefault, rememberRowHeight } from './row-model.js';
 
 let failures = 0;
 function is(what, got, want) {
@@ -60,6 +60,36 @@ const heights = {
   'ＭＳ Ｐゴシック|44': 18, 'ＭＳ Ｐゴシック|72': 28, '游ゴシック|44': 25, '游ゴシック|32': 17,
 };
 const heightOf = (face, size) => heights[`${face}|${Math.round(size * 4)}`];
+
+const themedSheet = {
+  normal_font: ['游ゴシック', 11], column_width_font: 'Aptos Narrow',
+  default_row_height: 15, rows: [], merge_cells: [],
+};
+const asked = [];
+const contextualHeight = (face, size, normal, bold, italic) => {
+  if (normal) {
+    asked.push([face, size, normal, bold, italic]);
+    return 21;
+  }
+  return face === 'Aptos Narrow' ? 20 : face === 'Arial' ? 20 : 25;
+};
+const themedRow = { index: 1, cells: [{ col: 0, value: {String: 'M'},
+  style: { font_name: 'Arial', font_size: 12 } }] };
+const contextual = explainRow({ sheet: themedSheet, index: 1, row: themedRow,
+  columns: [0, 100], heightOf: contextualHeight, advance: () => 13 });
+is('a mixed-font row uses the themed Latin Normal font', contextual.px, 21);
+is('the shared line calculation receives the effective Normal and style', asked,
+  [['Arial', 12, ['Aptos Narrow', 11], false, false]]);
+rememberRowHeight(themedSheet, themedRow, contextual);
+is('automatic height is available to save and VBA', themedRow.height, 15.75);
+rememberRowHeight(themedSheet, themedRow, {px: 20});
+is('returning to the default removes the automatic height cache', themedRow.height, undefined);
+themedRow.height = 30; themedRow.custom_height = true;
+rememberRowHeight(themedSheet, themedRow, {px: 21});
+is('a computed height leaves a manually chosen height alone', themedRow.height, 30);
+themedRow.custom_height = false;
+rememberRowHeight(themedSheet, themedRow, {px: 21, note: 'unmeasured font'});
+is('an unmeasured font keeps its stored height', themedRow.height, 30);
 const advance = () => em;
 const sheet = {
   name: 'S',

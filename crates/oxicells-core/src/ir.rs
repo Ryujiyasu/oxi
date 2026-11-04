@@ -15,6 +15,10 @@ pub struct FontReference {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheme: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub rgb: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub implicit_automatic: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indexed: Option<u32>,
@@ -28,6 +32,20 @@ impl FontReference {
     pub fn is_empty(&self) -> bool {
         self.latin_name.is_none() && self.scheme.is_none() && self.theme.is_none()
             && self.indexed.is_none() && !self.automatic && self.tint.is_none()
+            && self.rgb.is_none() && !self.implicit_automatic
+    }
+
+    pub fn color_reference(&self) -> Option<CellColorReference> {
+        if self.implicit_automatic {
+            return Some(CellColorReference {automatic:true,tint:self.tint,..Default::default()});
+        }
+        let mut color=CellColorReference {tint:self.tint,..Default::default()};
+        if let Some(theme)=self.theme {color.theme=Some(theme);}
+        else if let Some(index)=self.indexed {color.indexed=Some(index);}
+        else if self.automatic {color.automatic=true;}
+        else if let Some(rgb)=self.rgb.as_ref() {color.rgb=Some(rgb.clone());}
+        else {return None;}
+        Some(color)
     }
 }
 
@@ -55,6 +73,8 @@ pub struct NamedCellStyle {
     pub builtin_id: Option<u32>,
     #[serde(default)]
     pub number_format_id: u32,
+    #[serde(default)]
+    pub source_id: u32,
     pub style: CellStyle,
 }
 
@@ -1709,6 +1729,141 @@ pub struct ShapeLine {
     pub cap: Option<String>,
 }
 
+/// Direction used to order a cell's text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CellReadingOrder {
+    #[default]
+    Contextual,
+    LeftToRight,
+    RightToLeft,
+}
+
+impl CellReadingOrder {
+    pub fn is_contextual(&self) -> bool {
+        matches!(self, Self::Contextual)
+    }
+}
+
+/// A color's original identity, independent of its resolved display RGB.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CellColorReference {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rgb: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tint: Option<f64>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub automatic: bool,
+}
+
+/// Patterned cell paint; solid fills exchange the two visible color roles.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CellFill {
+    pub pattern: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foreground: Option<CellColorReference>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<CellColorReference>,
+}
+impl Default for CellFill {
+    fn default() -> Self { Self {pattern:"none".into(),foreground:None,background:None} }
+}
+
+/// The form of a line beneath a cell's text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CellUnderlineKind {
+    Single,
+    Double,
+    SingleAccounting,
+    DoubleAccounting,
+}
+
+impl CellUnderlineKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Double => "double",
+            Self::SingleAccounting => "singleAccounting",
+            Self::DoubleAccounting => "doubleAccounting",
+        }
+    }
+}
+
+/// A whole cell's text raised or lowered relative to its baseline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CellFontPosition {
+    Superscript,
+    Subscript,
+}
+
+impl CellFontPosition {
+    pub fn as_str(self) -> &'static str {
+        match self { Self::Superscript => "superscript", Self::Subscript => "subscript" }
+    }
+}
+
+/// The component of a cell format explicitly assigned by an editing operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellFormatComponent {
+    NumberFormat,
+    Font,
+    Fill,
+    Border,
+    Alignment,
+    Protection,
+}
+
+/// The named-style reference and presence of component application attributes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CellFormatReference {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protection: Option<bool>,
+}
+
+impl CellFormatReference {
+    pub fn for_style(style_id: u32) -> Self {
+        Self { style_id: Some(style_id), ..Self::default() }
+    }
+
+    pub fn mark(&mut self, component: CellFormatComponent) {
+        use CellFormatComponent::*;
+        *match component {
+            NumberFormat => &mut self.number_format,
+            Font => &mut self.font,
+            Fill => &mut self.fill,
+            Border => &mut self.border,
+            Alignment => &mut self.alignment,
+            Protection => &mut self.protection,
+        } = Some(true);
+    }
+
+    pub fn apply_all(&mut self) {
+        self.number_format=Some(true);self.font=Some(true);self.fill=Some(true);
+        self.border=Some(true);self.alignment=Some(true);self.protection=Some(true);
+    }
+}
+
 /// How a cell is drawn.
 ///
 /// `#[serde(default)]` on the whole struct is load-bearing for the browser:
@@ -1719,10 +1874,17 @@ pub struct ShapeLine {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct CellStyle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_reference: Option<Box<CellFormatReference>>,
     pub bold: bool,
     pub italic: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub underline: bool,
+    /// The kind of underline when enabled; absent means a single line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline_kind: Option<CellUnderlineKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_position: Option<CellFontPosition>,
     /// A line drawn THROUGH the writing, which a form uses to strike an entry
     /// out. 154 of the fonts in the 285 conformance workbooks ask for one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1745,6 +1907,8 @@ pub struct CellStyle {
     pub font_family: Option<i32>,
     pub font_color: Option<String>,
     pub bg_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern_fill: Option<Box<CellFill>>,
     pub number_format: Option<String>,
     pub horizontal_align: Option<String>,
     /// How many levels the text is pushed in from the edge it is aligned to.
@@ -1764,12 +1928,20 @@ pub struct CellStyle {
     /// corpus's 285 workbooks ask for it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shrink_to_fit: bool,
+    #[serde(default, skip_serializing_if = "CellReadingOrder::is_contextual")]
+    pub reading_order: CellReadingOrder,
     /// True when the cell's characters are stacked one above the next rather
     /// than set in a line 窶・`textRotation="255"`, which is how a Japanese
     /// form labels a narrow column. 771 of the 774 rotations in the
     /// conformance corpus are this one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stacked_text: bool,
+    /// Text rotation in degrees, from -90 to 90; absent means horizontal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_rotation: Option<i32>,
+    /// Whether the final line participates in distributed justification.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub justify_last_line: bool,
     /// True when an apostrophe typed first told Excel to keep the entry as
     /// text -- `quotePrefix="1"` on the cell's format, which
     /// `Range.PrefixCharacter` answers as `'`.
@@ -1796,9 +1968,16 @@ pub struct CellStyle {
     /// It decides nothing on an unprotected sheet.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unlocked: bool,
+    /// Whether a protected sheet conceals the formula while showing its value.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub formula_hidden: bool,
 }
 
 impl CellStyle {
+    pub fn effective_underline_kind(&self) -> Option<CellUnderlineKind> {
+        self.underline.then_some(self.underline_kind.unwrap_or(CellUnderlineKind::Single))
+    }
+
     pub fn normalize_font_reference(&mut self) {
         if self.font_reference.as_deref().is_some_and(FontReference::is_empty) {
             self.font_reference=None;

@@ -51,9 +51,17 @@ struct FileAttributes {
     value: i64,
 }
 
+#[derive(Clone, Copy)]
+enum SharedSaveOperation {
+    Save,
+    SaveAs,
+    Copy,
+}
+
 #[derive(Clone, Default)]
 pub(super) struct WorkbookFiles {
     pub package: Option<Vec<u8>>,
+    imported_package: bool,
     pub retained_project: Option<crate::vba_project::RetainedVbaProject>,
     pub full_name: Option<String>,
     pub read_only: bool,
@@ -90,6 +98,7 @@ pub(super) struct SharedInputFormat {
 pub(super) struct SharedFormatEdit {
     sequence: u64,
     range: CellRange,
+    references: Option<String>,
     start: u32,
     length: Option<u32>,
     dxf: String,
@@ -100,6 +109,7 @@ pub(super) struct SharedFormatRequest {
     range: CellRange,
     property: &'static str,
     before: CellStyle,
+    mixed: bool,
     span: Option<(u32,u32)>,
 }
 
@@ -611,6 +621,84 @@ impl WorkbookFiles {
         Ok(writer.into_inner())
     }
 
+    fn package_with_shared_formats(package: &[u8]) -> Result<Vec<u8>, String> {
+        use quick_xml::{events::Event, Reader, Writer};
+        let mut archive = oxidocs_common::archive::OoxmlArchive::new(package).map_err(|e| e.to_string())?;
+        let styles = archive.read_part("xl/styles.xml").map_err(|e| e.to_string())?;
+        let mut reader = Reader::from_str(&styles);
+        let mut writer = Writer::new(Vec::new());
+        let mut depth = 0usize;
+        let mut formats_depth = None;
+        let mut omitted_depth = None;
+        loop {
+            let event = reader.read_event().map_err(|e| e.to_string())?;
+            let level = match &event {
+                Event::Start(_) => { let level = depth; depth += 1; level },
+                Event::End(_) => { depth = depth.saturating_sub(1); depth },
+                _ => depth,
+            };
+            if let Some(omitted) = omitted_depth {
+                if matches!(event, Event::End(_)) && level == omitted { omitted_depth = None; }
+                if matches!(event, Event::Eof) { return Err("Unclosed default cell format element".into()); }
+                continue;
+            }
+            match &event {
+                Event::Start(e) if e.local_name().as_ref() == b"cellXfs" => formats_depth = Some(level),
+                Event::End(e) if e.local_name().as_ref() == b"cellXfs" => formats_depth = None,
+                Event::Start(e) | Event::Empty(e)
+                    if formats_depth.is_some_and(|parent| level == parent + 1) && e.local_name().as_ref() == b"xf" =>
+                {
+                    let mut tag = e.to_owned();
+                    tag.clear_attributes();
+                    for attribute in e.attributes() {
+                        let attribute = attribute.map_err(|e| e.to_string())?;
+                        tag.push_attribute(attribute);
+                    }
+                    for name in ["numFmtId", "fontId", "fillId", "borderId"] {
+                        if e.try_get_attribute(name).map_err(|e| e.to_string())?.is_none() {
+                            tag.push_attribute((name, "0"));
+                        }
+                    }
+                    writer.write_event(if matches!(event, Event::Empty(_)) { Event::Empty(tag) } else { Event::Start(tag) })
+                        .map_err(|e| e.to_string())?;
+                    continue;
+                }
+                Event::Start(e) | Event::Empty(e)
+                    if formats_depth.is_some_and(|parent| level == parent + 2)
+                        && matches!(e.local_name().as_ref(), b"alignment" | b"protection") =>
+                {
+                    let mut tag = e.to_owned();
+                    tag.clear_attributes();
+                    let mut retained = 0;
+                    for attribute in e.attributes() {
+                        let attribute = attribute.map_err(|e| e.to_string())?;
+                        let value = attribute.decode_and_unescape_value(reader.decoder()).map_err(|e| e.to_string())?;
+                        let omit = matches!((e.local_name().as_ref(), attribute.key.as_ref(), value.as_ref()),
+                            (b"alignment", b"vertical", "bottom")
+                            | (b"alignment", b"wrapText", "0" | "false")
+                            | (b"alignment", b"indent", "0")
+                            | (b"protection", b"locked", "1" | "true")
+                            | (b"protection", b"hidden", "0" | "false"));
+                        if !omit { tag.push_attribute(attribute); retained += 1; }
+                    }
+                    if retained == 0 {
+                        if matches!(event, Event::Start(_)) { omitted_depth = Some(level); }
+                        continue;
+                    }
+                    writer.write_event(if matches!(event, Event::Empty(_)) { Event::Empty(tag) } else { Event::Start(tag) })
+                        .map_err(|e| e.to_string())?;
+                    continue;
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+            writer.write_event(event.into_owned()).map_err(|e| e.to_string())?;
+        }
+        let updated = writer.into_inner();
+        if updated == styles.as_bytes() { return Ok(package.to_vec()); }
+        Self::replace_package_parts(package, BTreeMap::from([("xl/styles.xml".into(), updated)]), &BTreeSet::new())
+    }
+
     fn package_without_sharing(package: &[u8]) -> Result<Vec<u8>, String> {
         if !Self::package_is_shared(package)? { return Ok(package.to_vec()); }
         let mut archive=oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error|error.to_string())?;
@@ -730,16 +818,11 @@ impl WorkbookFiles {
     }
 
     fn revision_font_color(style: &CellStyle) -> String {
-        let reference=style.font_reference.as_ref();
-        let tint=reference.and_then(|r|r.tint).filter(|v|*v!=0.0)
-            .map_or_else(String::new,|v|format!(" tint=\"{v}\""));
-        if let Some(theme)=reference.and_then(|r|r.theme) {return format!("<color theme=\"{theme}\"{tint}/>");}
-        if let Some(index)=reference.and_then(|r|r.indexed) {return format!("<color indexed=\"{index}\"{tint}/>");}
-        if reference.is_some_and(|r|r.automatic) {return format!("<color auto=\"1\"{tint}/>");}
-        style.font_color.as_deref().map_or_else(||"<color auto=\"1\"/>".into(),|value| {
-            let hex=value.trim_start_matches('#');let value=if hex.len()==6 {format!("FF{hex}")} else {hex.into()};
-            format!("<color rgb=\"{}\"{tint}/>",value.to_ascii_uppercase())
-        })
+        let color=style.font_reference.as_ref().and_then(|r|r.color_reference()).or_else(||style.font_color.as_deref().map(|rgb| {
+            let rgb=rgb.trim_start_matches('#');
+            oxicells_core::ir::CellColorReference {rgb:Some(if rgb.len()==6 {format!("FF{rgb}")} else {rgb.into()}),..Default::default()}
+        })).unwrap_or(oxicells_core::ir::CellColorReference {automatic:true,..Default::default()});
+        oxicells_core::editor::cell_fill_color_xml("color",Some(&color),None)
     }
 
     fn revision_border(style: &CellStyle, edges: &[&str], outline: bool) -> String {
@@ -767,8 +850,9 @@ impl WorkbookFiles {
             ("condense",false),("extend",false),("outline",false),("shadow",false)] {
             font.push_str(&if value {format!("<{tag}/>")} else {format!("<{tag} val=\"0\"/>")});
         }
-        font.push_str(&format!("<u val=\"{}\"/><vertAlign val=\"baseline\"/><sz val=\"{}\"/>",
-            if style.underline {"single"} else {"none"},style.font_size.unwrap_or(11.0)));
+        font.push_str(&format!("<u val=\"{}\"/><vertAlign val=\"{}\"/><sz val=\"{}\"/>",
+            style.effective_underline_kind().map_or("none",|kind|kind.as_str()),
+            style.font_position.map_or("baseline",|position|position.as_str()),style.font_size.unwrap_or(11.0)));
         font.push_str(&Self::revision_font_color(style));
         if let Some(name)=style.latin_font_name() {font.push_str(&format!("<name val=\"{}\"/>",quick_xml::escape::escape(name)));}
         if let Some(family)=style.font_family {font.push_str(&format!("<family val=\"{family}\"/>"));}
@@ -784,11 +868,17 @@ impl WorkbookFiles {
                 "<border diagonalUp=\"{}\" diagonalDown=\"{}\" outline=\"0\">",
                 u8::from(style.diagonal_up),u8::from(style.diagonal_down)),1);
         let code=quick_xml::escape::escape(style.number_format.as_deref().unwrap_or("General"));
+        let fill=oxicells_core::editor::cell_fill_xml(&interior_fill(style),true);
         let horizontal=style.horizontal_align.as_deref().unwrap_or("general");
         let vertical=style.vertical_align.as_deref().unwrap_or("bottom");
         let wrap=u8::from(style.wrap_text);let shrink=u8::from(style.shrink_to_fit);let indent=style.indent;
-        let rotation=if style.stacked_text {255} else {0};let locked=u8::from(!style.unlocked);
-        format!("{font}<numFmt numFmtId=\"{number_format_id}\" formatCode=\"{code}\"/><fill><patternFill patternType=\"none\"><fgColor indexed=\"64\"/><bgColor indexed=\"65\"/></patternFill></fill><alignment horizontal=\"{horizontal}\" vertical=\"{vertical}\" textRotation=\"{rotation}\" wrapText=\"{wrap}\" indent=\"{indent}\" justifyLastLine=\"0\" shrinkToFit=\"{shrink}\" readingOrder=\"0\"/>{border}<protection locked=\"{locked}\" hidden=\"0\"/>")
+        let angle=style.text_rotation.unwrap_or(0);let rotation=if style.stacked_text {255} else if angle<0 {90-angle} else {angle};let justify=u8::from(style.justify_last_line);let locked=u8::from(!style.unlocked);let hidden=u8::from(style.formula_hidden);
+        let reading_order=match style.reading_order {
+            oxicells_core::ir::CellReadingOrder::Contextual=>0,
+            oxicells_core::ir::CellReadingOrder::LeftToRight=>1,
+            oxicells_core::ir::CellReadingOrder::RightToLeft=>2,
+        };
+        format!("{font}<numFmt numFmtId=\"{number_format_id}\" formatCode=\"{code}\"/>{fill}<alignment horizontal=\"{horizontal}\" vertical=\"{vertical}\" textRotation=\"{rotation}\" wrapText=\"{wrap}\" indent=\"{indent}\" justifyLastLine=\"{justify}\" shrinkToFit=\"{shrink}\" readingOrder=\"{reading_order}\"/>{border}<protection locked=\"{locked}\" hidden=\"{hidden}\"/>")
     }
 
     fn revision_number_format(format: &str) -> Option<(u32,&str)> {
@@ -851,8 +941,9 @@ impl WorkbookFiles {
     }
 
     fn package_with_revision_history(package: &[u8], baseline: &[u8], current: &oxicells_core::ir::Workbook,
-        author: &[u16], now: Option<f64>, copy_only: bool,
+        author: &[u16], now: Option<f64>, operation: SharedSaveOperation,
         pending: &Self) -> Result<Vec<u8>, String> {
+        let copy_only=matches!(operation,SharedSaveOperation::Copy);
         if !Self::package_is_shared(baseline)? { return Self::package_with_sharing(package,author,now); }
         let old=oxicells_core::parse_xlsx_preserving_values(baseline).map_err(|e|e.to_string())?;
         let mut archive=oxidocs_common::archive::OoxmlArchive::new(package).map_err(|e|e.to_string())?;
@@ -911,13 +1002,15 @@ impl WorkbookFiles {
             let at=edit.range.first();
             if edit.automatic && attached.contains(&(edit.sequence,at.sheet,at.row,at.column)) {continue;}
             let Some(sheet_id)=sheet_ids.get(edit.range.sheet) else {continue;};
-            let reference=format_range_address(edit.range,false,false);
+            let reference=edit.references.clone().unwrap_or_else(||format_range_address(edit.range,false,false));
             let span=edit.length.map(|length|format!(" start=\"{}\" length=\"{length}\"",edit.start)).unwrap_or_default();
             records.push((edit.sequence,format!("<rfmt sheetId=\"{sheet_id}\" sqref=\"{reference}\"{span}><dxf>{}</dxf></rfmt>",edit.dxf)));
         }
         records.sort_by_key(|record|record.0);
         let changes=records.into_iter().map(|(_,xml)|xml).collect::<String>();
-        if copy_only && changes.is_empty() { return Ok(package.to_vec()); }
+        // SaveAs opens a session; a plain Save with no queued edits keeps it.
+        let no_edits = pending.shared_cell_edits.is_empty() && pending.shared_format_edits.is_empty();
+        if changes.is_empty() && (copy_only || (matches!(operation,SharedSaveOperation::Save) && no_edits)) { return Ok(package.to_vec()); }
         let sidecar=Self::sidecar_part(&header_part);
         let header_rels=archive.read_part(&sidecar).map_err(|e|e.to_string())?;
         let existing=Self::xml_elements(&header_rels,b"Relationship",1)?;
@@ -1072,6 +1165,7 @@ impl WorkbookFiles {
         self.shared = Self::package_is_shared(&package)?;
         if let Some(project) = crate::vba_project::retain_workbook_project(&package)? { self.retained_project = Some(project); }
         self.package = Some(package);
+        self.imported_package = true;
         Ok(())
     }
 
@@ -1368,7 +1462,7 @@ impl WorkbookHost<'_> {
         edit.format.after=after.number_format.clone().unwrap_or_else(||"General".into());
         if !old.is_empty() || !new.is_empty() {
             self.file_io.shared_format_edits.push(SharedFormatEdit {
-                start:0,sequence:edit.format.sequence,range:CellRange::single(edit.at),length:Some(0),dxf:new.clone(),automatic:true,
+                start:0,sequence:edit.format.sequence,range:CellRange::single(edit.at),references:None,length:Some(0),dxf:new.clone(),automatic:true,
             });
             edit.format.style_dxf=Some((old,new));
         }
@@ -1432,7 +1526,7 @@ impl WorkbookHost<'_> {
         if changed {
             let dxf=self.shared_format_dxf(format,true);
             self.file_io.shared_format_edits.push(SharedFormatEdit {
-                start:0,sequence,range:CellRange::single(at),length:Some(0),dxf,automatic:true,
+                start:0,sequence,range:CellRange::single(at),references:None,length:Some(0),dxf,automatic:true,
             });
             self.file_io.shared_automatic_formats.insert(key);
         }
@@ -1448,6 +1542,7 @@ impl WorkbookHost<'_> {
     pub(super) fn shared_format_request(&self, receiver: &ObjectRef, name: &str, value: &Value) -> Option<SharedFormatRequest> {
         if !self.file_io.shared || self.gone(receiver) || matches!(value,Value::Null) {return None;}
         let lower=name.to_ascii_lowercase();
+        if matches!(value, Value::Array(_)) && matches!(lower.as_str(),"locked"|"formulahidden") {return None;}
         if let Some((at,start,length))=self.characters_font_of(receiver) {
             let property=match lower.as_str() {
                 "name"=>"charfontname","size"=>"fontsize","bold"=>"bold","italic"=>"italic",
@@ -1457,34 +1552,38 @@ impl WorkbookHost<'_> {
             let text=self.cell_here(at.sheet,at.row,at.column).map(|cell|cell_text_of(&cell)).unwrap_or_default();
             let (from,to)=font_character_span(start,length,&text);
             let before=self.shared_character_format(at,from as u32);
-            return Some(SharedFormatRequest {range:CellRange::single(at),property,before,span:Some((from as u32,(to-from) as u32))});
+            return Some(SharedFormatRequest {range:CellRange::single(at),property,before,mixed:false,span:Some((from as u32,(to-from) as u32))});
         }
         let (range,property)=if let Some(range)=self.range_font(receiver) {
-            (range,match lower.as_str() {"bold"=>"bold","italic"=>"italic","color"|"colorindex"|"themecolor"|"tintandshade"=>"fontcolor",
-                "size"=>"fontsize","name"=>"fontname","themefont"=>"themefont","underline"=>"underline","strikethrough"=>"strike",_=>return None})
+            (range,match lower.as_str() {"bold"=>"bold","italic"=>"italic","color"|"colorindex"|"themecolor"=>"fontcolor","tintandshade"=>"fonttint",
+                "size"=>"fontsize","name"=>"fontname","themefont"=>"themefont","underline"=>"underline","superscript"|"subscript"=>"fontposition","strikethrough"=>"strike",_=>return None})
         } else if let Some(range)=self.range_interior(receiver) {
-            (range,match lower.as_str() {"color"=>"fill",_=>return None})
+            (range,match lower.as_str() {
+                "pattern"=>"fillpattern","colorindex"=>"fillindex",
+                "color"|"themecolor"|"tintandshade"|"patterncolor"|"patterncolorindex"|
+                "patternthemecolor"|"patterntintandshade"=>"fill",_=>return None})
         } else if let Some((range,_))=self.range_borders(receiver) {
             (range,match lower.as_str() {"linestyle"|"weight"|"color"|"colorindex"=>"border",_=>return None})
         } else {
             (self.range(receiver)?,match lower.as_str() {
                 "style"=>"style","numberformat"|"numberformatlocal"=>"numberformat","horizontalalignment"=>"horizontal",
-                "verticalalignment"=>"vertical","wraptext"=>"wrap","shrinktofit"=>"shrink",_=>return None})
+                "verticalalignment"=>"vertical","wraptext"=>"wrap","shrinktofit"=>"shrink","readingorder"=>"readingorder","orientation"=>"rotation","indentlevel"=>"indent","addindent"=>"justify","locked"=>"locked","formulahidden"=>"hidden",_=>return None})
         };
         let at=range.first();
         let before=self.cell_here(at.sheet,at.row,at.column).map(|cell|cell.style).unwrap_or_else(||self.template_style(at));
-        Some(SharedFormatRequest {range,property,before,span:None})
+        let mixed = match property {
+            "hidden" => matches!(self.uniform_style(range, |style| style.formula_hidden), Ok(None)),
+            "locked" => matches!(self.uniform_style(range, |style| style.unlocked), Ok(None)),
+            _ => false,
+        };
+        Some(SharedFormatRequest {range,property,before,mixed,span:None})
     }
 
     pub(super) fn finish_shared_format(&mut self, request: SharedFormatRequest) {
-        let SharedFormatRequest {range,property,before,span}=request;
+        let SharedFormatRequest {range,property,before,mixed,span}=request;
         let at=range.first();
         let after=span.map_or_else(||self.cell_here(at.sheet,at.row,at.column).map(|cell|cell.style).unwrap_or_else(||self.template_style(at)),
             |(start,_)|self.shared_character_format(at,start));
-        let color=|value: &str| {
-            let hex=value.trim_start_matches('#');
-            if hex.len()==6 {format!("FF{hex}").to_ascii_uppercase()} else {hex.to_ascii_uppercase()}
-        };
         let (length,dxf)=match property {
             "style" => {
                 // Native's Normal application records the full style even
@@ -1501,7 +1600,24 @@ impl WorkbookHost<'_> {
                     sheet!=range.sheet || row<range.start_row || row>range.end_row || column<range.start_column || column>range.end_column);
                 (None,dxf)
             }
-            "bold"|"italic"|"underline"|"strike" => {
+            "underline" => {
+                let old=before.effective_underline_kind();let new=after.effective_underline_kind();
+                let xml=if old==new {String::new()} else {
+                    match new {
+                        Some(oxicells_core::ir::CellUnderlineKind::Single) => "<font><u/></font>".into(),
+                        Some(kind) => format!("<font><u val=\"{}\"/></font>",kind.as_str()),
+                        None => "<font><u val=\"none\"/></font>".into(),
+                    }
+                };
+                (Some(i32::MAX as u32),xml)
+            },
+            "fontposition" => {
+                let xml=if before.font_position==after.font_position {String::new()} else {
+                    format!("<font><vertAlign val=\"{}\"/></font>",after.font_position.map_or("baseline",|position|position.as_str()))
+                };
+                (Some(i32::MAX as u32),xml)
+            },
+            "bold"|"italic"|"strike" => {
                 let (old,new,tag)=match property {
                     "bold" => (before.bold,after.bold,"b"), "italic" => (before.italic,after.italic,"i"),
                     "underline" => (before.underline,after.underline,"u"),
@@ -1539,14 +1655,34 @@ impl WorkbookHost<'_> {
                 }
                 font.push_str("</font>");(Some(0),font)
             },
+            "fonttint" => {
+                let old=WorkbookFiles::revision_font_color(&before);let new=WorkbookFiles::revision_font_color(&after);
+                let family=after.font_family.map_or_else(String::new,|family|format!("<family val=\"{family}\"/>"));
+                (None,if old==new {String::new()} else {format!("<font>{new}{family}</font>")})
+            },
             "fontcolor" => {
                 let old=WorkbookFiles::revision_font_color(&before);let new=WorkbookFiles::revision_font_color(&after);
                 (Some(0),if old==new {String::new()} else {format!("<font>{new}</font>")})
             },
-            "fill" => (Some(0),if before.bg_color==after.bg_color {String::new()} else {
-                after.bg_color.as_deref().map_or_else(||"<fill><patternFill patternType=\"none\"/></fill>".into(),
-                    |value|format!("<fill><patternFill patternType=\"solid\"><bgColor rgb=\"{}\"/></patternFill></fill>",color(value)))
-            }),
+            "fill"|"fillpattern"|"fillindex" => {
+                let old=interior_fill(&before);let new=interior_fill(&after);
+                if property=="fillpattern" && old.pattern==new.pattern {return;}
+                let pattern=if old.pattern!=new.pattern {
+                    format!(" patternType=\"{}\"",quick_xml::escape::escape(&new.pattern))
+                } else {String::new()};
+                let mut colors=String::new();
+                if property!="fillpattern" {
+                    for (pattern_color,tag,fallback) in [(true,"fgColor",64),(false,"bgColor",65)] {
+                        let old_color=interior_color_token(&old,pattern_color);
+                        let new_color=interior_color_token(&new,pattern_color);
+                        if old_color!=new_color {
+                            colors.push_str(&oxicells_core::editor::cell_fill_color_xml(tag,new_color.as_ref(),Some(fallback)));
+                        }
+                    }
+                }
+                if pattern.is_empty() && colors.is_empty() {return;}
+                (Some(0),format!("<fill><patternFill{pattern}>{colors}</patternFill></fill>"))
+            },
             "border" => (Some(0),WorkbookFiles::revision_border(&after,&["left","right","top","bottom"],false)),
             "horizontal" => {
                 if before.horizontal_align.as_deref().unwrap_or("general")==after.horizontal_align.as_deref().unwrap_or("general") {return;}
@@ -1560,6 +1696,43 @@ impl WorkbookHost<'_> {
                 if before.wrap_text==after.wrap_text {return;}
                 (None,format!("<alignment wrapText=\"{}\"/>",u8::from(after.wrap_text)))
             },
+            "hidden" | "locked" => {
+                let (old, new, attribute) = if property == "hidden" {
+                    (before.formula_hidden, after.formula_hidden, "hidden")
+                } else {
+                    (!before.unlocked, !after.unlocked, "locked")
+                };
+                if !mixed && old == new { return; }
+                (None, format!("<protection {attribute}=\"{}\"/>", u8::from(new)))
+            },
+            "rotation" => {
+                if before.text_rotation==after.text_rotation && before.stacked_text==after.stacked_text {return;}
+                let angle=after.text_rotation.unwrap_or(0);
+                let encoded=if after.stacked_text {255} else if angle<0 {90-angle} else {angle};
+                (None,format!("<alignment textRotation=\"{encoded}\"/>"))
+            },
+            "justify" => {
+                if before.justify_last_line==after.justify_last_line {return;}
+                (None,format!("<alignment justifyLastLine=\"{}\"/>",u8::from(after.justify_last_line)))
+            },
+            "indent" => {
+                if before.indent==after.indent && before.horizontal_align==after.horizontal_align {return;}
+                let mut attributes=String::new();
+                if before.horizontal_align.as_deref().unwrap_or("general")!=after.horizontal_align.as_deref().unwrap_or("general") {
+                    attributes.push_str(&format!(" horizontal=\"{}\"",after.horizontal_align.as_deref().unwrap_or("general")));
+                }
+                if before.indent!=after.indent {attributes.push_str(&format!(" indent=\"{}\"",after.indent));}
+                (None,format!("<alignment{attributes}/>"))
+            },
+            "readingorder" => {
+                if before.reading_order==after.reading_order {return;}
+                let order=match after.reading_order {
+                    oxicells_core::ir::CellReadingOrder::Contextual=>0,
+                    oxicells_core::ir::CellReadingOrder::LeftToRight=>1,
+                    oxicells_core::ir::CellReadingOrder::RightToLeft=>2,
+                };
+                (None,format!("<alignment readingOrder=\"{order}\"/>"))
+            },
             "shrink" => {
                 if before.shrink_to_fit==after.shrink_to_fit {return;}
                 (None,format!("<alignment shrinkToFit=\"{}\"/>",u8::from(after.shrink_to_fit)))
@@ -1568,7 +1741,7 @@ impl WorkbookHost<'_> {
         };
         // A copy can retain an empty old-format record when a later
         // explicit format replaces its pasted format before the real save.
-        if before!=after {
+        if before!=after || mixed {
             let within=|at: CellAddress|at.sheet==range.sheet && at.row>=range.start_row && at.row<=range.end_row
                 && at.column>=range.start_column && at.column<=range.end_column;
             for (&(sheet,row,column),input) in &mut self.file_io.shared_input_formats {
@@ -1584,9 +1757,22 @@ impl WorkbookHost<'_> {
         }
         self.file_io.shared_revision_sequence=self.file_io.shared_revision_sequence.saturating_add(1);
         self.file_io.shared_format_edits.push(SharedFormatEdit {
-            start:span.map_or(0,|v|v.0),sequence:self.file_io.shared_revision_sequence,range,
+            start:span.map_or(0,|v|v.0),sequence:self.file_io.shared_revision_sequence,range,references:None,
             length:span.map(|v|v.1).or(length),dxf,automatic:false,
         });
+    }
+
+    pub(super) fn coalesce_shared_reading_order_edits(&mut self, from: usize, areas: &[CellRange], include_unchanged: bool) {
+        let edits=&self.file_io.shared_format_edits[from..];
+        let Some(first)=edits.first() else {return;};
+        if (!include_unchanged && edits.len()!=areas.len()) || edits.len()>areas.len() || edits.iter().any(|edit|
+            edit.dxf!=first.dxf || edit.length!=first.length || edit.start!=first.start
+            || edit.automatic || edit.range.sheet!=first.range.sheet) {return;}
+        let mut combined=first.clone();
+        combined.references=Some(areas.iter().map(|range|format_range_address(*range,false,false))
+            .collect::<Vec<_>>().join(" "));
+        self.file_io.shared_format_edits.truncate(from);
+        self.file_io.shared_format_edits.push(combined);
     }
 
     pub(super) fn record_shared_border_around(&mut self, range: CellRange, line: bool, colour: bool) {
@@ -1597,7 +1783,7 @@ impl WorkbookHost<'_> {
         for length in line.then_some(Some(0)).into_iter().chain(colour.then_some(None)) {
             self.file_io.shared_revision_sequence=self.file_io.shared_revision_sequence.saturating_add(1);
             self.file_io.shared_format_edits.push(SharedFormatEdit {
-                start:0,sequence:self.file_io.shared_revision_sequence,range,length,dxf:dxf.clone(),automatic:false,
+                start:0,sequence:self.file_io.shared_revision_sequence,range,references:None,length,dxf:dxf.clone(),automatic:false,
             });
         }
     }
@@ -1695,6 +1881,7 @@ impl WorkbookHost<'_> {
         self.file_io.full_name = Some(normalized.clone());
         self.file_name = Some(normalized.rsplit('\\').next().unwrap_or(&normalized).to_string());
         self.file_io.package = Some(files.bytes(&normalized).map_err(|error| error.description().to_string())?.to_vec());
+        self.file_io.imported_package = false;
         if let Some(format) = format { self.file_io.format = Some(format as f64); }
         self.file_io.read_only = false;
         self.file_io.shared_input_formats.clear();
@@ -1803,7 +1990,18 @@ impl WorkbookHost<'_> {
             }
         }
         let Some(package) = self.file_io.package.as_ref() else { return Err(CopyFailure::Method(self.copy_method_failure())); };
-        let package = package.clone();
+        let package = if self.file_io.imported_package {
+            let mut archive = oxidocs_common::archive::OoxmlArchive::new(package)
+                .map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
+            if let Some(styles) = archive.try_read_part("xl/styles.xml")
+                .map_err(|_| CopyFailure::Method(self.copy_method_failure()))? {
+                let imported = oxicells_core::parser::import_styles_xml(&styles)
+                    .map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
+                WorkbookFiles::replace_package_parts(package,
+                    BTreeMap::from([("xl/styles.xml".into(), imported.into_bytes())]), &BTreeSet::new())
+                    .map_err(|_| CopyFailure::Method(self.copy_method_failure()))?
+            } else { package.clone() }
+        } else { package.clone() };
         let saved = {
             let mut operation = self.user_functions.borrow_mut();
             *operation.copy_saved.get_or_insert(self.saved)
@@ -1845,7 +2043,10 @@ impl WorkbookHost<'_> {
         if shared {
             let author = self.application_setting("username").unwrap_or_else(||Value::String("User".into()));
             let units = author.string_units().map(|units|units.into_owned()).unwrap_or_else(||"User".encode_utf16().collect());
-            bytes = WorkbookFiles::package_with_revision_history(&bytes, &package, &self.workbook, &units, self.now, copy_only, &self.file_io).map_err(|_|failure())?;
+            let operation=if copy_only {SharedSaveOperation::Copy}
+                else if preferences.is_some() {SharedSaveOperation::SaveAs} else {SharedSaveOperation::Save};
+            bytes = WorkbookFiles::package_with_revision_history(&bytes, &package, &self.workbook, &units, self.now, operation, &self.file_io).map_err(|_|failure())?;
+            bytes = WorkbookFiles::package_with_shared_formats(&bytes).map_err(|_|failure())?;
         } else {
             bytes = WorkbookFiles::package_without_sharing(&bytes).map_err(|_|failure())?;
         }

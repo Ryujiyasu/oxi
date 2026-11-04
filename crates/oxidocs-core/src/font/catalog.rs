@@ -506,6 +506,119 @@ struct RuleFaceMetrics {
 struct RuleMetricIndex {
     schema: u32,
     faces: HashMap<String, RuleFaceMetrics>,
+    #[serde(default)]
+    device_faces: Vec<DeviceFaceMetrics>,
+}
+
+#[derive(Deserialize)]
+struct DeviceFaceMetrics {
+    families: Vec<String>,
+    full_names: Vec<String>,
+    bold: bool,
+    italic: bool,
+    #[serde(default)]
+    font_family: Option<i32>,
+    #[serde(default)]
+    font_charset: Option<i32>,
+    device_metrics: PackedDeviceMetrics,
+}
+
+#[derive(Deserialize)]
+struct PackedDeviceMetrics {
+    first_ppem: u16,
+    ppem_count: u16,
+    first_char: u32,
+    char_count: u16,
+    stride: u16,
+    deflate_hex: String,
+    #[serde(skip)]
+    decoded: OnceLock<Vec<u16>>,
+}
+
+/// A measured device font box, stroke and character advances at one pixel size.
+/// These measurements do not contain a font program.
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceFontMetrics {
+    pub height: u16,
+    pub ascent: u16,
+    pub descent: u16,
+    pub internal_leading: u16,
+    pub external_leading: u16,
+    pub strikeout_offset: u16,
+    pub strikeout_thickness: u16,
+    pub font_family: Option<i32>,
+    pub font_charset: Option<i32>,
+    first_char: u32,
+    advances: &'static [u16],
+}
+
+impl DeviceFontMetrics {
+    pub fn advance(&self, character: char) -> Option<u16> {
+        let index = (character as u32).checked_sub(self.first_char)? as usize;
+        self.advances.get(index).copied()
+    }
+}
+
+impl PackedDeviceMetrics {
+    fn at(&'static self, ppem: u16) -> Option<DeviceFontMetrics> {
+        let index = usize::from(ppem.checked_sub(self.first_ppem)?);
+        if index >= usize::from(self.ppem_count) {
+            return None;
+        }
+        let values = self.decoded.get_or_init(|| {
+            use std::io::Read;
+            assert_eq!(self.stride, self.char_count + 7, "device metric stride");
+            assert_eq!(self.deflate_hex.len() % 2, 0, "device metric hex length");
+            let packed: Vec<u8> = self.deflate_hex.as_bytes().chunks_exact(2).map(|pair| {
+                let digits = std::str::from_utf8(pair).expect("device metric hex");
+                u8::from_str_radix(digits, 16).expect("device metric hex digits")
+            }).collect();
+            let mut raw = Vec::new();
+            flate2::read::DeflateDecoder::new(packed.as_slice()).read_to_end(&mut raw)
+                .expect("generated device metrics must inflate");
+            assert_eq!(raw.len(), usize::from(self.ppem_count) * usize::from(self.stride) * 2,
+                "device metric payload length");
+            raw.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect()
+        });
+        let start = index * usize::from(self.stride);
+        let row = &values[start..start + usize::from(self.stride)];
+        Some(DeviceFontMetrics {
+            height: row[0], ascent: row[1], descent: row[2],
+            internal_leading: row[3], external_leading: row[4],
+            strikeout_offset: row[5], strikeout_thickness: row[6],
+            font_family: None, font_charset: None,
+            first_char: self.first_char, advances: &row[7..],
+        })
+    }
+}
+
+/// Exact measured device metrics for a face and size; absent when unmeasured.
+/// Registered programs retain their own metrics rather than using an older table.
+pub fn glyph_device_metrics(family: &str, bold: bool, italic: bool, ppem: u16) -> Option<DeviceFontMetrics> {
+    if super::runtime::has_registered_family(family) {
+        return None;
+    }
+    let family = family.trim();
+    let face = rule_metric_index().device_faces.iter().find(|face| {
+        if face.families.iter().any(|name| name.eq_ignore_ascii_case(family)) {
+            face.bold == bold && face.italic == italic
+        } else {
+            face.full_names.iter().any(|name| name.eq_ignore_ascii_case(family))
+                && (!bold || face.bold) && (!italic || face.italic)
+        }
+    })?;
+    let mut metrics = face.device_metrics.at(ppem)?;
+    metrics.font_family = face.font_family;
+    metrics.font_charset = face.font_charset;
+    Some(metrics)
+}
+
+/// Saved font classification for a measured family name, without alias substitution.
+pub fn glyph_device_metadata(family: &str) -> Option<(Option<i32>, Option<i32>)> {
+    rule_metric_index().device_faces.iter().find(|face| {
+        !face.bold && !face.italic
+            && face.families.iter().any(|name| name.eq_ignore_ascii_case(family))
+    }).map(|face| (face.font_family, face.font_charset))
 }
 
 /// Numeric rule thickness from the same selected face as glyph geometry.
@@ -521,7 +634,7 @@ pub(crate) fn glyph_rule_thickness(family: &str, bold: bool, italic: bool) -> Op
 
 /// OS/2 strikeout stroke of the same selected face, em-normalized:
 /// (top of the stroke above the baseline, thickness). Absent when unmeasured.
-pub(crate) fn glyph_strikeout(family: &str, bold: bool, italic: bool) -> Option<(f32, f32)> {
+pub fn glyph_strikeout(family: &str, bold: bool, italic: bool) -> Option<(f32, f32)> {
     if super::runtime::resolve_registered(family, bold, italic).is_some() {
         return super::runtime::registered_strikeout(family, bold, italic);
     }
@@ -532,17 +645,62 @@ pub(crate) fn glyph_strikeout(family: &str, bold: bool, italic: bool) -> Option<
     Some((f32::from(position) / upm, f32::from(thickness) / upm))
 }
 
-fn rule_face_metrics(family: &str, bold: bool, italic: bool) -> Option<&'static RuleFaceMetrics> {
+fn rule_metric_index() -> &'static RuleMetricIndex {
     static RULES: OnceLock<RuleMetricIndex> = OnceLock::new();
-    let rules = RULES.get_or_init(|| {
+    RULES.get_or_init(|| {
         let index: RuleMetricIndex = serde_json::from_str(include_str!("data/font_rule_metrics.json"))
             .expect("generated rule metrics must be valid");
         assert_eq!(index.schema, 1, "unsupported rule metric schema");
         index
-    });
+    })
+}
+
+fn rule_face_metrics(family: &str, bold: bool, italic: bool) -> Option<&'static RuleFaceMetrics> {
+    let rules = rule_metric_index();
     let catalog = catalog();
     let name = family.trim().to_lowercase();
     let i = catalog.select(&name, bold, italic)
         .or_else(|| catalog.select(&name, false, false))?;
     rules.faces.get(&catalog.faces[i].key)
+}
+
+#[cfg(test)]
+mod device_metric_tests {
+    use super::*;
+
+    #[test]
+    fn device_advances_match_native_font_measurements() {
+        for (family, bold, italic, ppem, character, expected) in [
+            ("Arial", false, false, 11, 'M', 8),
+            ("Arial", false, true, 16, 'M', 14),
+            ("Arial", true, true, 16, 'M', 14),
+            ("Times New Roman", true, false, 16, 'M', 16),
+            ("Times New Roman", true, true, 16, 'M', 13),
+            ("Calibri", false, false, 16, 'M', 13),
+            ("Aptos Narrow", false, false, 15, 'M', 11),
+        ] {
+            assert_eq!(glyph_device_metrics(family, bold, italic, ppem).unwrap().advance(character),
+                Some(expected), "{family}, bold={bold}, italic={italic}, ppem={ppem}");
+        }
+        assert_eq!(glyph_device_metrics("arial", false, true, 16).unwrap().advance('M'), Some(14));
+        assert!(glyph_device_metrics("Oxi unmeasured device font", false, false, 16).is_none());
+        assert!(glyph_device_metrics("Aptos", false, false, 16).is_none());
+        assert!(glyph_device_metrics("Arial", false, false, 0).is_none());
+        assert!(glyph_device_metrics("Arial", false, false, 547).is_none());
+    }
+
+    #[test]
+    fn device_payloads_cover_their_recorded_ranges() {
+        let faces = &rule_metric_index().device_faces;
+        assert!(!faces.is_empty());
+        for face in faces {
+            let packed = &face.device_metrics;
+            for ppem in packed.first_ppem..packed.first_ppem + packed.ppem_count {
+                let metrics = packed.at(ppem).unwrap();
+                assert_eq!(metrics.height, metrics.ascent + metrics.descent);
+                assert!(metrics.strikeout_thickness > 0);
+                assert_eq!(metrics.advances.len(), usize::from(packed.char_count));
+            }
+        }
+    }
 }

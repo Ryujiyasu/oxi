@@ -19,19 +19,19 @@
 /// down that height the baseline sits)
 static FONT_DEFAULT_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("AR P丸ゴシック体E", 44, 18, 16),
-    ("Aptos Narrow", 24, 11, 12),
-    ("Aptos Narrow", 32, 15, 13),
-    ("Aptos Narrow", 36, 16, 14),
+    ("Aptos Narrow", 24, 11, 9),
+    ("Aptos Narrow", 32, 15, 12),
+    ("Aptos Narrow", 36, 16, 13),
     ("Aptos Narrow", 40, 18, 14),
-    ("Aptos Narrow", 42, 19, 16),
-    ("Aptos Narrow", 44, 20, 17),
+    ("Aptos Narrow", 42, 19, 15),
+    ("Aptos Narrow", 44, 20, 16),
     ("Aptos Narrow", 48, 21, 17),
-    ("Aptos Narrow", 56, 25, 21),
-    ("Aptos Narrow", 64, 28, 23),
-    ("Aptos Narrow", 72, 32, 26),
-    ("Aptos Narrow", 80, 35, 29),
-    ("Aptos Narrow", 96, 42, 35),
-    ("Aptos Narrow", 144, 62, 51),
+    ("Aptos Narrow", 56, 25, 20),
+    ("Aptos Narrow", 64, 28, 22),
+    ("Aptos Narrow", 72, 32, 25),
+    ("Aptos Narrow", 80, 35, 28),
+    ("Aptos Narrow", 96, 42, 33),
+    ("Aptos Narrow", 144, 62, 49),
     ("Arial", 24, 11, 7),
     ("Arial", 32, 15, 12),
     ("Arial", 36, 16, 13),
@@ -85,6 +85,24 @@ static FONT_DEFAULT_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("Calibri", 80, 35, 28),
     ("Calibri", 96, 42, 33),
     ("Calibri", 144, 62, 49),
+    ("Cambria", 32, 14, 12),
+    ("Cambria", 44, 19, 16),
+    ("Cambria", 48, 21, 17),
+    ("Cambria", 64, 27, 22),
+    ("Cambria", 96, 40, 33),
+    ("Cambria", 144, 60, 49),
+    ("Consolas", 32, 15, 12),
+    ("Consolas", 44, 20, 16),
+    ("Consolas", 48, 21, 17),
+    ("Consolas", 64, 27, 22),
+    ("Consolas", 96, 41, 33),
+    ("Consolas", 144, 61, 49),
+    ("Courier New", 32, 15, 12),
+    ("Courier New", 44, 20, 16),
+    ("Courier New", 48, 21, 17),
+    ("Courier New", 64, 28, 22),
+    ("Courier New", 96, 42, 33),
+    ("Courier New", 144, 62, 49),
     ("Century", 24, 16, 11),
     ("Century", 28, 17, 12),
     ("Century", 36, 18, 14),
@@ -403,6 +421,53 @@ static FONT_BOLD_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("游ゴシック", 44, 24, 18),
 ];
 
+/// Style-specific line boxes that differ from the regular face.
+static FONT_STYLE_LINE_BOXES: &[(&str, u16, bool, bool, u16, u16)] = &[
+    ("Arial", 32, true, true, 14, 12),
+    ("Arial", 44, true, false, 20, 16),
+    ("Arial", 48, true, false, 21, 17),
+    ("Arial", 96, false, true, 41, 33),
+    ("Arial", 144, false, true, 60, 49),
+    ("Arial", 144, true, false, 60, 49),
+    ("Courier New", 32, false, true, 16, 12),
+    ("Courier New", 44, false, true, 21, 16),
+    ("Courier New", 44, true, false, 21, 16),
+    ("Courier New", 44, true, true, 21, 16),
+    ("Courier New", 48, false, true, 22, 17),
+    ("Courier New", 48, true, false, 22, 17),
+    ("Courier New", 48, true, true, 22, 17),
+    ("Courier New", 96, false, true, 41, 33),
+    ("Courier New", 96, true, false, 43, 33),
+    ("Courier New", 96, true, true, 43, 33),
+    ("Courier New", 144, true, false, 63, 49),
+    ("Courier New", 144, true, true, 63, 49),
+    ("Times New Roman", 32, true, false, 14, 12),
+    ("Times New Roman", 44, true, false, 19, 16),
+    ("Times New Roman", 96, true, false, 40, 33),
+    ("Times New Roman", 96, true, true, 40, 33),
+    ("Times New Roman", 144, true, false, 60, 49),
+    ("Times New Roman", 144, true, true, 60, 49),
+];
+
+/// Differences between the measured line descent and the device descent.
+static FONT_DEVICE_DESCENT_OFFSETS: &[(&str, u16, i16)] = &[
+    ("メイリオ", 24, -1),
+    ("メイリオ", 32, 1),
+    ("メイリオ", 36, 1),
+    ("メイリオ", 40, 1),
+    ("メイリオ", 42, 1),
+    ("メイリオ", 44, 1),
+    ("メイリオ", 48, 1),
+    ("メイリオ", 52, 1),
+    ("メイリオ", 56, 1),
+    ("メイリオ", 60, 1),
+    ("メイリオ", 64, 1),
+    ("メイリオ", 72, 1),
+    ("メイリオ", 80, 2),
+    ("メイリオ", 96, 2),
+    ("メイリオ", 144, 3),
+];
+
 /// The measured default row height for a font, in 96-dpi pixels.
 pub fn font_default_row_px(face: &str, size: f32) -> Option<u16> {
     found(face, size).map(|(_, _, px, _)| *px).or_else(|| {
@@ -455,6 +520,7 @@ pub fn font_line_box(face: &str, size: f32, bold: bool) -> Option<(u16, u16)> {
 }
 
 fn found(face: &str, size: f32) -> Option<&'static (&'static str, u16, u16, u16)> {
+    let face = if face.eq_ignore_ascii_case("Meiryo") { "メイリオ" } else { face };
     let size_q = (size * 4.0).round() as u16;
     let exact = FONT_DEFAULT_ROW_PX
         .iter()
@@ -470,6 +536,41 @@ fn found(face: &str, size: f32) -> Option<&'static (&'static str, u16, u16, u16)
     FONT_DEFAULT_ROW_PX
         .iter()
         .find(|(f, s, _, _)| *f == face && em_pixels(*s as f32 / 4.0) == em)
+}
+
+/// The line a cell shares with the sheet's Normal font.
+pub fn font_cell_line_box(
+    face: &str,
+    size: f32,
+    bold: bool,
+    italic: bool,
+    normal_face: &str,
+    normal_size: f32,
+    merged_wrap: bool,
+) -> Option<(u16, u16)> {
+    let canonical = if face.eq_ignore_ascii_case("Meiryo") { "メイリオ" } else { face };
+    let style = FONT_STYLE_LINE_BOXES.iter().find(|(held, points, held_bold, held_italic, _, _)| {
+        *held == canonical && *held_bold == bold && *held_italic == italic
+            && em_pixels(*points as f32 / 4.0) == em_pixels(size)
+    });
+    let (height, baseline) = style.map(|(_, _, _, _, height, baseline)| (*height, *baseline))
+        .or_else(|| font_line_box(face, size, bold))?;
+    if normal_face.is_empty() {
+        return Some((height, baseline));
+    }
+    let (normal_height, normal_baseline) = font_line_box(normal_face, normal_size, false)?;
+    let descent = height.saturating_sub(baseline);
+    let normal_descent = normal_height.saturating_sub(normal_baseline);
+    let device_descent = if merged_wrap {
+        let offset = FONT_DEVICE_DESCENT_OFFSETS.iter()
+            .find(|(held, points, _)| *held == canonical
+                && em_pixels(*points as f32 / 4.0) == em_pixels(size))
+            .map_or(0, |(_, _, offset)| *offset);
+        (i32::from(descent) - i32::from(offset)).clamp(0, i32::from(u16::MAX)) as u16
+    } else { descent };
+    let height = baseline.saturating_add(device_descent.max(normal_descent))
+        .max(normal_baseline.saturating_add(descent.max(normal_descent)));
+    Some((height, baseline.max(normal_baseline)))
 }
 
 fn em_pixels(points: f32) -> i32 {
@@ -585,4 +686,23 @@ pub fn raised_row_px(face: &str, size: f32) -> Option<u16> {
         .iter()
         .find(|(f, s, _)| *f == face && em_pixels(*s as f32 / 4.0) == em)
         .map(|(_, _, px)| *px)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::font_cell_line_box;
+
+    #[test]
+    fn mixed_fonts_keep_room_above_and_below_the_baseline() {
+        assert_eq!(font_cell_line_box("Arial", 12.0, false, false, "Aptos Narrow", 11.0, false), Some((21, 17)));
+        assert_eq!(font_cell_line_box("Meiryo", 8.0, false, false, "Aptos Narrow", 11.0, false), Some((22, 16)));
+        assert_eq!(font_cell_line_box("メイリオ", 11.0, false, false, "Arial", 20.0, false), Some((36, 28)));
+    }
+
+    #[test]
+    fn a_styled_face_keeps_its_own_line_box() {
+        assert_eq!(font_cell_line_box("Courier New", 12.0, true, false, "Arial", 8.0, false), Some((22, 17)));
+        assert_eq!(font_cell_line_box("Arial", 24.0, false, true, "Arial", 8.0, false), Some((41, 33)));
+        assert_eq!(font_cell_line_box("Unmeasured", 12.0, false, false, "Arial", 8.0, false), None);
+    }
 }

@@ -74,6 +74,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: jetli/wasm-pack-action@v0.4.0
+        env:
+          # The installer renames its extracted binary into Cargo's bin directory.
+          TMPDIR: ${{ env.CARGO_HOME }}
       # `suite` is what the in-repo editor needs: without it the spreadsheet,
       # presentation and hanko bindings are not exported at all, and the
       # browser suites below would open a workbook with nothing to open it.
