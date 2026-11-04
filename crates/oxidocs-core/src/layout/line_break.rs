@@ -342,9 +342,18 @@ impl<'a> LineBreaker<'a> {
         // 6.8tw/space, well under the 25% cap). This extends the KERNBREAK
         // space-compression credit (kern-active-only) to the no-kern justified
         // case. Scope: !doc_body_has_real_cjk → JP byte-identical by construction.
+        // OXI_LATIN_PARA_SHRINK (2026-11-02, default ON, opt-out _DISABLE): the S825
+        // quarter-space shrink is a property of the LINE's script, not of the
+        // document. `_pb_cjkdoc_latin_shrink_gen.py` («Connections Luxury in
+        // Madeira», Century 10.5, compat 15, compressPunctuation): justified keeps
+        // it 2.1pt under natural in a Japanese document and a Latin one alike, body
+        // and cell; left 0. A paragraph with no CJK character takes it whatever
+        // else the document holds (CJK lines stay with S1585).
+        let latin_para = !crate::env_flag!("OXI_LATIN_PARA_SHRINK_DISABLE")
+            && fragments.iter().all(|&(t, ..)| !t.chars().any(kinsoku::is_cjk));
         let s799_space_shrink = !crate::env_flag!("OXI_S799_DISABLE")
             && is_justified
-            && !self.doc_body_has_real_cjk;
+            && (!self.doc_body_has_real_cjk || latin_para);
         // S953 (2026-07-20, default ON, opt-out OXI_S953_DISABLE): a COMPAT-15 JUSTIFIED
         // line hangs its trailing '.'/',' past the right edge — the S809 rule's
         // modern-justified arm. DERIVED (hang_probe, Arial-12, 12-space line,
@@ -1893,7 +1902,16 @@ impl<'a> LineBreaker<'a> {
             if style.vert_in_horz && !text.is_empty() && !crate::env_flag!("OXI_S700_DISABLE")
             {
                 flush_word!(style);
-                let vw_tw = pt_to_tw(font_size);
+                // OXI_VERT_TCY: in vertical text the 縦中横 unit spans its face's natural
+                // line box along the column (see place_vertical_column).
+                let tcy_adv = if vertical && !crate::env_flag!("OXI_VERT_TCY_DISABLE")
+                    && super::IN_VERT_TEXT_BOX.with(|c| c.get())
+                {
+                    self.vert_tcy_advance(text, style, para_style, font_size)
+                } else {
+                    font_size
+                };
+                let vw_tw = pt_to_tw(tcy_adv);
                 if current_width_tw + vw_tw > available_tw
                     && !current_line.fragments.is_empty()
                     && !para_all_whitespace
@@ -1920,7 +1938,11 @@ impl<'a> LineBreaker<'a> {
                     run_index: frag_run_index,
                     char_offset: frag_char_start,
                 });
-                current_width += font_size;
+                if let Some(f) = current_line.fragments.last_mut() {
+                    f.width = tcy_adv;
+                    f.natural_width = tcy_adv;
+                }
+                current_width += tcy_adv;
                 current_width_tw += vw_tw;
                 current_capw_tw += vw_tw;
                 continue;
@@ -1947,9 +1969,30 @@ impl<'a> LineBreaker<'a> {
                 flush_word!(style);
                 let cs_field = style.character_spacing.unwrap_or(0.0);
                 let m_field = self.metrics_for_text(text, style, para_style);
+                // OXI_RUBY_FIELD_SCALE (2026-11-04, default ON, opt-out _DISABLE): the
+                // field's base glyphs take the run's character scale (w:w) and, under
+                // balanceSingleByteDoubleByteWidth, the doubled spacing on full-width
+                // glyphs, as everywhere else. `_pb_ruby_scale_gen.py` (slice of blind-J
+                // ja/creative__9aa11078, «図書館» HGS創英角ﾎﾟｯﾌﾟ体 b 28 under «としょかん»):
+                // Word's field is 55.46 / 61.46 / 67.46 at w 66 and spacing 0 / 1 / 2pt,
+                // 84.38 / 90.38 / 96.38 at w 100; Oxi drew 87.33 for every w.
+                let rf_scale = !crate::env_flag!("OXI_RUBY_FIELD_SCALE_DISABLE");
+                let scale_field = if rf_scale {
+                    style.text_scale.map(|s| s / 100.0).filter(|s| *s > 0.0).unwrap_or(1.0)
+                } else {
+                    1.0
+                };
                 let cw: f32 = text
                     .chars()
-                    .map(|c| self.registry.char_width_pt_with_fallback(c, font_size, &m_field) + cs_field)
+                    .map(|c| {
+                        let g = self.registry.char_width_pt_with_fallback(c, font_size, &m_field);
+                        let dbl = rf_scale
+                            && self.balance_single_byte_double_byte_width
+                            && !style.ruby_spread
+                            && crate::font::is_fullwidth(c)
+                            && g >= 0.98 * font_size;
+                        g * scale_field + cs_field * if dbl { 2.0 } else { 1.0 }
+                    })
                     .sum();
                 let cw_tw = pt_to_tw(cw);
                 if (if vertical { current_capw_tw } else { current_width_tw }) + cw_tw > available_tw
@@ -2648,8 +2691,14 @@ impl<'a> LineBreaker<'a> {
                 && !natural_break_jc
                 && !vertical
                 && (!lines_and_chars || (is_justified
+                    // OXI_CATALOG_OWN_WIDTH (2026-11-02, default ON, opt-out
+                    // OXI_CATALOG_OWN_WIDTH_DISABLE): read 、。 off the face's own
+                    // cmap when the calibrated entry holds ASCII only. ja/creative__
+                    // 13152ea1 (UD デジタル 教科書体 N-B 14pt, linesAndChars, jc=both):
+                    // Word packs 35 cells by squeezing 、。、 3.3pt each; the gate
+                    // missed 、 in the 100-width entry and the line broke at 34.
                     && cjk_metrics.is_some_and(|m|
-                        ['\u{3001}', '\u{3002}'].iter().all(|&ch| m.char_widths.contains_key(&ch) && m.char_width_em(ch) >= 0.99))
+                        ['\u{3001}', '\u{3002}'].iter().all(|&ch| m.own_width_em(ch).is_some_and(|w| w >= 0.99)))
                     && style.east_asia_lang.as_deref().is_some_and(|lang|
                         lang.eq_ignore_ascii_case("ja") || lang.to_ascii_lowercase().starts_with("ja-"))))
                 && s476_body
@@ -3053,6 +3102,17 @@ impl<'a> LineBreaker<'a> {
                         if next_of(i).map_or(false, kinsoku::is_yakumono_trigger) {
                             v[i] = true;
                         }
+                    } else if c == '\u{30FB}'
+                        && !crate::env_flag!("OXI_DOT_OPEN_PAIR_DISABLE")
+                        && next_of(i).map_or(false, kinsoku::is_yakumono_opening)
+                    {
+                        // OXI_DOT_OPEN_PAIR (2026-11-03, default ON, opt-out _DISABLE): a
+                        // middle dot before an opening bracket gives up its half em, like
+                        // 、「 and 」「 -- on a slack line, jc both or left, compressPunctuation
+                        // or not (`_pb_pair_dot_bracket_gen.py`, ＭＳ ゴシック 12 bold: «・「»
+                        // ・ 6.12, «・あ» 12.12, «、「» / «」「» 6.12). ja/creative__8048e30f's
+                        // «・「働きやすい職場」…・「問題社員」» lines.
+                        v[i] = true;
                     } else if kinsoku::is_yakumono_opening(c) {
                         // S1217 (2026-08-25, opt-out `OXI_S1217_DISABLE`): an opening
                         // bracket followed by ANOTHER opening bracket compresses --
@@ -3614,6 +3674,14 @@ impl<'a> LineBreaker<'a> {
                     && matches!(ch, '・' | '、' | '。' | '，' | '．')
                     && current_line.fragments.is_empty()
                     && word.is_empty()
+                    // OXI_LINESTART_PAIR_ONCE (2026-11-03, default ON, opt-out _DISABLE): a
+                    // mark already halved by its pair (、「 / ・「) takes no line-start
+                    // reduction on top -- the pair is protected from the loose-line revert,
+                    // so the extra 5/24 em was never given back. `_pb_pair_dot_bracket_gen.py`
+                    // (slack lines, compat 15 compressPunctuation): Word «、「» / «・「» 6.12,
+                    // Oxi 3.52.
+                    && !(yakumono_compressed[char_index]
+                        && !crate::env_flag!("OXI_LINESTART_PAIR_ONCE_DISABLE"))
                 {
                     let reduction = font_size * 5.0 / 24.0;
                     let floor = char_width * 0.5;
@@ -7202,6 +7270,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         if k + 1 < n && kinsoku::is_yakumono_trigger(line_chars[k + 1].1) {
                             v[k] = true;
                         }
+                    } else if c == '\u{30FB}'
+                        && !crate::env_flag!("OXI_DOT_OPEN_PAIR_DISABLE")
+                        && k + 1 < n
+                        && kinsoku::is_yakumono_opening(line_chars[k + 1].1)
+                    {
+                        // OXI_DOT_OPEN_PAIR: the revert keeps the ・「 half em too.
+                        v[k] = true;
                     } else if kinsoku::is_yakumono_opening(c) {
                         // S1217: mirror of the break-side rule -- an opening bracket
                         // followed by another opening bracket compresses ITSELF.

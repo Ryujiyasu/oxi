@@ -250,6 +250,16 @@ impl<'a> TableFitLayouter<'a> {
                 let s1239_negative = !crate::env_flag!("OXI_S1239_DISABLE")
                     && table.style.indent.is_some_and(|v| v < -0.1)
                     && (self.compat_mode <= 14 || !self.compat_mode_explicit);
+                // OXI_UNDECL_POS_TBLIND (2026-11-02, default ON, opt-out _DISABLE): in a
+                // document with NO compatibilityMode a POSITIVE tblInd absorbs the cell
+                // margin the same way, whole table with its borders (the S1239 probe's
+                // +162 arm: 38.04 = margin + ind - cellMar). The per-cell S496 path only
+                // runs for an explicit mode <= 14, so an undeclared document got neither.
+                // en/forms__006c06b0 (no compat, tblInd 108, TableGrid cellMar 108): Word's
+                // rules 71.78 / 173.42 / 533.26, Oxi 77.4 / 179.0 / 538.85 (every column +5.6).
+                let s1239_negative = s1239_negative || (!crate::env_flag!("OXI_UNDECL_POS_TBLIND_DISABLE")
+                    && !self.compat_mode_explicit
+                    && table.style.indent.is_some_and(|v| v > 0.1));
                 let absorb = if !crate::env_flag!("OXI_S621_DISABLE") {
                     (indent_zero && !self.table_modern_compat()) || s1239_negative
                 } else {
@@ -389,7 +399,21 @@ impl<'a> TableFitLayouter<'a> {
             && table.style.border
             && !separate_outer_edges
         {
-            table.style.border_width.unwrap_or(0.4)
+            // OXI_FOOT_BOTTOM_EDGE (2026-11-02, default ON, opt-out _DISABLE): the
+            // advance below the table is the BOTTOM edge's drawn extent -- the
+            // lumped `border_width` answered with whichever edge declared first.
+            // `_pb_cell_compound_border_gen.py` tbl arms (tblBorders = top only,
+            // single sz 4 / 24, thinThickSmallGap sz 24): Word's next paragraph sits
+            // 0.00 below the row; Oxi added 0.5 / 3.0 / 3.0.
+            if !crate::env_flag!("OXI_FOOT_BOTTOM_EDGE_DISABLE")
+                && (table.style.top_border.is_some() || table.style.bottom_border.is_some())
+            {
+                table.style.bottom_border.as_ref()
+                    .filter(|b| !matches!(b.style.as_str(), "none" | "nil"))
+                    .map_or(0.0, |b| b.width)
+            } else {
+                table.style.border_width.unwrap_or(0.4)
+            }
         } else {
             0.0
         };
@@ -3106,7 +3130,18 @@ impl<'a> TableFitLayouter<'a> {
                 // column, «題材の評価規準» on one line, column 1 untouched).
                 let positioned_float = table.style.position.is_some()
                     && !crate::env_flag!("OXI_FLOAT_NO_PAGE_CLAMP_DISABLE");
+                // OXI_S585C_FIXED_EXEMPT (2026-11-03, default ON, opt-out _DISABLE): a
+                // fixed-layout table keeps its declared width past the margin -- Word
+                // neither clamps the border nor narrows the text. ja/educational__0f950495
+                // (tblLayout fixed, 9846tw, tblInd 72, 4.7pt over): faithful slice in
+                // compat 15 and 14 alike, the full-width cell's line is 472.34 wide and
+                // the right rule sits at the declared edge (549.94 / 543.46); Oxi clamped
+                // the cell 2.9pt and wrapped 3–4pt short (`_pb` slice in
+                // tests/fixtures/thick_cell_slice). S585c's own cases are auto-width boxes.
+                let s585c_fixed_exempt = table.style.layout.as_deref() == Some("fixed")
+                    && !crate::env_flag!("OXI_S585C_FIXED_EXEMPT_DISABLE");
                 let s585c_clamp_base = !crate::env_flag!("OXI_S585C_DISABLE")
+                    && !s585c_fixed_exempt
                     && !positioned_float
                     && !is_nested
                     && row.cells.len() == 1
@@ -4871,7 +4906,9 @@ impl<'a> TableFitLayouter<'a> {
                                             && self.compress_punctuation;
                                     // S1082: the S825 compat-15 justified space-shrink capacity,
                                     // ported to this cell breaker (see the effective_wrap site).
-                                    let s1082_cell_shrink = !self.doc_body_has_real_cjk
+                                    let s1082_cell_shrink = (!self.doc_body_has_real_cjk
+                                        || (!crate::env_flag!("OXI_LATIN_PARA_SHRINK_DISABLE")
+                                            && para.runs.iter().all(|r| !r.text.chars().any(kinsoku::is_cjk))))
                                         && self.compat_mode >= 15
                                         && self.compat_mode_explicit
                                         && matches!(
@@ -4880,6 +4917,22 @@ impl<'a> TableFitLayouter<'a> {
                                         )
                                         && !crate::env_flag!("OXI_S1082_DISABLE")
                                         && !crate::env_flag!("OXI_S825_DISABLE");
+                                    // OXI_CELL_S1585_GAP (2026-11-02, default ON, opt-out _DISABLE):
+                                    // a justified CJK cell line keeps its overflowing CJK unit by
+                                    // squeezing its CJK<->digit/Latin autoSpace gaps, exactly as the
+                                    // body line does (S1585's CJK-unit arm, 1.5 x fs/4 x G/(G+2)).
+                                    // `_pb_cell_gap_squeeze_gen.py` (BIZ UDPゴシック 10.5, compat 15,
+                                    // docGrid lines, 2tw width sweeps): «317万人» keeps 万人 down to
+                                    // 1.3pt under natural in a cell and in the body alike, doNotCompress
+                                    // or compressPunctuation; jc=left 0. ja/reports__1fd371a8: the
+                                    // 1134tw column broke «317万 / 人» (0.3pt over) where Word keeps it.
+                                    let cell_s1585_gap = self.doc_body_has_real_cjk
+                                        && self.compat_mode >= 15
+                                        && self.compat_mode_explicit
+                                        && grid_char_pitch.is_none()
+                                        && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+                                        && !crate::env_flag!("OXI_CELL_S1585_GAP_DISABLE")
+                                        && !crate::env_flag!("OXI_S1585_DISABLE");
                                     // S1174 (opt-in): the derived legacy cell 約物
                                     // compression. Both settings must be declared --
                                     // compat 15 turns the mechanism off entirely.
@@ -6032,6 +6085,26 @@ impl<'a> TableFitLayouter<'a> {
                                                         .map(|c| c.natural_advance)
                                                         .sum::<f32>())
                                                         * 0.25
+                                                } else {
+                                                    0.0
+                                                };
+                                            let effective_wrap = effective_wrap
+                                                + if cell_s1585_gap && kinsoku::is_cjk(ch) && ch != '\u{3000}' {
+                                                    let solid = |c: char| kinsoku::is_cjk(c) && c != '\u{3000}';
+                                                    let mut g = 0usize;
+                                                    let mut prev: Option<char> = None;
+                                                    for c in current_line_chars.iter().chain(buf_chars.iter())
+                                                        .map(|c| c.ch).chain(std::iter::once(ch))
+                                                    {
+                                                        if let Some(a) = prev {
+                                                            if (solid(a) && c.is_ascii_alphanumeric())
+                                                                || (a.is_ascii_alphanumeric() && solid(c)) {
+                                                                g += 1;
+                                                            }
+                                                        }
+                                                        prev = Some(c);
+                                                    }
+                                                    if g == 0 { 0.0 } else { 1.5 * (font_size / 4.0) * g as f32 / (g as f32 + 2.0) }
                                                 } else {
                                                     0.0
                                                 };
@@ -8068,6 +8141,18 @@ impl<'a> TableFitLayouter<'a> {
                                         let cellpair_ws = self.cellpair_active();
                                         let ignore_ascii_spaces = !self.doc_body_has_real_cjk
                                             && line.iter().any(|(t, ..)| !t.trim().is_empty());
+                                        // OXI_CELL_WS_HEIGHT (2026-11-02, default ON, opt-out _DISABLE):
+                                        // a cell line is sized by what it draws in a CJK document too --
+                                        // a run of spaces / ideographic spaces taller than the text adds
+                                        // nothing. `_pb_bigspace_line_gen.py` (ＭＳ 明朝 9pt text + a 24pt
+                                        // «　» or « » leading / mid / trailing, jc left / center, body /
+                                        // cell, 24 arms): every line 12.00 in Word; a 24pt «Ａ» 31.50.
+                                        // Oxi's body already gave 11.67, the cell 31.12. ja/administrative__
+                                        // 0ba21b0c: «　 ７・８月の主な予定» (24pt «　») pushed its cell 18pt.
+                                        let cell_ws_height = !crate::env_flag!("OXI_CELL_WS_HEIGHT_DISABLE")
+                                            && line.iter().any(|(t, ..)| t.chars().any(|c| !c.is_whitespace()));
+                                        let cell_ws_only = |t: &str| cell_ws_height && !t.is_empty()
+                                            && t.chars().all(|c| c == ' ' || c == '\u{3000}');
                                         let tab_mark_line = !self.doc_body_has_real_cjk
                                             && !explicit_break_lines.contains(&line_idx)
                                             && line.iter().any(|f| f.0.contains('\t'))
@@ -8078,6 +8163,7 @@ impl<'a> TableFitLayouter<'a> {
                                         let mut lh: f32 = line
                                             .iter()
                                             .filter(|(t, ..)| !cellpair_ws || !t.trim().is_empty())
+                                            .filter(|(t, ..)| !cell_ws_only(t))
                                             .filter(|(t, ..)| !ignore_ascii_spaces || t.is_empty()
                                                 || !t.chars().all(|c| c == ' ' || c == '\t'))
                                             .map(
@@ -8517,6 +8603,40 @@ impl<'a> TableFitLayouter<'a> {
                                             }
                                         }
 
+                                        // OXI_CELL_SHADOW_LINE (2026-11-03, default ON, opt-out _DISABLE): a
+                                        // w14:shadow run grows its cell line exactly as a body line
+                                        // (OXI_TEXT_SHADOW_LINE / text_shadow_ext): top part above the
+                                        // text, the rest below. `_pb_cell_shadow_line_gen.py` (Calibri /
+                                        // Cambria 12 / 18 / 24, blur 4 dist 3 down / up, 18 arms): the row
+                                        // grows 2.30 / 3.00 / 3.72 (law 2.27 / 3.03 / 3.72), the baseline
+                                        // drops 0.36 (down) / 2.64 (up) at 18pt. en/policies__009625de: the
+                                        // header table's shadowed «2016» put Word's body 3.1pt below Oxi's.
+                                        // atLeast (`_pb_cell_shadow_line_gen.py` PB_ATLEAST, Arial 14): the
+                                        // shadow grows the NATURAL line -- atLeast 0 / 15 grow 2.64 like
+                                        // auto; atLeast 20 (above natural + shadow) keeps 20 and lifts the
+                                        // baseline 2.18 = the bottom extent. Applied after the offsets
+                                        // below are worked out on the shadow-less line.
+                                        // an atLeast line does not snap to the grid, so it grows
+                                        // under a typed grid too (ja/administrative__0ba21b0c's
+                                        // «Programação…» line, atLeast 0, docGrid lines).
+                                        let (cell_sh_t, cell_sh_b) = if (row_line_pitch.is_none()
+                                                || effective_line_rule == Some("atLeast"))
+                                            && matches!(effective_line_rule, None | Some("auto") | Some("atLeast"))
+                                            && !crate::env_flag!("OXI_CELL_SHADOW_LINE_DISABLE")
+                                        {
+                                            self.text_shadow_ext(line.iter().map(|f| (&f.16, f.0.as_str())), &para.style)
+                                        } else {
+                                            (0.0, 0.0)
+                                        };
+                                        let (cell_sh_grow, cell_sh_dy) = if cell_sh_t + cell_sh_b <= 0.0 {
+                                            (0.0, 0.0)
+                                        } else if effective_line_rule == Some("atLeast")
+                                            && lh <= effective_line_spacing.unwrap_or(0.0) + 0.01
+                                        {
+                                            (0.0, -cell_sh_b)
+                                        } else {
+                                            (cell_sh_t + cell_sh_b, cell_sh_t)
+                                        };
                                         // Paragraph indentation: first line uses indent_left + first_line_indent
                                         let line_indent = p_indent_left
                                             + if line_idx == 0 {
@@ -8811,6 +8931,7 @@ impl<'a> TableFitLayouter<'a> {
                                         let cell_max_fs: f32 = line
                                             .iter()
                                             .filter(|(t, ..)| !ignore_ascii_spaces || t.is_empty() || !t.chars().all(|c| c == ' ' || c == '\t'))
+                                            .filter(|(t, ..)| !cell_ws_only(t))
                                             .map(|(_, fs, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| *fs)
                                             .fold(0.0_f32, f32::max);
                                         // S175 (2026-05-22): match body's S166 fix — use word_line_height_table_cell
@@ -8826,6 +8947,7 @@ impl<'a> TableFitLayouter<'a> {
                                             cell_max_fs
                                         } else {
                                             line.iter().filter(|(t, ..)| !ignore_ascii_spaces || t.is_empty() || !t.chars().all(|c| c == ' ' || c == '\t'))
+                                    .filter(|(t, ..)| !cell_ws_only(t))
                                     .map(|(text, fs, _, bold, italic, _underline, _us, _strikethrough, font_family, _color, _hl, _cs, _ts, _, ea, _ruby, _)| {
                                         let mut rs = RunStyle::default();
                                         rs.font_size = Some(*fs);
@@ -9354,7 +9476,16 @@ impl<'a> TableFitLayouter<'a> {
                                         // shorter face beside a taller symbol or formatting run.
                                         // Grid, ruby, positioned scripts and embedded objects
                                         // retain their existing composed geometry.
-                                        let shared_cell_baseline = if row_line_pitch.is_none()
+                                        let cell_text_y_off = cell_text_y_off + cell_sh_dy;
+                                        lh += cell_sh_grow;
+                                        // OXI_CELL_ATLEAST_SHARED_BASE (2026-11-03, default ON, opt-out
+                                        // _DISABLE): an atLeast line does not snap to the grid, so its runs
+                                        // share one baseline under a typed grid too. ja/administrative__
+                                        // 0ba21b0c «給食費 Merenda ３，２５０円» (8pt + 11pt, atLeast 0,
+                                        // docGrid lines): Word one baseline; Oxi drew the 8pt run 4.2pt high.
+                                        let shared_cell_baseline = if (row_line_pitch.is_none()
+                                                || (effective_line_rule == Some("atLeast")
+                                                    && !crate::env_flag!("OXI_CELL_ATLEAST_SHARED_BASE_DISABLE")))
                                             && effective_line_rule != Some("exact")
                                             && para.style.list_marker.is_none()
                                             && line.iter().all(|f| !f.15 && !f.16.combine
