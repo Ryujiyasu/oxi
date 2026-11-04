@@ -6416,6 +6416,10 @@ impl<'a> PageLayouter<'a> {
                     let s903_next_borders_body: Option<&ParagraphBorders> =
                         page.blocks.get(s903_next_idx).and_then(|b| match b {
                             Block::Paragraph(p) => p.style.borders.as_ref(),
+                            // OXI_IMG_PBDR_GROUP: an image-only paragraph stays in its pBdr group.
+                            Block::Image(img) if img.position.is_none()
+                                && !crate::env_flag!("OXI_IMG_PBDR_GROUP_DISABLE") =>
+                                img.host_paragraph.as_deref().and_then(|h| h.style.borders.as_ref()),
                             _ => None,
                         });
                     // S676: a pending drop-cap indents THIS paragraph's body to the right
@@ -9899,7 +9903,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             .as_ref()
                             .map_or(false, |h| h.style.contextual_spacing);
                     }
-                    prev_borders = None; // S658: an image breaks border-merge adjacency
+                    // OXI_IMG_PBDR_GROUP (2026-11-04, default ON, opt-out _DISABLE): an
+                    // image-only paragraph (lowered to Block::Image by S537) keeps its
+                    // host's pBdr in the merge chain, as a paragraph would. blind-J en/
+                    // policies__00cb6db7 p1: one bordered box of 11 paragraphs (sz 48,
+                    // space 1) with two picture paragraphs -- Word draws no rule around
+                    // either (image top = the line top, 101.88 / 366.84); Oxi closed the
+                    // box before each picture and reopened it after (+7 + 7 per image,
+                    // +27.9 by «Teacher in charge», the page's last line went to p2).
+                    prev_borders = if crate::env_flag!("OXI_IMG_PBDR_GROUP_DISABLE") || img.position.is_some() {
+                        None // S658: an image breaks border-merge adjacency
+                    } else {
+                        img.host_paragraph.as_deref().and_then(|h| h.style.borders.clone())
+                    };
                     prev_autospacing_numid = None; // S931: and list adjacency
                     prev_keep_next = false; // S739
                                             // S961 (2026-07-21, HELD OPT-IN OXI_S961=1, default OFF):
