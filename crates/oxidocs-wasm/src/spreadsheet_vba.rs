@@ -22047,6 +22047,7 @@ impl<'a> WorkbookHost<'a> {
     /// worked out here -- only the breaks the text carries -- which is the
     /// one thing this falls short of Excel on.
     fn auto_fit_rows(&mut self, range: CellRange) -> Result<Value, String> {
+        self.guard_row_formats(range.sheet, "AutoFit")?;
         let result = self.fit_rows(range, false)?;
         for row in &mut self.workbook.sheets[range.sheet].rows {
             if (range.start_row..=range.end_row).contains(&row.index) { row.hidden = false; }
@@ -75472,6 +75473,48 @@ End Function"#;
         ).unwrap();
         let mut host = WorkbookHost::new(&mut book, 0).unwrap();
         assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(), Value::Double(15.0));
+    }
+
+
+    #[test]
+    fn row_autofit_permissions_keep_implicit_font_refits_separate() {
+        for (protection, blocked) in [
+            ("", false),
+            ("ActiveSheet.Protect AllowFormattingCells:=True", true),
+            ("ActiveSheet.Protect AllowFormattingCells:=True, AllowFormattingRows:=True", false),
+        ] {
+            for hidden in [false, true] {
+                let mut book = workbook();
+                book.default_style.font_name = Some("Arial".to_string());
+                book.default_style.font_size = Some(8.0);
+                book.default_style.font_reference = None;
+                book.sheets[0].rows.clear();
+                book.sheets[0].normal_font = Some(("Arial".to_string(), 8.0));
+                book.sheets[0].column_width_font = Some("Arial".to_string());
+                book.sheets[0].default_row_height = 11.25;
+                let hide = if hidden { "Rows(1).Hidden = True\n" } else { "" };
+                let module = parse_module(&format!(
+                    "Public Function Probe() As String\n\
+                     Range(\"A1\").Font.Name = \"Arial\"\n\
+                     Range(\"A1\").Font.Size = 11\n\
+                     Range(\"A1\").Value2 = \"M\"\n\
+                     Rows(1).AutoFit\n{hide}{protection}\n\
+                     Range(\"A1\").Font.Bold = True\n\
+                     Dim named As Double\nnamed = Rows(1).RowHeight\n\
+                     On Error Resume Next\nRows(1).AutoFit\n\
+                     Probe = CStr(named) & \"|\" & CStr(Err.Number) & \"|\" & \
+                     CStr(Rows(1).Hidden) & \"|\" & CStr(Rows(1).RowHeight)\nEnd Function\n"
+                )).unwrap();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                let still_hidden = blocked && hidden;
+                let expected = format!("{}|{}|{}|{}",
+                    if hidden { 0 } else { 15 }, if blocked { 1004 } else { 0 },
+                    if still_hidden { "True" } else { "False" },
+                    if still_hidden { 0 } else { 15 });
+                assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                    Value::String(expected), "blocked={blocked}, hidden={hidden}");
+            }
+        }
     }
 
     /// What a filter counts as a match.
