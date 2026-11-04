@@ -5364,6 +5364,39 @@ impl<'a> PageLayouter<'a> {
                                     do_push = false;
                                 }
                             }
+                            // OXI_KN_CHAIN_PAGE_TOP (2026-11-04, default ON, opt-out _DISABLE): a
+                            // keepNext chain that already starts at the top of this page does
+                            // not move again -- it is longer than a page, and Word lets it
+                            // break where the page ends. blind-J en/policies__00cb2a64 p13:
+                            // the Heading3 + 15 keepNext list items moved to p13 (S802B), then
+                            // item 8 and its example did not fit; Oxi pulled the whole chain to
+                            // p14 and left p13 blank (one of the two blank pages, 37 vs 35).
+                            if do_push
+                                && !crate::env_flag!("OXI_KN_CHAIN_PAGE_TOP_DISABLE")
+                                && !crate::env_flag!("OXI_S802B_DISABLE")
+                                && !(num_columns > 1 && current_column + 1 < num_columns)
+                            {
+                                let mut from = block_idx;
+                                while from > 0 {
+                                    match page.blocks.get(from - 1) {
+                                        Some(Block::Paragraph(pp))
+                                            if pp.style.keep_next
+                                                && block_page_indices.get(from - 1)
+                                                    == Some(&current_page_idx) =>
+                                        {
+                                            from -= 1;
+                                        }
+                                        _ => break,
+                                    }
+                                }
+                                let chain_at_top = from < block_idx
+                                    && (from == 0
+                                        || block_page_indices.get(from - 1)
+                                            .map_or(true, |&pg| pg != current_page_idx));
+                                if chain_at_top {
+                                    do_push = false;
+                                }
+                            }
                             if crate::env_flag!("OXI_DBG_KN635") {
                                 let t: String = para
                                     .runs
