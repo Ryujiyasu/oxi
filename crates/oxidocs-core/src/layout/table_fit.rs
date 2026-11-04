@@ -12522,6 +12522,44 @@ impl<'a> TableFitLayouter<'a> {
                         }
                     }
                 }
+                // OXI_S1431_PER_CELL (2026-11-04, default ON, opt-out _DISABLE): each
+                // cell's restart carries the space before of ITS first overflow
+                // paragraph, as S1431 does for the row's topmost one. blind-J en/
+                // creative__04637c5f p2: the right cell continues with a Heading2
+                // (before 36pt) while the left cell's image is the topmost line, so
+                // the heading took no space; _pb_split_row_before_gen.py: Word draws
+                // it at continuation top 298.8 + before (36 / 50 / 72 -> 334.8 /
+                // 348.7 / 370.8).
+                if s1093 && !crate::env_flag!("OXI_S1431_PER_CELL_DISABLE")
+                    && !crate::env_flag!("OXI_S1431_DISABLE")
+                {
+                    let mut credit: Vec<(usize, f32)> = Vec::new();
+                    for (&ci, &m) in s1093_col_min.iter() {
+                        let sb = next_page_elems
+                            .iter()
+                            .filter(|e| anchors(e) && e.cell_col_index == Some(ci)
+                                && (e.y - e.flow_line_offset - m).abs() < 0.01)
+                            .filter_map(|e| {
+                                let key = (ci, e.cell_paragraph_index?);
+                                let stayed = current_page_elems.iter().any(|c| {
+                                    matches!(c.content, LayoutContent::Text { .. })
+                                        && c.cell_row_index == Some(row_idx)
+                                        && c.cell_col_index == Some(key.0)
+                                        && c.cell_paragraph_index == Some(key.1)
+                                });
+                                if stayed { None } else { s1431_cell_para_sb.get(&key).copied() }
+                            })
+                            .fold(0.0f32, f32::max);
+                        if sb > 0.0 {
+                            credit.push((ci, sb));
+                        }
+                    }
+                    for (ci, sb) in credit {
+                        if let Some(m) = s1093_col_min.get_mut(&ci) {
+                            *m -= sb;
+                        }
+                    }
+                }
                 if s570 && min_overflow_text_y.is_finite() {
                     next_page_elems.retain(|e| {
                         !matches!(&e.content,
