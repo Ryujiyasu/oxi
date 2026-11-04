@@ -12561,6 +12561,18 @@ cells={} pitch={:.2} text={:?}",
                 let mut prev_sa: Option<f32> = None;
                 for b in blocks {
                     if let Block::Paragraph(p) = b {
+                        // OXI_FTR_STACK_FRAME_SKIP (2026-11-04, default ON, opt-out
+                        // _DISABLE): a framed paragraph (framePr) is out of the
+                        // footer's flow here as in the branch below. blind-J
+                        // ja/administrative__208244a3: footer = an empty framed
+                        // page-number paragraph + an empty paragraph (exact 24.1);
+                        // counting both raised the body bottom to 751.15 and Word's
+                        // page-1 last line (box to 752.67) went to page 2.
+                        if p.style.frame_pr.is_some()
+                            && !crate::env_flag!("OXI_FTR_STACK_FRAME_SKIP_DISABLE")
+                        {
+                            continue;
+                        }
                         let sb = p.style.space_before.unwrap_or(0.0);
                         let sa = p.style.space_after.unwrap_or(0.0);
                         stack += match prev_sa {
@@ -18528,6 +18540,24 @@ cells={} pitch={:.2} text={:?}",
                         }
                         if let Some((fs, win_ascent)) = fs_a {
                             let origin_term = if s1356 { 1.0 } else { 0.0 };
+                            // OXI_EXACT_TALIGN_CENTER (2026-11-04, default ON, opt-out
+                            // _DISABLE): textAlignment="center" centres the em box in
+                            // the exact line instead of the 0.8 L baseline.
+                            // `_pb_exact_talign_center_gen.py` (slice of blind-J
+                            // ja/administrative__208244a3, ＭＳ 明朝): baseline - top =
+                            // L/2 + 0.371 fs for L 18 / 24.1 / 30 and fs 10.5 / 14 (12.89
+                            // 14.21 15.89 17.21 18.89 20.21); auto and baseline keep 0.8 L.
+                            // 208244a3's every line sat 3.3pt low and lost page 1's last.
+                            if para_style.text_alignment.as_deref() == Some("center")
+                                && !crate::env_flag!("OXI_EXACT_TALIGN_CENTER_DISABLE")
+                            {
+                                let wd = line.fragments.iter()
+                                    .filter(|f| !f.text.trim().is_empty())
+                                    .find(|f| (f.style.font_size.unwrap_or(para_font_size) - fs).abs() < 0.01)
+                                    .map(|f| self.metrics_for_text(&f.text, &f.style, para_style).win_descent)
+                                    .unwrap_or(1.0 - win_ascent);
+                                return 0.5 * lh + (win_ascent - wd) * 0.5 * fs + origin_term - win_ascent * fs;
+                            }
                             // OXI_ATLEAST_UNION_CELL: a MIXED exact line (a CJK face
                             // beside another) converts through the line's largest
                             // baseline ascent, the maximum the shared-baseline shift
