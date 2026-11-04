@@ -7362,7 +7362,17 @@ impl<'a> ParagraphLayouter<'a> {
                     .map(|(fi, f)| {
                         let fs = f.style.font_size.unwrap_or(para_font_size);
                         let m = &*self.metrics_for_text(&f.text, &f.style, &para.style);
-                        let tw: f32 = f.text.chars().map(|c| m.char_width_em(c) * fs).sum();
+                        // OXI_S672_SCALE (2026-11-05, default ON, opt-out _DISABLE): the
+                        // true advance is the scaled glyph, as the renderer draws it
+                        // (character spacing left out: adding it regressed 30 golden
+                        // gen/gen2 documents by up to -0.0086 in the ssim_ab). blind-J en/legal__005ce334:
+                        // «STATEMENT OF POLICY AND PROCEDURE» is w:w=80 words between
+                        // spaced space runs; the unscaled sum (73.3 for a 58.7 word)
+                        // pushed every word 14pt right and drew the heading spread out.
+                        let (sc, cs) = if crate::env_flag!("OXI_S672_SCALE_DISABLE") { (1.0, 0.0) } else {
+                            (f.style.text_scale.map_or(1.0, |s| s / 100.0), 0.0)
+                        };
+                        let tw: f32 = f.text.chars().map(|c| m.char_width_em(c) * fs * sc + cs).sum();
                         (f.width + frag_width_adjustments[fi], tw)
                     })
                     .fold((0.0_f32, 0.0_f32), |(a, b), (c, d)| (a + c, b + d))
@@ -9237,10 +9247,13 @@ impl<'a> ParagraphLayouter<'a> {
                 // un-rounded em width (= the DWrite render advance) so the NEXT
                 // fragment emits where this word actually ends on screen.
                 if s672_latinx {
+                    let (sc, cs) = if crate::env_flag!("OXI_S672_SCALE_DISABLE") { (1.0, 0.0) } else {
+                        (frag.style.text_scale.map_or(1.0, |s| s / 100.0), 0.0)
+                    };
                     let true_w: f32 = frag
                         .text
                         .chars()
-                        .map(|c| frag_metrics.char_width_em(c) * resolved_font_size)
+                        .map(|c| frag_metrics.char_width_em(c) * resolved_font_size * sc + cs)
                         .sum();
                     render_x += true_w + frag_spacing_after[frag_idx];
                 }
