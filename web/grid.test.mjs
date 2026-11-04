@@ -499,8 +499,10 @@ grid.wearFace('Courier New');
 is('a new face replaces the effective font name', grid.styleAt(1, 0).font_name, 'Courier New');
 is('the new face uses the shared family classification', grid.styleAt(1, 0).font_family, 3);
 is('the old face character set is cleared', grid.styleAt(1, 0).font_charset, undefined);
-is('a new name clears theme font identity while preserving its color',
-  grid.styleAt(1, 0).font_reference, {theme: 3});
+is('an explicit new name retains its color and classified identity',
+  [grid.styleAt(1, 0).font_reference.latin_name,
+    grid.styleAt(1, 0).font_reference.theme, grid.styleAt(1, 0).font_reference.scheme],
+  ['Courier New', 3, undefined]);
 grid.undo();
 is('undo restores the complete theme font identity', grid.styleAt(1, 0), themedFont);
 

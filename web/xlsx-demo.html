@@ -3017,9 +3017,10 @@ function wearFace(name) {
       if (metadata[index] >= 0) style[part] = metadata[index];
       else delete style[part];
     }
-    if (was?.font_reference) {
-      const reference = { ...was.font_reference };
-      delete reference.latin_name;
+    if (face || was?.font_reference) {
+      const reference = { ...was?.font_reference };
+      if (face) reference.latin_name = face;
+      else delete reference.latin_name;
       delete reference.scheme;
       if (Object.keys(reference).length) style.font_reference = reference;
       else delete style.font_reference;

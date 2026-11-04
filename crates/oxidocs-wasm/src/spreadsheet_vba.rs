@@ -34175,7 +34175,7 @@ impl Host for WorkbookHost<'_> {
                     style.font_name=named.clone();
                     style.font_family=metadata.0;style.font_charset=metadata.1;
                     let reference=style.font_reference.get_or_insert_with(Default::default);
-                    reference.latin_name=None;reference.scheme=None;
+                    reference.latin_name=named.clone();reference.scheme=None;
                     style.normalize_font_reference();
                 })?;
                 self.redress_runs(range,|dress| {
@@ -75214,6 +75214,34 @@ End Function"#;
 
         assert_eq!(result, Value::String("True|False|Null|-4142".to_string()));
         assert!(workbook.sheets[0].rows[0].cells[0].style.strikethrough);
+    }
+
+    #[test]
+    fn font_name_classification_survives_save_and_reopen() {
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let rename=|bytes:&[u8],name:&str| {
+            let mut editor=oxicells_core::XlsxEditor::new(bytes).unwrap();
+            let mut book=editor.workbook().clone();
+            let module=parse_module(&format!(
+                "Public Sub ChangeFace()\nRange(\"A1\").Font.Name = \"{name}\"\nEnd Sub\n"
+            )).unwrap();
+            {
+                let mut host=WorkbookHost::new(&mut book,0).unwrap();
+                execute_with_host(&module,"ChangeFace",vec![],&mut host).unwrap();
+            }
+            editor.apply_workbook(&book).unwrap();
+            editor.save().unwrap()
+        };
+        let baseline=rename(original,"Arial");
+        for name in ["Calibri","Aptos Narrow"] {
+            let saved=rename(&baseline,name);
+            let restored=oxicells_core::parse_xlsx(&saved).unwrap();
+            let style=&restored.sheets[0].rows.iter().find(|row|row.index==1).unwrap()
+                .cells.iter().find(|cell|cell.col==0).unwrap().style;
+            assert_eq!(style.latin_font_name(),Some(name));
+            assert_eq!(style.font_family,Some(2));
+            assert!(style.font_reference.as_ref().and_then(|reference|reference.scheme.as_ref()).is_none());
+        }
     }
 
     /// What a filter counts as a match.
