@@ -70,6 +70,9 @@ struct ParseContext {
     numbering: NumberingDefinitions,
     /// Counters for numbered lists: (numId, ilvl) -> current count
     list_counters: std::cell::RefCell<HashMap<(String, u8), u32>>,
+    /// OXI_LISTNUM: the numId of the last numbered paragraph (a LISTNUM field
+    /// outside a list numbers from it; none yet = Word's NumberDefault list).
+    listnum_list: std::cell::RefCell<Option<String>>,
     /// Footnote ID -> paragraphs (from word/footnotes.xml)
     footnotes: HashMap<String, Vec<Block>>,
     /// Endnote ID -> paragraphs (from word/endnotes.xml)
@@ -1658,6 +1661,7 @@ impl OoxmlParser {
                         hyperlinks,
                         numbering: ctx.numbering.clone(),
                         list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
                         fields: std::cell::RefCell::new(Vec::new()),
                         paragraph_base: std::cell::RefCell::new(RunStyle::default()),
                         footnotes: ctx.footnotes.clone(),
@@ -1837,6 +1841,7 @@ impl OoxmlParser {
             hyperlinks,
             numbering,
             list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes,
@@ -5021,6 +5026,9 @@ fn parse_paragraph_with_inline_images_impl(
         }
     }
 
+    let listnum_para = num_pr_ref.as_ref()
+        .filter(|n| !n.num_id.is_empty() && n.num_id != "0" && ctx.numbering.num_map.contains_key(&n.num_id))
+        .map(|n| (n.num_id.clone(), n.ilvl));
     // Resolve list marker from numbering definitions
     if let Some(npr) = num_pr_ref {
         if !npr.num_id.is_empty() && npr.num_id != "0" {
@@ -5208,6 +5216,59 @@ fn parse_paragraph_with_inline_images_impl(
                 }
             }
         }
+    }
+
+    // OXI_LISTNUM: number the paragraph's LISTNUM fields. _pb_listnum_gen.py
+    // (Word PDF, 008d98e2 slice): the field numbers from the paragraph's list,
+    // else from the last numbered paragraph's list, else Word's NumberDefault
+    // list, sharing that list's counters; no `\l` = the previous LISTNUM's level
+    // in the paragraph, else one below the paragraph's level. Before any list:
+    // «\l 4, (none), \l 2» -> (1) (2) b); after a numId-34 paragraph -> (B) (C) (b).
+    if runs.iter().any(|r: &Run| r.text.contains('\u{F0010}')) {
+        let list = listnum_para.as_ref().map(|(id, _)| id.clone())
+            .or_else(|| ctx.listnum_list.borrow().clone());
+        let mut last: Option<u8> = None;
+        for run in runs.iter_mut() {
+            while let Some(a) = run.text.find('\u{F0010}') {
+                let b = match run.text[a..].find('\u{F0011}') { Some(b) => a + b, None => break };
+                let req: u8 = run.text[a + '\u{F0010}'.len_utf8()..b].parse().unwrap_or(0);
+                let ilvl = if req > 0 {
+                    req - 1
+                } else if let Some(l) = last {
+                    l
+                } else {
+                    listnum_para.as_ref().map_or(0, |(_, l)| (l + 1).min(8))
+                };
+                last = Some(ilvl);
+                let label = match list.as_deref() {
+                    Some(id) => ctx.numbering
+                        .resolve_marker_full(id, ilvl, &mut ctx.list_counters.borrow_mut())
+                        .text,
+                    None => {
+                        const FMT: [(&str, &str); 9] = [
+                            ("decimal", "%1)"), ("lowerLetter", "%2)"), ("lowerRoman", "%3)"),
+                            ("decimal", "(%4)"), ("lowerLetter", "(%5)"), ("lowerRoman", "(%6)"),
+                            ("decimal", "%7."), ("lowerLetter", "%8."), ("lowerRoman", "%9.")];
+                        let mut c = ctx.list_counters.borrow_mut();
+                        let key = |l: u8| ("\u{0}NumberDefault".to_string(), l);
+                        for p in 0..ilvl {
+                            let e = c.entry(key(p)).or_insert(0);
+                            if *e == 0 { *e = 1; }
+                        }
+                        let e = c.entry(key(ilvl)).or_insert(0);
+                        *e += 1;
+                        let n = *e;
+                        for d in (ilvl + 1)..9 { c.remove(&key(d)); }
+                        let (fmt, txt) = FMT[ilvl as usize];
+                        txt.replace(&format!("%{}", ilvl + 1), &super::numbering::format_number(n, fmt))
+                    }
+                };
+                run.text.replace_range(a..b + '\u{F0011}'.len_utf8(), &label);
+            }
+        }
+    }
+    if let Some((id, _)) = listnum_para.as_ref() {
+        *ctx.listnum_list.borrow_mut() = Some(id.clone());
     }
 
     // Convert inline page break (w:br type="page" as \x0C in first run).
@@ -7540,6 +7601,21 @@ fn parse_run(
             } else if text.is_empty() {
                 text = "#".to_string();
             }
+        } else if field.split_whitespace().next().is_some_and(|name| name.eq_ignore_ascii_case("LISTNUM"))
+            && std::env::var_os("OXI_LISTNUM_DISABLE").is_none()
+        {
+            // OXI_LISTNUM (2026-11-04, default ON, opt-out _DISABLE): Word numbers
+            // a LISTNUM field itself (008d98e2 writes them with no result). The
+            // paragraph pass below turns this placeholder into the number once the
+            // paragraph's own list is known; `\l n` = level n (ilvl n-1).
+            let mut it = field.split_whitespace().skip(1);
+            let mut level = 0u8;
+            while let Some(arg) = it.next() {
+                if arg.eq_ignore_ascii_case("\\l") {
+                    level = it.next().and_then(|v| v.parse::<u8>().ok()).unwrap_or(0).min(9);
+                }
+            }
+            text = format!("\u{F0010}{}\u{F0011}", level);
         } else if field.split_whitespace().next().is_some_and(|name| name.eq_ignore_ascii_case("IF")) {
             // Conditional fields display the outer cached result. Operand fields
             // are hidden by the enclosing code context and never paint here.
@@ -7704,6 +7780,7 @@ fn parse_notes_xml(
         hyperlinks: HashMap::new(),
         numbering: super::numbering::NumberingDefinitions::default(),
         list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
         fields: std::cell::RefCell::new(Vec::new()),
         paragraph_base: std::cell::RefCell::new(RunStyle::default()),
         footnotes: HashMap::new(),
@@ -16642,6 +16719,7 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
         hyperlinks: HashMap::new(),
         numbering: super::numbering::NumberingDefinitions::default(),
         list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
         fields: std::cell::RefCell::new(Vec::new()),
         paragraph_base: std::cell::RefCell::new(RunStyle::default()),
         footnotes: HashMap::new(),
@@ -17468,6 +17546,7 @@ mod tests {
             media_types: HashMap::new(), hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
@@ -17493,6 +17572,7 @@ mod tests {
             media_types: HashMap::new(), hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
@@ -17523,6 +17603,7 @@ mod tests {
             media_types: HashMap::new(), hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
@@ -17555,6 +17636,7 @@ mod tests {
             media_types: HashMap::new(), hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
@@ -17876,6 +17958,7 @@ mod tests {
             hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(),
@@ -17917,6 +18000,7 @@ mod tests {
             hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(),
@@ -17953,6 +18037,7 @@ mod tests {
             hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(),
@@ -18328,6 +18413,7 @@ fn s1598_val_off(e: &quick_xml::events::BytesStart) -> bool {
             media_types: HashMap::new(), hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
@@ -18361,6 +18447,7 @@ fn s1598_val_off(e: &quick_xml::events::BytesStart) -> bool {
             media_types: HashMap::new(), hyperlinks: HashMap::new(),
             numbering: NumberingDefinitions::default(),
             list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
             fields: std::cell::RefCell::new(Vec::new()),
             paragraph_base: std::cell::RefCell::new(RunStyle::default()),
             footnotes: HashMap::new(), endnotes: HashMap::new(),
@@ -18392,7 +18479,7 @@ fn s1598_val_off(e: &quick_xml::events::BytesStart) -> bool {
 fn floating_source_point_survives_text_and_run_transformations(){
     let mut ctx=ParseContext{
         _rels:HashMap::new(),media:HashMap::new(),media_types:HashMap::new(),hyperlinks:HashMap::new(),
-        numbering:NumberingDefinitions::default(),list_counters:std::cell::RefCell::new(HashMap::new()),
+        numbering:NumberingDefinitions::default(),list_counters:std::cell::RefCell::new(HashMap::new()),listnum_list:std::cell::RefCell::new(None),
         fields:std::cell::RefCell::new(Vec::new()),paragraph_base:std::cell::RefCell::new(RunStyle::default()),
         footnotes:HashMap::new(),endnotes:HashMap::new(),comments:HashMap::new(),theme:ThemeColors::default(),graphic_parts:HashMap::new(),
     };
@@ -18433,7 +18520,7 @@ fn floating_source_point_survives_text_and_run_transformations(){
 fn math_run_properties_use_the_package_font_and_style_context() {
     let ctx=ParseContext {
         _rels:HashMap::new(),media:HashMap::new(),media_types:HashMap::new(),hyperlinks:HashMap::new(),
-        numbering:NumberingDefinitions::default(),list_counters:std::cell::RefCell::new(HashMap::new()),
+        numbering:NumberingDefinitions::default(),list_counters:std::cell::RefCell::new(HashMap::new()),listnum_list:std::cell::RefCell::new(None),
         fields:std::cell::RefCell::new(Vec::new()),paragraph_base:std::cell::RefCell::new(RunStyle {
             font_family_east_asia:Some("Inherited EA face".into()),
             font_hint_east_asia:Some(true),font_size:Some(10.5), ..RunStyle::default()
@@ -18471,6 +18558,7 @@ fn math_operator_control_color_uses_package_context_without_coloring_leaves() {
     let ctx = ParseContext {
         _rels: HashMap::new(), media: HashMap::new(), media_types: HashMap::new(), hyperlinks: HashMap::new(),
         numbering: NumberingDefinitions::default(), list_counters: std::cell::RefCell::new(HashMap::new()),
+        listnum_list: std::cell::RefCell::new(None),
         fields: std::cell::RefCell::new(Vec::new()), paragraph_base: std::cell::RefCell::new(RunStyle {
             color: Some("00FF00".into()), ..RunStyle::default()
         }), footnotes: HashMap::new(), endnotes: HashMap::new(), comments: HashMap::new(), theme: ThemeColors::default(), graphic_parts: HashMap::new(),
