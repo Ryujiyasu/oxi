@@ -187,7 +187,7 @@ export function sheetDefault(sheet, heightOf) {
 /// undefined for one that has never been measured. `advance(face, size, bold,
 /// italic, letter)` gives one character's width. `columns` holds the left edge
 /// of every column, so a wrapped cell knows the box it breaks inside.
-export function explainRow({ sheet, index, row, columns, heightOf, advance }) {
+export function explainRow({ sheet, index, row, columns, heightOf, advance, fontRowHeightOf }) {
   const parts = [];
   const fallback = () => row?.height
     ? {
@@ -236,11 +236,13 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance }) {
   }
 
   let raise = 0;
+  const normal = sheet.normal_font
+    ? [sheet.column_width_font || sheet.normal_font[0], sheet.normal_font[1]] : null;
+  const aggregateLines = !!fontRowHeightOf && !!normal;
+  const lineFonts = [];
   for (const cell of row.cells || []) {
     const face = cell.style?.font_reference?.latin_name || cell.style?.font_name || 'Calibri';
     const size = cell.style?.font_size || 11;
-    const normal = sheet.normal_font
-      ? [sheet.column_width_font || sheet.normal_font[0], sheet.normal_font[1]] : null;
     let px = heightOf(face, size, null,
       !!cell.style?.bold, !!cell.style?.italic);
     if (px === undefined) return { ...fallback(), parts };
@@ -274,13 +276,24 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance }) {
     }
     if (lines === 1 && normal) {
       const shared = heightOf(face, size, normal, !!cell.style?.bold,
-        !!cell.style?.italic, !!where && !!cell.style?.wrap_text);
+        !!cell.style?.italic, !!where?.anchor && !!cell.style?.wrap_text);
       if (shared === undefined) return { ...fallback(), parts };
       px = shared;
     }
-    const asked = lines * px;
+    const wrappedAnchor = !!where?.anchor && !!cell.style?.wrap_text;
+    if (lines === 1) {
+      lineFonts.push([face, size, !!cell.style?.bold, !!cell.style?.italic, wrappedAnchor]);
+    }
+    const asked = aggregateLines && wrappedAnchor ? 0 : lines * px;
     parts.push({ kind: 'cell', px: asked, column: cell.col, what });
     raise = Math.max(raise, asked);
+  }
+
+  if (aggregateLines && lineFonts.length) {
+    const shared = fontRowHeightOf(normal[0], normal[1], lineFonts);
+    if (shared === undefined) return { ...fallback(), parts };
+    parts.push({ kind: 'line', px: shared, what: 'the one-line cells share a baseline and descent' });
+    raise = Math.max(raise, shared);
   }
 
   const thick = (row.thick_top ? 1 : 0) + (row.thick_bottom ? 1 : 0);

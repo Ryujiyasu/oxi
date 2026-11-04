@@ -13873,9 +13873,19 @@ impl<'a> WorkbookHost<'a> {
             .filter(|row| (range.start_row..=range.end_row).contains(&row.index) && !row.custom_height)
             .map(|row| row.index)
             .collect();
+        let merged = self.merges_on(sheet);
         for row in rows {
+            let vertical_only = self.workbook.sheets[sheet].rows.iter()
+                .find(|held| held.index == row)
+                .is_some_and(|held| held.cells.iter()
+                    .filter(|cell| (range.start_column..=range.end_column).contains(&cell.col))
+                    .all(|cell| {
+                        let at = CellAddress { sheet, row, column: cell.col };
+                        merged.iter().any(|merge| merge.start_row != merge.end_row
+                            && range_contains(*merge, CellRange::single(at)))
+                    }));
             let band = CellRange { sheet, start_row: row, end_row: row, start_column: 0, end_column: MAX_WORKSHEET_COLUMN };
-            self.fit_rows(band, true)?;
+            self.fit_rows(band, vertical_only)?;
         }
         Ok(())
     }
@@ -22040,8 +22050,8 @@ impl<'a> WorkbookHost<'a> {
         self.fit_rows(range, false)
     }
 
-    fn fit_rows(&mut self, range: CellRange, refitting: bool) -> Result<Value, String> {
-        use oxicells_core::row_defaults::{font_cell_line_box, font_default_row_px, font_line_box};
+    fn fit_rows(&mut self, range: CellRange, preserve_vertical_height: bool) -> Result<Value, String> {
+        use oxicells_core::row_defaults::{font_cell_line_box, font_default_row_px, font_line_box, font_row_line_box};
         let sheet_index = range.sheet;
         // A formula written a moment ago is fitted by its answer: measured,
         // =REPT("ab ",10) set to wrap asks four lines.
@@ -22082,6 +22092,8 @@ impl<'a> WorkbookHost<'a> {
                 continue;
             }
             let mut px = base_px;
+            let mut retained_px = base_px;
+            let mut one_line_fonts = Vec::new();
             // A medium or thick rule along the top or the bottom of the row
             // takes a pixel of room each: measured, a row whose cell wears a
             // thick bottom border fits at 26 pixels, 19.5, where 25 is the
@@ -22096,8 +22108,9 @@ impl<'a> WorkbookHost<'a> {
                 let merge = merged.iter().find(|merge| range_contains(**merge, CellRange::single(at)));
                 if let Some(merge) = merge {
                     if merge.start_row != merge.end_row {
-                        if refitting {
+                        if preserve_vertical_height {
                             px = px.max(row.height.unwrap_or(sheet.default_row_height) / 0.75);
+                            retained_px = retained_px.max(row.height.unwrap_or(sheet.default_row_height) / 0.75);
                         }
                         continue;
                     }
@@ -22112,8 +22125,10 @@ impl<'a> WorkbookHost<'a> {
                 } else {
                     None
                 };
+                let wrapped_anchor = merge.is_some_and(|merge| merge.start_column == cell.col)
+                    && cell.style.wrap_text;
                 let shared_line = font_cell_line_box(cell_face, cell_size, cell.style.bold, cell.style.italic,
-                    &face, size, merge.is_some() && cell.style.wrap_text).map(|(height, _)| height);
+                    &face, size, wrapped_anchor).map(|(height, _)| height);
                 let own_line = font_cell_line_box(cell_face, cell_size, cell.style.bold, cell.style.italic,
                     "", 0.0, false).map(|(height, _)| height);
                 let font_px = own_line.or(line_px)
@@ -22142,6 +22157,14 @@ impl<'a> WorkbookHost<'a> {
                 };
                 let font_px = if lines == 1.0 { shared_line.unwrap_or(font_px) } else { font_px };
                 px = px.max(f32::from(font_px) * lines);
+                if lines == 1.0 {
+                    one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic, wrapped_anchor));
+                } else {
+                    retained_px = retained_px.max(f32::from(font_px) * lines);
+                }
+            }
+            if let Some((height, _)) = font_row_line_box(&face, size, one_line_fonts) {
+                px = retained_px.max(f32::from(height));
             }
             px += f32::from(u8::from(thick_top)) + f32::from(u8::from(thick_bottom));
             // No row is taller than 409.5 points.
@@ -75284,6 +75307,39 @@ End Function"#;
                 assert_eq!(execute_with_host(&module,"Probe",vec![],&mut host).unwrap(),
                     Value::Double(0.25),"{action}, manual={manual}");
             }
+        }
+    }
+
+
+    #[test]
+    fn a_font_change_refits_beside_a_vertical_merge() {
+        for address in ["A1", "A1:D1"] {
+            let mut book = workbook();
+            book.default_style.font_name = Some("Arial".to_string());
+            book.default_style.font_size = Some(8.0);
+            book.default_style.font_reference = None;
+            book.sheets[0].rows.clear();
+            book.sheets[0].merge_cells.clear();
+            book.sheets[0].normal_font = Some(("Arial".to_string(), 8.0));
+            book.sheets[0].column_width_font = Some("Arial".to_string());
+            book.sheets[0].default_row_height = 11.25;
+            let module = parse_module(&format!(
+                "Public Function Probe() As Double\n\
+                 Range(\"A1:B1\").Font.Name = \"Arial\"\n\
+                 Range(\"A1:B1\").Font.Size = 12\n\
+                 Range(\"A1:B1\").WrapText = True\n\
+                 Range(\"A1:B1\").Merge\n\
+                 Range(\"A1\").Font.Size = 24\n\
+                 Range(\"A1\").Font.Name = \"Meiryo\"\n\
+                 Range(\"A1\").Value2 = \"M\"\n\
+                 Range(\"D1:D2\").Merge\n\
+                 Rows(1).AutoFit\n\
+                 Range(\"{address}\").Font.Name = \"Arial\"\n\
+                 Probe = Rows(1).RowHeight\nEnd Function\n"
+            )).unwrap();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                Value::Double(18.0), "{address}");
         }
     }
 

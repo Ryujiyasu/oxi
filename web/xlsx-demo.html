@@ -847,6 +847,21 @@ function rowHeightOf(face, size, normal = null, bold = false, italic = false, me
   return rowHeights.get(key);
 }
 
+const rowLineHeights = new Map();
+function rowFontHeightOf(face, size, fonts) {
+  const key = JSON.stringify([face, size, fonts]);
+  if (!rowLineHeights.has(key)) {
+    let px;
+    try {
+      px = vbaProjectApi.row_font_height_px(face, size, fonts) ?? undefined;
+    } catch {
+      px = undefined;
+    }
+    rowLineHeights.set(key, px);
+  }
+  return rowLineHeights.get(key);
+}
+
 function measureDigit(name, points) {
   const canvas = measureDigit.canvas ||= document.createElement('canvas');
   const pen = canvas.getContext('2d');
@@ -1339,6 +1354,7 @@ function layout() {
       try {
         const measured = explainRow({
           sheet, index, row, columns: cols, heightOf: rowHeightOf, advance: step,
+          fontRowHeightOf: rowFontHeightOf,
         });
         px = measured.px;
         rememberRowHeight(sheet, row, measured);
