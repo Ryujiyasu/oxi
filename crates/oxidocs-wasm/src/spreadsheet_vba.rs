@@ -68097,10 +68097,24 @@ End Function"#;
 
     #[test]
     fn colorindex_reads_and_writes_the_workbooks_indexed_palette() {
-        let book = oxicells_core::parse_xlsx(include_bytes!(
-            "../../../tools/golden-test/documents/xlsx/e1c631fac30a_bunya_taikeizu_point.xlsx"
-        ))
-        .unwrap();
+        let palette = [
+            "000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF",
+            "000000", "FFFFFF", "DD0806", "1FB714", "0000D4", "FCF305", "F20884", "00ABEA",
+            "900000", "006411", "000090", "90713A", "4600A5", "008080", "C0C0C0", "808080",
+            "9999FF", "993366", "FFFFCC", "CCFFFF", "660066", "FF8080", "0066CC", "CCCCFF",
+            "000080", "FF00FF", "FFFF00", "00FFFF", "800080", "800000", "008080", "0000FF",
+            "00CCFF", "CCFFFF", "CCFFCC", "FFFF99", "99CCFF", "FF99CC", "CC99FF", "FFCC99",
+            "3366FF", "33CCCC", "99CC00", "FFCC00", "FF9900", "FF6600", "666699", "969696",
+            "003366", "339966", "003300", "333300", "993300", "993366", "333399", "333333",
+        ].iter().map(|rgb| format!(r#"<rgbColor rgb="FF{rgb}"/>"#)).collect::<String>();
+        let seed = include_bytes!("../../../tests/fixtures/conditional/cell_is.xlsx");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(seed)).unwrap();
+        let mut styles = String::new();
+        std::io::Read::read_to_string(&mut archive.by_name("xl/styles.xml").unwrap(), &mut styles).unwrap();
+        assert!(!styles.contains("<colors>"));
+        let styles = styles.replace("</styleSheet>", &format!("<colors><indexedColors>{palette}</indexedColors></colors></styleSheet>"));
+        let package = shared_fixture_styles(seed, &styles);
+        let book = oxicells_core::parse_xlsx(&package).unwrap();
         assert_eq!(book.indexed_colors[20], "4600A5");
         let source = r#"Public Sub UseWorkbookPalette()
             ActiveSheet.Range("A1").Interior.ColorIndex = 13
