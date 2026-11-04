@@ -26,12 +26,16 @@ static FONT_DEFAULT_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("Aptos Narrow", 42, 19, 15),
     ("Aptos Narrow", 44, 20, 16),
     ("Aptos Narrow", 48, 21, 17),
+    ("Aptos Narrow", 50, 23, 18),
     ("Aptos Narrow", 56, 25, 20),
     ("Aptos Narrow", 64, 28, 22),
     ("Aptos Narrow", 72, 32, 25),
     ("Aptos Narrow", 80, 35, 28),
     ("Aptos Narrow", 96, 42, 33),
+    ("Aptos Narrow", 112, 48, 38),
     ("Aptos Narrow", 144, 62, 49),
+    ("Aptos Narrow", 192, 85, 66),
+    ("Aptos Narrow", 288, 125, 98),
     ("Arial", 24, 11, 7),
     ("Arial", 32, 15, 12),
     ("Arial", 36, 16, 13),
@@ -39,12 +43,20 @@ static FONT_DEFAULT_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("Arial", 42, 18, 15),
     ("Arial", 44, 19, 16),
     ("Arial", 48, 20, 17),
+    ("Arial", 50, 22, 18),
     ("Arial", 56, 24, 20),
     ("Arial", 64, 27, 22),
     ("Arial", 72, 31, 25),
     ("Arial", 80, 34, 28),
     ("Arial", 96, 40, 33),
+    ("Arial", 112, 46, 38),
     ("Arial", 144, 59, 49),
+    ("Arial", 192, 79, 65),
+    ("Arial", 200, 83, 68),
+    ("Arial", 208, 85, 70),
+    ("Arial", 288, 120, 98),
+    ("Arial", 320, 133, 109),
+    ("Arial", 480, 199, 163),
     ("Arial Unicode MS", 44, 19, 16),
     ("BIZ UDPゴシック", 24, 12, 10),
     ("BIZ UDPゴシック", 32, 15, 13),
@@ -79,30 +91,61 @@ static FONT_DEFAULT_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("Calibri", 42, 19, 15),
     ("Calibri", 44, 20, 16),
     ("Calibri", 48, 21, 17),
+    ("Calibri", 50, 23, 18),
     ("Calibri", 56, 25, 20),
     ("Calibri", 64, 28, 22),
     ("Calibri", 72, 31, 25),
     ("Calibri", 80, 35, 28),
     ("Calibri", 96, 42, 33),
+    ("Calibri", 112, 48, 38),
     ("Calibri", 144, 62, 49),
+    ("Calibri", 192, 82, 65),
+    ("Calibri", 288, 123, 97),
     ("Cambria", 32, 14, 12),
+    ("Cambria", 38, 17, 14),
+    ("Cambria", 42, 18, 15),
     ("Cambria", 44, 19, 16),
     ("Cambria", 48, 21, 17),
+    ("Cambria", 50, 22, 18),
+    ("Cambria", 56, 24, 20),
     ("Cambria", 64, 27, 22),
+    ("Cambria", 72, 30, 25),
+    ("Cambria", 80, 34, 28),
     ("Cambria", 96, 40, 33),
+    ("Cambria", 112, 46, 38),
     ("Cambria", 144, 60, 49),
+    ("Cambria", 192, 79, 65),
+    ("Cambria", 288, 118, 97),
     ("Consolas", 32, 15, 12),
+    ("Consolas", 38, 17, 14),
+    ("Consolas", 42, 19, 15),
     ("Consolas", 44, 20, 16),
     ("Consolas", 48, 21, 17),
+    ("Consolas", 50, 22, 18),
+    ("Consolas", 56, 25, 20),
     ("Consolas", 64, 27, 22),
+    ("Consolas", 72, 31, 25),
+    ("Consolas", 80, 35, 28),
     ("Consolas", 96, 41, 33),
+    ("Consolas", 112, 47, 38),
     ("Consolas", 144, 61, 49),
+    ("Consolas", 192, 81, 65),
+    ("Consolas", 288, 121, 97),
     ("Courier New", 32, 15, 12),
+    ("Courier New", 38, 18, 14),
+    ("Courier New", 42, 19, 15),
     ("Courier New", 44, 20, 16),
     ("Courier New", 48, 21, 17),
+    ("Courier New", 50, 23, 18),
+    ("Courier New", 56, 25, 20),
     ("Courier New", 64, 28, 22),
+    ("Courier New", 72, 32, 25),
+    ("Courier New", 80, 35, 28),
     ("Courier New", 96, 42, 33),
+    ("Courier New", 112, 48, 38),
     ("Courier New", 144, 62, 49),
+    ("Courier New", 192, 83, 65),
+    ("Courier New", 288, 123, 97),
     ("Century", 24, 16, 11),
     ("Century", 28, 17, 12),
     ("Century", 36, 18, 14),
@@ -220,7 +263,10 @@ static FONT_DEFAULT_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("Times New Roman", 80, 35, 28),
     ("Times New Roman", 88, 37, 30),
     ("Times New Roman", 96, 41, 33),
+    ("Times New Roman", 112, 47, 38),
     ("Times New Roman", 144, 61, 49),
+    ("Times New Roman", 192, 82, 66),
+    ("Times New Roman", 288, 122, 98),
     ("Verdana", 24, 11, 9),
     ("Verdana", 32, 14, 12),
     ("Verdana", 36, 15, 13),
@@ -262,7 +308,10 @@ static FONT_DEFAULT_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("メイリオ", 72, 38, 26),
     ("メイリオ", 80, 44, 30),
     ("メイリオ", 96, 51, 35),
+    ("メイリオ", 112, 58, 40),
     ("メイリオ", 144, 76, 52),
+    ("メイリオ", 192, 101, 69),
+    ("メイリオ", 288, 151, 103),
     ("明朝", 40, 16, 13),
     ("明朝", 44, 18, 17),
     ("明朝", 72, 28, 26),
@@ -426,9 +475,20 @@ static FONT_STYLE_LINE_BOXES: &[(&str, u16, bool, bool, u16, u16)] = &[
     ("Arial", 32, true, true, 14, 12),
     ("Arial", 44, true, false, 20, 16),
     ("Arial", 48, true, false, 21, 17),
+    ("Arial", 56, false, true, 25, 20),
+    ("Arial", 56, true, true, 25, 20),
+    ("Arial", 80, true, false, 35, 28),
     ("Arial", 96, false, true, 41, 33),
+    ("Arial", 112, false, true, 47, 38),
+    ("Arial", 112, true, false, 47, 38),
     ("Arial", 144, false, true, 60, 49),
     ("Arial", 144, true, false, 60, 49),
+    ("Arial", 192, false, true, 80, 65),
+    ("Arial", 192, true, false, 80, 65),
+    ("Arial", 192, true, true, 80, 65),
+    ("Arial", 288, false, true, 121, 98),
+    ("Arial", 288, true, false, 121, 98),
+    ("Arial", 288, true, true, 121, 98),
     ("Courier New", 32, false, true, 16, 12),
     ("Courier New", 44, false, true, 21, 16),
     ("Courier New", 44, true, false, 21, 16),
@@ -436,21 +496,49 @@ static FONT_STYLE_LINE_BOXES: &[(&str, u16, bool, bool, u16, u16)] = &[
     ("Courier New", 48, false, true, 22, 17),
     ("Courier New", 48, true, false, 22, 17),
     ("Courier New", 48, true, true, 22, 17),
+    ("Courier New", 56, true, false, 26, 20),
+    ("Courier New", 56, true, true, 26, 20),
+    ("Courier New", 80, true, false, 36, 28),
+    ("Courier New", 80, true, true, 36, 28),
     ("Courier New", 96, false, true, 41, 33),
     ("Courier New", 96, true, false, 43, 33),
     ("Courier New", 96, true, true, 43, 33),
+    ("Courier New", 112, true, false, 49, 38),
+    ("Courier New", 112, true, true, 49, 38),
     ("Courier New", 144, true, false, 63, 49),
     ("Courier New", 144, true, true, 63, 49),
+    ("Courier New", 192, true, false, 84, 65),
+    ("Courier New", 192, true, true, 84, 65),
+    ("Courier New", 288, true, false, 126, 97),
+    ("Courier New", 288, true, true, 126, 97),
     ("Times New Roman", 32, true, false, 14, 12),
+    ("Times New Roman", 38, true, true, 18, 14),
+    ("Times New Roman", 42, true, true, 19, 15),
     ("Times New Roman", 44, true, false, 19, 16),
+    ("Times New Roman", 50, true, true, 23, 18),
+    ("Times New Roman", 56, true, true, 26, 20),
+    ("Times New Roman", 72, true, false, 30, 25),
+    ("Times New Roman", 80, true, false, 34, 28),
+    ("Times New Roman", 80, true, true, 34, 28),
     ("Times New Roman", 96, true, false, 40, 33),
     ("Times New Roman", 96, true, true, 40, 33),
+    ("Times New Roman", 112, true, false, 46, 38),
+    ("Times New Roman", 112, true, true, 46, 38),
     ("Times New Roman", 144, true, false, 60, 49),
     ("Times New Roman", 144, true, true, 60, 49),
+    ("Times New Roman", 192, true, false, 81, 66),
+    ("Times New Roman", 192, true, true, 81, 66),
+    ("Times New Roman", 288, true, false, 120, 98),
+    ("Times New Roman", 288, true, true, 120, 98),
 ];
 
 /// Differences between the measured line descent and the device descent.
 static FONT_DEVICE_DESCENT_OFFSETS: &[(&str, u16, i16)] = &[
+    ("Aptos Narrow", 192, 1),
+    ("Aptos Narrow", 288, 1),
+    ("Arial", 288, 1),
+    ("Times New Roman", 192, 1),
+    ("Times New Roman", 288, 1),
     ("メイリオ", 24, -1),
     ("メイリオ", 32, 1),
     ("メイリオ", 36, 1),
@@ -465,7 +553,10 @@ static FONT_DEVICE_DESCENT_OFFSETS: &[(&str, u16, i16)] = &[
     ("メイリオ", 72, 1),
     ("メイリオ", 80, 2),
     ("メイリオ", 96, 2),
+    ("メイリオ", 112, 2),
     ("メイリオ", 144, 3),
+    ("メイリオ", 192, 4),
+    ("メイリオ", 288, 6),
 ];
 
 /// The measured default row height for a font, in 96-dpi pixels.
@@ -571,6 +662,28 @@ pub fn font_cell_line_box(
     let height = baseline.saturating_add(device_descent.max(normal_descent))
         .max(normal_baseline.saturating_add(descent.max(normal_descent)));
     Some((height, baseline.max(normal_baseline)))
+}
+
+
+/// The shared line of a row. Wrapped horizontal merge anchors contribute
+/// descent; the ordinary and covered cells establish the row's baseline.
+pub fn font_row_line_box<'a>(
+    normal_face: &str,
+    normal_size: f32,
+    cells: impl IntoIterator<Item = (&'a str, f32, bool, bool, bool)>,
+) -> Option<(u16, u16)> {
+    let (height, mut baseline) = font_line_box(normal_face, normal_size, false)?;
+    let mut descent = height.saturating_sub(baseline);
+    for (face, size, bold, italic, wrapped_merge_anchor) in cells {
+        let (height, cell_baseline) = font_cell_line_box(
+            face, size, bold, italic, "", 0.0, false,
+        )?;
+        descent = descent.max(height.saturating_sub(cell_baseline));
+        if !wrapped_merge_anchor {
+            baseline = baseline.max(cell_baseline);
+        }
+    }
+    Some((baseline.saturating_add(descent), baseline))
 }
 
 fn em_pixels(points: f32) -> i32 {
@@ -704,5 +817,39 @@ mod tests {
         assert_eq!(font_cell_line_box("Courier New", 12.0, true, false, "Arial", 8.0, false), Some((22, 17)));
         assert_eq!(font_cell_line_box("Arial", 24.0, false, true, "Arial", 8.0, false), Some((41, 33)));
         assert_eq!(font_cell_line_box("Unmeasured", 12.0, false, false, "Arial", 8.0, false), None);
+    }
+
+    #[test]
+    fn half_point_and_large_sizes_share_the_normal_font_line() {
+        assert_eq!(font_cell_line_box("Arial", 12.5, false, false, "Aptos Narrow", 11.0, false).map(|line| line.0), Some(22));
+        assert_eq!(font_cell_line_box("Courier New", 9.5, true, true, "Arial", 8.0, false).map(|line| line.0), Some(18));
+        assert_eq!(font_cell_line_box("Times New Roman", 14.0, true, false, "Arial", 20.0, false).map(|line| line.0), Some(34));
+        assert_eq!(font_cell_line_box("Meiryo", 48.0, false, false, "Arial", 52.0, false).map(|line| line.0), Some(102));
+        assert_eq!(font_cell_line_box("Aptos Narrow", 72.0, false, false, "Arial", 80.0, false).map(|line| line.0), Some(136));
+        assert_eq!(font_cell_line_box("Arial", 72.0, false, false, "Arial", 120.0, false).map(|line| line.0), Some(199));
+    }
+
+    #[test]
+    fn a_row_shares_baselines_and_descents_across_cells() {
+        use super::font_row_line_box;
+        let height = |fonts: &[(&str, f32, bool, bool, bool)]| {
+            font_row_line_box("Arial", 8.0, fonts.iter().copied()).map(|line| line.0)
+        };
+        assert_eq!(height(&[
+            ("Arial", 12.0, false, false, false), ("Meiryo", 8.0, false, false, false),
+        ]), Some(23));
+        assert_eq!(height(&[
+            ("Arial", 12.0, false, false, true), ("Meiryo", 8.0, false, false, false),
+        ]), Some(19));
+        assert_eq!(height(&[
+            ("Meiryo", 72.0, false, false, true), ("Arial", 72.0, false, false, false),
+        ]), Some(146));
+        assert_eq!(height(&[
+            ("Times New Roman", 48.0, true, false, true), ("Arial", 48.0, true, false, false),
+        ]), Some(80));
+        assert_eq!(height(&[
+            ("Arial", 12.0, false, false, false), ("Arial", 72.0, false, false, true),
+            ("Arial", 12.0, false, false, false),
+        ]), Some(39));
     }
 }

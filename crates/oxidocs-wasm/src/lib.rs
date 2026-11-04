@@ -772,6 +772,25 @@ pub fn cell_row_height_px(
     ).map(|(height, _)| height)
 }
 
+
+/// One-line row height shared by VBA and the browser, in 96-dpi pixels.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn row_font_height_px(
+    normal_face: &str,
+    normal_size: f32,
+    cells: JsValue,
+) -> Result<Option<u16>, JsError> {
+    let cells: Vec<(String, f32, bool, bool, bool)> =
+        serde_wasm_bindgen::from_value(cells).map_err(|error| JsError::new(&error.to_string()))?;
+    Ok(oxicells_core::row_defaults::font_row_line_box(
+        normal_face, normal_size,
+        cells.iter().map(|(face, size, bold, italic, anchor)| {
+            (face.as_str(), *size, *bold, *italic, *anchor)
+        }),
+    ).map(|(height, _)| height))
+}
+
 /// Strikeout offset above the baseline and stroke thickness, in 96-dpi pixels.
 /// An unmeasured face returns an empty vector.
 #[cfg(feature = "suite")]
