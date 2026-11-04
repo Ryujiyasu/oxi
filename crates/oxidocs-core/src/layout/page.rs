@@ -2896,8 +2896,38 @@ impl<'a> PageLayouter<'a> {
                                         + l1
                                         > ft_top + if first_line_only { 0.0 } else { 0.1 }
                                 });
+                    // OXI_TABLE_FLOAT_CROSS (2026-11-04, default ON, opt-out _DISABLE): an
+                    // inline TABLE whose first row would cross the float's top goes
+                    // below the float, as a text line does (S1230). blind-J ja/
+                    // reports__7a8268ce p1: the «病院名…» form is a vertAnchor=text
+                    // float at 689..835; four empties end at 684 and the next block is
+                    // the 「１．t-PA…」 heading table (one 23pt row) -- Word starts it at
+                    // the top of p2 (36.0), Oxi drew it across the form's first row.
+                    let table_float_cross = !crate::env_flag!("OXI_TABLE_FLOAT_CROSS_DISABLE")
+                        && cursor.cursor_y < ft_top - 0.1
+                        && matches!(block, Block::Table(t) if t.style.position.is_none()
+                            && !t.rows.is_empty()
+                            && {
+                                let mut one = t.clone();
+                                one.rows.truncate(1);
+                                let mut rp: Vec<LayoutPage> = Vec::new();
+                                let mut re: Vec<LayoutElement> = Vec::new();
+                                let mut rc = LayoutCursor::new(start_y);
+                                let _ = self.layout_table(
+                                    &one, start_x, &mut rc, content_width, grid_pitch,
+                                    page.grid_char_pitch, page.grid_char_cw_ratio, start_y,
+                                    content_height, page.size.width, page.size.height,
+                                    &mut rp, &mut re, Some(block_idx), page, false, None, None,
+                                    0.0, 0.0, false, None,
+                                );
+                                let row_h = if rp.is_empty() { rc.cursor_y - start_y } else { 0.0 };
+                                row_h > 0.0 && cursor.cursor_y + row_h > ft_top + 0.1
+                            });
                     if s1509_keep && cursor.cursor_y < ft_bot {
                         // the empty line rides the lane; the region stays armed
+                    } else if table_float_cross {
+                        cursor.set(ft_bot);
+                        text_float_region = None;
                     } else if cursor.cursor_y >= ft_top - 0.1 && cursor.cursor_y < ft_bot {
                         cursor.set(ft_bot);
                         text_float_region = None;
