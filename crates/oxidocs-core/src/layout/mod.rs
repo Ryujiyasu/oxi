@@ -5195,7 +5195,11 @@ impl LayoutEngine {
 
         // Renderers consume RGB colors; OOXML highlight names are a palette,
         // not hexadecimal strings. Normalize at the shared rendering boundary.
-        if crate::env_flag!("OXI_HIGHLIGHT_COLORS") {
+        // OXI_HIGHLIGHT_COLORS (default ON since 2026-11-04, opt-out _DISABLE): the
+        // renderers parse the highlight as hex, so an unmapped name painted black --
+        // blind-J en/reference__0107980d's `w:highlight w:val="white"` runs came out
+        // as solid black bars over the text; Word draws them white on white.
+        if !crate::env_flag!("OXI_HIGHLIGHT_COLORS_DISABLE") {
             for page in &mut pages {
                 for element in &mut page.elements {
                     if let LayoutContent::Text { highlight, .. } = &mut element.content {
@@ -22992,6 +22996,19 @@ cells={} pitch={:.2} text={:?}",
                                             grid_char_pitch,
                                             grid_char_cw_ratio,
                                         );
+                                    } else if let Block::Image(img) = nb {
+                                        // OXI_NESTED_CELL_IMAGE_EST (2026-11-04, default ON,
+                                        // opt-out _DISABLE): an inline picture in a NESTED
+                                        // table's cell takes its line, as in an outer cell
+                                        // (S533). blind-J en/reference__0107980d: the header's
+                                        // 149.7pt logo sits in a nested table; Word starts the
+                                        // body below it (first baseline 202.2), Oxi measured
+                                        // the header table at 114.7 and the body ran 45pt high.
+                                        if img.position.is_none()
+                                            && !crate::env_flag!("OXI_NESTED_CELL_IMAGE_EST_DISABLE")
+                                        {
+                                            nc_h += self.s971_image_line_h(img, 1.0e6, table_grid_pitch, false);
+                                        }
                                     }
                                 }
                                 nr_h = nr_h.max(nc_h);
