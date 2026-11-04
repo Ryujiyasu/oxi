@@ -723,6 +723,21 @@ impl FontMetrics {
         )
     }
 
+    /// The face's own advance for `c` in em: the measured table first, then the
+    /// font catalog's full cmap for the same family. A calibrated entry added
+    /// for line metrics only (S1140/S1142: «UD デジタル 教科書体», «BIZ UD明朝»,
+    /// the HG faces) holds ASCII widths alone, so a CJK lookup in it misses.
+    pub fn own_width_em(&self, c: char) -> Option<f32> {
+        if let Some(w) = self.char_widths.get(&c) {
+            return Some(*w);
+        }
+        if crate::env_flag!("OXI_CATALOG_OWN_WIDTH_DISABLE") {
+            return None;
+        }
+        catalog::resolve(&self.family, false, false)
+            .and_then(|m| m.char_widths.get(&c).copied())
+    }
+
     /// Kana advances narrower than the em (a proportional-kana face such as
     /// UD デジタル 教科書体 NK or the P-faces), read off ト / ル / あ.
     pub fn has_proportional_kana(&self) -> bool {
@@ -2585,6 +2600,31 @@ pub fn vertical_presentation_form(ch: char) -> Option<char> {
 pub fn vertical_rotated_char(ch: char) -> bool {
     std::env::var_os("OXI_VERT_FORMS_DISABLE").is_none()
         && matches!(ch, '\u{30FC}' | '\u{301C}' | '\u{FF5E}' | '\u{FF0D}' | '\u{2212}' | '\u{2015}' | '\u{FF1D}')
+}
+
+/// OXI_UD_KYOKASHO_ALIAS (2026-11-02, default ON, opt-out _DISABLE): Windows
+/// renamed «UD デジタル 教科書体 N-R / N-B / NP-R / NP-B / NK-R / NK-B» to the
+/// families «… N / NP / NK» with Regular and Bold faces. A document saved under
+/// an old name finds no such family on a current machine and the renderers fell
+/// back to a thin Gothic; Word draws the new family at the suffix's weight
+/// (ja/administrative__0ba21b0c: 340 «NP-B» runs, Word's PDF glyphs are
+/// UD Digi Kyokasho NP Bold). Returns the family to draw and whether the suffix
+/// asks for bold, only when the old name is absent and the new one present.
+pub fn legacy_face_alias(name: &str) -> Option<(&'static str, bool)> {
+    if crate::env_flag!("OXI_UD_KYOKASHO_ALIAS_DISABLE") {
+        return None;
+    }
+    let (base, bold) = match name {
+        "UD デジタル 教科書体 N-R" => ("UD デジタル 教科書体 N", false),
+        "UD デジタル 教科書体 N-B" => ("UD デジタル 教科書体 N", true),
+        "UD デジタル 教科書体 NP-R" => ("UD デジタル 教科書体 NP", false),
+        "UD デジタル 教科書体 NP-B" => ("UD デジタル 教科書体 NP", true),
+        "UD デジタル 教科書体 NK-R" => ("UD デジタル 教科書体 NK", false),
+        "UD デジタル 教科書体 NK-B" => ("UD デジタル 教科書体 NK", true),
+        _ => return None,
+    };
+    (runtime::resolve(name, false, false).is_none() && runtime::resolve(base, bold, false).is_some())
+        .then_some((base, bold))
 }
 
 pub fn render_family_name(name: &str) -> &str {
