@@ -159,6 +159,10 @@ pub struct HeaderFooterRun {
     pub title_pg: bool,
     #[serde(default)]
     pub even_odd_hf: bool,
+    /// OXI_S1553_HF_BOXES: this section's header/footer text boxes (the same
+    /// variant codes as `Page::hf_text_boxes`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hf_text_boxes: Vec<(u8, TextBox)>,
 }
 
 /// Grid settings belonging to a range of blocks in a continuous section.
@@ -185,6 +189,10 @@ pub struct Page {
     /// the absolute value is already in `margin.top`.
     #[serde(default)]
     pub margin_top_negative: bool,
+    /// OXI_NEGBOTTOM_FOOTER: `w:pgMar/@bottom` was negative -- the body runs to
+    /// page height - |bottom| and the footer does not push it up.
+    #[serde(default)]
+    pub margin_bottom_negative: bool,
     /// Document grid line pitch in points (from w:docGrid w:linePitch).
     /// When set with grid_type "lines" or "linesAndChars", line spacing
     /// snaps to multiples of this pitch.
@@ -1287,6 +1295,22 @@ pub struct TextBox {
     /// its text sits in the ellipse's inscribed text rectangle.
     #[serde(default)]
     pub ellipse: bool,
+    /// OXI_TXBX_CALLOUT: a wedgeRectCallout / wedgeRoundRectCallout box —
+    /// [adj1, adj2, adj3] in 1/100000 (adj3 0 for the square-cornered one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callout: Option<[f32; 3]>,
+    /// OXI_TXBX_CMPD: the outline's compound type (a:ln@cmpd: dbl, thickThin,
+    /// thinThick, tri); None = a single line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_cmpd: Option<String>,
+    /// OXI_TXBX_SHADOW: a:outerShdw as (dx, dy, colour hex, alpha 0..1), the
+    /// offset in points (dist along dir, y down).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outer_shadow: Option<(f32, f32, String, f32)>,
+    /// OXI_TXBX_DASH: the outline's a:prstDash (dash, dashDot, sysDot, ...);
+    /// None = solid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_dash: Option<String>,
     /// Text inset left (in points, default 7.2pt = 91440 EMU)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset_left: Option<f32>,
@@ -1395,6 +1419,10 @@ pub struct VectorShape {
     /// M x y (move), L x y (line), C x1 y1 x2 y2 x y (cubic), Z (close).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub path: Vec<PathSeg>,
+    /// OXI_VML_GROUP_MEMBERS: a picture member (v:shape + v:imagedata) stretched
+    /// over the shape's box; None for drawn shapes.
+    #[serde(skip)]
+    pub image: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 /// One command of a `VectorShape::path` outline (coordinates normalized 0..1
@@ -1410,6 +1438,10 @@ pub enum PathSeg {
 /// A geometric shape (DrawingML or VML)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shape {
+    /// OXI_VML_PATH: a VML freeform's `path` outline, normalized 0..1 over its
+    /// `coordsize` (empty for preset / rect shapes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vml_path: Vec<PathSeg>,
     /// Text-wrap contour in normalized shape coordinates; may extend outside the shape.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wrap_polygon: Vec<(f32, f32)>,
