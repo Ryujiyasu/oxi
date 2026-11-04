@@ -1577,6 +1577,79 @@ unsafe fn weight_named_family<'a>(
     (font_family, None)
 }
 
+/// OXI_DW_GDI_FAMILY (2026-11-04, default ON, opt-out _DISABLE): a GDI family
+/// name DirectWrite lists under another family -- it re-groups legacy names
+/// around a style word, so «Eras Demi ITC» (ERASDEMI.TTF, name ID 1, no
+/// typographic names) is the Demi face of «Eras ITC» there and FindFamilyName
+/// misses it. Resolve it through GDI interop and draw that font's DirectWrite
+/// family at its own weight / stretch / style. blind-J en/policies__00cb6db7:
+/// «Letter-join 16» -> altName Eras Demi ITC (Word's PDF: ErasITC-Demi); Oxi laid
+/// it out in Eras Demi and DirectWrite drew a fallback face, thinner and narrower.
+unsafe fn gdi_named_family(
+    dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+    font_family: &str,
+) -> Option<(String, windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT,
+    windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH,
+    windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE)> {
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::Graphics::DirectWrite::*;
+    use windows::Win32::Graphics::Gdi::LOGFONTW;
+    type Hit = Option<(String, DWRITE_FONT_WEIGHT, DWRITE_FONT_STRETCH, DWRITE_FONT_STYLE)>;
+    thread_local! {
+        static SEEN: std::cell::RefCell<std::collections::HashMap<String, Hit>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if std::env::var_os("OXI_DW_GDI_FAMILY_DISABLE").is_some() || font_family.is_empty() {
+        return None;
+    }
+    if let Some(hit) = SEEN.with(|m| m.borrow().get(font_family).cloned()) {
+        return hit;
+    }
+    let lookup = || -> Hit {
+        if dwrite_knows_family(dwrite_factory, font_family) {
+            return None;
+        }
+        let interop = dwrite_factory.GetGdiInterop().ok()?;
+        let mut lf = LOGFONTW::default();
+        let wide: Vec<u16> = font_family.encode_utf16().collect();
+        if wide.len() >= lf.lfFaceName.len() {
+            return None;
+        }
+        lf.lfFaceName[..wide.len()].copy_from_slice(&wide);
+        lf.lfWeight = 400;
+        let font = interop.CreateFontFromLOGFONT(&lf).ok()?;
+        // GDI maps an unknown name to some other face: keep only an exact match.
+        let mut win32: Option<IDWriteLocalizedStrings> = None;
+        let mut exists = BOOL(0);
+        font.GetInformationalStrings(DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES, &mut win32, &mut exists).ok()?;
+        let read = |names: &IDWriteLocalizedStrings, i: u32| -> Option<String> {
+            let n = names.GetStringLength(i).ok()? as usize;
+            let mut buf = vec![0u16; n + 1];
+            names.GetString(i, &mut buf).ok()?;
+            Some(String::from_utf16_lossy(&buf[..n]))
+        };
+        let win32 = win32.filter(|_| exists.as_bool())?;
+        let matches = (0..win32.GetCount()).any(|i| read(&win32, i)
+            .is_some_and(|n| n.eq_ignore_ascii_case(font_family)));
+        if !matches {
+            return None;
+        }
+        let names = font.GetFontFamily().ok()?.GetFamilyNames().ok()?;
+        let mut idx = 0u32;
+        let mut found = BOOL(0);
+        let en: Vec<u16> = "en-us".encode_utf16().chain(std::iter::once(0)).collect();
+        let _ = names.FindLocaleName(windows::core::PCWSTR(en.as_ptr()), &mut idx, &mut found);
+        let fam = read(&names, if found.as_bool() { idx } else { 0 })?;
+        if fam.eq_ignore_ascii_case(font_family) {
+            return None;
+        }
+        Some((fam, font.GetWeight(), font.GetStretch(), font.GetStyle()))
+    };
+    let hit = lookup();
+    SEEN.with(|m| m.borrow_mut().insert(font_family.to_string(), hit.clone()));
+    hit
+}
+
 unsafe fn render_text(
     rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
     dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
@@ -1652,6 +1725,8 @@ unsafe fn render_text(
     // The face DirectWrite will actually draw (see `weight_named_family`); the
     // baseline below is measured on it, not on a fallback for the raw name.
     let (render_family, light_weight) = weight_named_family(dwrite_factory, font_family);
+    let gdi_family = if light_weight.is_none() { gdi_named_family(dwrite_factory, font_family) } else { None };
+    let render_family: &str = gdi_family.as_ref().map_or(render_family, |g| g.0.as_str());
     let ascent_bold = bold && light_weight.is_none();
     let table_ascent_on = std::env::var_os("OXI_DWRITE_TABLE_ASCENT_DISABLE").is_none();
     let y_pt = if is_vertical
@@ -1711,6 +1786,14 @@ unsafe fn render_text(
         Some(w) => (render_family, w, bold),
         None => (font_family, weight, false),
     };
+    let gdi_owned: String;
+    let (font_family, weight, gdi_stretch, gdi_style) = match gdi_family.clone() {
+        Some((fam, w, st, sy)) => {
+            gdi_owned = fam;
+            (&gdi_owned[..], if bold { DWRITE_FONT_WEIGHT_BOLD } else { w }, Some(st), Some(sy))
+        }
+        None => (font_family, weight, None, None),
+    };
     // OXI_UD_KYOKASHO_ALIAS: a renamed face drawn under its current family.
     let ud_alias = oxidocs_core::font::legacy_face_alias(font_family);
     let (font_family, weight) = match ud_alias {
@@ -1755,8 +1838,8 @@ unsafe fn render_text(
         PCWSTR(family_wide.as_ptr()),
         doc_coll.as_ref(),
         weight,
-        style,
-        DWRITE_FONT_STRETCH_NORMAL,
+        if italic { style } else { gdi_style.unwrap_or(style) },
+        gdi_stretch.unwrap_or(DWRITE_FONT_STRETCH_NORMAL),
         font_size_pt * PT_TO_DIP,
         PCWSTR(locale_wide.as_ptr()),
     )?;
