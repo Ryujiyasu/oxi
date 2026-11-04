@@ -11677,7 +11677,14 @@ cells={} pitch={:.2} text={:?}",
             // sections hid the bug: their top margin (81) exceeds the header
             // bottom, so the body top was margin-driven (the discriminator).
             // Latin scope (JP header calibration untouched).
-            let s813 = !self.doc_body_has_real_cjk && !crate::env_flag!("OXI_S813_DISABLE");
+            // OXI_S813_CJK (2026-11-04, default ON, opt-out _DISABLE): the same
+            // stack in CJK documents. blind-J ja/reports__75ebb654: the empty
+            // header paragraph (style beforeLines=50 = 6pt) -- Word's body top
+            // 74.96 = 48.2 + 6 + 20.76 on every page, Oxi 68.95 without the
+            // before; the probe's header arms (_pb_hdr_before_cjk_gen.py) wrote
+            // w:before under a style beforeLines and so never moved.
+            let s813 = (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_S813_CJK_DISABLE"))
+                && !crate::env_flag!("OXI_S813_DISABLE");
             let mut s813_first = true;
             let mut s813_prev_sa: Option<f32> = None;
             // S1392 (2026-09-13, opt-out OXI_S1392_DISABLE): contextualSpacing
