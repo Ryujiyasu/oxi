@@ -883,7 +883,9 @@ enum Paint {
 #[derive(Debug, Clone)]
 struct Protection {
     password: String,
+    password_verifier: Option<oxicells_core::ir::PasswordVerifier>,
     contents: bool,
+    scenarios: bool,
     drawing_objects: bool,
     user_interface_only: bool,
     allow_formatting_cells: bool,
@@ -899,7 +901,146 @@ struct Protection {
     allow_using_pivot_tables: bool,
 }
 
+
+fn legacy_sheet_password_hash(password: &str, page: Option<AnsiCodePage>) -> u16 {
+    let encoding = codepage::to_encoding_no_replacement(match page.unwrap_or(AnsiCodePage::Western) {
+        AnsiCodePage::Japanese => 932,
+        AnsiCodePage::Western => 1252,
+    }).expect("supported host code page");
+    let mut bytes = Vec::new();
+    for unit in password.encode_utf16() {
+        let Some(character) = char::from_u32(u32::from(unit)) else { bytes.push(b'?'); continue; };
+        let text = character.to_string();
+        let (encoded, _, unmappable) = encoding.encode(&text);
+        if unmappable { bytes.push(b'?'); } else { bytes.extend_from_slice(&encoded); }
+    }
+    let mut value = 0u16;
+    for byte in bytes.iter().rev() {
+        value = ((value >> 14) & 1) | ((value << 1) & 0x7fff);
+        value ^= u16::from(*byte);
+    }
+    value = ((value >> 14) & 1) | ((value << 1) & 0x7fff);
+    value ^ bytes.len() as u16 ^ 0xce4b
+}
+
+fn sheet_base64(value: &str) -> Option<Vec<u8>> {
+    let mut held = 0u32;
+    let mut bits = 0u32;
+    let mut output = Vec::new();
+    let mut padded = false;
+    for byte in value.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        if byte == b'=' { padded = true; continue; }
+        if padded { return None; }
+        let digit = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        held = (held << 6) | u32::from(digit);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            output.push((held >> bits) as u8);
+            held &= (1 << bits) - 1;
+        }
+    }
+    (held == 0).then_some(output)
+}
+
+fn iso_sheet_password_hash<D: sha2::Digest>(password: &str, salt: &[u8], spins: u32) -> Vec<u8> {
+    let mut initial = D::new();
+    initial.update(salt);
+    for unit in password.encode_utf16() { initial.update(unit.to_le_bytes()); }
+    let mut value = initial.finalize().to_vec();
+    for index in 0..spins {
+        let mut digest = D::new();
+        digest.update(&value);
+        digest.update(index.to_le_bytes());
+        value = digest.finalize().to_vec();
+    }
+    value
+}
+
+fn sheet_password_matches(verifier: &oxicells_core::ir::PasswordVerifier, password: &str, page: Option<AnsiCodePage>) -> bool {
+    if let Some(algorithm) = &verifier.algorithm {
+        let Some(salt) = verifier.salt.as_deref().and_then(sheet_base64) else { return false; };
+        let Some(expected) = verifier.hash.as_deref().and_then(sheet_base64) else { return false; };
+        let Some(spins) = verifier.iterations.filter(|spins| *spins <= 10_000_000) else { return false; };
+        if salt.len() > 65_536 { return false; }
+        let actual = match algorithm.to_ascii_uppercase().as_str() {
+            "SHA-256" => iso_sheet_password_hash::<sha2::Sha256>(password, &salt, spins),
+            "SHA-384" => iso_sheet_password_hash::<sha2::Sha384>(password, &salt, spins),
+            "SHA-512" => iso_sheet_password_hash::<sha2::Sha512>(password, &salt, spins),
+            _ => return false,
+        };
+        return actual.len() == expected.len()
+            && actual.iter().zip(expected).fold(0, |bits, (left, right)| bits | (*left ^ right)) == 0;
+    }
+    verifier.legacy_hash.is_some_and(|expected| legacy_sheet_password_hash(password, page) == expected)
+}
+
 impl Protection {
+    fn imported(sheet: &Sheet) -> Option<Self> {
+        if !sheet.protected && sheet.protection.is_none() { return None; }
+        let flags = sheet.protection.clone().unwrap_or_default();
+        Some(Self {
+            password: String::new(),
+            password_verifier: flags.password,
+            contents: sheet.protected,
+            drawing_objects: flags.drawing_objects,
+            scenarios: flags.scenarios,
+            user_interface_only: false,
+            allow_formatting_cells: flags.allow_formatting_cells,
+            allow_formatting_columns: flags.allow_formatting_columns,
+            allow_formatting_rows: flags.allow_formatting_rows,
+            allow_inserting_columns: flags.allow_inserting_columns,
+            allow_inserting_rows: flags.allow_inserting_rows,
+            allow_inserting_hyperlinks: flags.allow_inserting_hyperlinks,
+            allow_deleting_columns: flags.allow_deleting_columns,
+            allow_deleting_rows: flags.allow_deleting_rows,
+            allow_sorting: flags.allow_sorting,
+            allow_filtering: flags.allow_filtering,
+            allow_using_pivot_tables: flags.allow_using_pivot_tables,
+        })
+    }
+
+    fn active(&self) -> bool { self.contents || self.drawing_objects || self.scenarios }
+
+    fn saved_flags(&self, page: Option<AnsiCodePage>) -> oxicells_core::ir::SheetProtection {
+        oxicells_core::ir::SheetProtection {
+            drawing_objects: self.drawing_objects,
+            scenarios: self.scenarios,
+            allow_formatting_cells: self.allow_formatting_cells,
+            allow_formatting_columns: self.allow_formatting_columns,
+            allow_formatting_rows: self.allow_formatting_rows,
+            allow_inserting_columns: self.allow_inserting_columns,
+            allow_inserting_rows: self.allow_inserting_rows,
+            allow_inserting_hyperlinks: self.allow_inserting_hyperlinks,
+            allow_deleting_columns: self.allow_deleting_columns,
+            allow_deleting_rows: self.allow_deleting_rows,
+            allow_sorting: self.allow_sorting,
+            allow_filtering: self.allow_filtering,
+            allow_using_pivot_tables: self.allow_using_pivot_tables,
+            password: self.password_verifier.clone().or_else(|| (!self.password.is_empty()).then(|| {
+                oxicells_core::ir::PasswordVerifier {
+                    legacy_hash: Some(legacy_sheet_password_hash(&self.password, page)),
+                    ..Default::default()
+                }
+            })),
+        }
+    }
+
+    fn accepts_password(&self, offered: &str, page: Option<AnsiCodePage>) -> bool {
+        match &self.password_verifier {
+            Some(verifier) => sheet_password_matches(verifier, offered, page),
+            None => self.password.is_empty() || self.password == offered,
+        }
+    }
+
+
     /// Read off `Protect`'s arguments in their declared order: Password,
     /// DrawingObjects, Contents, Scenarios, UserInterfaceOnly, then the
     /// Allow flags -- FormattingCells, FormattingColumns, FormattingRows,
@@ -917,6 +1058,8 @@ impl Protection {
                 None | Some(Value::Missing) => String::new(),
                 Some(value) => shown_text(value, None),
             },
+            password_verifier: None,
+            scenarios: flag(3, true)?,
             drawing_objects: flag(1, true)?,
             contents: flag(2, true)?,
             user_interface_only: flag(4, false)?,
@@ -3625,6 +3768,7 @@ impl<'a> WorkbookHost<'a> {
             }))
         }).collect();
         Self::seed_compatibility_names(&mut workbook);
+        let protected = workbook.sheets.iter().map(Protection::imported).collect();
         let notes = notes_pinned_open(&workbook);
         let table_counter = last_table_number(&workbook);
         let threaded_notes = workbook.sheets.iter().enumerate().flat_map(|(sheet_index, sheet)| {
@@ -3703,7 +3847,7 @@ impl<'a> WorkbookHost<'a> {
                 column: 0,
             },
             screen_updating: true,
-            protected: Vec::new(),
+            protected,
             unlocked,
             hidden_formulas: std::collections::HashSet::new(),
             notes,
@@ -14536,6 +14680,7 @@ impl<'a> WorkbookHost<'a> {
             unsupported_elements: Vec::new(),
             hyperlinks: Vec::new(),
             protected: false,
+            protection: None,
             form_controls: Vec::new(),
             validations: Vec::new(),
             conditional_rules: Vec::new(),
@@ -22047,7 +22192,12 @@ impl<'a> WorkbookHost<'a> {
     /// worked out here -- only the breaks the text carries -- which is the
     /// one thing this falls short of Excel on.
     fn auto_fit_rows(&mut self, range: CellRange) -> Result<Value, String> {
-        self.fit_rows(range, false)
+        self.guard_row_formats(range.sheet, "AutoFit")?;
+        let result = self.fit_rows(range, false)?;
+        for row in &mut self.workbook.sheets[range.sheet].rows {
+            if (range.start_row..=range.end_row).contains(&row.index) { row.hidden = false; }
+        }
+        Ok(result)
     }
 
     fn fit_rows(&mut self, range: CellRange, preserve_vertical_height: bool) -> Result<Value, String> {
@@ -22094,6 +22244,7 @@ impl<'a> WorkbookHost<'a> {
             let mut px = base_px;
             let mut retained_px = base_px;
             let mut one_line_fonts = Vec::new();
+            let mut unmodeled_position = false;
             // A medium or thick rule along the top or the bottom of the row
             // takes a pixel of room each: measured, a row whose cell wears a
             // thick bottom border fits at 26 pixels, 19.5, where 25 is the
@@ -22158,12 +22309,39 @@ impl<'a> WorkbookHost<'a> {
                 let font_px = if lines == 1.0 { shared_line.unwrap_or(font_px) } else { font_px };
                 px = px.max(f32::from(font_px) * lines);
                 if lines == 1.0 {
-                    one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic, wrapped_anchor));
+                    if cell.style.font_position.is_some()
+                        || cell.runs.iter().any(|run| run.vert_align.as_deref()
+                            .is_some_and(|position| position != "baseline")) {
+                        unmodeled_position = true;
+                    }
+                    let text_units = cell_text_of(cell).len();
+                    if cell.runs.is_empty() || text_units == 0 {
+                        one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic, wrapped_anchor));
+                    } else {
+                        let mut covered_units = 0;
+                        for run in &cell.runs {
+                            if run.text.is_empty() { continue; }
+                            covered_units += run.text.encode_utf16().count();
+                            let run_face = if run.dressed {
+                                run.font_reference.as_ref().and_then(|font| font.latin_name.as_deref())
+                                    .or(run.font.as_deref()).unwrap_or(cell_face)
+                            } else { cell_face };
+                            let run_size = if run.dressed { run.size.unwrap_or(cell_size) } else { cell_size };
+                            let bold = if run.dressed { run.bold } else { cell.style.bold };
+                            let italic = if run.dressed { run.italic } else { cell.style.italic };
+                            one_line_fonts.push((run_face, run_size, bold, italic, wrapped_anchor));
+                        }
+                        if covered_units < text_units {
+                            one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic, wrapped_anchor));
+                        }
+                    }
                 } else {
                     retained_px = retained_px.max(f32::from(font_px) * lines);
                 }
             }
-            if let Some((height, _)) = font_row_line_box(&face, size, one_line_fonts) {
+            if unmodeled_position {
+                px = px.max(row.height.unwrap_or(sheet.default_row_height) / 0.75);
+            } else if let Some((height, _)) = font_row_line_box(&face, size, one_line_fonts) {
                 px = retained_px.max(f32::from(height));
             }
             px += f32::from(u8::from(thick_top)) + f32::from(u8::from(thick_bottom));
@@ -29076,7 +29254,9 @@ impl Host for WorkbookHost<'_> {
                     if self.protected.len() <= sheet {
                         self.protected.resize(sheet + 1, None);
                     }
-                    if self.protected[sheet].is_none() {
+                    if self.protected[sheet].as_ref().is_none_or(|held| !held.active()) {
+                        self.workbook.sheets[sheet].protected = asked.contents;
+                        self.workbook.sheets[sheet].protection = Some(asked.saved_flags(self.automation_code_page));
                         self.protected[sheet] = Some(asked);
                     }
                     return Ok(Some(Value::Empty));
@@ -29087,12 +29267,14 @@ impl Host for WorkbookHost<'_> {
                         Some(value) => shown_text(value, None),
                     };
                     if let Some(Some(held)) = self.protected.get(sheet) {
-                        if held.password != offered {
+                        if held.active() && !held.accepts_password(&offered, self.automation_code_page) {
                             return Err(
                                 "the password supplied is not correct for this sheet".to_string(),
                             );
                         }
                         self.protected[sheet] = None;
+                        self.workbook.sheets[sheet].protected = false;
+                        self.workbook.sheets[sheet].protection = None;
                     }
                     // A function to Excel: measured, CallByName of it is True
                     // where Protect, a Sub, is Empty.
@@ -31833,7 +32015,7 @@ impl Host for WorkbookHost<'_> {
             // A protected sheet guards its scenarios too, and an unprotected
             // one does not: measured, False and then True after Protect.
             if name.eq_ignore_ascii_case("protectscenarios") {
-                return Ok(Some(Value::Boolean(self.protected.get(sheet).and_then(Option::as_ref).is_some())));
+                return Ok(Some(Value::Boolean(self.protected.get(sheet).and_then(Option::as_ref).is_some_and(|held| held.scenarios))));
             }
             // What a sheet made here answers of the rest: measured, no
             // circular reference, xlSum (-4157) for consolidation, left to
@@ -34226,6 +34408,7 @@ impl Host for WorkbookHost<'_> {
                 };
                 self.set_range_style(range, |_, style| style.bold = value)?;
                 self.redress_runs(range, |dress| dress.bold = value);
+                self.refit_rows(range)?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("italic") {
@@ -34234,6 +34417,7 @@ impl Host for WorkbookHost<'_> {
                 };
                 self.set_range_style(range, |_, style| style.italic = value)?;
                 self.redress_runs(range, |dress| dress.italic = value);
+                self.refit_rows(range)?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("size") {
@@ -49535,6 +49719,7 @@ End Sub
                 unsupported_elements: Vec::new(),
                 hyperlinks: Vec::new(),
                 protected: false,
+                protection: None,
                 form_controls: Vec::new(),
                 validations: Vec::new(),
                 conditional_rules: Vec::new(),
@@ -60248,6 +60433,7 @@ End Function
             unsupported_elements: Vec::new(),
             hyperlinks: Vec::new(),
             protected: false,
+            protection: None,
             form_controls: Vec::new(),
             validations: Vec::new(),
             conditional_rules: Vec::new(),
@@ -60323,6 +60509,7 @@ End Function
             unsupported_elements: Vec::new(),
             hyperlinks: Vec::new(),
             protected: false,
+            protection: None,
             form_controls: Vec::new(),
             validations: Vec::new(),
             conditional_rules: Vec::new(),
@@ -68179,6 +68366,7 @@ End Function"#;
             unsupported_elements: Vec::new(),
             hyperlinks: Vec::new(),
             protected: false,
+            protection: None,
             form_controls: Vec::new(),
             validations: Vec::new(),
             conditional_rules: Vec::new(),
@@ -68445,6 +68633,7 @@ End Function"#;
             unsupported_elements: Vec::new(),
             hyperlinks: Vec::new(),
             protected: false,
+            protection: None,
             form_controls: Vec::new(),
             validations: Vec::new(),
             conditional_rules: Vec::new(),
@@ -68512,6 +68701,7 @@ End Function"#;
             unsupported_elements: Vec::new(),
             hyperlinks: Vec::new(),
             protected: false,
+            protection: None,
             form_controls: Vec::new(),
             validations: Vec::new(),
             conditional_rules: Vec::new(),
@@ -68651,6 +68841,7 @@ End Function"#;
             unsupported_elements: Vec::new(),
             hyperlinks: Vec::new(),
             protected: false,
+            protection: None,
             form_controls: Vec::new(),
             validations: Vec::new(),
             conditional_rules: Vec::new(),
@@ -75288,6 +75479,8 @@ End Function"#;
             for action in [
                 "Range(\"A1\").Font.Name = \"Meiryo\"",
                 "Range(\"A1\").Font.Size = 20",
+                "Range(\"A1\").Font.Bold = True",
+                "Range(\"A1\").Font.Italic = True",
                 "Rows(1).AutoFit",
                 "Columns(\"A:B\").AutoFit",
             ] {
@@ -75340,6 +75533,199 @@ End Function"#;
             let mut host = WorkbookHost::new(&mut book, 0).unwrap();
             assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
                 Value::Double(18.0), "{address}");
+        }
+    }
+
+
+    #[test]
+    fn font_weight_and_slant_refit_automatic_rows() {
+        for (face, size, property, value, expected) in [
+            ("Arial", 11.0, "Bold", true, 15.0),
+            ("Arial", 11.0, "Bold", false, 14.25),
+            ("Courier New", 8.0, "Italic", true, 12.0),
+            ("Courier New", 8.0, "Italic", false, 11.25),
+        ] {
+            for fixed in [false, true] {
+                let mut book = workbook();
+                book.default_style.font_name = Some("Arial".to_string());
+                book.default_style.font_size = Some(8.0);
+                book.default_style.font_reference = None;
+                book.sheets[0].rows.clear();
+                book.sheets[0].normal_font = Some(("Arial".to_string(), 8.0));
+                book.sheets[0].column_width_font = Some("Arial".to_string());
+                book.sheets[0].default_row_height = 11.25;
+                let before = if value { "False" } else { "True" };
+                let after = if value { "True" } else { "False" };
+                let pin = if fixed { "Rows(1).RowHeight = 30\n" } else { "" };
+                let module = parse_module(&format!(
+                    "Public Function Probe() As Double\n\
+                     Range(\"A1\").Font.Name = \"{face}\"\n\
+                     Range(\"A1\").Font.Size = {size}\n\
+                     Range(\"A1\").Font.{property} = {before}\n\
+                     Range(\"A1\").Value2 = \"M\"\n\
+                     Rows(1).AutoFit\n{pin}\
+                     Range(\"A1\").Font.{property} = {after}\n\
+                     Probe = Rows(1).RowHeight\nEnd Function\n"
+                )).unwrap();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                    Value::Double(if fixed { 30.0 } else { expected }));
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_character_sizes_fit_before_and_after_a_font_change() {
+        for (first, second) in [(12, 72), (72, 12)] {
+            for merged in [false, true] {
+                let mut book = workbook();
+                book.default_style.font_name = Some("Arial".to_string());
+                book.default_style.font_size = Some(8.0);
+                book.default_style.font_reference = None;
+                book.sheets[0].rows.clear();
+                book.sheets[0].normal_font = Some(("Arial".to_string(), 8.0));
+                book.sheets[0].column_width_font = Some("Arial".to_string());
+                book.sheets[0].default_row_height = 11.25;
+                let merge = if merged { "Range(\"A1:B1\").WrapText = True\nRange(\"A1:B1\").Merge\n" } else { "" };
+                let module = parse_module(&format!(
+                    "Public Function Probe() As Double\n\
+                     Range(\"A1:B1\").Font.Name = \"Arial\"\n\
+                     Range(\"A1:B1\").Font.Size = 12\n{merge}\
+                     Range(\"A1\").Font.Size = {first}\n\
+                     Range(\"A1\").Value2 = \"MM\"\n\
+                     Range(\"A1\").Characters(2, 1).Font.Size = {second}\n\
+                     Rows(1).AutoFit\n\
+                     Range(\"A1\").Font.Bold = True\n\
+                     Probe = Rows(1).RowHeight\nEnd Function\n"
+                )).unwrap();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                    Value::Double(if merged { 30.0 } else { 90.75 }));
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_auto_fit_unhides_but_a_font_change_does_not() {
+        let mut book = workbook();
+        book.default_style.font_name = Some("Arial".to_string());
+        book.default_style.font_size = Some(8.0);
+        book.default_style.font_reference = None;
+        book.sheets[0].rows.clear();
+        book.sheets[0].normal_font = Some(("Arial".to_string(), 8.0));
+        book.sheets[0].column_width_font = Some("Arial".to_string());
+        book.sheets[0].default_row_height = 11.25;
+        let module = parse_module(
+            "Public Function Probe() As Double\n\
+             Range(\"A1\").Font.Name = \"Arial\"\n\
+             Range(\"A1\").Font.Size = 11\n\
+             Range(\"A1\").Value2 = \"M\"\n\
+             Rows(1).Hidden = True\n\
+             Range(\"A1\").Font.Bold = True\n\
+             If Not Rows(1).Hidden Then\nProbe = -1\nExit Function\nEnd If\n\
+             Rows(1).AutoFit\n\
+             If Rows(1).Hidden Then\nProbe = -2\nElse\nProbe = Rows(1).RowHeight\nEnd If\n\
+             End Function\n"
+        ).unwrap();
+        let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+        assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(), Value::Double(15.0));
+    }
+
+
+    #[test]
+    fn row_autofit_permissions_keep_implicit_font_refits_separate() {
+        for (protection, blocked) in [
+            ("", false),
+            ("ActiveSheet.Protect AllowFormattingCells:=True", true),
+            ("ActiveSheet.Protect AllowFormattingCells:=True, AllowFormattingRows:=True", false),
+        ] {
+            for hidden in [false, true] {
+                let mut book = workbook();
+                book.default_style.font_name = Some("Arial".to_string());
+                book.default_style.font_size = Some(8.0);
+                book.default_style.font_reference = None;
+                book.sheets[0].rows.clear();
+                book.sheets[0].normal_font = Some(("Arial".to_string(), 8.0));
+                book.sheets[0].column_width_font = Some("Arial".to_string());
+                book.sheets[0].default_row_height = 11.25;
+                let hide = if hidden { "Rows(1).Hidden = True\n" } else { "" };
+                let module = parse_module(&format!(
+                    "Public Function Probe() As String\n\
+                     Range(\"A1\").Font.Name = \"Arial\"\n\
+                     Range(\"A1\").Font.Size = 11\n\
+                     Range(\"A1\").Value2 = \"M\"\n\
+                     Rows(1).AutoFit\n{hide}{protection}\n\
+                     Range(\"A1\").Font.Bold = True\n\
+                     Dim named As Double\nnamed = Rows(1).RowHeight\n\
+                     On Error Resume Next\nRows(1).AutoFit\n\
+                     Probe = CStr(named) & \"|\" & CStr(Err.Number) & \"|\" & \
+                     CStr(Rows(1).Hidden) & \"|\" & CStr(Rows(1).RowHeight)\nEnd Function\n"
+                )).unwrap();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                let still_hidden = blocked && hidden;
+                let expected = format!("{}|{}|{}|{}",
+                    if hidden { 0 } else { 15 }, if blocked { 1004 } else { 0 },
+                    if still_hidden { "True" } else { "False" },
+                    if still_hidden { 0 } else { 15 });
+                assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                    Value::String(expected), "blocked={blocked}, hidden={hidden}");
+            }
+        }
+    }
+
+
+    #[test]
+    fn saved_sheet_protection_reaches_fresh_vba_hosts() {
+        use std::io::{Cursor, Read, Write};
+        let original = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        for protection in [
+            "<sheetProtection sheet=\"1\" formatCells=\"0\"/>",
+            "<sheetProtection sheet=\"1\" formatCells=\"0\"></sheetProtection>",
+        ] {
+            let mut source = zip::ZipArchive::new(Cursor::new(original)).unwrap();
+            let mut target = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            for index in 0..source.len() {
+                let mut part = source.by_index(index).unwrap();
+                let name = part.name().to_string();
+                let mut bytes = Vec::new();
+                part.read_to_end(&mut bytes).unwrap();
+                if name == "xl/worksheets/sheet1.xml" {
+                    let text = String::from_utf8(bytes).unwrap();
+                    assert!(!text.contains("<sheetProtection"));
+                    bytes = text.replace("</sheetData>", &format!("</sheetData>{protection}")).into_bytes();
+                }
+                target.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                target.write_all(&bytes).unwrap();
+            }
+            let bytes = target.finish().unwrap().into_inner();
+            let mut book = oxicells_core::parse_xlsx(&bytes).unwrap();
+            let module = parse_module(
+                "Public Function FormatCell() As String\n\
+                 Range(\"A1\").Font.Bold = True\n\
+                 FormatCell = CStr(ActiveSheet.ProtectContents) & \"|\" & \
+                 CStr(ActiveSheet.Protection.AllowFormattingCells) & \"|\" & \
+                 CStr(ActiveSheet.Protection.AllowFormattingRows)\nEnd Function\n\
+                 Public Function FitRow() As Long\nOn Error Resume Next\n\
+                 Rows(1).AutoFit\nFitRow = Err.Number\nEnd Function\n\
+                 Public Function DropProtection() As Boolean\nActiveSheet.Unprotect\n\
+                 DropProtection = ActiveSheet.ProtectContents\nEnd Function\n"
+            ).unwrap();
+            {
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                assert_eq!(execute_with_host(&module, "FormatCell", vec![], &mut host).unwrap(),
+                    Value::String("True|True|False".to_string()));
+            }
+            let mut book: Workbook = serde_json::from_slice(&serde_json::to_vec(&book).unwrap()).unwrap();
+            {
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                assert_eq!(execute_with_host(&module, "FitRow", vec![], &mut host).unwrap(),
+                    Value::Integer(1004));
+                assert_eq!(execute_with_host(&module, "DropProtection", vec![], &mut host).unwrap(),
+                    Value::Boolean(false));
+            }
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            assert_eq!(execute_with_host(&module, "DropProtection", vec![], &mut host).unwrap(),
+                Value::Boolean(false));
         }
     }
 

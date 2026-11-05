@@ -580,6 +580,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "sha2",
  "ttf-parser",
  "typed-arena",
  "uuid",

@@ -3288,6 +3288,10 @@ function restore(built, side) {
   for (let i = built.cells.length - 1; i >= 0; i--) {
     const one = built.cells[i];
     put(one.row, one.col, one[side], side === 'was' ? one.wasStyle : one.nowStyle);
+    if (one.wasRuns) {
+      const cell = heldAt(one.row, one.col);
+      if (cell) cell.runs = structuredClone(side === 'was' ? one.wasRuns : one.nowRuns);
+    }
   }
   const sheet = sheetNow();
   // A merge belongs to the sheet it was made on, which need not be the one in
@@ -4686,7 +4690,7 @@ function edit(seed) {
 // Put the typed text into the sheet. Excel decides then and there whether it
 // is a number: `12` right-aligns, `12a` does not, and for most people that is
 // the only sign a column will add up.
-function put(row, col, text, style) {
+function put(row, col, text, style, runFontField = null) {
   const sheet = sheetNow();
   if (!sheet) return;
   const holding = heldAt(row, col);
@@ -4711,8 +4715,12 @@ function put(row, col, text, style) {
   // A fill hands over the style of the cell it copied from; everything else
   // leaves whatever the cell already wore.
   const nowStyle = style === undefined ? wasStyle : style;
-  if (before === text && sameStyle(wasStyle, nowStyle)) return;
-  if (step) step.cells.push({ row, col, was: before, now: text, wasStyle, nowStyle });
+  const runChange = runFontField && holding?.runs?.some(run => run.text
+    && Boolean(run.dressed ? run[runFontField] : wasStyle[runFontField]) !== !!nowStyle[runFontField]);
+  if (before === text && sameStyle(wasStyle, nowStyle) && !runChange) return;
+  const delta = { row, col, was: before, now: text, wasStyle, nowStyle };
+  if (style !== undefined && holding?.runs?.length) delta.wasRuns = structuredClone(holding.runs);
+  if (step) step.cells.push(delta);
   let line = sheet.rows.find((one) => one.index === row);
   if (!line) {
     line = { index: row, cells: [], height: null };
@@ -4741,6 +4749,15 @@ function put(row, col, text, style) {
   }
   if (style !== undefined) {
     cell.style = { ...style };
+    if (cell.runs?.length) {
+      const changed = ['bold', 'italic'].filter(name => name === runFontField || !!wasStyle[name] !== !!style[name]);
+      if (changed.length) cell.runs = cell.runs.map(run => {
+        const next = { ...run };
+        for (const name of changed) next[name] = !!style[name];
+        return next;
+      });
+      if (delta.wasRuns) delta.nowRuns = structuredClone(cell.runs);
+    }
     // Only the wide save path carries a cell's style, and it costs a crossing
     // of the whole workbook, so it is taken only when a style has actually
     // moved. Without it a filled date saves as the bare number underneath it.
@@ -4762,15 +4779,17 @@ function put(row, col, text, style) {
 /// `alter` is handed the row and column as well, because some changes depend
 /// on where in the selection a cell falls: an outline rules the top of the top
 /// row and nothing else.
-function restyle(alter) {
+function restyle(alter, runFontField = null) {
   change(() => eachInRegion((row, col) => {
     const held = heldAt(row, col);
     const was = held ? held.style : bandStyleAt(sheetNow(), row, col) || {};
     const now = alter(was, row, col);
-    if (sameStyle(was, now)) return;
+    const runChange = runFontField && held?.runs?.some(run => run.text
+      && Boolean(run.dressed ? run[runFontField] : was[runFontField]) !== !!now[runFontField]);
+    if (sameStyle(was, now) && !runChange) return;
     // Writing the text back unchanged is how the style rides in; put() knows
     // not to work the value out again when the text has not moved.
-    put(row, col, contentOf(held), now);
+    put(row, col, contentOf(held), now, runFontField);
   }));
   draw();
   paint();
@@ -4783,15 +4802,20 @@ function allWear(has) {
   eachInRegion((row, col) => {
     const held = heldAt(row, col);
     seen = true;
-    if (!has(held ? held.style : bandStyleAt(sheetNow(), row, col) || {})) all = false;
+    if (!has(held ? held.style : bandStyleAt(sheetNow(), row, col) || {}, held)) all = false;
   });
   return seen && all;
 }
 
 /** Turn a yes-or-no part of the style on, or off if it is on everywhere. */
 function toggle(name) {
-  const off = allWear((style) => Boolean(style[name]));
-  restyle((style) => ({ ...style, [name]: !off }));
+  const off = allWear((style, cell) => {
+    if ((name === 'bold' || name === 'italic') && cell?.runs?.length) {
+      return cell.runs.filter(run => run.text).every(run => Boolean(run.dressed ? run[name] : style[name]));
+    }
+    return Boolean(style[name]);
+  });
+  restyle((style) => ({ ...style, [name]: !off }), name === 'bold' || name === 'italic' ? name : null);
 }
 
 /** Line the selected cells up, or take an alignment away if it is set. */

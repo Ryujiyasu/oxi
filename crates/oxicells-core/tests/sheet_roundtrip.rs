@@ -47,6 +47,7 @@ fn blank_sheet(name: &str) -> Sheet {
         unsupported_elements: Vec::new(),
         hyperlinks: Vec::new(),
         protected: false,
+        protection: None,
         form_controls: Vec::new(),
         validations: Vec::new(),
         conditional_rules: Vec::new(),
