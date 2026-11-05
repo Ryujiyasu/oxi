@@ -10130,10 +10130,15 @@ cells={} pitch={:.2} text={:?}",
                     // elements grouped by y) and push one spec per line —
                     // space_before only on the paragraph's first line.
                     {
+                        let clnsp_ruby = !crate::env_flag!("OXI_CLNSP_RUBY_DISABLE");
+                        let line_key = |e: &LayoutElement| {
+                            let y = if clnsp_ruby { e.y - e.flow_line_offset } else { e.y };
+                            (y * 10.0).round() as i64
+                        };
                         let mut ys: Vec<i64> = para_elements
                             .iter()
                             .filter(|e| matches!(e.content, LayoutContent::Text { .. }))
-                            .map(|e| (e.y * 10.0).round() as i64)
+                            .map(line_key)
                             .collect();
                         ys.sort_unstable();
                         ys.dedup();
@@ -10160,7 +10165,41 @@ cells={} pitch={:.2} text={:?}",
                         } else {
                             (0.0, 0.0)
                         };
-                        for (li, _) in ys.iter().enumerate() {
+                        // OXI_CLNSP_RUBY (2026-11-06, default ON, opt-out _DISABLE): a ruby
+                        // annotation belongs to its base's line, and a ruby line that is not
+                        // exact grows above by the ruby's room (exact lines keep their box).
+                        // `_pb_txbx_ruby_gen.py` (slice of blind-J ja/administrative__
+                        // 1fc69a4f's «出張ういんぐ・関町» box, HG丸ｺﾞｼｯｸM-PRO 12, rt 6 raise
+                        // 11, compatLnSpc): Word's ruby line advances 20.52 auto (plain 15.6)
+                        // and 20.04 exact 400 with the base 16.0 under the line top; Oxi read
+                        // the annotation as the line's first element and drew the exact line
+                        // 11.15 low, and dropped the auto line's 4.92.
+                        let ruby_keys: Vec<i64> = if clnsp_ruby {
+                            para_elements
+                                .iter()
+                                .filter(|e| matches!(e.content, LayoutContent::Text { .. }) && e.flow_line_offset != 0.0)
+                                .map(line_key)
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        let ruby_exp = if ruby_keys.is_empty() {
+                            0.0
+                        } else {
+                            let default_style = RunStyle::default();
+                            let fs = self.resolve_font_size(
+                                para.runs.first().map(|r| &r.style).unwrap_or(&default_style),
+                                &para.style,
+                            );
+                            self.s1396_ruby_expansion(para, fs)
+                        };
+                        for (li, y0) in ys.iter().enumerate() {
+                            let next = ys.get(li + 1);
+                            let shadow = if ruby_keys.iter().any(|k| k >= y0 && next.map_or(true, |n| k < n)) {
+                                (shadow.0 + ruby_exp, shadow.1)
+                            } else {
+                                shadow
+                            };
                             clnsp_line_specs.push((
                                 para.style.line_spacing_rule.clone(),
                                 para.style.line_spacing,
@@ -10634,11 +10673,13 @@ cells={} pitch={:.2} text={:?}",
             }
             // group text elements into lines by y
             use std::collections::BTreeMap;
+            let clnsp_ruby = !crate::env_flag!("OXI_CLNSP_RUBY_DISABLE");
             let mut lines: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
             for (i, el) in elements.iter().enumerate() {
                 if matches!(el.content, LayoutContent::Text { .. }) {
+                    let y = if clnsp_ruby { el.y - el.flow_line_offset } else { el.y };
                     lines
-                        .entry((el.y * 10.0).round() as i64)
+                        .entry((y * 10.0).round() as i64)
                         .or_default()
                         .push(i);
                 }
@@ -10716,7 +10757,11 @@ cells={} pitch={:.2} text={:?}",
                     };
                     let (asc, desc) = (asc + sh_t, desc + sh_b);
                     let cur_base = {
-                        let i0 = idxs[0];
+                        let i0 = if clnsp_ruby {
+                            idxs.iter().copied().find(|&i| elements[i].flow_line_offset == 0.0).unwrap_or(idxs[0])
+                        } else {
+                            idxs[0]
+                        };
                         let (efs, fam) = match &elements[i0].content {
                             LayoutContent::Text {
                                 font_size,
