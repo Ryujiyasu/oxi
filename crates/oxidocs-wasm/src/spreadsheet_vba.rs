@@ -964,6 +964,20 @@ fn iso_sheet_password_hash<D: sha2::Digest>(password: &str, salt: &[u8], spins: 
     value
 }
 
+fn new_sheet_password_verifier(password: &str) -> Result<oxicells_core::ir::PasswordVerifier, String> {
+    let mut salt = [0u8; 16];
+    getrandom::getrandom(&mut salt)
+        .map_err(|_| "unable to create worksheet password protection".to_string())?;
+    let hash = iso_sheet_password_hash::<sha2::Sha512>(password, &salt, 100_000);
+    Ok(oxicells_core::ir::PasswordVerifier {
+        legacy_hash: None,
+        algorithm: Some("SHA-512".into()),
+        salt: Some(crate::base64_encode(&salt)),
+        hash: Some(crate::base64_encode(&hash)),
+        iterations: Some(100_000),
+    })
+}
+
 fn sheet_password_matches(verifier: &oxicells_core::ir::PasswordVerifier, password: &str, page: Option<AnsiCodePage>) -> bool {
     if let Some(algorithm) = &verifier.algorithm {
         let Some(salt) = verifier.salt.as_deref().and_then(sheet_base64) else { return false; };
@@ -1029,7 +1043,7 @@ impl Protection {
         ]
     }
 
-    fn saved_flags(&self, page: Option<AnsiCodePage>) -> oxicells_core::ir::SheetProtection {
+    fn saved_flags(&self) -> oxicells_core::ir::SheetProtection {
         oxicells_core::ir::SheetProtection {
             drawing_objects: self.drawing_objects,
             scenarios: self.scenarios,
@@ -1044,16 +1058,12 @@ impl Protection {
             allow_sorting: self.allow_sorting,
             allow_filtering: self.allow_filtering,
             allow_using_pivot_tables: self.allow_using_pivot_tables,
-            password: self.password_verifier.clone().or_else(|| (!self.password.is_empty()).then(|| {
-                oxicells_core::ir::PasswordVerifier {
-                    legacy_hash: Some(legacy_sheet_password_hash(&self.password, page)),
-                    ..Default::default()
-                }
-            })),
+            password: self.password_verifier.clone(),
         }
     }
 
     fn accepts_password(&self, offered: &str, page: Option<AnsiCodePage>) -> bool {
+        if !self.password.is_empty() { return self.password == offered; }
         match &self.password_verifier {
             Some(verifier) => sheet_password_matches(verifier, offered, page),
             None => self.password.is_empty() || self.password == offered,
@@ -29264,8 +29274,8 @@ impl Host for WorkbookHost<'_> {
                     return Ok(Some(self.object(HostObject::PageSetup(sheet))));
                 }
                 // Protect returns Empty. Repeating the same permissions is a
-                // no-op; changing them verifies and retains the existing
-                // password. Unprotect returns True and rejects a wrong password.
+                // no-op; changing them checks the current password before
+                // applying the new settings. Unprotect returns True.
                 if name.eq_ignore_ascii_case("protect") {
                     let mut asked = Protection::asked(args)?;
                     if self.protected.len() <= sheet {
@@ -29281,12 +29291,7 @@ impl Host for WorkbookHost<'_> {
                             if !held.accepts_password(&asked.password, self.automation_code_page) {
                                 return Err("the password supplied is not correct for this sheet".into());
                             }
-                            if asked.active() {
-                                if !held.password.is_empty() || held.password_verifier.is_some() {
-                                    asked.password = held.password.clone();
-                                    asked.password_verifier = held.password_verifier.clone();
-                                }
-                            } else {
+                            if !asked.active() {
                                 let mode = held.user_interface_only || asked.user_interface_only;
                                 asked = held.unprotected();
                                 asked.user_interface_only = mode;
@@ -29299,8 +29304,11 @@ impl Host for WorkbookHost<'_> {
                         asked.password.clear();
                         asked.password_verifier = None;
                     }
+                    if asked.active() && !asked.password.is_empty() && asked.password_verifier.is_none() {
+                        asked.password_verifier = Some(new_sheet_password_verifier(&asked.password)?);
+                    }
                     self.workbook.sheets[sheet].protected = asked.contents;
-                    self.workbook.sheets[sheet].protection = Some(asked.saved_flags(self.automation_code_page));
+                    self.workbook.sheets[sheet].protection = Some(asked.saved_flags());
                     self.protected[sheet] = Some(asked);
                     self.saved = false;
                     return Ok(Some(Value::Empty));
@@ -29317,7 +29325,7 @@ impl Host for WorkbookHost<'_> {
                             );
                         }
                         let free = held.unprotected();
-                        let flags = free.saved_flags(self.automation_code_page);
+                        let flags = free.saved_flags();
                         self.workbook.sheets[sheet].protected = false;
                         self.workbook.sheets[sheet].protection =
                             (flags != oxicells_core::ir::SheetProtection::default()).then_some(flags);
@@ -75753,7 +75761,7 @@ End Function"#;
              ActiveSheet.Protect \"pw\", DrawingObjects:=False, Scenarios:=False, AllowFormattingCells:=True, AllowFormattingRows:=True\n\
              Probe = CStr(ThisWorkbook.Saved) & \"|\" & CStr(ActiveSheet.ProtectDrawingObjects) & \"|\" & CStr(ActiveSheet.ProtectScenarios)"),
             Value::String("False|False|False".into()));
-        assert_eq!(book.sheets[0].protection.as_ref().unwrap().password, password);
+        assert_ne!(book.sheets[0].protection.as_ref().unwrap().password, password);
         let second = save(&first, &book);
         let mut book = oxicells_core::parse_xlsx(&second).unwrap();
         assert_eq!(run(&mut book,
@@ -75819,6 +75827,76 @@ End Function"#;
         assert_eq!(run(&mut reopened,
             "ActiveSheet.Unprotect \"added\"\nProbe = CStr(ActiveSheet.ProtectContents)"),
             Value::String("False".into()));
+    }
+
+    #[test]
+    fn new_sheet_passwords_remain_distinct_after_saving() {
+        let original = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        for (password, wrong) in [("aa", "ec"), ("😀", "😁")] {
+            let mut book = oxicells_core::parse_xlsx(original).unwrap();
+            let module = parse_module(&format!("Public Sub SetPassword()\nActiveSheet.Protect \"{password}\"\nEnd Sub\n")).unwrap();
+            {
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                execute_with_host(&module, "SetPassword", vec![], &mut host).unwrap();
+            }
+            let verifier = book.sheets[0].protection.as_ref().unwrap().password.as_ref().unwrap();
+            assert!(verifier.legacy_hash.is_none());
+            assert_eq!(verifier.algorithm.as_deref(), Some("SHA-512"));
+            assert_eq!(verifier.iterations, Some(100_000));
+            assert_eq!(super::sheet_base64(verifier.salt.as_deref().unwrap()).unwrap().len(), 16);
+            let mut editor = oxicells_core::XlsxEditor::new(original).unwrap();
+            editor.apply_workbook(&book).unwrap();
+            let saved = editor.save().unwrap();
+            let mut book = oxicells_core::parse_xlsx(&saved).unwrap();
+            for (offered, expected) in [(wrong, "1004|True"), (password, "0|False")] {
+                let module = parse_module(&format!(
+                    "Public Function DropPassword() As String\nOn Error Resume Next\n\
+                     ActiveSheet.Unprotect \"{offered}\"\n\
+                     DropPassword = CStr(Err.Number) & \"|\" & CStr(ActiveSheet.ProtectContents)\nEnd Function\n"
+                )).unwrap();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                assert_eq!(execute_with_host(&module, "DropPassword", vec![], &mut host).unwrap(), Value::String(expected.into()));
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_protection_reapplication_binds_the_new_unicode_password() {
+        let original = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        for (offered, wrong) in [("😀", "😁"), ("😁", "😀")] {
+            let mut book = oxicells_core::parse_xlsx(original).unwrap();
+            book.sheets[0].protected = true;
+            book.sheets[0].protection = Some(oxicells_core::ir::SheetProtection {
+                drawing_objects: true, scenarios: true,
+                password: Some(oxicells_core::ir::PasswordVerifier {
+                    legacy_hash: Some(52939), ..Default::default()
+                }),
+                ..Default::default()
+            });
+            let module = parse_module(&format!(
+                "Public Sub Reconfigure()\n\
+                 ActiveSheet.Protect \"{offered}\", DrawingObjects:=False, Scenarios:=False, AllowFormattingRows:=True\nEnd Sub\n"
+            )).unwrap();
+            {
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                host.automation_code_page = Some(AnsiCodePage::from_id(932).unwrap());
+                execute_with_host(&module, "Reconfigure", vec![], &mut host).unwrap();
+            }
+            let verifier = book.sheets[0].protection.as_ref().unwrap().password.as_ref().unwrap();
+            assert!(verifier.legacy_hash.is_none());
+            assert_eq!(verifier.algorithm.as_deref(), Some("SHA-512"));
+            let mut editor = oxicells_core::XlsxEditor::new(original).unwrap();
+            editor.apply_workbook(&book).unwrap();
+            let mut book = oxicells_core::parse_xlsx(&editor.save().unwrap()).unwrap();
+            for (password, expected) in [(wrong, "1004|True"), (offered, "0|False")] {
+                let module = parse_module(&format!(
+                    "Public Function DropPassword() As String\nOn Error Resume Next\nActiveSheet.Unprotect \"{password}\"\n\
+                     DropPassword = CStr(Err.Number) & \"|\" & CStr(ActiveSheet.ProtectContents)\nEnd Function\n"
+                )).unwrap();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                assert_eq!(execute_with_host(&module, "DropPassword", vec![], &mut host).unwrap(), Value::String(expected.into()));
+            }
+        }
     }
 
     #[test]
