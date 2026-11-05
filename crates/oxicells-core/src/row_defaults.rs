@@ -1208,6 +1208,7 @@ fn row_profile(face: &str, bold: bool, italic: bool) -> Option<&'static str> {
         else if face.eq_ignore_ascii_case("Yu Gothic") { "游ゴシック" }
         else if face.eq_ignore_ascii_case("MS PGothic") { "ＭＳ Ｐゴシック" }
         else if face.eq_ignore_ascii_case("MS Mincho") { "ＭＳ 明朝" }
+        else if face.eq_ignore_ascii_case("Aptos Display") { "Aptos Narrow" }
         else { face };
     let style = u8::from(bold) | (u8::from(italic) << 1);
     FONT_ROW_PROFILES.iter().find(|(held, flags, _)| {

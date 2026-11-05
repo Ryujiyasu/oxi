@@ -11691,6 +11691,7 @@ impl<'a> WorkbookHost<'a> {
                 dress.normalize_reference();
             })?;
             self.theme_fonts.remove(&at);
+            self.refit_rows(CellRange::single(at))?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("themecolor") || name.eq_ignore_ascii_case("tintandshade") {
@@ -11778,6 +11779,11 @@ impl<'a> WorkbookHost<'a> {
             if held || clear_position { self.refit_rows(CellRange::single(at))?; }
         } else {
             return Ok(false);
+        }
+        if ["name", "bold", "italic", "fontstyle"].iter()
+            .any(|property| name.eq_ignore_ascii_case(property))
+        {
+            self.refit_rows(CellRange::single(at))?;
         }
         Ok(true)
     }
@@ -78883,6 +78889,30 @@ End Sub
         let outcome=execute_workbook_action(reopened,read,Some("Act"),vec![],0,failure_context()).unwrap();
         assert!(outcome.error.is_none());
         assert_eq!(outcome.debug_output,["2\t2","12\t11","11\t11","409.5"]);
+    }
+
+    #[test]
+    fn partial_character_font_changes_refit_shared_rows() {
+        let mut workbook = workbook();
+        workbook.default_style.font_name = Some("Arial".into());
+        workbook.default_style.font_size = Some(8.0);
+        workbook.theme_fonts.major = Some("Aptos Display".into());
+        workbook.theme_fonts.major_latin = Some("Aptos Display".into());
+        let module = parse_module(r#"Public Sub Act()
+            Range("A1:A4").Value2 = "MM"
+            Range("A1:A4").Font.Name = "Arial"
+            Range("A1:A4").Font.Size = 12.1
+            Debug.Print Range("A1").RowHeight
+            Range("A1").Characters(1, 1).Font.Bold = True
+            Range("A2").Characters(2, 1).Font.FontStyle = "Bold"
+            Range("A3").Characters(1, 1).Font.Name = "游ゴシック"
+            Debug.Print Range("A1").RowHeight, Range("A2").RowHeight, Range("A3").RowHeight
+            Range("A4").Characters(1, 1).Font.ThemeFont = 1
+            Debug.Print Range("A4").RowHeight, Range("A4").Characters(1, 1).Font.Name
+            End Sub"#).unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        assert_eq!(host.take_debug_output(), ["15", "15.75\t15.75\t19.5", "15.75\tAptos Display"]);
     }
 
     #[test]
