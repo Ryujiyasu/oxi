@@ -6389,6 +6389,7 @@ impl<'a> PageLayouter<'a> {
                     // column the float + its 9pt distL eat; requires a real
                     // horizontal overlap so decorative off-column floats stay
                     // inert.
+                    super::BODY_BOTTOM_HINT.with(|b| b.set(start_y + content_height));
                     let (s758_para_band, s758_two_seg, wrap_advance) = self.body_paragraph_wrap_bands_after(
                         para, page, &s758_bands, current_page_idx,
                         cursor.cursor_y, prev_space_after, start_x, content_width,

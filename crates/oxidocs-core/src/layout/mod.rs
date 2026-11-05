@@ -3809,6 +3809,9 @@ thread_local! {
     /// (see the caller near break_into_lines) so the cap computation inside
     /// break_into_lines escalates the 約物 caps for the retry pass only.
     static S721_ORPHAN_RETRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// OXI_EMPTY_BAND_NO_PAGE: the body content bottom of the page being laid out,
+    /// set by the page loop before its wrap-band queries (INFINITY = unknown).
+    pub(crate) static BODY_BOTTOM_HINT: std::cell::Cell<f32> = const { std::cell::Cell::new(f32::INFINITY) };
     /// S1026 replay diagnostic (2026-07-28): the body paragraph index, set by
     /// layout_paragraph around its body break_into_lines calls so the DIAGNOSTIC
     /// `[S1026-REPLAY]` trace (OXI_DBG_REPLAY, default off) can tag each break
@@ -13656,6 +13659,22 @@ cells={} pitch={:.2} text={:?}",
                 };
                 advance += step;
                 line_top = cursor_y + advance + before;
+            }
+            // OXI_EMPTY_BAND_NO_PAGE (2026-11-05, default ON, opt-out _DISABLE): an
+            // all-whitespace paragraph is not carried past the page bottom by a wrap
+            // band -- it stays where it is (nothing to collide with, and its own
+            // anchored floats would move with it). blind-J en/creative__045bc787: the
+            // only body paragraph (empty, Header style, 47.6pt line) anchors three
+            // square boxes (paragraph-relative, 646.5 / 564.75 / 32.25pt); Word keeps it
+            // and its boxes on p1, Oxi stepped it below Box2 to 702.7, where the line no
+            // longer fit, and put it and every box on p2 (W1/O2).
+            if advance > 0.0
+                && !crate::env_flag!("OXI_EMPTY_BAND_NO_PAGE_DISABLE")
+                && para.runs.iter().all(|r| r.text.chars().all(char::is_whitespace))
+                && cursor_y + advance + line_height
+                    > BODY_BOTTOM_HINT.with(|b| b.get()).min(page.size.height - page.margin.bottom) + 0.01
+            {
+                advance = 0.0;
             }
             if crate::env_flag!("OXI_DBG_WRAP_INTERSECTION") {
                 eprintln!("[WRAP_INTERSECTION] y={} before={} lh={} advance={} bands={:?} text={:?}",
