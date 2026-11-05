@@ -22307,7 +22307,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn fit_rows(&mut self, range: CellRange, preserve_vertical_height: bool) -> Result<Value, String> {
-        use oxicells_core::row_defaults::{font_cell_line_box, font_default_row_px, font_line_box, font_decorated_text_row_height, font_run_line_box};
+        use oxicells_core::row_defaults::{font_cell_line_box, font_default_row_px, font_line_box, font_decorated_text_row_height};
         let sheet_index = range.sheet;
         // A formula written a moment ago is fitted by its answer: measured,
         // =REPT("ab ",10) set to wrap asks four lines.
@@ -22330,7 +22330,9 @@ impl<'a> WorkbookHost<'a> {
             }
         };
         let default_px = self.workbook.sheets[sheet_index].default_row_height / 0.75;
-        let base_px = font_default_row_px(&face, size).map(f32::from).unwrap_or(default_px);
+        let base_px = font_decorated_text_row_height(&face, size, std::iter::empty())
+            .or_else(|| font_default_row_px(&face, size))
+            .map(f32::from).unwrap_or(default_px);
         // The room a wrapped cell's text has in each column: its pixels less
         // five, measured as for what a cell shows.
         let rooms: std::collections::BTreeMap<u32, u32> = self.workbook.sheets[sheet_index]
@@ -22352,6 +22354,7 @@ impl<'a> WorkbookHost<'a> {
             let mut one_line_fonts = Vec::new();
             let mut unmodeled_line = false;
             let mut accounting_in_row = false;
+            let mut position_in_row = false;
             let is_accounting = |kind| matches!(kind,
                 Some(oxicells_core::ir::CellUnderlineKind::SingleAccounting
                     | oxicells_core::ir::CellUnderlineKind::DoubleAccounting));
@@ -22429,11 +22432,7 @@ impl<'a> WorkbookHost<'a> {
                     let cell_position = cell.style.font_position.map(|position| position.as_str());
                     let text_units = cell_text_of(cell).len();
                     if cell.runs.is_empty() || text_units == 0 {
-                        if cell_position.is_some() && font_run_line_box(
-                            cell_face, cell_size, cell.style.bold, cell.style.italic, cell_position,
-                        ).is_none() {
-                            unmodeled_line = true;
-                        }
+                        position_in_row |= cell_position.is_some_and(|position| position != "baseline");
                         one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic,
                             wrapped_anchor, cell_position, lines as u32, cell_underline));
                     } else {
@@ -22449,22 +22448,14 @@ impl<'a> WorkbookHost<'a> {
                             let bold = if run.dressed { run.bold } else { cell.style.bold };
                             let italic = if run.dressed { run.italic } else { cell.style.italic };
                             let position = if run.dressed { run.vert_align.as_deref() } else { cell_position };
-                            if position.is_some() && font_run_line_box(
-                                run_face, run_size, bold, italic, position,
-                            ).is_none() {
-                                unmodeled_line = true;
-                            }
+                            position_in_row |= position.is_some_and(|position| position != "baseline");
                             let underline = if run.dressed {
                                 run.underline_kind.filter(|_| run.underline)
                             } else { cell_underline };
                             one_line_fonts.push((run_face, run_size, bold, italic, wrapped_anchor, position, 1, underline));
                         }
                         if covered_units < text_units {
-                            if cell_position.is_some() && font_run_line_box(
-                                cell_face, cell_size, cell.style.bold, cell.style.italic, cell_position,
-                            ).is_none() {
-                                unmodeled_line = true;
-                            }
+                            position_in_row |= cell_position.is_some_and(|position| position != "baseline");
                             one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic,
                                 wrapped_anchor, cell_position, lines as u32, cell_underline));
                         }
@@ -22481,7 +22472,7 @@ impl<'a> WorkbookHost<'a> {
                 px = px.max(row.height.unwrap_or(sheet.default_row_height) / 0.75);
             } else if let Some(height) = font_decorated_text_row_height(&face, size, one_line_fonts) {
                 px = retained_px.max(f32::from(height));
-            } else if accounting_in_row {
+            } else if accounting_in_row || position_in_row {
                 px = px.max(row.height.unwrap_or(sheet.default_row_height) / 0.75);
             }
             px += f32::from(u8::from(thick_top)) + f32::from(u8::from(thick_bottom));
@@ -78938,6 +78929,59 @@ End Sub
         let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
         execute_with_host(&module, "Act", vec![], &mut host).unwrap();
         assert_eq!(host.take_debug_output(), ["15", "15.75\t15.75\t19.5", "15.75\tAptos Display", "17.25", "17.25\t4"]);
+    }
+
+
+    #[test]
+    fn tiny_script_rows_keep_minima_and_requested_font_names() {
+        let mut workbook = workbook();
+        workbook.default_style.font_name = Some("Arial".into());
+        workbook.default_style.font_size = Some(1.0);
+        let module = parse_module(r#"Public Sub Act()
+            Range("A1:A2").Value2 = "M"
+            Range("A1").Font.Name = "Meiryo"
+            Range("A1").Font.Size = 4.5
+            Range("A2").Font.Name = "メイリオ"
+            Range("A2").Font.Size = 4.5
+            Range("A3:B3").Value2 = "M"
+            Range("A3").Font.Name = "Arial"
+            Range("A3").Font.Size = 3.75
+            Range("A3").Font.Superscript = True
+            Range("B3").Font.Name = "メイリオ"
+            Range("B3").Font.Size = 4.5
+            Range("B3").Font.Subscript = True
+            Range("A4").Value2 = "MM"
+            Range("A4").Font.Name = "Arial"
+            Range("A4").Font.Size = 12.1
+            Range("A4").Characters(1, 1).Font.Superscript = True
+            Debug.Print Range("A1").RowHeight, Range("A2").RowHeight, Range("A3").RowHeight, Range("A4").RowHeight
+            End Sub"#).unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        assert_eq!(host.take_debug_output(), ["6.75\t7.5\t7.5\t18"]);
+    }
+
+
+    #[test]
+    fn manual_script_edits_wait_for_explicit_autofit() {
+        let mut workbook = workbook();
+        workbook.default_style.font_name = Some("Arial".into());
+        workbook.default_style.font_size = Some(8.0);
+        let module = parse_module(r#"Public Sub Act()
+            Range("A1:A2").Value2 = "MM"
+            Range("A1:A2").Font.Name = "Arial"
+            Range("A1:A2").Font.Size = 12.1
+            Range("A1").RowHeight = 10
+            Range("A2").RowHeight = 33
+            Range("A1").Characters(1, 1).Font.Superscript = True
+            Range("A2").Characters(1, 1).Font.Superscript = True
+            Debug.Print Range("A1").RowHeight, Range("A2").RowHeight
+            Range("A1:A2").EntireRow.AutoFit
+            Debug.Print Range("A1").RowHeight, Range("A2").RowHeight
+            End Sub"#).unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        assert_eq!(host.take_debug_output(), ["10\t33", "18\t18"]);
     }
 
     #[test]
