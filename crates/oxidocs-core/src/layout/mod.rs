@@ -10116,6 +10116,16 @@ cells={} pitch={:.2} text={:?}",
                             .collect();
                         ys.sort_unstable();
                         ys.dedup();
+                        // OXI_CLNSP_LINE_TOL (2026-11-05, default ON, opt-out _DISABLE): a
+                        // line's elements may sit at slightly different y (a Symbol-face
+                        // bullet 0.9pt above its text); count y values within 3pt as one
+                        // line. blind-J en/creative__045bc787's side box (bullets, before
+                        // 10 from docDefaults): every item read as one line more, the
+                        // per-line specs slid, and each «before» landed inside the next
+                        // item («Proof of successful | completion» +10, «Hair Stylist» +23).
+                        if !crate::env_flag!("OXI_CLNSP_LINE_TOL_DISABLE") {
+                            ys.dedup_by(|b, a| *b - *a < 30);
+                        }
                         let n_lines = ys.len();
                         if n_lines == 0 && clnsp_empty_on {
                             // the previous text line's after (passed in as
