@@ -108,6 +108,8 @@ pub struct XlsxEditor {
     /// Sheets whose tab colour is being set. `Some(hex)` paints it, `None`
     /// takes any colour away. Keyed by the sheet's origin index.
     tab_colors: HashMap<usize, Option<String>>,
+    /// Changed worksheet protection, keyed by the original sheet identity.
+    sheet_protection: HashMap<usize, (bool, Option<crate::ir::SheetProtection>)>,
     /// What the workbook's sheets should end up as, when they are changing.
     sheet_plan: Option<Vec<PlannedSheet>>,
     /// The names the workbook should end up keeping, when they have changed.
@@ -208,6 +210,7 @@ impl XlsxEditor {
             conditional_rules: HashMap::new(),
             hyperlinks: HashMap::new(),
             tab_colors: HashMap::new(),
+            sheet_protection: HashMap::new(),
             sheet_plan: None,
             name_plan: None,
             name_attributes_plan: None,
@@ -623,6 +626,9 @@ impl XlsxEditor {
                     self.threaded_comment_additions.entry(index).or_default().push(addition);
                 }
             }
+            if before.protected != after.protected || before.protection != after.protection {
+                self.sheet_protection.insert(index, (after.protected, after.protection.clone()));
+            }
             if before.tab_color != after.tab_color {
                 self.tab_colors.insert(index, after.tab_color.clone());
             }
@@ -844,6 +850,7 @@ impl XlsxEditor {
             || !self.conditional_rules.is_empty()
             || !self.hyperlinks.is_empty()
             || !self.tab_colors.is_empty()
+            || !self.sheet_protection.is_empty()
             || self.sheet_plan.is_some()
             || self.name_plan.is_some()
             || self.calculation_plan.is_some()
@@ -1566,6 +1573,8 @@ impl XlsxEditor {
                     .iter()
                     .position(|part| *part == name)
                     .and_then(|origin| self.tab_colors.get(&origin));
+                let protection_change = sheet_paths_by_index.iter().position(|part| *part == name)
+                    .and_then(|origin| self.sheet_protection.get(&origin));
                 let default_width = sheet_paths_by_index.iter().position(|part| *part == name)
                     .and_then(|origin| self.default_col_width.get(&origin)).copied();
                 let validation_change = sheet_paths_by_index.iter().position(|part| *part == name)
@@ -1577,6 +1586,9 @@ impl XlsxEditor {
                     entry.read_to_string(&mut xml)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     let mut patched = patch_worksheet_xml(&xml, sheet_edits)?;
+                    if let Some((contents, flags)) = protection_change {
+                        patched = set_sheet_protection_in_worksheet(&patched, *contents, flags.as_ref())?;
+                    }
                     if let Some((origin, rules)) = validation_change {
                         patched = patch_data_validations_xml(&patched, &self.workbook.sheets[origin].validations, rules)?;
                     }
@@ -1608,11 +1620,14 @@ impl XlsxEditor {
                     }
                     writer.write_all(patched.as_bytes())
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                } else if colour_change.is_some() || default_width.is_some() || legacy_edits.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_legacy_drawing.contains_key(&name) || drawing_package.ole_anchors.contains_key(&name) || drawing_package.worksheet_ole_objects.contains_key(&name) {
+                } else if protection_change.is_some() || colour_change.is_some() || default_width.is_some() || legacy_edits.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_legacy_drawing.contains_key(&name) || drawing_package.ole_anchors.contains_key(&name) || drawing_package.worksheet_ole_objects.contains_key(&name) {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     let mut recoloured = xml;
+                    if let Some((contents, flags)) = protection_change {
+                        recoloured = set_sheet_protection_in_worksheet(&recoloured, *contents, flags.as_ref())?;
+                    }
                     if let Some(colour) = colour_change { recoloured = set_tab_color_in_worksheet(&recoloured, colour); }
                     if let Some(width) = default_width { recoloured = patch_default_column_width(&recoloured, width)?; }
                     if let Some(rid) = legacy_edits.worksheet_drawing.get(&name) {
@@ -10238,7 +10253,8 @@ fn write_new_sheet(
     let edits: HashMap<_,_> = sheet.rows.iter().flat_map(|row|row.cells.iter().filter_map(move |cell|edit_for(cell,row.index,multiple).map(|value|((row.index,cell.col),value)))).collect();
     let refs=edits.iter().map(|(at,value)|(*at,value)).collect();
     let rich = crate::rich_text::patch(std::str::from_utf8(&part).map_err(|error|XlsxError::InvalidData(error.to_string()))?, &refs)?;
-    patch_data_validations_xml(&rich, &[], &sheet.validations).map(String::into_bytes)
+    let protected = set_sheet_protection_in_worksheet(&rich, sheet.protected, sheet.protection.as_ref())?;
+    patch_data_validations_xml(&protected, &[], &sheet.validations).map(String::into_bytes)
 }
 
 /// Serialize filter criteria for a table part or another spreadsheet container.
@@ -10828,6 +10844,82 @@ fn set_tab_color_in_worksheet(xml: &str, colour: &Option<String>) -> String {
     }
 }
 
+
+/// Replace only the worksheet's direct protection child, preserving unrelated
+/// cells, extension payloads and protection attributes not represented in IR.
+fn set_sheet_protection_in_worksheet(
+    xml: &str,
+    contents: bool,
+    protection: Option<&crate::ir::SheetProtection>,
+) -> Result<String, XlsxError> {
+    if !contents && protection.is_none() {
+        return replace_direct_xml_child(xml, "sheetProtection", None);
+    }
+    let flags = protection.cloned().unwrap_or_default();
+    let (existing, _, _, root) = direct_xml_child(xml, "sheetProtection")?;
+    let mut attributes = String::new();
+    let known = [
+        "sheet", "objects", "scenarios", "formatCells", "formatColumns", "formatRows",
+        "insertColumns", "insertRows", "insertHyperlinks", "deleteColumns", "deleteRows",
+        "sort", "autoFilter", "pivotTables", "password", "algorithmName", "saltValue",
+        "hashValue", "spinCount",
+    ];
+    if let Some((start, end)) = existing {
+        let mut reader = Reader::from_str(&xml[start..end]);
+        if let Event::Start(element) | Event::Empty(element) = reader.read_event().map_err(XlsxError::Xml)? {
+            for attribute in element.attributes() {
+                let attribute = attribute.map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                let name = std::str::from_utf8(attribute.key.as_ref())
+                    .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                if !known.contains(&name) {
+                    let value = attribute.decode_and_unescape_value(reader.decoder())
+                        .map_err(XlsxError::Xml)?;
+                    attributes.push_str(&format!(" {name}=\"{}\"", escape(&value)));
+                }
+            }
+        }
+    }
+    for (name, enabled) in [("sheet", contents), ("objects", flags.drawing_objects), ("scenarios", flags.scenarios)] {
+        if enabled { attributes.push_str(&format!(" {name}=\"1\"")); }
+    }
+    for (name, allowed) in [
+        ("formatCells", flags.allow_formatting_cells),
+        ("formatColumns", flags.allow_formatting_columns),
+        ("formatRows", flags.allow_formatting_rows),
+        ("insertColumns", flags.allow_inserting_columns),
+        ("insertRows", flags.allow_inserting_rows),
+        ("insertHyperlinks", flags.allow_inserting_hyperlinks),
+        ("deleteColumns", flags.allow_deleting_columns),
+        ("deleteRows", flags.allow_deleting_rows),
+        ("sort", flags.allow_sorting),
+        ("autoFilter", flags.allow_filtering),
+        ("pivotTables", flags.allow_using_pivot_tables),
+    ] {
+        if allowed { attributes.push_str(&format!(" {name}=\"0\"")); }
+    }
+    if let Some(password) = &flags.password {
+        if let Some(hash) = password.legacy_hash { attributes.push_str(&format!(" password=\"{hash:04X}\"")); }
+        for (name, value) in [("algorithmName", &password.algorithm), ("saltValue", &password.salt), ("hashValue", &password.hash)] {
+            if let Some(value) = value { attributes.push_str(&format!(" {name}=\"{}\"", escape(value))); }
+        }
+        if let Some(iterations) = password.iterations { attributes.push_str(&format!(" spinCount=\"{iterations}\"")); }
+    }
+    if attributes.is_empty() {
+        return replace_direct_xml_child(xml, "sheetProtection", None);
+    }
+    let name = root.rsplit_once(':').map(|(prefix, _)| format!("{prefix}:sheetProtection"))
+        .unwrap_or_else(|| "sheetProtection".into());
+    let element = format!("<{name}{attributes}/>");
+    set_worksheet_drawing_child(xml, "sheetProtection", &element, &[
+        "protectedRanges", "scenarios", "autoFilter", "sortState", "dataConsolidate",
+        "customSheetViews", "mergeCells", "phoneticPr", "conditionalFormatting",
+        "dataValidations", "hyperlinks", "printOptions", "pageMargins", "pageSetup",
+        "headerFooter", "rowBreaks", "colBreaks", "customProperties", "cellWatches",
+        "ignoredErrors", "smartTags", "drawing", "legacyDrawing", "legacyDrawingHF",
+        "drawingHF", "picture", "oleObjects", "controls", "webPublishItems", "tableParts", "extLst",
+    ])
+}
+
 /// A `<sheetPr>` body with any `<tabColor>` taken out.
 fn remove_tab_color(body: &str) -> String {
     let Some(at) = body.find("<tabColor") else {
@@ -11352,6 +11444,77 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn worksheet_protection_survives_save_reorder_copy_and_removal() {
+        let bytes = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let mut book = crate::parse_xlsx_preserving_values(bytes).unwrap();
+        let flags = crate::ir::SheetProtection {
+            drawing_objects: true, scenarios: true,
+            allow_formatting_cells: true, allow_formatting_rows: true,
+            password: Some(crate::ir::PasswordVerifier { legacy_hash: Some(0x1234), ..Default::default() }),
+            ..Default::default()
+        };
+        book.sheets[0].protected = true;
+        book.sheets[0].protection = Some(flags.clone());
+        let mut editor = super::XlsxEditor::new(bytes).unwrap();
+        editor.apply_workbook(&book).unwrap();
+        assert!(editor.has_edits());
+        let saved = editor.save().unwrap();
+        let mut restored = crate::parse_xlsx_preserving_values(&saved).unwrap();
+        assert!(restored.sheets[0].protected);
+        assert_eq!(restored.sheets[0].protection.as_ref(), Some(&flags));
+        let mut unchanged = super::XlsxEditor::new(&saved).unwrap();
+        unchanged.apply_workbook(&restored).unwrap();
+        assert_eq!(unchanged.save().unwrap(), saved);
+
+        let mut copy = restored.sheets[0].clone();
+        copy.origin_id = None;
+        copy.name = "Protected copy".into();
+        restored.sheets[0].protected = false;
+        restored.sheets[0].protection = None;
+        restored.sheets.insert(0, copy);
+        let mut editor = super::XlsxEditor::new(&saved).unwrap();
+        editor.apply_workbook(&restored).unwrap();
+        let copied = editor.save().unwrap();
+        let restored = crate::parse_xlsx_preserving_values(&copied).unwrap();
+        assert_eq!(restored.sheets[0].name, "Protected copy");
+        assert!(restored.sheets[0].protected);
+        assert_eq!(restored.sheets[0].protection.as_ref(), Some(&flags));
+        assert!(!restored.sheets[1].protected);
+        assert!(restored.sheets[1].protection.is_none());
+        assert_eq!(restored.sheets[0].rows.len(), restored.sheets[1].rows.len());
+    }
+
+    #[test]
+    fn worksheet_protection_keeps_namespace_order_and_extension_payloads() {
+        let flags = crate::ir::SheetProtection { allow_formatting_rows: true, ..Default::default() };
+        for prefix in ["", "s:"] {
+            let namespace = if prefix.is_empty() { "xmlns" } else { "xmlns:s" };
+            for expanded in [false, true] {
+                let protection = if expanded {
+                    format!("<{prefix}sheetProtection sheet=\"1\" selectLockedCells=\"1\"></{prefix}sheetProtection>")
+                } else {
+                    format!("<{prefix}sheetProtection sheet=\"1\" selectLockedCells=\"1\"/>")
+                };
+                let extension = "<extLst><ext uri=\"test\"><item xmlns=\"urn:extension\">untouched</item></ext></extLst>";
+                let xml = format!("<{prefix}worksheet {namespace}=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><{prefix}sheetData/><{prefix}sheetCalcPr/>{protection}<{prefix}protectedRanges/>{extension}</{prefix}worksheet>");
+                let patched = super::set_sheet_protection_in_worksheet(&xml, true, Some(&flags)).unwrap();
+                assert!(patched.contains(&format!("<{prefix}sheetProtection")));
+                assert!(patched.contains("selectLockedCells=\"1\""));
+                assert!(patched.contains("formatRows=\"0\""));
+                assert!(patched.contains(extension));
+                let removed = super::set_sheet_protection_in_worksheet(&patched, false, None).unwrap();
+                assert!(!removed.contains(&format!("<{prefix}sheetProtection")));
+                assert!(removed.contains(extension));
+                let inserted = super::set_sheet_protection_in_worksheet(&removed, true, Some(&flags)).unwrap();
+                assert!(inserted.find("sheetCalcPr").unwrap() < inserted.find("sheetProtection").unwrap());
+                assert!(inserted.find("sheetProtection").unwrap() < inserted.find("protectedRanges").unwrap());
+                assert!(inserted.contains(extension));
+            }
+        }
+    }
+
     #[test]
     fn cell_format_attribute_presence_survives_roundtrip() {
         let bytes=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
