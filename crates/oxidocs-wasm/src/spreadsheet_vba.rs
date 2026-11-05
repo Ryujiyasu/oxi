@@ -22461,11 +22461,49 @@ impl<'a> WorkbookHost<'a> {
                         }
                     }
                 } else {
-                    if cell.style.font_position.is_some() || cell.runs.iter().any(|run|
-                        run.vert_align.as_deref().is_some_and(|position| position != "baseline")) {
-                        unmodeled_line = true;
+                    // Newline runs may retain the ordinary font while every
+                    // visible character uses the same raised or lowered font.
+                    let text = cell.value.display();
+                    let explicit_lines = text.split('\n').collect::<Vec<_>>();
+                    let mut homogeneous_font = None;
+                    let mut homogeneous = true;
+                    let mut covered_units = 0;
+                    for run in &cell.runs {
+                        covered_units += run.text.encode_utf16().count();
+                        if run.text.chars().all(|character| character == '\n') { continue; }
+                        let run_face = if run.dressed {
+                            run.font_reference.as_ref().and_then(|font| font.latin_name.as_deref())
+                                .or(run.font.as_deref()).unwrap_or(cell_face)
+                        } else { cell_face };
+                        let run_size = if run.dressed { run.size.unwrap_or(cell_size) } else { cell_size };
+                        let bold = if run.dressed { run.bold } else { cell.style.bold };
+                        let italic = if run.dressed { run.italic } else { cell.style.italic };
+                        let position = if run.dressed { run.vert_align.as_deref() }
+                            else { cell.style.font_position.map(|position| position.as_str()) };
+                        let underline = if run.dressed {
+                            run.underline_kind.filter(|_| run.underline)
+                        } else { cell_underline };
+                        let descriptor = (run_face, run_size, bold, italic, wrapped_anchor,
+                            position, lines as u32, underline);
+                        if let Some(held) = homogeneous_font {
+                            if held != descriptor { homogeneous = false; }
+                        } else { homogeneous_font = Some(descriptor); }
                     }
-                    retained_px = retained_px.max(f32::from(font_px) * lines);
+                    let homogeneous_font = homogeneous_font.filter(|_| {
+                        homogeneous && covered_units == text.encode_utf16().count()
+                            && explicit_lines.len() == lines as usize
+                            && explicit_lines.iter().all(|line| !line.is_empty())
+                    });
+                    if let Some(descriptor) = homogeneous_font {
+                        position_in_row |= descriptor.5.is_some_and(|position| position != "baseline");
+                        one_line_fonts.push(descriptor);
+                    } else {
+                        if cell.style.font_position.is_some() || cell.runs.iter().any(|run|
+                            run.vert_align.as_deref().is_some_and(|position| position != "baseline")) {
+                            unmodeled_line = true;
+                        }
+                        retained_px = retained_px.max(f32::from(font_px) * lines);
+                    }
                 }
             }
             if unmodeled_line {
@@ -78961,6 +78999,65 @@ End Sub
         assert_eq!(host.take_debug_output(), ["6.75\t7.5\t7.5\t18"]);
     }
 
+
+
+    #[test]
+    fn tiny_wrapped_fonts_and_homogeneous_character_scripts_fit_their_advance() {
+        let mut workbook = workbook();
+        workbook.default_style.font_name = Some("Arial".into());
+        workbook.default_style.font_size = Some(8.0);
+        let module = parse_module(r#"Public Sub Act()
+            Columns("A").ColumnWidth = 255
+            Range("A1:A6").Font.Name = "Arial"
+            Range("A1:A6").Font.Size = 1
+            Range("A1:A6").WrapText = True
+            Range("A1").Value2 = "M" & Chr(10) & "M"
+            Range("A2:A6").Value2 = "M" & Chr(10) & "M" & Chr(10) & "M"
+            Range("A3").Font.Superscript = True
+            Range("A4").Characters(1, 1).Font.Superscript = True
+            Range("A4").Characters(3, 1).Font.Superscript = True
+            Range("A4").Characters(5, 1).Font.Superscript = True
+            Range("A5:A6").Font.Name = "メイリオ"
+            Range("A5").Font.Subscript = True
+            Range("A6").Characters(1, 1).Font.Subscript = True
+            Range("A6").Characters(3, 1).Font.Subscript = True
+            Range("A6").Characters(5, 1).Font.Subscript = True
+            Range("A1:A6").EntireRow.AutoFit
+            Debug.Print Range("A1").RowHeight, Range("A2").RowHeight, Range("A3").RowHeight
+            Debug.Print Range("A4").RowHeight, Range("A5").RowHeight, Range("A6").RowHeight
+            End Sub"#).unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        assert_eq!(host.take_debug_output(), ["11.25\t16.5\t18.75", "18.75\t14.25\t14.25"]);
+    }
+
+
+    #[test]
+    fn tiny_row_extents_include_normal_and_neighbor_fonts() {
+        let mut workbook = workbook();
+        workbook.default_style.font_name = Some("Times New Roman".into());
+        workbook.default_style.font_size = Some(6.75);
+        let module = parse_module(r#"Public Sub Act()
+            Columns("A:B").ColumnWidth = 255
+            Range("A1:A4").Value2 = "M"
+            Range("A1:A4").Font.Name = "Arial"
+            Range("A1:A4").Font.Size = 6.75
+            Range("A2").Value2 = "M" & Chr(10) & "M"
+            Range("A2").WrapText = True
+            Range("A3:A4").Font.Name = "メイリオ"
+            Range("A3:A4").Font.Size = 4.5
+            Range("A3").Font.Superscript = True
+            Range("A4").Font.Subscript = True
+            Range("B3:B4").Value2 = "M"
+            Range("B3:B4").Font.Name = "Times New Roman"
+            Range("B3:B4").Font.Size = 6.75
+            Range("A1:A4").EntireRow.AutoFit
+            Debug.Print Range("A1").RowHeight, Range("A2").RowHeight, Range("A3").RowHeight, Range("A4").RowHeight
+            End Sub"#).unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        assert_eq!(host.take_debug_output(), ["9\t18\t9.75\t9.75"]);
+    }
 
     #[test]
     fn manual_script_edits_wait_for_explicit_autofit() {
