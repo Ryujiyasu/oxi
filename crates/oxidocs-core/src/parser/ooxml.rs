@@ -10610,7 +10610,15 @@ fn parse_drawing(
             width: tb_width,
             height: tb_height,
             position: tb_position,
-            border: !has_no_stroke && !s839_attach,
+            // OXI_TXBX_NO_LN_NO_BORDER (2026-11-05, default ON, opt-out _DISABLE): a
+            // shape with neither an a:ln nor a style lnRef colour has no outline.
+            // blind-J ja/administrative__1fc69a4f's WordArt boxes «練馬区» / «だより»
+            // (spPr = xfrm + prstGeom only, no wps:style): Word's PDF draws no box
+            // there; Oxi stroked both in black.
+            border: !has_no_stroke && !s839_attach
+                && (stroke_color_saved.is_some()
+                    || stroke_width_saved.is_some()
+                    || std::env::var_os("OXI_TXBX_NO_LN_NO_BORDER_DISABLE").is_some()),
             stroke_color: if has_no_stroke || s839_attach {
                 None
             } else {
