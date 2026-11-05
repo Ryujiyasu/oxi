@@ -33105,9 +33105,6 @@ impl Host for WorkbookHost<'_> {
         let shared_format=self.shared_format_request(receiver,name,&value);
         let format_intent=self.format_intent_request(receiver,name,&value);
         let format_assignment = self.format_assignment_range(receiver, name);
-        if let Some(range) = format_assignment {
-            self.guard_formats(range.sheet, "formatting cells")?;
-        }
         let assign=|| {
         if name.eq_ignore_ascii_case("iconset") && self.condition_id(receiver).is_some() {
             if let Value::Object(object) = &value { return Ok(self.set_from_object(receiver, name, object)?.unwrap_or(false)); }
@@ -33138,36 +33135,33 @@ impl Host for WorkbookHost<'_> {
         if self.gone(receiver) {
             return Err(host_error(424, "the object's worksheet has been deleted"));
         }
-        // Excel leaves Copy mode before these setters validate their input.
+        // Excel leaves Copy mode before checking permissions or validating these setters.
         // Colors, themes and dimensions keep the copied cells live instead.
-        if self.clipboard.is_some() || matches!(&value,Value::Null) {
-            let member=name.to_ascii_lowercase();
-            let font=self.range_font(receiver).is_some() || self.characters_font_of(receiver).is_some();
-            let range=self.range(receiver).is_some();
-            if self.clipboard.is_some() &&
-                (((font || self.characters_font_of(receiver).is_some())
-                    && matches!(member.as_str(),"name"|"size"|"bold"|"italic"|"underline"|
-                        "strikethrough"|"superscript"|"subscript"|"fontstyle"))
-                || (self.range_borders(receiver).is_some() && matches!(member.as_str(),"linestyle"|"weight"))
-                || (range && matches!(member.as_str(),"style"|"numberformat"|"numberformatlocal"|
-                    "locked"|"formulahidden"|"horizontalalignment"|"verticalalignment"|"wraptext"|
-                    "shrinktofit"|"indentlevel"|"orientation"|"readingorder"|"addindent"))) {
-                self.clipboard=None;
-            }
-            if font && member=="themefont" && matches!(&value,Value::Null) {
-                return Err(host_error(13,"Type mismatch"));
-            }
-            if matches!(&value,Value::Null)
-                && ((font && matches!(member.as_str(),"name"|"size"|"color"|"colorindex"|"underline"|
-                        "bold"|"italic"|"superscript"|"subscript"|"strikethrough"|"fontstyle"))
-                    || (range && matches!(member.as_str(),"numberformat"|"numberformatlocal"))) {
-                return Ok(true);
-            }
+        let member=name.to_ascii_lowercase();
+        let font=self.range_font(receiver).is_some() || self.characters_font_of(receiver).is_some();
+        let range=self.range(receiver).is_some();
+        if self.clipboard.is_some() &&
+            ((font && matches!(member.as_str(),"name"|"size"|"bold"|"italic"|"underline"|
+                "strikethrough"|"superscript"|"subscript"|"fontstyle"))
+            || (self.range_borders(receiver).is_some() && matches!(member.as_str(),"linestyle"|"weight"))
+            || (range && matches!(member.as_str(),"style"|"numberformat"|"numberformatlocal"|
+                "locked"|"formulahidden"|"horizontalalignment"|"verticalalignment"|"wraptext"|
+                "shrinktofit"|"indentlevel"|"orientation"|"readingorder"|"addindent"))) {
+            self.clipboard=None;
+        }
+        if let Some(range)=format_assignment {self.guard_formats(range.sheet,"formatting cells")?;}
+        if font && member=="themefont" && matches!(&value,Value::Null) {
+            return Err(host_error(13,"Type mismatch"));
+        }
+        if matches!(&value,Value::Null)
+            && ((font && matches!(member.as_str(),"name"|"size"|"color"|"colorindex"|"underline"|
+                "bold"|"italic"|"superscript"|"subscript"|"strikethrough"|"fontstyle"))
+                || (range && matches!(member.as_str(),"numberformat"|"numberformatlocal"))) {
+            return Ok(true);
         }
         // Cell fonts accept absent scalar values differently from Find/Replace formats.
         // Apply this after Copy mode is cleared and after the formatting permission guard.
-        let cell_font=self.range_font(receiver).is_some() || self.characters_font_of(receiver).is_some();
-        let member=name.to_ascii_lowercase();
+        let cell_font=font;
         if cell_font {
             if matches!(&value,Value::Error(_)) && matches!(member.as_str(),
                 "name"|"size"|"bold"|"italic"|"underline"|"superscript"|"subscript"|"strikethrough"|"fontstyle") {
@@ -75870,6 +75864,30 @@ End Function
                 Value::Boolean(false),
                 "{assignment}",
             );
+        }
+    }
+
+
+    #[test]
+    fn protected_font_assignments_clear_copy_mode_before_reporting_error() {
+        for target in ["Range(\"A1\").Font","Range(\"A1\").Characters(1, 2).Font"] {
+            for (property,value,mode) in [("Bold","True",0),("Bold","Null",0),("Size","Empty",0),("Color","Null",1)] {
+                let mut book=workbook();
+                let module=parse_module(&format!(r#"Public Function Probe() As String
+Range("A1").Value2 = "MgA"
+Range("B1").Value2 = "clipboard-source"
+ActiveSheet.Protect ""
+Range("B1").Copy
+ThisWorkbook.Saved = True
+On Error Resume Next
+{target}.{property} = {value}
+Probe = CStr(Err.Number) & ":" & CStr(CLng(Application.CutCopyMode)) & ":" & CStr(ThisWorkbook.Saved)
+End Function
+"#)).unwrap();
+                let mut host=WorkbookHost::new(&mut book,0).unwrap();
+                assert_eq!(execute_with_host(&module,"Probe",vec![],&mut host).unwrap(),
+                    Value::String(format!("1004:{mode}:True")),"{target}.{property} = {value}");
+            }
         }
     }
 
