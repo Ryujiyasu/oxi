@@ -10917,9 +10917,47 @@ impl<'a> TableFitLayouter<'a> {
                 // = line box ~1.29×fs) gained tokumei only +0.0014 (peak LEAD=0.05) — most
                 // form content is vAlign=TOP, not center, so this is a tiny component, not
                 // the form-family ~1pt drift. See [[tokumei_form_family_ssim]].
+                // OXI_CELL_ANCHOR_VALIGN (2026-11-05, default ON, opt-out _DISABLE): a
+                // vAlign=center cell centres the reach of its paragraph-anchored
+                // objects too (their bottom below the anchor paragraph top), not only
+                // the text flow; the row height is unchanged. `_pb_cell_anchor_valign
+                // _gen.py` (slice of blind-J ja/administrative__1fc69a4f, a merged
+                // 96pt notes cell holding one empty paragraph): with no anchors the
+                // paragraph centres (109.0); with its pictures (reach 89.9) it sits at
+                // 70.8, with the 93pt textbox (reach 100.3) at the top 67.8, and the
+                // neighbouring cells do not move.
+                let center_content_h = if cell.v_align.as_deref() == Some("center")
+                    && !crate::env_flag!("OXI_CELL_ANCHOR_VALIGN_DISABLE")
+                {
+                    let para_rel = |rel: Option<&str>| matches!(rel, None | Some("paragraph") | Some("line"));
+                    let mut reach = content_h;
+                    for b in &cell.blocks {
+                        if let Block::Image(img) = b {
+                            if let Some(pos) = img.position.as_ref() {
+                                if para_rel(pos.v_relative.as_deref()) {
+                                    if let Some(&top) = cell_block_tops.get(img.anchor_block_index) {
+                                        reach = reach.max(top + pos.y + img.height);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    for tb in &cell.cell_text_boxes {
+                        if let Some(pos) = tb.position.as_ref() {
+                            if para_rel(pos.v_relative.as_deref()) {
+                                if let Some(&top) = cell_block_tops.get(tb.anchor_block_index) {
+                                    reach = reach.max(top + pos.y + tb.height);
+                                }
+                            }
+                        }
+                    }
+                    reach
+                } else {
+                    content_h
+                };
                 let v_offset = match cell.v_align.as_deref() {
                     Some("center") => {
-                        ((effective_row_h - pad_t - pad_b - content_h) / 2.0).max(0.0)
+                        ((effective_row_h - pad_t - pad_b - center_content_h) / 2.0).max(0.0)
                     }
                     Some("bottom") => (effective_row_h - pad_t - pad_b - content_h).max(0.0),
                     _ => 0.0, // top (default)
