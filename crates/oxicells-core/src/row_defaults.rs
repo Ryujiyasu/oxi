@@ -2930,7 +2930,7 @@ fn measured_run_row_bounds(
     Some(decoded_run_row_bounds(packed, em, position != 0 || em <= 8))
 }
 
-fn run_height_bounds(face: &str, size: f32, bold: bool, italic: bool,
+fn legacy_run_height_bounds(face: &str, size: f32, bold: bool, italic: bool,
     position: Option<&str>) -> Option<LineHeightBounds> {
     let kind = match position {
         None | Some("baseline") => 0,
@@ -2951,6 +2951,39 @@ fn run_height_bounds(face: &str, size: f32, bold: bool, italic: bool,
             descent_max: height.saturating_sub(baseline), row_only: false,
         }
     })
+}
+
+
+fn run_height_bounds(face: &str, size: f32, bold: bool, italic: bool,
+    position: Option<&str>) -> Option<LineHeightBounds> {
+    let mut bounds = legacy_run_height_bounds(face, size, bold, italic, position)?;
+    let kind = match position {
+        None | Some("baseline") => 0,
+        Some("superscript") => 1,
+        Some("subscript") => 2,
+        _ => return None,
+    };
+    let em = em_pixels(size);
+    if (1..=8).contains(&em) {
+        let flags = u8::from(bold) | (u8::from(italic) << 1);
+        if let Some((_, _, _, packed)) = TINY_FLOW_PROFILES.iter().find(|(held, style, held_kind, _)| {
+            held.eq_ignore_ascii_case(face) && *style == flags && *held_kind == kind
+        }) {
+            let flow = decoded_run_row_bounds(packed, em, false);
+            bounds.baseline_min = flow.baseline_min;
+            bounds.baseline_max = flow.baseline_max;
+            bounds.descent_min = flow.descent_min;
+            bounds.descent_max = flow.descent_max;
+        }
+    } else if bounds.baseline_min == bounds.baseline_max
+        && bounds.descent_min == bounds.descent_max {
+        let extra = 2u16.saturating_sub(bounds.descent_min);
+        bounds.baseline_min = bounds.baseline_min.saturating_sub(extra);
+        bounds.baseline_max = bounds.baseline_max.saturating_sub(extra);
+        bounds.descent_min = bounds.descent_min.saturating_add(extra);
+        bounds.descent_max = bounds.descent_max.saturating_add(extra);
+    }
+    Some(bounds)
 }
 
 fn decorated_run_height_bounds(
@@ -3577,6 +3610,24 @@ mod tests {
             ]),
             Some((43, 37)),
         );
+    }
+
+
+    #[test]
+    fn tiny_rows_and_multiline_text_share_canonical_extents() {
+        assert_eq!(super::font_text_row_height("Times New Roman", 6.75, [
+            ("Arial", 6.75, false, false, false, None, 1),
+        ]), Some(12));
+        assert_eq!(super::font_text_row_height("Arial", 1.0, [
+            ("メイリオ", 4.5, false, false, false, Some("superscript"), 1),
+            ("Times New Roman", 6.75, false, false, false, None, 1),
+        ]), Some(13));
+        assert_eq!(super::font_text_row_height("Arial", 8.0, [
+            ("Times New Roman", 6.75, false, false, false, None, 2),
+        ]), Some(25));
+        assert_eq!(super::font_text_row_height("Arial", 1.0, [
+            ("Times New Roman", 6.75, false, false, false, None, 3),
+        ]), Some(36));
     }
 
     #[test]

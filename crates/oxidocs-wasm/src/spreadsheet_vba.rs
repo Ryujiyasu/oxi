@@ -79031,6 +79031,34 @@ End Sub
         assert_eq!(host.take_debug_output(), ["11.25\t16.5\t18.75", "18.75\t14.25\t14.25"]);
     }
 
+
+    #[test]
+    fn tiny_row_extents_include_normal_and_neighbor_fonts() {
+        let mut workbook = workbook();
+        workbook.default_style.font_name = Some("Times New Roman".into());
+        workbook.default_style.font_size = Some(6.75);
+        let module = parse_module(r#"Public Sub Act()
+            Columns("A:B").ColumnWidth = 255
+            Range("A1:A4").Value2 = "M"
+            Range("A1:A4").Font.Name = "Arial"
+            Range("A1:A4").Font.Size = 6.75
+            Range("A2").Value2 = "M" & Chr(10) & "M"
+            Range("A2").WrapText = True
+            Range("A3:A4").Font.Name = "メイリオ"
+            Range("A3:A4").Font.Size = 4.5
+            Range("A3").Font.Superscript = True
+            Range("A4").Font.Subscript = True
+            Range("B3:B4").Value2 = "M"
+            Range("B3:B4").Font.Name = "Times New Roman"
+            Range("B3:B4").Font.Size = 6.75
+            Range("A1:A4").EntireRow.AutoFit
+            Debug.Print Range("A1").RowHeight, Range("A2").RowHeight, Range("A3").RowHeight, Range("A4").RowHeight
+            End Sub"#).unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        assert_eq!(host.take_debug_output(), ["9\t18\t9.75\t9.75"]);
+    }
+
     #[test]
     fn manual_script_edits_wait_for_explicit_autofit() {
         let mut workbook = workbook();
