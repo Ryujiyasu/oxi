@@ -839,13 +839,28 @@ pub fn font_position_row_line_box<'a>(
     normal_size: f32,
     cells: impl IntoIterator<Item = (&'a str, f32, bool, bool, bool, Option<&'a str>)>,
 ) -> Option<(u16, u16)> {
+    font_text_row_line_box(
+        normal_face, normal_size,
+        cells.into_iter().map(|(face, size, bold, italic, anchor, position)| {
+            (face, size, bold, italic, anchor, position, 1)
+        }),
+    )
+}
+
+/// Wrapped plain text shares the Normal font at its last baseline.
+pub fn font_text_row_line_box<'a>(
+    normal_face: &str,
+    normal_size: f32,
+    cells: impl IntoIterator<Item = (&'a str, f32, bool, bool, bool, Option<&'a str>, u32)>,
+) -> Option<(u16, u16)> {
     let (height, mut baseline) = font_line_box(normal_face, normal_size, false)?;
     let mut descent = height.saturating_sub(baseline);
-    for (face, size, bold, italic, wrapped_merge_anchor, position) in cells {
+    for (face, size, bold, italic, wrapped_merge_anchor, position, lines) in cells {
         let (height, cell_baseline) = font_run_line_box(face, size, bold, italic, position)?;
         descent = descent.max(height.saturating_sub(cell_baseline));
         if !wrapped_merge_anchor {
-            baseline = baseline.max(cell_baseline);
+            let extra = u16::try_from(lines.saturating_sub(1)).unwrap_or(u16::MAX);
+            baseline = baseline.max(cell_baseline.saturating_add(height.saturating_mul(extra)));
         }
     }
     Some((baseline.saturating_add(descent), baseline))
@@ -1069,6 +1084,28 @@ mod tests {
                 ("Arial", 72.0, false, false, false, Some("superscript")),
             ]),
             Some((161, 118)),
+        );
+    }
+
+    #[test]
+    fn wrapped_positions_share_the_last_baseline_once() {
+        assert_eq!(
+            super::font_text_row_line_box("Arial", 20.0, [
+                ("Arial", 12.0, false, false, false, Some("superscript"), 2),
+            ]),
+            Some((51, 45)),
+        );
+        assert_eq!(
+            super::font_text_row_line_box("Arial", 20.0, [
+                ("Arial", 12.0, false, false, false, Some("subscript"), 3),
+            ]),
+            Some((78, 72)),
+        );
+        assert_eq!(
+            super::font_text_row_line_box("Arial", 20.0, [
+                ("Arial", 12.0, false, false, false, None, 2),
+            ]),
+            Some((43, 37)),
         );
     }
 }

@@ -22236,7 +22236,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn fit_rows(&mut self, range: CellRange, preserve_vertical_height: bool) -> Result<Value, String> {
-        use oxicells_core::row_defaults::{font_cell_line_box, font_default_row_px, font_line_box, font_position_row_line_box, font_run_line_box};
+        use oxicells_core::row_defaults::{font_cell_line_box, font_default_row_px, font_line_box, font_text_row_line_box, font_run_line_box};
         let sheet_index = range.sheet;
         // A formula written a moment ago is fitted by its answer: measured,
         // =REPT("ab ",10) set to wrap asks four lines.
@@ -22343,7 +22343,7 @@ impl<'a> WorkbookHost<'a> {
                 };
                 let font_px = if lines == 1.0 { shared_line.unwrap_or(font_px) } else { font_px };
                 px = px.max(f32::from(font_px) * lines);
-                if lines == 1.0 {
+                if lines == 1.0 || cell.runs.is_empty() {
                     let cell_position = cell.style.font_position.map(|position| position.as_str());
                     let text_units = cell_text_of(cell).len();
                     if cell.runs.is_empty() || text_units == 0 {
@@ -22353,7 +22353,7 @@ impl<'a> WorkbookHost<'a> {
                             unmodeled_position = true;
                         }
                         one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic,
-                            wrapped_anchor, cell_position));
+                            wrapped_anchor, cell_position, lines as u32));
                     } else {
                         let mut covered_units = 0;
                         for run in &cell.runs {
@@ -22372,7 +22372,7 @@ impl<'a> WorkbookHost<'a> {
                             ).is_none() {
                                 unmodeled_position = true;
                             }
-                            one_line_fonts.push((run_face, run_size, bold, italic, wrapped_anchor, position));
+                            one_line_fonts.push((run_face, run_size, bold, italic, wrapped_anchor, position, 1));
                         }
                         if covered_units < text_units {
                             if cell_position.is_some() && font_run_line_box(
@@ -22381,16 +22381,20 @@ impl<'a> WorkbookHost<'a> {
                                 unmodeled_position = true;
                             }
                             one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic,
-                                wrapped_anchor, cell_position));
+                                wrapped_anchor, cell_position, lines as u32));
                         }
                     }
                 } else {
+                    if cell.style.font_position.is_some() || cell.runs.iter().any(|run|
+                        run.vert_align.as_deref().is_some_and(|position| position != "baseline")) {
+                        unmodeled_position = true;
+                    }
                     retained_px = retained_px.max(f32::from(font_px) * lines);
                 }
             }
             if unmodeled_position {
                 px = px.max(row.height.unwrap_or(sheet.default_row_height) / 0.75);
-            } else if let Some((height, _)) = font_position_row_line_box(&face, size, one_line_fonts) {
+            } else if let Some((height, _)) = font_text_row_line_box(&face, size, one_line_fonts) {
                 px = retained_px.max(f32::from(height));
             }
             px += f32::from(u8::from(thick_top)) + f32::from(u8::from(thick_bottom));

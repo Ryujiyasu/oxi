@@ -240,13 +240,13 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance, font
     ? [sheet.column_width_font || sheet.normal_font[0], sheet.normal_font[1]] : null;
   const aggregateLines = (!!fontRowHeightOf || !!fontPositionRowHeightOf) && !!normal;
   const lineFonts = [];
-  const lineFont = (face, size, bold, italic, anchor, position) =>
+  const lineFont = (face, size, bold, italic, anchor, position, lines = 1) =>
     fontPositionRowHeightOf
-      ? [face, size, bold, italic, anchor, position || null]
+      ? [face, size, bold, italic, anchor, position || null, lines]
       : [face, size, bold, italic, anchor];
-  const richFontsOf = (cell, face, size, anchor) => {
+  const richFontsOf = (cell, face, size, anchor, lines = 1) => {
     const style = cell.style || {};
-    if (!cell.runs?.length || !cellText(cell)) return [lineFont(face, size, !!style.bold, !!style.italic, anchor, style.font_position)];
+    if (!cell.runs?.length || !cellText(cell)) return [lineFont(face, size, !!style.bold, !!style.italic, anchor, style.font_position, lines)];
     const fonts = [];
     let covered = 0;
     for (const run of cell.runs) {
@@ -305,8 +305,10 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance, font
       px = shared;
     }
     const wrappedAnchor = !!where?.anchor && !!cell.style?.wrap_text;
-    if (lines === 1) {
-      lineFonts.push(...richFontsOf(cell, face, size, wrappedAnchor));
+    if (lines > 1 && rich && (cell.style?.font_position || cell.runs?.some(run =>
+      run.vert_align && run.vert_align !== 'baseline'))) return { ...fallback(), parts };
+    if (lines === 1 || (!rich && fontPositionRowHeightOf)) {
+      lineFonts.push(...richFontsOf(cell, face, size, wrappedAnchor, lines));
     }
     const asked = aggregateLines && lines === 1 && (wrappedAnchor || rich) ? 0 : lines * px;
     parts.push({ kind: 'cell', px: asked, column: cell.col, what });
@@ -318,7 +320,7 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance, font
       ? fontPositionRowHeightOf(normal[0], normal[1], lineFonts)
       : fontRowHeightOf(normal[0], normal[1], lineFonts);
     if (shared === undefined) return { ...fallback(), parts };
-    parts.push({ kind: 'line', px: shared, what: 'the one-line cells share a baseline and descent' });
+    parts.push({ kind: 'line', px: shared, what: 'the cells share a baseline and descent' });
     raise = Math.max(raise, shared);
   }
 
