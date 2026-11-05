@@ -3796,7 +3796,16 @@ impl<'a> LineBreaker<'a> {
                             {
                                 let default_fs = pitch / ratio;
                                 let char_space_pt = pitch - default_fs;
-                                let base = if char_space_pt >= 0.0 {
+                                // OXI_GRID_SPACE_ADDITIVE (2026-11-05, default ON, opt-out
+                                // _DISABLE): the balanced space is half the same ADDITIVE
+                                // cell (fs + charSpace) the half-width characters use since
+                                // OXI_HALF_CELL_ADDITIVE. blind-J ja/administrative__1f33602b
+                                // (ＭＳ 明朝 12 on a 10.5 / charSpace 6360 grid, cell 13.55):
+                                // Word's run of spaces advances 6.76 each; the proportional
+                                // 12 x pitch / 10.5 gave 6.85 and pushed p2 onto a third page.
+                                let base = if char_space_pt >= 0.0
+                                    && crate::env_flag!("OXI_GRID_SPACE_ADDITIVE_DISABLE")
+                                {
                                     font_size * pitch / default_fs
                                 } else {
                                     font_size + char_space_pt
@@ -3839,10 +3848,18 @@ impl<'a> LineBreaker<'a> {
                 // first line on a linesAndChars grid -- the padded last glyph (+2.2)
                 // pushed the group to 129.2 and wrapped «子» / «任» (Word: one line,
                 // last glyph at 548.1, end 559.1), two lines per page.
+                // OXI_FIT_SAVED_NO_GRID (2026-11-05, default ON, opt-out _DISABLE): a
+                // fitText group whose w:w Word saved takes no grid padding either --
+                // Word's own scale already fits it. blind-J ja/administrative__1f33602b
+                // («NPO法人全国災害…代表理事他», fitText 6233, w 90, ＭＳ 明朝 12 on a
+                // 10.5 / charSpace 6360 grid): Word advances the kanji 10.80 = 12 x 0.9;
+                // Oxi padded each to 11.58 and the group ran 336pt for 311.65.
                 let fit_text_expand = style.fit_text.is_some()
                     && (style.character_spacing.map_or(false, |cs| cs > 0.01)
                         || (style.text_scale.is_none()
-                            && !crate::env_flag!("OXI_FIT_EXPAND_LAST_DISABLE")));
+                            && !crate::env_flag!("OXI_FIT_EXPAND_LAST_DISABLE"))
+                        || (style.fit_text_saved_scale
+                            && !crate::env_flag!("OXI_FIT_SAVED_NO_GRID_DISABLE")));
                 // S1347: the run's w:w scale factor for the grid cell (see below).
                 let s1347_scale = if !crate::env_flag!("OXI_S1347_DISABLE")
                     && style.fit_text.is_none()

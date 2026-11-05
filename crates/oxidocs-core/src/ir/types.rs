@@ -745,6 +745,10 @@ pub struct RunStyle {
     /// Fit text group ID (w:fitText w:id)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit_text_id: Option<i64>,
+    /// The fitText group already carries Word's own w:w (resolve_fit_text_runs
+    /// keeps those values); see OXI_FIT_SAVED_NO_GRID in line_break.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fit_text_saved_scale: bool,
     /// Character width scale percentage (w:w, default 100)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_scale: Option<f32>,
@@ -887,6 +891,7 @@ impl Default for RunStyle {
             kern: None,
             fit_text: None,
             fit_text_id: None,
+            fit_text_saved_scale: false,
             text_scale: None,
             combine: false,
             combine_brackets: None,

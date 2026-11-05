@@ -6846,6 +6846,9 @@ impl LayoutEngine {
                 // recomputation (which may disagree due to CJK pitch/yakumono
                 // differences, causing overflow on b35 事務処理体制 row).
                 if runs[start..i].iter().any(|r| r.style.text_scale.is_some()) {
+                    for run in &mut runs[start..i] {
+                        run.style.fit_text_saved_scale = true;
+                    }
                     continue;
                 }
 
