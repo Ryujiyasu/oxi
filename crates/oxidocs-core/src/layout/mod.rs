@@ -10358,6 +10358,12 @@ cells={} pitch={:.2} text={:?}",
                     elements.extend(table_elements);
                 }
                 Block::Image(img) => {
+                    // OXI_TXBX_IMAGE_ONLY: the image-only paragraph's spacing rides on
+                    // its picture (0 for every other text-box image).
+                    let img_sb = if std::env::var_os("OXI_TXBX_IMAGE_ONLY_DISABLE").is_none() {
+                        img.paragraph_space_before.max(0.0)
+                    } else { 0.0 };
+                    cursor.advance(img_sb);
                     elements.push(LayoutElement::new(
                         inner_x,
                         cursor.visual_y,
@@ -10373,6 +10379,9 @@ cells={} pitch={:.2} text={:?}",
                         },
                     ));
                     cursor.advance(img.height);
+                    if std::env::var_os("OXI_TXBX_IMAGE_ONLY_DISABLE").is_none() {
+                        cursor.advance(img.paragraph_space_after.max(0.0));
+                    }
                 }
                 Block::UnsupportedElement(_) => {}
                 Block::Math(_) => {
