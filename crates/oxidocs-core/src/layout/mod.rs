@@ -788,6 +788,38 @@ fn autospace_cell_segments(
     Some(segs)
 }
 
+/// ECMA-376 20.1.10.48 preset dash patterns in multiples of the line width.
+fn prst_dash_units(name: &str) -> Option<&'static [f32]> {
+    match name {
+        "dash" => Some(&[4.0, 3.0]),
+        "dashDot" => Some(&[4.0, 3.0, 1.0, 3.0]),
+        "lgDash" => Some(&[8.0, 3.0]),
+        "lgDashDot" => Some(&[8.0, 3.0, 1.0, 3.0]),
+        "lgDashDotDot" => Some(&[8.0, 3.0, 1.0, 3.0, 1.0, 3.0]),
+        "sysDash" => Some(&[3.0, 1.0]),
+        "sysDot" => Some(&[1.0, 1.0]),
+        "sysDashDot" => Some(&[3.0, 1.0, 1.0, 1.0]),
+        "sysDashDotDot" => Some(&[3.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+        "dot" => Some(&[1.0, 3.0]),
+        _ => None,
+    }
+}
+
+/// OXI_LINE_DASH (2026-11-06, default ON, opt-out _DISABLE): a straight line's
+/// a:prstDash, the same pattern as a text box outline, starting at the line's
+/// start. blind-J ja/administrative__1fc69a4f's column dividers (2.25pt accent6 /
+/// FF66FF lines, prstDash dash): Word's PDF strokes [9 6.75] = [4 3] x w; Oxi
+/// drew them solid.
+fn shape_line_dash(shape: &Shape) -> Option<String> {
+    if shape.shape_type != "line" || shape.arrow_head || shape.arrow_tail
+        || crate::env_flag!("OXI_LINE_DASH_DISABLE")
+    {
+        return None;
+    }
+    let units = prst_dash_units(shape.stroke_dash.as_deref()?)?;
+    Some(format!("prst:{}:0", units.iter().map(|u| format!("{u}")).collect::<Vec<_>>().join(",")))
+}
+
 fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
     if crate::env_flag!("OXI_VMLRECT_DISABLE") {
         return None;
@@ -2879,6 +2911,9 @@ pub enum LayoutContent {
         /// Connector arrowheads (a:ln headEnd/tailEnd). Default false.
         arrow_head: bool,
         arrow_tail: bool,
+        /// OXI_LINE_DASH: a straight line's preset dash as a TableBorder style
+        /// ("prst:<units>:<offset>"); None = solid.
+        dash: Option<String>,
     },
     /// WATERMARK (2026-07-08): a VML WordArt page watermark («SAMPLE» etc.) —
     /// element (x,y,w,h) is the UNROTATED shape box centered on the margin
@@ -7531,6 +7566,7 @@ impl LayoutEngine {
                     flip_v: shape.flip_v,
                     arrow_head: shape.arrow_head,
                     arrow_tail: shape.arrow_tail,
+                    dash: shape_line_dash(shape),
                 });
                 drawings.push((false, 0, target, vec![
                     LayoutElement::new(x, y, shape.width, shape.height, content),
@@ -9757,17 +9793,8 @@ cells={} pitch={:.2} text={:?}",
             let dash_units: Option<&[f32]> = match text_box.outline_dash.as_deref() {
                 _ if !has_border || cr > 0.0 || !bands.is_empty()
                     || crate::env_flag!("OXI_TXBX_DASH_DISABLE") => None,
-                Some("dash") => Some(&[4.0, 3.0]),
-                Some("dashDot") => Some(&[4.0, 3.0, 1.0, 3.0]),
-                Some("lgDash") => Some(&[8.0, 3.0]),
-                Some("lgDashDot") => Some(&[8.0, 3.0, 1.0, 3.0]),
-                Some("lgDashDotDot") => Some(&[8.0, 3.0, 1.0, 3.0, 1.0, 3.0]),
-                Some("sysDash") => Some(&[3.0, 1.0]),
-                Some("sysDot") => Some(&[1.0, 1.0]),
-                Some("sysDashDot") => Some(&[3.0, 1.0, 1.0, 1.0]),
-                Some("sysDashDotDot") => Some(&[3.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-                Some("dot") => Some(&[1.0, 3.0]),
-                _ => None,
+                Some(d) => prst_dash_units(d),
+                None => None,
             };
             if let Some(units) = dash_units {
                 elements.push(LayoutElement::new(
@@ -10237,6 +10264,7 @@ cells={} pitch={:.2} text={:?}",
                                     flip_v: shape.flip_v,
                                     arrow_head: shape.arrow_head,
                                     arrow_tail: shape.arrow_tail,
+                                    dash: shape_line_dash(shape),
                                 }
                             });
                             elements.push(LayoutElement::new(
@@ -18049,6 +18077,41 @@ cells={} pitch={:.2} text={:?}",
                             // New Roman 10pt, eastAsia MS Mincho) on a 12.1pt
                             // linesAndChars grid: Word 12 (one cell), Oxi 24.2 (the
                             // Mincho 12.88 box, 0.78 over the pitch, outside the window).
+                            // OXI_GRID_CJK_UNFLOORED (2026-11-06, default ON, opt-out _DISABLE):
+                            // a CJK 83/64 line counts its cells from the face's design
+                            // height, before the 1/8pt floor the line advance takes. UD
+                            // Digi Kyokasho 12pt: (2369 + 2 x 355) / 2048 x 12 = 18.041 ->
+                            // 361tw -> two cells; the floored 18.0 gave one. Word (the
+                            // current truth machine), `_pb_grid_boundary_gen.py`, lines grid
+                            // 360: NP-R / NK-R 12pt, empty and with text, compat 15 and
+                            // legacy -> 54.02 (two cells) in all 8 arms; 11pt 36.02, 13pt
+                            // 54.02. This supersedes S1143c's reading of the UD line as
+                            // 18.0017 -> one cell (taken on the old truth machine).
+                            // blind-J ja/educational__2aa00bc4 p2: the left column kept
+                            // «チャレンジ» that Word moves to the right column.
+                            let cell_basis = if dominant_cjk_83_64
+                                && !crate::env_flag!("OXI_GRID_CJK_UNFLOORED_DISABLE")
+                            {
+                                let raw = if line.fragments.iter().all(|f| f.text.trim().is_empty()) {
+                                    let rpr_ref =
+                                        para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                                    let fs = rpr_ref.font_size.unwrap_or(para_font_size);
+                                    let m = &*self.metrics_for_para_mark_g(&rpr_ref, para_style, true);
+                                    if m.is_cjk_83_64_font() { m.word_line_height_no_grid(fs) } else { 0.0 }
+                                } else {
+                                    line.fragments.iter().filter(|f| !f.text.trim().is_empty()).map(|f| {
+                                        let m = &*self.metrics_for_text(&f.text, &f.style, para_style);
+                                        if m.is_cjk_83_64_font() {
+                                            m.word_line_height_no_grid(f.style.font_size.unwrap_or(para_font_size))
+                                        } else {
+                                            0.0
+                                        }
+                                    }).fold(0.0f32, f32::max)
+                                };
+                                cell_basis.max(raw * line_spacing.unwrap_or(1.0))
+                            } else {
+                                cell_basis
+                            };
                             let cell_basis = if is_empty
                                 && !ascii_is_cjk
                                 && !crate::env_flag!("OXI_S1502_DISABLE")

@@ -6674,6 +6674,31 @@ impl<'a> PageLayouter<'a> {
                         start_x = col_x_positions[current_column];
                         content_width = col_widths[current_column];
                     }
+                    // OXI_COL_MOVE_ANCHOR (2026-11-06, default ON, opt-out _DISABLE): a
+                    // paragraph that moved whole into the next column on the same page
+                    // anchors its floats there -- the new column's left edge and the
+                    // paragraph's new top. blind-J ja/educational__2aa00bc4 p2: «チャレンジ»
+                    // opens column 2 and its 図 5 (posH column -5.07, posV paragraph
+                    // -83.17) sits at (601, -11) in Word's PDF; Oxi drew it at (49, 673),
+                    // off the paragraph's place at the foot of column 1.
+                    if num_columns > 1
+                        && pages.len() == pages_before
+                        && final_col > s1324_col_before
+                        && !crate::env_flag!("OXI_COL_MOVE_ANCHOR_DISABLE")
+                    {
+                        let new_x = col_x_positions[final_col];
+                        let mut texts = para_elements.iter()
+                            .filter(|e| matches!(e.content, LayoutContent::Text { .. }))
+                            .peekable();
+                        if texts.peek().is_some() && texts.all(|e| e.x >= new_x - 0.5) {
+                            if let Some(x) = block_col_x.last_mut() {
+                                *x = new_x;
+                            }
+                            if let Some(y) = block_y_positions.last_mut() {
+                                *y = start_y;
+                            }
+                        }
+                    }
                     // S1324 (2026-09-05, default ON, opt-out OXI_S1324_DISABLE): a
                     // keepNext chain stranded at the foot of the column its follower
                     // just LEFT (the S1323 whole-move into the next column) follows
@@ -7334,6 +7359,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     flip_v: shape.flip_v,
                                     arrow_head: shape.arrow_head,
                                     arrow_tail: shape.arrow_tail,
+                                    dash: shape_line_dash(shape),
                                 }
                             });
                             elements.push(LayoutElement::new(
@@ -12225,6 +12251,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 flip_v: shape.flip_v,
                                 arrow_head: shape.arrow_head,
                                 arrow_tail: shape.arrow_tail,
+                                dash: shape_line_dash(shape),
                             }
                         });
                         lp.elements.push(LayoutElement::new(

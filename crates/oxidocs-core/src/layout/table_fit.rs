@@ -10358,6 +10358,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         flip_v: shape.flip_v,
                                                         arrow_head: shape.arrow_head,
                                                         arrow_tail: shape.arrow_tail,
+                                                        dash: shape_line_dash(shape),
                                                     }
                                                 });
                                             // S711b: o:allowincell="f" shapes escape the cell — anchor x at
@@ -10474,6 +10475,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     flip_v: shape.flip_v,
                                                     arrow_head: shape.arrow_head,
                                                     arrow_tail: shape.arrow_tail,
+                                                    dash: shape_line_dash(shape),
                                                 }
                                             });
                                             let sx = if shape.escapes_cell

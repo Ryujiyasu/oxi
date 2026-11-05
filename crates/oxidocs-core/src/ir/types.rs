@@ -1521,6 +1521,9 @@ pub struct Shape {
     /// margin-left, not cell_x+pad). Default false = normal cell-relative.
     #[serde(default)]
     pub escapes_cell: bool,
+    /// DrawingML a:ln/a:prstDash (None = solid).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_dash: Option<String>,
 }
 
 /// A gradient color stop

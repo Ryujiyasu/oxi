@@ -8442,6 +8442,26 @@ fn parse_drawing(
                     // `_pb_shape_cmpd_shadow_gen.py`: dist 9 at 315/45/135/0 deg ->
                     // (+-6.36, +-6.36) / (9, 0); alpha 40% black over white -> 154.
                     // ja/reports__5373dd8a's masthead roundRect.
+                    // OXI_HIDDEN_EFFECTS_SKIP (2026-11-06, default ON, opt-out _DISABLE): an
+                    // a14:hiddenEffects / hiddenFill / hiddenLine extension keeps a setting
+                    // the user turned off; Word draws none of it. blind-J ja/administrative
+                    // __1fc69a4f p4's two access boxes (white fill, 1pt dashed 9BBB59,
+                    // a:effectLst empty, hidden outerShdw 868686): Word's PDF has no
+                    // shadow; Oxi drew the boxes grey.
+                    "hiddenEffects" | "hiddenFill" | "hiddenLine"
+                        if !crate::env_flag!("OXI_HIDDEN_EFFECTS_SKIP_DISABLE") =>
+                    {
+                        let mut sd = 1;
+                        while sd > 0 {
+                            match reader.read_event() {
+                                Ok(Event::Start(_)) => sd += 1,
+                                Ok(Event::End(_)) => sd -= 1,
+                                Ok(Event::Eof) | Err(_) => break,
+                                _ => {}
+                            }
+                        }
+                        depth -= 1;
+                    }
                     "outerShdw" if !crate::env_flag!("OXI_TXBX_SHADOW_DISABLE") => {
                         let (mut dist, mut dir) = (0.0f32, 0.0f32);
                         for attr in e.attributes().flatten() {
@@ -10416,6 +10436,7 @@ fn parse_drawing(
             anchor_wrap: wrap_type,
             is_vml: false, // DrawingML
             escapes_cell: false,
+            stroke_dash: if has_no_stroke { None } else { stroke_dash.clone() },
         })
     } else {
         None
@@ -12248,6 +12269,7 @@ fn parse_vml_pict(
         anchor_wrap: None,
         is_vml: true, // legacy VML <w:pict> shape
         escapes_cell,
+        stroke_dash: None,
     });
 
     Ok(DrawingResult {

@@ -543,9 +543,15 @@ unsafe fn render_page_elements(
                     render_image(rt, &page_factory_handle(rt)?, el.x, el.y, el.width, el.height, data, *crop, *rotation)?;
                 }
             }
-            LayoutContent::PresetShape { shape_type, stroke_color, stroke_width, flip_h, flip_v, arrow_head, arrow_tail } => {
-                render_preset_shape(rt, el.x, el.y, el.width, el.height,
-                    shape_type, stroke_color.as_deref(), *stroke_width, *flip_h, *flip_v, *arrow_head, *arrow_tail)?;
+            LayoutContent::PresetShape { shape_type, stroke_color, stroke_width, flip_h, flip_v, arrow_head, arrow_tail, dash } => {
+                if let (Some(dash), "line") = (dash.as_deref(), shape_type.as_str()) {
+                    let (x1, x2) = if *flip_h { (el.x + el.width, el.x) } else { (el.x, el.x + el.width) };
+                    let (y1, y2) = if *flip_v { (el.y + el.height, el.y) } else { (el.y, el.y + el.height) };
+                    render_line(rt, x1, y1, x2, y2, stroke_color.as_deref(), *stroke_width, Some(dash))?;
+                } else {
+                    render_preset_shape(rt, el.x, el.y, el.width, el.height,
+                        shape_type, stroke_color.as_deref(), *stroke_width, *flip_h, *flip_v, *arrow_head, *arrow_tail)?;
+                }
             }
             LayoutContent::WatermarkText { text, color, rotation, font_family } => {
                 if exclude.iter().any(|e| e == "watermark") { continue; }
