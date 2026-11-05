@@ -10747,7 +10747,18 @@ cells={} pitch={:.2} text={:?}",
                         first = false;
                         law_pos = 0.0;
                     } else {
-                        law_pos += prev_desc + prev_after + sb + asc;
+                        // OXI_CLNSP_COLLAPSE (2026-11-05, default ON, opt-out _DISABLE): a
+                        // box paragraph's after and the next one's before collapse to the
+                        // larger. `_pb_txbx_collapse_gen.py` (slice of blind-J en/creative
+                        // __045bc787's side box, Arial 12 line 240): A->B baseline 13.8 +
+                        // max(after, before) for 10/10, 10/0, 0/10, 20/10, 10/20 (23.88 /
+                        // 23.88 / 23.76 / 33.84 / 33.84); Oxi added them (33.8 / 43.8).
+                        let gap = if crate::env_flag!("OXI_CLNSP_COLLAPSE_DISABLE") {
+                            prev_after + sb
+                        } else {
+                            prev_after.max(sb)
+                        };
+                        law_pos += prev_desc + gap + asc;
                     }
                     per_line.push((idxs.clone(), cur_base, law_pos));
                     prev_desc = desc;
