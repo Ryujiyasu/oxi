@@ -3520,9 +3520,20 @@ impl<'a> LineBreaker<'a> {
                 // grid and none): kanji and ＭＳ ゴシック kana +2s, P-face kana +1s
                 // (に 9.60 -> 10.67 / 11.75). ja/correspondence__17884aa3's
                 // HGP創英角ﾎﾟｯﾌﾟ体 lines held one character fewer than Word.
+                // OXI_BALANCE_PROP_SCALE (2026-11-05, default ON, opt-out _DISABLE): the
+                // em the glyph is judged against carries the run's w:w, as the cell and
+                // estimate paths judge the unscaled em. blind-J ja/creative__9aa11078
+                // (HG丸ｺﾞｼｯｸM-PRO b 16, w 66, spacing -0.9): Word advances every glyph
+                // 8.76 = 10.56 - 2 x 0.9; Oxi read the 66% glyph as proportional, took
+                // the spacing once (9.66) and lost «ん。» past the text box edge.
+                let prop_em = if crate::env_flag!("OXI_BALANCE_PROP_SCALE_DISABLE") {
+                    1.0
+                } else {
+                    style.text_scale.map(|s| s / 100.0).filter(|s| *s > 0.0).unwrap_or(1.0)
+                };
                 let balance_prop_once = !crate::env_flag!("OXI_BALANCE_PROP_ONCE_DISABLE")
                     && !vertical
-                    && width_before_tracking < 0.98 * font_size;
+                    && width_before_tracking < 0.98 * font_size * prop_em;
                 if self.balance_single_byte_double_byte_width
                     && if vertical && crate::font::vertical_font_advance_on() {
                         LayoutEngine::vertical_balance_spacing_char(ch)
@@ -3709,6 +3720,14 @@ impl<'a> LineBreaker<'a> {
                 // but shares the balanced space advance next to CJK. Saved
                 // Word controls measure 6pt at 12pt for both space characters;
                 // disabling balance restores their natural space advance.
+                // OXI_BALANCE_EA_SPACE (2026-11-05, default ON, opt-out _DISABLE): the
+                // neighbour that balances a space is any East Asian character, a
+                // fullwidth bracket or U+3000 included (see balanced_cjk_space).
+                let s1333_ea = |c: char| if super::balance_ea_space_on() {
+                    super::balance_ea_neighbour(c)
+                } else {
+                    kinsoku::is_cjk_ideograph_or_kana(c)
+                };
                 if matches!(ch, ' ' | '\u{00a0}') && s1333_balance {
                     let prev_is_cjk = chars_vec
                         .get(char_index.wrapping_sub(1))
@@ -3722,7 +3741,7 @@ impl<'a> LineBreaker<'a> {
                                 None
                             }
                         })
-                        .map_or(false, kinsoku::is_cjk_ideograph_or_kana);
+                        .map_or(false, s1333_ea);
                     let next_is_cjk = chars_vec
                         .get(char_index + 1)
                         .copied()
@@ -3733,7 +3752,7 @@ impl<'a> LineBreaker<'a> {
                                 None
                             }
                         })
-                        .map_or(false, kinsoku::is_cjk_ideograph_or_kana);
+                        .map_or(false, s1333_ea);
                     // A space that touches another space or NBSP is also half an
                     // em under the balancing setting (any font, across runs); a
                     // lone space between Latin words keeps its natural advance.
