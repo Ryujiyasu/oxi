@@ -631,9 +631,27 @@ fn cell_proportional_space_grid(ch: char, metrics: &FontMetrics, fs: f32,
     Some((metrics.char_width_em(ch) * fs, delta * if balance { 0.5 } else { 1.0 }))
 }
 
+/// OXI_BALANCE_EA_SPACE (2026-11-05, default ON, opt-out _DISABLE): under
+/// balanceSingleByteDoubleByteWidth an ASCII space beside an East Asian character
+/// (either side, a fullwidth bracket or U+3000 included) advances half the font
+/// size, in a Latin face too. `_pb_hint_ea_space_gen.py` (slice of blind-J
+/// ja/reports__7a8268ce, Arial 11 between «医» and «（»): « » / «  » / « a» / «a »
+/// take 5.52 / 11.04 / 5.52 / 5.52 for the space, «a b» keeps Arial's 3.07;
+/// without the flag every space is 3.12, and the run's hint does not matter.
+/// The curly quotes and dashes that `is_cjk` also claims are not East Asian
+/// neighbours here: Word keeps the space before «“This» at the Latin width
+/// (golden db9ca18368cd p1, -0.13 SSIM when it was halved).
+pub(crate) fn balance_ea_neighbour(c: char) -> bool {
+    kinsoku::is_cjk_ideograph_or_kana(c)
+        || matches!(c, '\u{3000}'..='\u{303F}' | '\u{FF01}'..='\u{FF60}' | '\u{FFE0}'..='\u{FFE6}')
+}
+
 fn balanced_cjk_space(ch: char, previous: Option<char>, next: Option<char>) -> bool {
-    ch == ' ' && (previous.map_or(false, kinsoku::is_cjk_ideograph_or_kana)
-        || next.map_or(false, kinsoku::is_cjk_ideograph_or_kana))
+    ch == ' ' && (previous.map_or(false, balance_ea_neighbour) || next.map_or(false, balance_ea_neighbour))
+}
+
+pub(crate) fn balance_ea_space_on() -> bool {
+    !crate::env_flag!("OXI_BALANCE_EA_SPACE_DISABLE")
 }
 
 fn autospace_cell_segments(
@@ -10729,7 +10747,18 @@ cells={} pitch={:.2} text={:?}",
                         first = false;
                         law_pos = 0.0;
                     } else {
-                        law_pos += prev_desc + prev_after + sb + asc;
+                        // OXI_CLNSP_COLLAPSE (2026-11-05, default ON, opt-out _DISABLE): a
+                        // box paragraph's after and the next one's before collapse to the
+                        // larger. `_pb_txbx_collapse_gen.py` (slice of blind-J en/creative
+                        // __045bc787's side box, Arial 12 line 240): A->B baseline 13.8 +
+                        // max(after, before) for 10/10, 10/0, 0/10, 20/10, 10/20 (23.88 /
+                        // 23.88 / 23.76 / 33.84 / 33.84); Oxi added them (33.8 / 43.8).
+                        let gap = if crate::env_flag!("OXI_CLNSP_COLLAPSE_DISABLE") {
+                            prev_after + sb
+                        } else {
+                            prev_after.max(sb)
+                        };
+                        law_pos += prev_desc + gap + asc;
                     }
                     per_line.push((idxs.clone(), cur_base, law_pos));
                     prev_desc = desc;
@@ -21296,7 +21325,7 @@ cells={} pitch={:.2} text={:?}",
                     }
                 }
                 let mut deferred_fullwidth_grid = 0.0;
-                if crate::env_flag!("OXI_CELL_BALANCED_SPACE")
+                if balance_ea_space_on()
                     && self.balance_single_byte_double_byte_width
                     && balanced_cjk_space(ch,
                         s1082_here.checked_sub(1).and_then(|i| s1082_para_chars.get(i).copied()),

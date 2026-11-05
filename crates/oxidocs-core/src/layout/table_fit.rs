@@ -5746,7 +5746,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 }
                                             }
                                             let mut deferred_fullwidth_grid = 0.0;
-                                            if crate::env_flag!("OXI_CELL_BALANCED_SPACE")
+                                            if super::balance_ea_space_on()
                                                 && self.balance_single_byte_double_byte_width
                                                 && balanced_cjk_space(ch,
                                                     (s586_run_offset + s586_ci).checked_sub(1)
@@ -10074,7 +10074,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         (para.style.auto_space_de && self.doc_autospace()),
                                                         (para.style.auto_space_dn && self.doc_autospace()),
                                                         None,
-                                                        crate::env_flag!("OXI_CELL_BALANCED_SPACE")
+                                                        super::balance_ea_space_on()
                                                             && self.balance_single_byte_double_byte_width,
                                                         frag_idx.checked_sub(1).and_then(|i| line.get(i))
                                                             .and_then(|f| f.0.chars().last()),
