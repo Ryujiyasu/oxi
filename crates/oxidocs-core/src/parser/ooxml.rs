@@ -8001,10 +8001,22 @@ pub(super) fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, 
     let (mut r, mut g, mut b) = (r, g, b);
 
     // Apply tint (move towards white)
+    // OXI_TINT_LINEAR (2026-11-06, default ON, opt-out _DISABLE): a:tint mixes with
+    // white in LINEAR light (sRGB decoded, mixed, encoded). blind-J ja/reports__
+    // 7a8daf36's doughnut (dk1 = black, tint 88500 / 75000): Word's PDF fills 0.373 /
+    // 0.537 = encode(0.115) / encode(0.25); the sRGB-space mix gave 0.115 / 0.25.
     if let Some(t) = tint {
-        r = r * t + (1.0 - t);
-        g = g * t + (1.0 - t);
-        b = b * t + (1.0 - t);
+        if std::env::var_os("OXI_TINT_LINEAR_DISABLE").is_none() {
+            let dec = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+            let enc = |c: f32| if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+            r = enc(dec(r) * t + (1.0 - t));
+            g = enc(dec(g) * t + (1.0 - t));
+            b = enc(dec(b) * t + (1.0 - t));
+        } else {
+            r = r * t + (1.0 - t);
+            g = g * t + (1.0 - t);
+            b = b * t + (1.0 - t);
+        }
     }
 
     // Apply shade (move towards black)
