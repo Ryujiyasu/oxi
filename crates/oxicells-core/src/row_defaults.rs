@@ -36,7 +36,7 @@ static FONT_DEFAULT_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("Aptos Narrow", 144, 62, 49),
     ("Aptos Narrow", 192, 85, 66),
     ("Aptos Narrow", 288, 125, 98),
-    ("Arial", 24, 11, 7),
+    ("Arial", 24, 11, 9),
     ("Arial", 32, 15, 12),
     ("Arial", 36, 16, 13),
     ("Arial", 40, 17, 14),
@@ -131,6 +131,7 @@ static FONT_DEFAULT_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("Consolas", 144, 61, 49),
     ("Consolas", 192, 81, 65),
     ("Consolas", 288, 121, 97),
+    ("Courier New", 24, 11, 9),
     ("Courier New", 32, 15, 12),
     ("Courier New", 38, 18, 14),
     ("Courier New", 42, 19, 15),
@@ -246,7 +247,7 @@ static FONT_DEFAULT_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("Terminal", 40, 17, 14),
     ("Terminal", 48, 19, 14),
     ("Terminal", 56, 21, 18),
-    ("Times New Roman", 24, 11, 10),
+    ("Times New Roman", 24, 11, 9),
     ("Times New Roman", 32, 15, 12),
     ("Times New Roman", 34, 15, 12),
     ("Times New Roman", 36, 16, 13),
@@ -851,5 +852,36 @@ mod tests {
             ("Arial", 12.0, false, false, false), ("Arial", 72.0, false, false, true),
             ("Arial", 12.0, false, false, false),
         ]), Some(39));
+    }
+
+    #[test]
+    fn small_fonts_share_the_normal_baseline_in_both_directions() {
+        for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+            for face in ["Arial", "Times New Roman", "Courier New"] {
+                assert_eq!(
+                    font_cell_line_box(face, 6.0, bold, italic, "Arial", 8.0, false)
+                        .map(|line| line.0),
+                    Some(15),
+                    "{face}: bold={bold}, italic={italic}",
+                );
+            }
+        }
+        assert_eq!(
+            font_cell_line_box("Arial", 12.0, false, false, "Arial", 6.0, false)
+                .map(|line| line.0),
+            Some(20),
+        );
+        assert_eq!(
+            font_cell_line_box("Times New Roman", 6.0, false, false, "Arial", 6.0, false)
+                .map(|line| line.0),
+            Some(11),
+        );
+        assert_eq!(
+            super::font_row_line_box("Arial", 6.0, [
+                ("Arial", 8.0, false, false, false),
+                ("Times New Roman", 6.0, false, false, false),
+            ]).map(|line| line.0),
+            Some(15),
+        );
     }
 }
