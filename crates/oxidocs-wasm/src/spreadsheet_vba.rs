@@ -3686,7 +3686,7 @@ struct WorkbookHost<'a> {
     find_format_font_color: Option<Option<String>>,
     find_format_font_color_index: Option<i64>,
     find_format_font_name: Option<Option<String>>,
-    find_format_font_size: Option<f32>,
+    find_format_font_size: Option<f64>,
     find_format_font_theme: Option<usize>,
     find_format_font_theme_font: Option<i64>,
     find_format_font_tint: Option<f64>,
@@ -3721,7 +3721,7 @@ struct WorkbookHost<'a> {
     replace_format_font_face_actions: Vec<FormatFontFaceAction>,
     replace_format_font_name: Option<Option<String>>,
     replace_format_font_paint_actions: Vec<FormatFontPaintAction>,
-    replace_format_font_size: Option<f32>,
+    replace_format_font_size: Option<f64>,
     replace_format_font_theme_font: Option<i64>,
     replace_format_font_touched: bool,
     replace_format_formula_hidden: Option<bool>,
@@ -11377,6 +11377,15 @@ impl<'a> WorkbookHost<'a> {
 
     /// The dress every character of a stretch shares, or None where they
     /// differ.
+    fn effective_theme_font(&self, dress: &Dress) -> i64 {
+        if dress.font.is_some() || dress.api_font.is_some()
+            || dress.reference.as_ref().and_then(|reference| reference.scheme.as_deref()).is_some() {
+            dress.theme_font()
+        } else {
+            Dress::of_style(&self.workbook.default_style).theme_font()
+        }
+    }
+
     fn uniform_character_dress<T: PartialEq + Clone>(
         &self,
         at: CellAddress,
@@ -11576,7 +11585,7 @@ impl<'a> WorkbookHost<'a> {
         let default_name = self.workbook.default_style.latin_font_name().unwrap_or("Calibri").to_string();
         let default_size = self.workbook.default_style.font_size.unwrap_or(11.0);
         if name.eq_ignore_ascii_case("themefont") {
-            return Ok(Some(Value::Integer(self.uniform_font(CellRange::single(at),Dress::theme_font)?.unwrap_or(0))));
+            return Ok(Some(Value::Integer(self.uniform_font(CellRange::single(at),|dress| self.effective_theme_font(dress))?.unwrap_or(0))));
         }
         if name.eq_ignore_ascii_case("themecolor") || name.eq_ignore_ascii_case("tintandshade") {
             let held=self.uniform_character_dress(at,start,length,Dress::theme_color);
@@ -11605,8 +11614,8 @@ impl<'a> WorkbookHost<'a> {
         } else if name.eq_ignore_ascii_case("underline") {
             self.uniform_character_dress(at, start, length, dress_underline).map(Value::Integer)
         } else if name.eq_ignore_ascii_case("size") {
-            self.uniform_character_dress(at, start, length, |dress| dress.size)
-                .map(|held| Value::Double(f64::from(held.unwrap_or(default_size))))
+            self.uniform_character_dress(at, start, length, |dress| dress.size.map(font_size_points))
+                .map(|held| Value::Double(held.unwrap_or_else(|| font_size_points(default_size))))
         } else if name.eq_ignore_ascii_case("name") {
             self.uniform_character_dress(at, start, length, |dress| dress.api_font.clone())
                 .map(|held| Value::String(held.unwrap_or(default_name)))
@@ -18824,7 +18833,7 @@ impl<'a> WorkbookHost<'a> {
         }
         if self.find_format_font_size.is_some_and(|wanted| {
             let actual = style.font_size.unwrap_or_else(|| self.workbook.default_style.font_size.unwrap_or(11.0));
-            actual != wanted
+            wanted > 0.0 && font_size_points(actual) != wanted
         }) {
             return false;
         }
@@ -19175,7 +19184,7 @@ impl<'a> WorkbookHost<'a> {
         let merge_cells = self.replace_format_merge_cells;
         let borders = self.replace_format_borders.clone();
         let paint_only=bold.is_none() && italic.is_none() && strikethrough.is_none()
-            && underline.is_none() && name.is_none() && size.is_none() && face_actions.is_empty()
+            && underline.is_none() && name.is_none() && size.is_none_or(|size| size <= 0.0) && face_actions.is_empty()
             && subscript.is_none() && superscript.is_none();
         if font_touched {
             // Unspecified criteria preserve each target cell's font flags.
@@ -19199,8 +19208,8 @@ impl<'a> WorkbookHost<'a> {
                     self.set(&font, "Name", value.map(Value::String).unwrap_or(Value::Empty))?;
                 }
             }
-            if let Some(value) = size {
-                self.set(&font, "Size", Value::Double(f64::from(value)))?;
+            if let Some(value) = size.filter(|size| *size > 0.0) {
+                self.set(&font, "Size", Value::Double(value.min(409.55)))?;
             }
             if paint_actions.is_empty() {
                 if let Some(value) = font_color {
@@ -25553,7 +25562,7 @@ struct ApplicationProperties {
     find_format_font_color: Option<Option<String>>,
     find_format_font_color_index: Option<i64>,
     find_format_font_name: Option<Option<String>>,
-    find_format_font_size: Option<f32>,
+    find_format_font_size: Option<f64>,
     find_format_font_theme: Option<usize>,
     find_format_font_theme_font: Option<i64>,
     find_format_font_tint: Option<f64>,
@@ -25588,7 +25597,7 @@ struct ApplicationProperties {
     replace_format_font_face_actions: Vec<FormatFontFaceAction>,
     replace_format_font_name: Option<Option<String>>,
     replace_format_font_paint_actions: Vec<FormatFontPaintAction>,
-    replace_format_font_size: Option<f32>,
+    replace_format_font_size: Option<f64>,
     replace_format_font_theme_font: Option<i64>,
     replace_format_font_touched: bool,
     replace_format_formula_hidden: Option<bool>,
@@ -31479,7 +31488,7 @@ impl Host for WorkbookHost<'_> {
                 }).unwrap_or(Value::Null)));
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("size") => {
-                return Ok(Some(self.find_format_font_size.map(|size| Value::Double(f64::from(size))).unwrap_or(Value::Null)));
+                return Ok(Some(self.find_format_font_size.map(Value::Double).unwrap_or(Value::Null)));
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("color") => {
                 let (color, _, _, _) = self.find_format_font_paint_state();
@@ -31639,7 +31648,7 @@ impl Host for WorkbookHost<'_> {
                 }).unwrap_or(Value::Null)));
             }
             Some(HostObject::ReplaceFormatFont) if name.eq_ignore_ascii_case("size") => {
-                return Ok(Some(self.replace_format_font_size.map(|size| Value::Double(f64::from(size))).unwrap_or(Value::Null)));
+                return Ok(Some(self.replace_format_font_size.map(Value::Double).unwrap_or(Value::Null)));
             }
             Some(HostObject::ReplaceFormatFont) if name.eq_ignore_ascii_case("color") => {
                 let (color, _, _, _) = format_font_paint_state(&self.replace_format_font_paint_actions, &self.indexed_colour_palette());
@@ -31814,7 +31823,7 @@ impl Host for WorkbookHost<'_> {
             // xlThemeFontMinor reads 2 until a face is named again.
             // OutlineFont and Shadow are always False.
             if name.eq_ignore_ascii_case("themefont") {
-                return Ok(Some(Value::Integer(self.uniform_font(range,Dress::theme_font)?.unwrap_or(0))));
+                return Ok(Some(Value::Integer(self.uniform_font(range,|dress| self.effective_theme_font(dress))?.unwrap_or(0))));
             }
             if name.eq_ignore_ascii_case("outlinefont") || name.eq_ignore_ascii_case("shadow") {
                 return Ok(Some(Value::Boolean(false)));
@@ -31885,11 +31894,11 @@ impl Host for WorkbookHost<'_> {
                 // not answer Empty.
                 let fallback = self.workbook.default_style.font_size;
                 return self
-                    .uniform_font(range, |dress| dress.size)
+                    .uniform_font(range, |dress| dress.size.map(font_size_points))
                     .map(|value| {
                         Some(match value {
-                            Some(Some(value)) => Value::Double(f64::from(value)),
-                            Some(None) => Value::Double(f64::from(fallback.unwrap_or(11.0))),
+                            Some(Some(value)) => Value::Double(value),
+                            Some(None) => Value::Double(font_size_points(fallback.unwrap_or(11.0))),
                             None => Value::Null,
                         })
                     });
@@ -33382,7 +33391,7 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("size") => {
-                self.find_format_font_size = font_size(&value)?;
+                self.find_format_font_size = format_font_size(&value)?;
                 return Ok(true);
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("color") => {
@@ -33657,7 +33666,7 @@ impl Host for WorkbookHost<'_> {
                         self.replace_format_font_name = assigned.clone();
                         self.replace_format_font_face_actions.push(FormatFontFaceAction::Name(assigned.flatten()));
                     }
-                    "size" => self.replace_format_font_size = font_size(&value)?,
+                    "size" => self.replace_format_font_size = format_font_size(&value)?,
                     "color" => {
                         let colour = style_color(&value, "ReplaceFormat.Font.Color")?;
                         self.replace_format_font_color = Some(colour.clone());
@@ -36044,6 +36053,25 @@ fn format_font_style(value: &Value) -> Result<Option<(bool, bool)>, String> {
     }
 }
 
+fn format_font_size(value: &Value) -> Result<Option<f64>, String> {
+    if matches!(value, Value::Null) { return Ok(None); }
+    let number = match value {
+        Value::Empty | Value::Missing | Value::Error(_) => Some(0.0),
+        Value::Boolean(held) => Some(if *held { -1.0 } else { 0.0 }),
+        Value::String(text) => text.trim().parse::<f64>().ok(),
+        _ => any_number(value),
+    }.filter(|number| number.is_finite())
+        .ok_or_else(|| host_error(1004, "Unable to set the Size property of the Font class"))?;
+    let rounded = number.round_ties_even();
+    if !(0.0..f64::from(i32::MAX)).contains(&rounded) {
+        return Err(host_error(1004, "Unable to set the Size property of the Font class"));
+    }
+    let twips = rounded * 20.0;
+    if twips > f64::from(u32::MAX) { return Ok(None); }
+    let native_twips = (twips as u32) as i32;
+    Ok(Some(f64::from(native_twips) / 20.0))
+}
+
 fn format_font_underline(value: &Value) -> Result<Option<i64>, String> {
     if matches!(value, Value::Null) { return Ok(None); }
     let number = match value {
@@ -38097,15 +38125,20 @@ fn number_format_readable(format: &str) -> bool {
 
 fn font_size(value: &Value) -> Result<Option<f32>, String> {
     let number = match value {
-        Value::Empty => return Ok(None),
-        value if any_number(value).is_some() => any_number(value).unwrap_or_default(),
-        _ => return Err("Font.Size must be numeric".to_string()),
-    };
-    // One to 409 points: measured, 0.5 and 410 are 1004 where 409 is taken.
-    if !number.is_finite() || !(1.0..=409.0).contains(&number) {
+        Value::String(text) => text.trim().parse::<f64>().ok(),
+        Value::Boolean(held) => Some(if *held { 1.0 } else { 0.0 }),
+        _ => any_number(value),
+    }.filter(|number| number.is_finite())
+        .ok_or_else(|| host_error(1004, "Unable to set the Size property of the Font class"))?;
+    let twips = (number * 20.0).round();
+    if !(20.0..=8191.0).contains(&twips) {
         return Err(host_error(1004, "Unable to set the Size property of the Font class"));
     }
-    Ok(Some(number as f32))
+    Ok(Some((twips / 20.0) as f32))
+}
+
+fn font_size_points(size: f32) -> f64 {
+    (f64::from(size) * 20.0).round() / 20.0
 }
 
 fn color_number(value: &Value, property: &str) -> Result<Option<u32>, String> {
@@ -42766,7 +42799,7 @@ struct WorkbookHostState {
     find_format_font_color: Option<Option<String>>,
     find_format_font_color_index: Option<i64>,
     find_format_font_name: Option<Option<String>>,
-    find_format_font_size: Option<f32>,
+    find_format_font_size: Option<f64>,
     find_format_font_theme: Option<usize>,
     find_format_font_theme_font: Option<i64>,
     find_format_font_tint: Option<f64>,
@@ -42801,7 +42834,7 @@ struct WorkbookHostState {
     replace_format_font_face_actions: Vec<FormatFontFaceAction>,
     replace_format_font_name: Option<Option<String>>,
     replace_format_font_paint_actions: Vec<FormatFontPaintAction>,
-    replace_format_font_size: Option<f32>,
+    replace_format_font_size: Option<f64>,
     replace_format_font_theme_font: Option<i64>,
     replace_format_font_touched: bool,
     replace_format_formula_hidden: Option<bool>,
@@ -78692,6 +78725,114 @@ End Sub
         let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
         execute_with_host(&module, "Act", vec![], &mut host).unwrap();
         assert_eq!(host.take_debug_output(), vec!["5\t0.399975585192419\t1", "5\t0.399975585192419\t1", "2\t0\t0"]);
+    }
+
+    #[test]
+    fn vba_find_replace_format_font_size_rounds_and_clears_criteria() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            r#"Public Sub Act()
+               Application.FindFormat.Clear
+               Debug.Print VarType(Application.FindFormat.Font.Size)
+               Application.FindFormat.Font.Size = "12.5"
+               Debug.Print Application.FindFormat.Font.Size, VarType(Application.FindFormat.Font.Size)
+               Application.FindFormat.Font.Size = Empty
+               Debug.Print Application.FindFormat.Font.Size
+               Application.FindFormat.Font.Size = Null
+               Debug.Print VarType(Application.FindFormat.Font.Size)
+               Application.FindFormat.Font.Size = 16777217#
+               On Error Resume Next
+               Application.FindFormat.Font.Size = 2147483647#
+               Debug.Print Err.Number, Application.FindFormat.Font.Size
+               Err.Clear
+               Application.ReplaceFormat.Clear
+               Application.ReplaceFormat.Font.Size = True
+               Debug.Print Err.Number, VarType(Application.ReplaceFormat.Font.Size)
+               Err.Clear
+               Application.ReplaceFormat.Font.Size = CVErr(2015)
+               Debug.Print Application.ReplaceFormat.Font.Size, VarType(Application.ReplaceFormat.Font.Size)
+             End Sub
+"#,
+        ).unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        assert_eq!(host.take_debug_output(), vec![
+            "1", "12\t5", "0", "1", "1004\t16777217", "1004\t1", "0\t5",
+        ]);
+    }
+
+    #[test]
+    fn vba_find_replace_format_font_size_zero_preserves_target_sizes() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            r#"Public Sub Act()
+               Range("A1:A4").Value2 = "x"
+               Range("A1").Font.Size = 10
+               Range("A2").Font.Size = 10.5
+               Range("A3").Font.Size = 11
+               Range("A4").Font.Size = 12
+               Range("A2").Font.Bold = True
+               Range("A3").Font.Italic = True
+               Range("A4").Font.FontStyle = "Bold Italic"
+               Application.FindFormat.Clear
+               Application.FindFormat.Font.Size = 10.5
+               Debug.Print Range("A1:A4").Find("x", After:=Range("A4"), SearchFormat:=True).Address
+               Application.FindFormat.Font.Size = 0
+               Debug.Print Range("A1:A4").Find("x", After:=Range("A1"), SearchFormat:=True).Address
+               Application.ReplaceFormat.Clear
+               Application.ReplaceFormat.Font.Size = 0
+               Range("A1:A4").Replace "x", "y", xlWhole, xlByRows, False, False, False, True
+               Dim i As Long
+               For i = 1 To 4
+                 Debug.Print Cells(i, 1).Font.Size
+               Next
+               Application.ReplaceFormat.Font.Size = 410
+               Range("A1:A4").Replace "y", "z", xlWhole, xlByRows, False, False, False, True
+               For i = 1 To 4
+                 Debug.Print Cells(i, 1).Font.Size, Cells(i, 1).Font.Bold, Cells(i, 1).Font.Italic
+               Next
+             End Sub
+"#,
+        ).unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        assert_eq!(host.take_debug_output(), vec![
+            "$A$1", "$A$2", "10", "10.5", "11", "12",
+            "409.55\tFalse\tFalse", "409.55\tTrue\tFalse",
+            "409.55\tFalse\tTrue", "409.55\tTrue\tTrue",
+        ]);
+    }
+
+    #[test]
+    fn vba_font_size_rounds_cell_and_character_sizes_to_twips() {
+        let mut workbook = workbook();
+        workbook.default_style.font_reference = Some(Box::new(oxicells_core::ir::FontReference {
+            scheme: Some("minor".into()),
+            ..Default::default()
+        }));
+        let module = parse_module(
+            r#"Public Sub Act()
+               Range("A1").Value2 = "MM"
+               Debug.Print Range("A1").Font.ThemeFont, Range("A1").Characters(1, 1).Font.ThemeFont
+               Range("A1").Font.Size = "10.125"
+               Debug.Print Range("A1").Font.Size, VarType(Range("A1").Font.Size)
+               Range("A1").Characters(1, 1).Font.Size = 1.025
+               Debug.Print Range("A1").Characters(1, 1).Font.Size, Range("A1").Characters(2, 1).Font.Size
+               Range("A1").Font.Size = 0.99
+               Debug.Print Range("A1").Font.Size
+               Range("A1").Font.Size = 409.56
+               Debug.Print Range("A1").Font.Size
+               On Error Resume Next
+               Range("A1").Font.Size = 409.6
+               Debug.Print Err.Number, Range("A1").Font.Size
+             End Sub
+"#,
+        ).unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        assert_eq!(host.take_debug_output(), vec![
+            "2\t2", "10.15\t5", "1.05\t10.15", "1", "409.55", "1004\t409.55",
+        ]);
     }
 
     #[test]
