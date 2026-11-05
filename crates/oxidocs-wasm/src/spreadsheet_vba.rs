@@ -11358,7 +11358,24 @@ impl<'a> WorkbookHost<'a> {
         update: impl Fn(&mut Dress),
     ) -> Result<(), String> {
         self.guard_formats(at.sheet, "formatting characters")?;
+        let normal = self.workbook.default_style.clone();
         let cell = self.cell_for_characters(at)?;
+        // Redressing promotes the first character's font to the cell font.
+        // Resolve sparse defaults first so the remaining characters retain
+        // their original size and theme when that first character changes.
+        cell.style.font_size = Some(cell.style.font_size.or(normal.font_size).unwrap_or(11.0));
+        if cell.style.latin_font_name().is_none()
+            && cell.style.font_reference.as_ref().and_then(|r| r.scheme.as_ref()).is_none()
+        {
+            cell.style.font_name = normal.font_name.clone();
+            cell.style.font_family = cell.style.font_family.or(normal.font_family);
+            cell.style.font_charset = cell.style.font_charset.or(normal.font_charset);
+            if let Some(default) = normal.font_reference.as_ref() {
+                let reference = cell.style.font_reference.get_or_insert_with(Default::default);
+                reference.latin_name = default.latin_name.clone();
+                reference.scheme = default.scheme.clone();
+            }
+        }
         if !cell.value.is_text() || cell.formula.is_some() {
             let mut dress = Dress::of_style(&cell.style);
             update(&mut dress);
@@ -21132,6 +21149,7 @@ impl<'a> WorkbookHost<'a> {
                 }
                 if clear_formats {
                     cell.style = CellStyle::default();
+                    cell.runs.clear();
                 }
             }
         }
@@ -78833,6 +78851,35 @@ End Sub
         assert_eq!(host.take_debug_output(), vec![
             "2\t2", "10.15\t5", "1.05\t10.15", "1", "409.55", "1004\t409.55",
         ]);
+    }
+
+    #[test]
+    fn vba_sparse_character_fonts_inherit_cell_theme_after_save() {
+        let bytes=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let book=oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+        let code=r#"Public Sub Act()
+            Range("A1").ClearFormats
+            Range("A1").Value2 = "MM"
+            Range("A1").Characters(1, 1).Font.Size = 12
+            Debug.Print Range("A1").Font.ThemeFont, Range("A1").Characters(1, 1).Font.ThemeFont
+            Debug.Print Range("A1").Characters(1, 1).Font.Size, Range("A1").Characters(2, 1).Font.Size
+            End Sub"#;
+        let outcome=execute_workbook_action(book,code,Some("Act"),vec![],0,failure_context()).unwrap();
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.debug_output,["2\t2","12\t11"]);
+        let mut editor=oxicells_core::XlsxEditor::new(bytes).unwrap();
+        editor.apply_workbook(&outcome.workbook).unwrap();
+        let saved=editor.save().unwrap();
+        let reopened=oxicells_core::parse_xlsx_preserving_values(&saved).unwrap();
+        let read=r#"Public Sub Act()
+            Debug.Print Range("A1").Font.ThemeFont, Range("A1").Characters(1, 1).Font.ThemeFont
+            Debug.Print Range("A1").Characters(1, 1).Font.Size, Range("A1").Characters(2, 1).Font.Size
+            Range("A1").ClearFormats
+            Debug.Print Range("A1").Characters(1, 1).Font.Size, Range("A1").Characters(2, 1).Font.Size
+            End Sub"#;
+        let outcome=execute_workbook_action(reopened,read,Some("Act"),vec![],0,failure_context()).unwrap();
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.debug_output,["2\t2","12\t11","11\t11"]);
     }
 
     #[test]

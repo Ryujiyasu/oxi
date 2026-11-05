@@ -1211,7 +1211,7 @@ impl XlsxEditor {
             let (mut patched, indices) = if distinct.is_empty() {
                 (xml, Vec::new())
             } else {
-                patch_styles_xml(&xml, &distinct)?
+                patch_styles_xml(&xml, &distinct, &self.workbook.default_style)?
             };
             if let Some(indexed_colors) = &self.indexed_colors {
                 patched = patch_indexed_colors_xml(&patched, indexed_colors)?;
@@ -6717,6 +6717,7 @@ fn edit_for(cell: &crate::ir::Cell, row: u32, multiple: &dyn Fn(&str) -> bool) -
 fn patch_styles_xml(
     xml: &str,
     wanted: &[CellStyle],
+    default_style: &CellStyle,
 ) -> Result<(String, Vec<u32>), XlsxError> {
     if wanted.is_empty() {
         return Ok((xml.to_string(), Vec::new()));
@@ -6740,7 +6741,23 @@ fn patch_styles_xml(
 
     for (offset, style) in wanted.iter().enumerate() {
         let offset = offset as u32;
-        fonts.push_str(&font_xml(style));
+        // A sparse font keeps the workbook's default face in memory. A new
+        // OOXML font record must carry its name and scheme together, otherwise
+        // saving a size-only edit detaches it from the theme.
+        let mut font_style = style.clone();
+        if style.latin_font_name().is_none()
+            && style.font_reference.as_ref().and_then(|r| r.scheme.as_ref()).is_none()
+        {
+            font_style.font_name = default_style.font_name.clone();
+            font_style.font_family = font_style.font_family.or(default_style.font_family);
+            font_style.font_charset = font_style.font_charset.or(default_style.font_charset);
+            if let Some(default) = default_style.font_reference.as_ref() {
+                let reference = font_style.font_reference.get_or_insert_with(Default::default);
+                reference.latin_name = default.latin_name.clone();
+                reference.scheme = default.scheme.clone();
+            }
+        }
+        fonts.push_str(&font_xml(&font_style));
         fills.push_str(&fill_xml(style));
         borders.push_str(&border_xml(style));
 
@@ -13520,6 +13537,43 @@ mod tests {
     }
 
     #[test]
+    fn saving_sparse_font_edits_retains_default_theme_face() {
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        for whole_workbook in [false,true] {
+            for explicit_face in [false,true] {
+                for explicit_color in [false,true] {
+                    let mut editor=XlsxEditor::new(original).unwrap();
+                    let default=editor.workbook().default_style.clone();
+                    let mut style=CellStyle {font_size:Some(12.5),..Default::default()};
+                    if explicit_face {style.font_name=Some("Meiryo".into());}
+                    if explicit_color {
+                        style.font_reference=Some(Box::new(crate::ir::FontReference {
+                            theme:Some(4),..Default::default()
+                        }));
+                    }
+                    if whole_workbook {
+                        let mut edited=editor.workbook().clone();
+                        edited.sheets[0].rows.iter_mut().find(|r|r.index==1).unwrap()
+                            .cells.iter_mut().find(|c|c.col==0).unwrap().style=style;
+                        editor.apply_workbook(&edited).unwrap();
+                    } else {
+                        editor.set_cell_style(0,1,0,style);
+                    }
+                    let saved=editor.save().unwrap();
+                    let restored=parse_xlsx(&saved).unwrap();
+                    let actual=&restored.sheets[0].rows.iter().find(|r|r.index==1).unwrap()
+                        .cells.iter().find(|c|c.col==0).unwrap().style;
+                    assert_eq!(actual.font_size,Some(12.5));
+                    assert_eq!(actual.latin_font_name(),if explicit_face {Some("Meiryo")} else {default.latin_font_name()});
+                    assert_eq!(actual.font_reference.as_ref().and_then(|r|r.scheme.as_deref()),
+                        if explicit_face {None} else {Some("minor")});
+                    assert_eq!(actual.font_reference.as_ref().and_then(|r|r.theme),explicit_color.then_some(4));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn editing_bold_preserves_theme_color_and_latin_font_identity() {
         let bytes=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
         let mut editor=XlsxEditor::new(bytes).unwrap();
@@ -13731,7 +13785,7 @@ mod tests {
             bold: true,
             ..CellStyle::default()
         };
-        let (patched, indices) = patch_styles_xml(STYLES, &[bold]).expect("appends");
+        let (patched, indices) = patch_styles_xml(STYLES, &[bold], &CellStyle::default()).expect("appends");
 
         assert_eq!(indices, vec![1]);
         assert!(patched.contains("<font><b/></font>"));
@@ -13748,7 +13802,7 @@ mod tests {
             number_format: Some("0.000".to_string()),
             ..CellStyle::default()
         };
-        let (patched, _) = patch_styles_xml(STYLES, &[styled]).expect("appends");
+        let (patched, _) = patch_styles_xml(STYLES, &[styled], &CellStyle::default()).expect("appends");
         assert!(patched.contains(r#"<numFmt numFmtId="164" formatCode="0.000"/>"#));
         assert!(patched.contains(r#"numFmtId="164""#));
         assert!(patched.contains(r#"<numFmts count="1">"#));
@@ -13760,7 +13814,7 @@ mod tests {
             number_format: Some("0.00".to_string()),
             ..CellStyle::default()
         };
-        let (patched, _) = patch_styles_xml(STYLES, &[styled]).expect("appends");
+        let (patched, _) = patch_styles_xml(STYLES, &[styled], &CellStyle::default()).expect("appends");
         assert!(!patched.contains("<numFmt "));
         assert!(patched.contains(r#"numFmtId="2""#));
     }
@@ -13774,7 +13828,7 @@ mod tests {
             border_top: Some(BorderLine { style: "thin".to_string(), color: None }),
             ..CellStyle::default()
         };
-        let (patched, _) = patch_styles_xml(STYLES, &[styled]).expect("appends");
+        let (patched, _) = patch_styles_xml(STYLES, &[styled], &CellStyle::default()).expect("appends");
         assert!(patched.contains(r#"<alignment horizontal="center"/>"#));
         assert!(patched.contains(r#"<fgColor rgb="FFFFFF00"/>"#));
         assert!(patched.contains(r#"<color rgb="FFFF0000"/>"#));
@@ -13794,7 +13848,7 @@ mod tests {
             indent: 2,
             ..CellStyle::default()
         };
-        let (patched, _) = patch_styles_xml(STYLES, &[laid_out]).expect("appends");
+        let (patched, _) = patch_styles_xml(STYLES, &[laid_out], &CellStyle::default()).expect("appends");
         assert!(patched.contains(
             r#"<alignment horizontal="left" vertical="top" wrapText="1" shrinkToFit="1" indent="2"/>"#
         ));
@@ -13805,13 +13859,13 @@ mod tests {
     #[test]
     fn a_style_that_lines_nothing_up_writes_no_alignment() {
         let plain = CellStyle { bold: true, ..CellStyle::default() };
-        let (patched, _) = patch_styles_xml(STYLES, &[plain]).expect("appends");
+        let (patched, _) = patch_styles_xml(STYLES, &[plain], &CellStyle::default()).expect("appends");
         assert!(!patched.contains("<alignment"));
     }
 
     #[test]
     fn asking_for_no_styles_changes_nothing() {
-        let (patched, indices) = patch_styles_xml(STYLES, &[]).expect("does nothing");
+        let (patched, indices) = patch_styles_xml(STYLES, &[], &CellStyle::default()).expect("does nothing");
         assert_eq!(patched, STYLES);
         assert!(indices.is_empty());
     }
