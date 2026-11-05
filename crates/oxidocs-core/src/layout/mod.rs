@@ -12833,7 +12833,17 @@ cells={} pitch={:.2} text={:?}",
                     }
                     // S806 (c): the FIRST paragraph's before-spacing sits inside
                     // the reserved stack (replaces the S780 before−desc relief).
-                    if s806_latin && s806_first_before {
+                    // OXI_FTR_FIRST_BEFORE_CJK (2026-11-05, default ON, opt-out _DISABLE):
+                    // the first footer paragraph's before sits inside the reserved stack
+                    // in an East Asian footer too. `_pb_footnote_stack_gen.py` (slice of
+                    // blind-J ja/reports__75ebb654, Microsoft JhengHei footer, empty
+                    // paragraph before 0 / 6 / 24): Word's footnote block ends at 771.75 /
+                    // 765.75 / 747.75 = 841.92 - (49.6 + 20.75 + before); Oxi reserved
+                    // the line alone and stood every arm on 771.5.
+                    let ftr_cjk_before = !s806_latin
+                        && !crate::env_flag!("OXI_S806_DISABLE")
+                        && !crate::env_flag!("OXI_FTR_FIRST_BEFORE_CJK_DISABLE");
+                    if (s806_latin || ftr_cjk_before) && s806_first_before {
                         s806_first_before = false;
                         // S1131 covers the FIRST paragraph's before too: with a
                         // direct `w:spacing` the old guard skipped it, so probe
