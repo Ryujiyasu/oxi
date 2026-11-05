@@ -701,6 +701,7 @@ impl OoxmlParser {
         let fn_pos_beneath = self.parse_fn_pos_beneath();
         let endnote_sep_line = self.parse_endnote_sep_line();
         let compress_punctuation = self.parse_compress_punctuation();
+        let no_punctuation_kerning = self.parse_compat_bool_flag("noPunctuationKerning");
         let wp_justification = self.parse_compat_bool_flag("wpJustification");
         let wrap_trail_spaces = self.parse_compat_bool_flag("wrapTrailSpaces");
         let no_indent_num_tab_stop = self.parse_compat_bool_flag("doNotUseIndentAsNumberingTabStop");
@@ -1437,6 +1438,7 @@ impl OoxmlParser {
             fn_pos_beneath,
             endnote_sep_line,
             compress_punctuation,
+            no_punctuation_kerning,
             wp_justification,
             wrap_trail_spaces,
             no_indent_num_tab_stop,

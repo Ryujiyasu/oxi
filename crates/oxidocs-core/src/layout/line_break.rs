@@ -1709,14 +1709,16 @@ impl<'a> LineBreaker<'a> {
         // kern>0, else the paragraph/docDefaults default-run kern). Gates the
         // yakumono pair halving (break-time rule AND the S532 Stage-2 revert
         // protection). See the gate comment at yakumono_pair_enabled below.
-        let para_kern_on = fragments
+        let para_kern_on = (fragments
             .iter()
             .any(|&(_, st, _, _, _)| st.kern.map_or(false, |k| k > 0.0))
             || para_style
                 .default_run_style
                 .as_ref()
                 .and_then(|rs| rs.kern)
-                .map_or(false, |k| k > 0.0);
+                .map_or(false, |k| k > 0.0))
+            // OXI_NO_PUNCT_KERN: no kern-driven pair to protect either.
+            && !(self.no_punctuation_kerning && !crate::env_flag!("OXI_NO_PUNCT_KERN_DISABLE"));
         let s547_kern_gate = !crate::env_flag!("OXI_S547_DISABLE");
         // S466 (2026-05-31, SHIPPED default-ON, opt-out OXI_S466_DISABLE):
         // hoisted once — see h8_trigger comment below. (a) compute positive grid
@@ -2327,10 +2329,17 @@ impl<'a> LineBreaker<'a> {
             // pair scan below is per-fragment (chars_vec), so fragment
             // granularity is exact. Opt-out OXI_S547_DISABLE restores the
             // pre-S547 compress_punctuation gate.
+            // OXI_NO_PUNCT_KERN (2026-11-05, default ON, opt-out _DISABLE):
+            // w:noPunctuationKerning turns the kern-driven pair off.
+            // `_pb_no_punct_kern_gen.py` (slice of blind-J ja/forms__03a9ef3d, ＭＳ 明朝
+            // 10.5, Normal kern 1, doNotCompress): «。）» «、「» «」、» «）「» keep the
+            // full 11.27 advance with the setting and halve to 5.52 without it.
+            // 03a9ef3d's «…という。）にわたる…» lines held one glyph more than Word.
             let frag_kern_on = style
                 .kern
                 .or_else(|| para_style.default_run_style.as_ref().and_then(|rs| rs.kern))
-                .map_or(false, |k| k > 0.0);
+                .map_or(false, |k| k > 0.0)
+                && !(self.no_punctuation_kerning && !crate::env_flag!("OXI_NO_PUNCT_KERN_DISABLE"));
             let yakumono_pair_enabled = if s547_kern_gate {
                 frag_kern_on || cjk_font_has_hwid
             } else {

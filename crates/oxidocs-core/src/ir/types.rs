@@ -82,6 +82,10 @@ pub struct Document {
     /// (enables CJK yakumono compression). False (default) for "doNotCompress" or absent.
     #[serde(default)]
     pub compress_punctuation: bool,
+    /// w:noPunctuationKerning in settings.xml: the kern-driven pair halving of
+    /// adjacent CJK punctuation is off (see OXI_NO_PUNCT_KERN in line_break).
+    #[serde(default)]
+    pub no_punctuation_kerning: bool,
     /// S994 (2026-07-23): w:compat/w:wpJustification (CT_OnOff). The WordPerfect
     /// 6.x justification-compat rule (MS-OE376 §2.1.481): a fully-justified line
     /// selects content for an EFFECTIVE width `W_actual × (1 + 281/7200)` — fitting

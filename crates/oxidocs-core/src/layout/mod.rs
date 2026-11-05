@@ -3453,6 +3453,7 @@ pub struct LayoutEngine {
     /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana".
     /// False (default) when "doNotCompress" or absent.
     compress_punctuation: bool,
+    no_punctuation_kerning: bool,
     /// S994 (2026-07-23): w:compat/w:wpJustification (WordPerfect justify-compat).
     /// A fully-justified line fits content for W_actual × (1 + 281/7200), then
     /// compresses inter-word spacing to the physical width. See ir::Document.
@@ -4143,6 +4144,7 @@ impl LayoutEngine {
             footnote_previous_style: std::collections::HashMap::new(),
             endnote_sep_line: false,
             compress_punctuation: false,
+            no_punctuation_kerning: false,
             wp_justification: false,
             wrap_trail_spaces: false,
             no_indent_num_tab_stop: false,
@@ -4387,6 +4389,7 @@ impl LayoutEngine {
             },
             endnote_sep_line: doc.endnote_sep_line,
             compress_punctuation: doc.compress_punctuation,
+            no_punctuation_kerning: doc.no_punctuation_kerning,
             wp_justification: doc.wp_justification,
             wrap_trail_spaces: doc.wrap_trail_spaces,
             no_indent_num_tab_stop: doc.no_indent_num_tab_stop,
