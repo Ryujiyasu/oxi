@@ -35989,9 +35989,18 @@ fn cell_font_name(value: &Value) -> Result<Option<String>,String> {
 }
 
 fn cell_font_style(value: &Value) -> Result<(bool,bool),String> {
-    let Value::String(style)=value else {return Err("Font.FontStyle takes a style's name".into());};
-    let lower=style.to_ascii_lowercase();
-    Ok((lower.contains("bold") || lower.contains("太字"),lower.contains("italic") || lower.contains("斜体")))
+    let lower=match value {
+        Value::String(style)=>style.to_ascii_lowercase(),
+        Value::Boolean(_)=>return Ok((false,false)),
+        value if any_number(value).is_some()=>return Ok((false,false)),
+        _=>return Err("Font.FontStyle takes a style's name".into()),
+    };
+    Ok(match lower.as_str() {
+        "bold"|"太字"=>(true,false),
+        "italic"|"斜体"=>(false,true),
+        "bold italic"|"太字 斜体"=>(true,true),
+        _=>(false,false),
+    })
 }
 
 fn font_style_name(bold: bool, italic: bool, language: ErrorLanguage) -> &'static str {
@@ -75719,6 +75728,43 @@ End Function"#;
 
 
 
+
+
+    #[test]
+    fn cell_font_style_requires_exact_names_and_accepts_scalar_variants() {
+        for language in [ErrorLanguage::English,ErrorLanguage::Japanese] {
+            for target in ["Range(\"A1\").Font","Range(\"A1\").Characters(1,2).Font"] {
+                for (value,bold,italic) in [
+                    ("True",false,false),("False",false,false),("0",false,false),("12.5",false,false),
+                    ("\"Bold\"",true,false),("\"BOLD\"",true,false),("\"Italic\"",false,true),
+                    ("\"Bold Italic\"",true,true),("\"bold italic\"",true,true),
+                    ("\"Bold  Italic\"",false,false),("\"Bold \"",false,false),
+                    ("\"not bold\"",false,false),("\"italicize\"",false,false),
+                    ("\"太字 斜体\"",true,true),("\"太字斜体\"",false,false),
+                    ("\"太字ではない\"",false,false),("\"BoldItalic\"",false,false),
+                ] {
+                    let mut book=workbook();
+                    let module=parse_module(&format!(r#"Public Function Probe() As String
+Range("A1").Value2 = "MgA"
+Range("A1").Font.Name = "Arial"
+Range("A1").Font.Size = 12
+Range("A1").Font.Bold = True
+Range("A1").Font.Italic = True
+ThisWorkbook.Saved = True
+On Error Resume Next
+{target}.FontStyle = {value}
+Probe = CStr(Err.Number) & ":" & CStr(ThisWorkbook.Saved) & ":" & CStr({target}.Bold) & ":" & CStr({target}.Italic) & ":" & {target}.FontStyle
+End Function
+"#)).unwrap();
+                    let mut host=WorkbookHost::new(&mut book,0).unwrap();host.error_language=language;
+                    let flag=|v|if v {"True"} else {"False"};
+                    let expected=format!("0:False:{}:{}:{}",flag(bold),flag(italic),font_style_name(bold,italic,language));
+                    assert_eq!(execute_with_host(&module,"Probe",vec![],&mut host).unwrap(),Value::String(expected),
+                        "{target}.FontStyle = {value}, {language:?}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn cell_font_absent_values_keep_native_state() {
