@@ -11732,6 +11732,7 @@ impl<'a> WorkbookHost<'a> {
         } else if name.eq_ignore_ascii_case("size") {
             let held = font_size(&value)?;
             self.dress_characters(at, start, length, |dress| dress.size = held)?;
+            self.refit_rows(CellRange::single(at))?;
         } else if name.eq_ignore_ascii_case("name") {
             let held=cell_font_name(&value)?;
             let normal=self.workbook.default_style.clone();
@@ -22299,7 +22300,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn fit_rows(&mut self, range: CellRange, preserve_vertical_height: bool) -> Result<Value, String> {
-        use oxicells_core::row_defaults::{font_cell_line_box, font_default_row_px, font_line_box, font_text_row_line_box, font_run_line_box};
+        use oxicells_core::row_defaults::{font_cell_line_box, font_default_row_px, font_line_box, font_text_row_height, font_run_line_box};
         let sheet_index = range.sheet;
         // A formula written a moment ago is fitted by its answer: measured,
         // =REPT("ab ",10) set to wrap asks four lines.
@@ -22457,7 +22458,7 @@ impl<'a> WorkbookHost<'a> {
             }
             if unmodeled_position {
                 px = px.max(row.height.unwrap_or(sheet.default_row_height) / 0.75);
-            } else if let Some((height, _)) = font_text_row_line_box(&face, size, one_line_fonts) {
+            } else if let Some(height) = font_text_row_height(&face, size, one_line_fonts) {
                 px = retained_px.max(f32::from(height));
             }
             px += f32::from(u8::from(thick_top)) + f32::from(u8::from(thick_bottom));
@@ -78876,10 +78877,12 @@ End Sub
             Debug.Print Range("A1").Characters(1, 1).Font.Size, Range("A1").Characters(2, 1).Font.Size
             Range("A1").ClearFormats
             Debug.Print Range("A1").Characters(1, 1).Font.Size, Range("A1").Characters(2, 1).Font.Size
+            Range("A1").Characters(1, 1).Font.Size = 409.55
+            Debug.Print Range("A1").RowHeight
             End Sub"#;
         let outcome=execute_workbook_action(reopened,read,Some("Act"),vec![],0,failure_context()).unwrap();
         assert!(outcome.error.is_none());
-        assert_eq!(outcome.debug_output,["2\t2","12\t11","11\t11"]);
+        assert_eq!(outcome.debug_output,["2\t2","12\t11","11\t11","409.5"]);
     }
 
     #[test]
