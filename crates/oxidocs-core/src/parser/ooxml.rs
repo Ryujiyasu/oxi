@@ -8988,10 +8988,35 @@ fn parse_drawing(
                                         continue;
                                     }
                                     if sl == "p" {
-                                        if let Ok(pr) =
+                                        if let Ok(mut pr) =
                                             parse_paragraph(reader, ctx, styles, false, false, None)
                                         {
-                                            txbx_blocks.push(Block::Paragraph(pr.paragraph));
+                                            // OXI_TXBX_IMAGE_ONLY (2026-11-05, default ON, opt-out
+                                            // _DISABLE): an image-only paragraph in a text box is the
+                                            // picture's line, as S537 has it in the body -- not an
+                                            // empty paragraph line followed by the picture. blind-J
+                                            // en/creative__045bc787's sidebar box opens with a Header-
+                                            // style paragraph holding only the 309.5pt photo: Word draws
+                                            // it at box top + 3.6 + 10 (its before), Oxi put a 47.6pt
+                                            // empty Header line first (+57.6, every line below low).
+                                            let txbx_image_only = !pr.inline_images.is_empty()
+                                                && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
+                                                && pr.math_blocks.is_empty()
+                                                && std::env::var_os("OXI_TXBX_IMAGE_ONLY_DISABLE").is_none()
+                                                && std::env::var("OXI_S1223_DISABLE").is_err();
+                                            if txbx_image_only {
+                                                let before = pr.paragraph.style.space_before.unwrap_or(0.0);
+                                                let after = pr.paragraph.style.space_after.unwrap_or(0.0);
+                                                let last = pr.inline_images.len() - 1;
+                                                for (i, b) in pr.inline_images.iter_mut().enumerate() {
+                                                    if let Block::Image(img) = b {
+                                                        if i == 0 { img.paragraph_space_before = before; }
+                                                        if i == last { img.paragraph_space_after = after; }
+                                                    }
+                                                }
+                                            } else {
+                                                txbx_blocks.push(Block::Paragraph(pr.paragraph));
+                                            }
                                             // S1223 (2026-08-26, opt-out `OXI_S1223_DISABLE`):
                                             // an image-only paragraph inside a TEXT BOX parses
                                             // into sibling Block::Image entries -- and this loop
