@@ -223,6 +223,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         unsupported_elements: vec![],
         hyperlinks: vec![],
         protected: false,
+        protection: None,
         form_controls: Vec::new(),
         validations: Vec::new(),
         conditional_rules: Vec::new(),

@@ -319,6 +319,38 @@ impl SheetKind {
 /// A dynamic-array anchor and its extent, in cells.
 pub type CachedSpill = ((u32, u32), (u32, u32));
 
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PasswordVerifier {
+    pub legacy_hash: Option<u16>,
+    pub algorithm: Option<String>,
+    pub salt: Option<String>,
+    pub hash: Option<String>,
+    pub iterations: Option<u32>,
+}
+
+/// Permissions saved with a worksheet; false means the action is not allowed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SheetProtection {
+    pub drawing_objects: bool,
+    pub scenarios: bool,
+    pub allow_formatting_cells: bool,
+    pub allow_formatting_columns: bool,
+    pub allow_formatting_rows: bool,
+    pub allow_inserting_columns: bool,
+    pub allow_inserting_rows: bool,
+    pub allow_inserting_hyperlinks: bool,
+    pub allow_deleting_columns: bool,
+    pub allow_deleting_rows: bool,
+    pub allow_sorting: bool,
+    pub allow_filtering: bool,
+    pub allow_using_pivot_tables: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<PasswordVerifier>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Sheet {
     pub name: String,
@@ -423,6 +455,8 @@ pub struct Sheet {
     /// protected-looking workbooks in the sweep are the second kind.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub protected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protection: Option<SheetProtection>,
     /// The buttons and tick boxes on the grid, from the same legacy drawing
     /// that carries the notes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

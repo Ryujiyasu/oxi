@@ -1053,6 +1053,7 @@ mod tests {
             unsupported_elements: vec![],
             hyperlinks: vec![],
             protected: false,
+            protection: None,
             form_controls: Vec::new(),
             validations: Vec::new(),
             conditional_rules: Vec::new(),

@@ -48,6 +48,37 @@ fn is_true(value: Option<&str>) -> bool {
     matches!(value, Some("1") | Some("true"))
 }
 
+fn sheet_protection_from(start: &quick_xml::events::BytesStart<'_>) -> crate::ir::SheetProtection {
+    let allowed = |name| !get_attr(start, name).as_deref().is_none_or(|value| is_true(Some(value)));
+    let password = crate::ir::PasswordVerifier {
+        legacy_hash: get_attr(start, "password").and_then(|value| u16::from_str_radix(&value, 16).ok()),
+        algorithm: get_attr(start, "algorithmName"),
+        salt: get_attr(start, "saltValue"),
+        hash: get_attr(start, "hashValue"),
+        iterations: get_attr(start, "spinCount").and_then(|value| value.parse().ok()),
+    };
+    let has_password = password.legacy_hash.is_some() || password.algorithm.is_some()
+        || password.salt.is_some() || password.hash.is_some() || password.iterations.is_some();
+    crate::ir::SheetProtection {
+        drawing_objects: is_true(get_attr(start, "objects").as_deref()),
+        scenarios: is_true(get_attr(start, "scenarios").as_deref()),
+        allow_formatting_cells: allowed("formatCells"),
+        allow_formatting_columns: allowed("formatColumns"),
+        allow_formatting_rows: allowed("formatRows"),
+        allow_inserting_columns: allowed("insertColumns"),
+        allow_inserting_rows: allowed("insertRows"),
+        allow_inserting_hyperlinks: allowed("insertHyperlinks"),
+        allow_deleting_columns: allowed("deleteColumns"),
+        allow_deleting_rows: allowed("deleteRows"),
+        allow_sorting: allowed("sort"),
+        allow_filtering: allowed("autoFilter"),
+        allow_using_pivot_tables: allowed("pivotTables"),
+        password: has_password.then_some(password),
+    }
+}
+
+
+
 use oxidocs_common::xml_utils::{get_attr, local_name};
 
 use crate::ir::{
@@ -4775,6 +4806,7 @@ fn parse_worksheet(
     // Whether the sheet is protected, which decides nothing about how it is
     // drawn and everything about whether it can be typed into.
     let mut protected = false;
+    let mut protection = None;
     // What the sheet says its ranges will accept, and the rule being read.
     let mut validations: Vec<crate::ir::DataValidation> = Vec::new();
     let mut rule: Option<crate::ir::DataValidation> = None;
@@ -4862,6 +4894,10 @@ fn parse_worksheet(
                 let name = local_name(e.name().as_ref());
                 note_unsupported(&name, &mut unsupported);
                 match name.as_str() {
+                    "sheetProtection" => {
+                        protected = is_true(get_attr(&e, "sheet").as_deref());
+                        protection = Some(sheet_protection_from(&e));
+                    }
                     "extLst" => conditional_extension_depth += 1,
                     "id" if conditional_extension_depth > 0 && cf_rule.is_some() && e.name().as_ref() == b"x14:id" => in_visual_extension_id = true,
                     "dataValidation" => rule = Some(validation_from(&e)),
@@ -5191,6 +5227,7 @@ fn parse_worksheet(
                     // one that is not, which Excel writes just as readily.
                     "sheetProtection" => {
                         protected = is_true(get_attr(&e, "sheet").as_deref());
+                        protection = Some(sheet_protection_from(&e));
                     }
                     // <tabColor rgb="FF00B050"/> -- the sheet tab's colour.
                     "tabColor" => {
@@ -5570,6 +5607,7 @@ fn parse_worksheet(
         },
         unsupported_elements: unsupported,
         protected,
+        protection,
         validations,
         conditional_rules: {
             let mut held = conditional_rules;
