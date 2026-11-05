@@ -8692,6 +8692,24 @@ impl<'a> ParagraphLayouter<'a> {
                             emit_y + line_height
                         };
                         let oy = baseline - tb.height;
+                        // OXI_EXACT_INLINE_CLIP (2026-11-05, default ON, opt-out
+                        // _DISABLE): Word clips the inline object of an exact line
+                        // to the line box. `_pb_exact_inline_chart_gen.py` exact12 /
+                        // exact30: the 324 x 220.5pt chart stands on the baseline yet
+                        // the Word PDF shows none of it above the line (7a8daf36's
+                        // doughnut drew over the page top in Oxi).
+                        let exact_clip = para.style.line_spacing_rule.as_deref() == Some("exact")
+                            && !crate::env_flag!("OXI_EXACT_INLINE_NO_GROW_DISABLE")
+                            && !crate::env_flag!("OXI_EXACT_INLINE_CLIP_DISABLE");
+                        if exact_clip {
+                            elements.push(LayoutElement::new(
+                                el_x - 2000.0,
+                                emit_y,
+                                4000.0 + tb.width,
+                                line_height,
+                                LayoutContent::ClipStart,
+                            ));
+                        }
                         for vs in &tb.vector_shapes {
                             let (vx, vy) = (el_x + vs.x, oy + vs.y);
                             if vs.is_line {
@@ -8764,6 +8782,9 @@ impl<'a> ParagraphLayouter<'a> {
                                 }
                                 elements.extend(els);
                             }
+                        }
+                        if exact_clip {
+                            elements.push(LayoutElement::new(0.0, 0.0, 0.0, 0.0, LayoutContent::ClipEnd));
                         }
                     }
                     x += adjusted_width + frag_spacing_after[frag_idx];
