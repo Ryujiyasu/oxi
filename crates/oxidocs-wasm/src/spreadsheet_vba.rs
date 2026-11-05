@@ -11611,16 +11611,14 @@ impl<'a> WorkbookHost<'a> {
                     None => Value::Integer(1),
                     Some(packed) => Value::Integer(nearest_palette_index(packed)),
                 })
-        } else if name.eq_ignore_ascii_case("superscript") {
-            self.uniform_character_dress(at, start, length, |dress| {
-                dress.vert_align.as_deref() == Some("superscript")
+        } else if name.eq_ignore_ascii_case("superscript") || name.eq_ignore_ascii_case("subscript") {
+            let position = if name.eq_ignore_ascii_case("superscript") { 1 } else { -1 };
+            self.uniform_character_dress(at, start, length, |dress| match dress.vert_align.as_deref() {
+                Some("superscript") => 1,
+                Some("subscript") => -1,
+                _ => 0,
             })
-            .map(Value::Boolean)
-        } else if name.eq_ignore_ascii_case("subscript") {
-            self.uniform_character_dress(at, start, length, |dress| {
-                dress.vert_align.as_deref() == Some("subscript")
-            })
-            .map(Value::Boolean)
+            .map(|held| Value::Boolean(held == position))
         } else if name.eq_ignore_ascii_case("parent") {
             return Ok(Some(self.object(HostObject::Characters(at, start, length))));
         } else {
@@ -11727,14 +11725,24 @@ impl<'a> WorkbookHost<'a> {
                 return Ok(true);
             };
             let which = if name.eq_ignore_ascii_case("superscript") { "superscript" } else { "subscript" };
+            // The setter tests the whole cell before dressing the selection.
+            let current = self.uniform_font(CellRange::single(at), |dress| match dress.vert_align.as_deref() {
+                Some("superscript") => 1,
+                Some("subscript") => -1,
+                _ => 0,
+            })?;
+            let clear_position = !held && match current {
+                Some(current) => current == if which == "superscript" { 1 } else { -1 },
+                None => which == "superscript",
+            };
             self.dress_characters(at, start, length, |dress| {
                 if held {
                     dress.vert_align = Some(which.to_string());
-                } else if dress.vert_align.as_deref() == Some(which) {
+                } else if clear_position {
                     dress.vert_align = None;
                 }
             })?;
-            self.refit_rows(CellRange::single(at))?;
+            if held || clear_position { self.refit_rows(CellRange::single(at))?; }
         } else {
             return Ok(false);
         }
@@ -75633,6 +75641,88 @@ End Function"#;
 
 
 
+
+    #[test]
+    fn character_position_false_setters_use_whole_cell_uniformity() {
+        for (outside, property, expected) in [
+            ("baseline", "Superscript", "False:True:False:False:False:False:False:False"),
+            ("baseline", "Subscript", "False:True:False:True:False:False:True:True"),
+            ("superscript", "Superscript", "False:True:False:False:True:False:True:True"),
+            ("superscript", "Subscript", "False:True:False:True:True:False:True:True"),
+            ("subscript", "Superscript", "False:True:False:True:False:True:False:False"),
+            ("subscript", "Subscript", "False:True:False:False:False:True:True:True"),
+        ] {
+            let mut book = workbook();
+            let outside_format = match outside {
+                "baseline" => "Range(\"A1\").Characters(1, 1).Font.Subscript = False",
+                "superscript" => "Range(\"A1\").Characters(1, 1).Font.Superscript = True",
+                _ => "",
+            };
+            let code = format!(
+                "Public Function Probe() As String\n\
+                 Dim s As String\n\
+                 Range(\"A1\").Value2 = \"MgA\"\n\
+                 Range(\"A1\").Font.Subscript = True\n\
+                 {outside_format}\n\
+                 s = CStr(Range(\"A1\").Characters(2, 2).Font.Superscript) & \":\" & CStr(Range(\"A1\").Characters(2, 2).Font.Subscript)\n\
+                 Range(\"A1\").Characters(2, 2).Font.{property} = False\n\
+                 s = s & \":\" & CStr(Range(\"A1\").Characters(2, 2).Font.Superscript) & \":\" & CStr(Range(\"A1\").Characters(2, 2).Font.Subscript)\n\
+                 s = s & \":\" & CStr(Range(\"A1\").Characters(1, 1).Font.Superscript) & \":\" & CStr(Range(\"A1\").Characters(1, 1).Font.Subscript)\n\
+                 Probe = s & \":\" & CStr(IsNull(Range(\"A1\").Font.Superscript)) & \":\" & CStr(IsNull(Range(\"A1\").Font.Subscript))\n\
+                 End Function\n"
+            );
+            let module = parse_module(&code).unwrap();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            assert_eq!(
+                execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                Value::String(expected.to_string()),
+                "{outside}, {property}",
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_character_position_selection_getters_and_false_setters() {
+        let cleared = "True:True:False:False:False:False:False:False:False:False";
+        for (first, second, property, expected) in [
+            ("", "Subscript", "Superscript", cleared),
+            ("", "Subscript", "Subscript", "True:True:True:True:False:False:False:True:False:False"),
+            ("", "Superscript", "Superscript", cleared),
+            ("", "Superscript", "Subscript", "True:True:True:True:False:False:True:False:False:False"),
+            ("Superscript", "Subscript", "Superscript", cleared),
+            ("Superscript", "Subscript", "Subscript", "True:True:True:True:True:False:False:True:False:False"),
+        ] {
+            let mut book = workbook();
+            let initial = if first.is_empty() { String::new() } else {
+                format!("Range(\"A1\").Characters(1, 1).Font.{first} = True\n")
+            };
+            let mut code = format!(
+                "Public Function Probe() As String\n\
+                 Dim s As String\n\
+                 Range(\"A1\").Value2 = \"MgA\"\n\
+                 Range(\"A1\").Font.Name = \"Arial\"\n\
+                 Range(\"A1\").Font.Size = 12\n\
+                 {initial}\
+                 Range(\"A1\").Characters(2, 1).Font.{second} = True\n\
+                 s = CStr(IsNull(Range(\"A1\").Characters(1, 2).Font.Superscript)) & \":\" & CStr(IsNull(Range(\"A1\").Characters(1, 2).Font.Subscript))\n\
+                 Range(\"A1\").Characters(1, 2).Font.{property} = False\n\
+                 s = s & \":\" & CStr(IsNull(Range(\"A1\").Characters(1, 2).Font.Superscript)) & \":\" & CStr(IsNull(Range(\"A1\").Characters(1, 2).Font.Subscript))\n"
+            );
+            for index in 1..=3 {
+                code.push_str(&format!(
+                    "s = s & \":\" & CStr(Range(\"A1\").Characters({index}, 1).Font.Superscript) & \":\" & CStr(Range(\"A1\").Characters({index}, 1).Font.Subscript)\n"
+                ));
+            }
+            code.push_str("Probe = s\nEnd Function\n");
+            let module = parse_module(&code).unwrap();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            assert_eq!(
+                execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                Value::String(expected.to_string()),
+                "{first}, {second}, {property}",
+            );
+        }
+    }
 
     #[test]
     fn mixed_position_false_setters_match_font_uniformity_rules() {
