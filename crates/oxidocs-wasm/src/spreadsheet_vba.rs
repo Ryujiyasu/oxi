@@ -1009,6 +1009,26 @@ impl Protection {
 
     fn active(&self) -> bool { self.contents || self.drawing_objects || self.scenarios }
 
+    fn unprotected(&self) -> Self {
+        let mut free = self.clone();
+        free.contents = false;
+        free.drawing_objects = false;
+        free.scenarios = false;
+        free.password.clear();
+        free.password_verifier = None;
+        free
+    }
+
+    fn permissions(&self) -> [bool; 14] {
+        [
+            self.contents, self.drawing_objects, self.scenarios,
+            self.allow_formatting_cells, self.allow_formatting_columns, self.allow_formatting_rows,
+            self.allow_inserting_columns, self.allow_inserting_rows, self.allow_inserting_hyperlinks,
+            self.allow_deleting_columns, self.allow_deleting_rows,
+            self.allow_sorting, self.allow_filtering, self.allow_using_pivot_tables,
+        ]
+    }
+
     fn saved_flags(&self, page: Option<AnsiCodePage>) -> oxicells_core::ir::SheetProtection {
         oxicells_core::ir::SheetProtection {
             drawing_objects: self.drawing_objects,
@@ -29243,22 +29263,46 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("pagesetup") && args.is_empty() {
                     return Ok(Some(self.object(HostObject::PageSetup(sheet))));
                 }
-                // `Protect [password, ...]` and `Unprotect [password]`.
-                // Measured: a wrong password on Unprotect is error 1004 and
-                // leaves the sheet protected; no password either way is fine;
-                // `Protect` on a sheet already protected changes nothing, not
-                // even the password; and `r = ActiveSheet.Protect("pw")`
-                // answers Empty, not the True the doing-members give.
+                // Protect returns Empty. Repeating the same permissions is a
+                // no-op; changing them verifies and retains the existing
+                // password. Unprotect returns True and rejects a wrong password.
                 if name.eq_ignore_ascii_case("protect") {
-                    let asked = Protection::asked(args)?;
+                    let mut asked = Protection::asked(args)?;
                     if self.protected.len() <= sheet {
                         self.protected.resize(sheet + 1, None);
                     }
-                    if self.protected[sheet].as_ref().is_none_or(|held| !held.active()) {
-                        self.workbook.sheets[sheet].protected = asked.contents;
-                        self.workbook.sheets[sheet].protection = Some(asked.saved_flags(self.automation_code_page));
-                        self.protected[sheet] = Some(asked);
+                    if let Some(held) = self.protected[sheet].as_ref() {
+                        if held.active() {
+                            if held.permissions() == asked.permissions()
+                                && (!asked.user_interface_only || held.user_interface_only)
+                            {
+                                return Ok(Some(Value::Empty));
+                            }
+                            if !held.accepts_password(&asked.password, self.automation_code_page) {
+                                return Err("the password supplied is not correct for this sheet".into());
+                            }
+                            if asked.active() {
+                                if !held.password.is_empty() || held.password_verifier.is_some() {
+                                    asked.password = held.password.clone();
+                                    asked.password_verifier = held.password_verifier.clone();
+                                }
+                            } else {
+                                let mode = held.user_interface_only || asked.user_interface_only;
+                                asked = held.unprotected();
+                                asked.user_interface_only = mode;
+                            }
+                        } else if !asked.active() {
+                            asked.user_interface_only |= held.user_interface_only;
+                        }
                     }
+                    if !asked.active() {
+                        asked.password.clear();
+                        asked.password_verifier = None;
+                    }
+                    self.workbook.sheets[sheet].protected = asked.contents;
+                    self.workbook.sheets[sheet].protection = Some(asked.saved_flags(self.automation_code_page));
+                    self.protected[sheet] = Some(asked);
+                    self.saved = false;
                     return Ok(Some(Value::Empty));
                 }
                 if name.eq_ignore_ascii_case("unprotect") {
@@ -29266,15 +29310,19 @@ impl Host for WorkbookHost<'_> {
                         None | Some(Value::Missing) => String::new(),
                         Some(value) => shown_text(value, None),
                     };
-                    if let Some(Some(held)) = self.protected.get(sheet) {
-                        if held.active() && !held.accepts_password(&offered, self.automation_code_page) {
+                    if let Some(held) = self.protected.get(sheet).and_then(Option::as_ref).filter(|held| held.active()) {
+                        if !held.accepts_password(&offered, self.automation_code_page) {
                             return Err(
                                 "the password supplied is not correct for this sheet".to_string(),
                             );
                         }
-                        self.protected[sheet] = None;
+                        let free = held.unprotected();
+                        let flags = free.saved_flags(self.automation_code_page);
                         self.workbook.sheets[sheet].protected = false;
-                        self.workbook.sheets[sheet].protection = None;
+                        self.workbook.sheets[sheet].protection =
+                            (flags != oxicells_core::ir::SheetProtection::default()).then_some(flags);
+                        self.protected[sheet] = Some(free);
+                        self.saved = false;
                     }
                     // A function to Excel: measured, CallByName of it is True
                     // where Protect, a Sub, is Empty.
@@ -75673,6 +75721,105 @@ End Function"#;
         }
     }
 
+
+    #[test]
+    fn worksheet_protection_changes_roundtrip_with_saved_and_password_rules() {
+        fn run(book: &mut Workbook, body: &str) -> Value {
+            let module = parse_module(&format!("Public Function Probe() As String\n{body}\nEnd Function\n")).unwrap();
+            let mut host = WorkbookHost::new(book, 0).unwrap();
+            execute_with_host(&module, "Probe", vec![], &mut host).unwrap()
+        }
+        fn save(original: &[u8], book: &Workbook) -> Vec<u8> {
+            let mut editor = oxicells_core::XlsxEditor::new(original).unwrap();
+            editor.apply_workbook(book).unwrap();
+            editor.save().unwrap()
+        }
+        let original = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let mut book = oxicells_core::parse_xlsx(original).unwrap();
+        assert_eq!(run(&mut book,
+            "ThisWorkbook.Saved = True\n\
+             ActiveSheet.Protect \"pw\", UserInterfaceOnly:=True, AllowFormattingCells:=True, AllowFormattingRows:=True\n\
+             Probe = CStr(ThisWorkbook.Saved) & \"|\" & CStr(ActiveSheet.ProtectContents) & \"|\" & \
+             CStr(ActiveSheet.Protection.AllowFormattingRows) & \"|\" & CStr(ActiveSheet.ProtectionMode)"),
+            Value::String("False|True|True|True".into()));
+        let first = save(original, &book);
+        let mut book = oxicells_core::parse_xlsx(&first).unwrap();
+        assert_eq!(run(&mut book,
+            "Probe = CStr(ActiveSheet.ProtectContents) & \"|\" & CStr(ActiveSheet.Protection.AllowFormattingRows) & \"|\" & CStr(ActiveSheet.ProtectionMode)"),
+            Value::String("True|True|False".into()));
+        let password = book.sheets[0].protection.as_ref().unwrap().password.clone();
+        assert_eq!(run(&mut book,
+            "ThisWorkbook.Saved = True\n\
+             ActiveSheet.Protect \"pw\", DrawingObjects:=False, Scenarios:=False, AllowFormattingCells:=True, AllowFormattingRows:=True\n\
+             Probe = CStr(ThisWorkbook.Saved) & \"|\" & CStr(ActiveSheet.ProtectDrawingObjects) & \"|\" & CStr(ActiveSheet.ProtectScenarios)"),
+            Value::String("False|False|False".into()));
+        assert_eq!(book.sheets[0].protection.as_ref().unwrap().password, password);
+        let second = save(&first, &book);
+        let mut book = oxicells_core::parse_xlsx(&second).unwrap();
+        assert_eq!(run(&mut book,
+            "ThisWorkbook.Saved = True\nOn Error Resume Next\n\
+             ActiveSheet.Protect \"wrong\", DrawingObjects:=False, Scenarios:=False, AllowFormattingCells:=True, AllowFormattingRows:=True\n\
+             Probe = CStr(Err.Number) & \"|\" & CStr(ThisWorkbook.Saved)"),
+            Value::String("0|True".into()));
+        assert_eq!(run(&mut book,
+            "ThisWorkbook.Saved = True\nOn Error Resume Next\n\
+             ActiveSheet.Protect \"wrong\", DrawingObjects:=True, Scenarios:=False, AllowFormattingCells:=True, AllowFormattingRows:=True\n\
+             Probe = CStr(Err.Number) & \"|\" & CStr(ThisWorkbook.Saved) & \"|\" & CStr(ActiveSheet.ProtectDrawingObjects)"),
+            Value::String("1004|True|False".into()));
+        assert_eq!(run(&mut book,
+            "ThisWorkbook.Saved = True\nActiveSheet.Unprotect \"pw\"\n\
+             Probe = CStr(ThisWorkbook.Saved) & \"|\" & CStr(ActiveSheet.ProtectContents)"),
+            Value::String("False|False".into()));
+        let third = save(&second, &book);
+        let mut book = oxicells_core::parse_xlsx(&third).unwrap();
+        assert!(!book.sheets[0].protected);
+        let flags = book.sheets[0].protection.as_ref().unwrap();
+        assert!(flags.allow_formatting_cells && flags.allow_formatting_rows);
+        assert!(!flags.drawing_objects && !flags.scenarios);
+        assert!(flags.password.is_none());
+        assert_eq!(run(&mut book,
+            "ThisWorkbook.Saved = True\nActiveSheet.Unprotect\nProbe = CStr(ThisWorkbook.Saved)"),
+            Value::String("True".into()));
+        let mut empty = oxicells_core::parse_xlsx(original).unwrap();
+        assert_eq!(run(&mut empty,
+            "ActiveSheet.Protect \"\", False, False, False, False, True, False, True\n\
+             ThisWorkbook.Saved = True\nActiveSheet.Unprotect \"wrong\"\n\
+             Probe = CStr(ThisWorkbook.Saved) & \"|\" & CStr(ActiveSheet.Protection.AllowFormattingRows)"),
+            Value::String("True|True".into()));
+        let mut empty = oxicells_core::parse_xlsx(original).unwrap();
+        assert_eq!(run(&mut empty,
+            "ActiveSheet.Protect \"\", False, False, False, True\n\
+             ThisWorkbook.Saved = True\nActiveSheet.Unprotect\n\
+             Probe = CStr(ThisWorkbook.Saved) & \"|\" & CStr(ActiveSheet.ProtectionMode)"),
+            Value::String("True|True".into()));
+        let mut empty = oxicells_core::parse_xlsx(original).unwrap();
+        assert_eq!(run(&mut empty,
+            "ActiveSheet.Protect \"pw\", UserInterfaceOnly:=True, AllowFormattingCells:=True, AllowFormattingRows:=True\n\
+             ThisWorkbook.Saved = True\nActiveSheet.Unprotect \"pw\"\n\
+             Probe = CStr(ThisWorkbook.Saved) & \"|\" & CStr(ActiveSheet.ProtectionMode) & \"|\" & CStr(ActiveSheet.Protection.AllowFormattingRows)"),
+            Value::String("False|True|True".into()));
+        let mut empty = oxicells_core::parse_xlsx(original).unwrap();
+        assert_eq!(run(&mut empty,
+            "ActiveSheet.Protect \"pw\", UserInterfaceOnly:=True, AllowFormattingCells:=True, AllowFormattingRows:=True\n\
+             ThisWorkbook.Saved = True\nActiveSheet.Protect \"pw\", False, False, False\n\
+             Probe = CStr(ThisWorkbook.Saved) & \"|\" & CStr(ActiveSheet.ProtectionMode) & \"|\" & CStr(ActiveSheet.Protection.AllowFormattingRows) & \"|\" & CStr(ActiveSheet.ProtectContents)"),
+            Value::String("False|True|True|False".into()));
+        let mut empty = oxicells_core::parse_xlsx(original).unwrap();
+        assert_eq!(run(&mut empty,
+            "ActiveSheet.Protect \"\"\nThisWorkbook.Saved = True\n\
+             ActiveSheet.Protect \"added\", AllowFormattingRows:=True\n\
+             Probe = CStr(ThisWorkbook.Saved) & \"|\" & CStr(ActiveSheet.Protection.AllowFormattingRows)"),
+            Value::String("False|True".into()));
+        let added = save(original, &empty);
+        let mut reopened = oxicells_core::parse_xlsx(&added).unwrap();
+        assert_eq!(run(&mut reopened,
+            "ThisWorkbook.Saved = True\nOn Error Resume Next\nActiveSheet.Unprotect \"wrong\"\n\
+             Probe = CStr(Err.Number) & \"|\" & CStr(ThisWorkbook.Saved) & \"|\" & CStr(ActiveSheet.ProtectContents)"),
+            Value::String("1004|True|True".into()));
+        assert_eq!(run(&mut reopened,
+            "ActiveSheet.Unprotect \"added\"\nProbe = CStr(ActiveSheet.ProtectContents)"),
+            Value::String("False".into()));
+    }
 
     #[test]
     fn saved_sheet_protection_reaches_fresh_vba_hosts() {
