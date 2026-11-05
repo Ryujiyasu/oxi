@@ -11728,8 +11728,13 @@ impl<'a> WorkbookHost<'a> {
             };
             let which = if name.eq_ignore_ascii_case("superscript") { "superscript" } else { "subscript" };
             self.dress_characters(at, start, length, |dress| {
-                dress.vert_align = if held { Some(which.to_string()) } else { None };
+                if held {
+                    dress.vert_align = Some(which.to_string());
+                } else if dress.vert_align.as_deref() == Some(which) {
+                    dress.vert_align = None;
+                }
             })?;
+            self.refit_rows(CellRange::single(at))?;
         } else {
             return Ok(false);
         }
@@ -22231,7 +22236,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn fit_rows(&mut self, range: CellRange, preserve_vertical_height: bool) -> Result<Value, String> {
-        use oxicells_core::row_defaults::{font_cell_line_box, font_default_row_px, font_line_box, font_row_line_box};
+        use oxicells_core::row_defaults::{font_cell_line_box, font_default_row_px, font_line_box, font_position_row_line_box, font_run_line_box};
         let sheet_index = range.sheet;
         // A formula written a moment ago is fitted by its answer: measured,
         // =REPT("ab ",10) set to wrap asks four lines.
@@ -22339,14 +22344,16 @@ impl<'a> WorkbookHost<'a> {
                 let font_px = if lines == 1.0 { shared_line.unwrap_or(font_px) } else { font_px };
                 px = px.max(f32::from(font_px) * lines);
                 if lines == 1.0 {
-                    if cell.style.font_position.is_some()
-                        || cell.runs.iter().any(|run| run.vert_align.as_deref()
-                            .is_some_and(|position| position != "baseline")) {
-                        unmodeled_position = true;
-                    }
+                    let cell_position = cell.style.font_position.map(|position| position.as_str());
                     let text_units = cell_text_of(cell).len();
                     if cell.runs.is_empty() || text_units == 0 {
-                        one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic, wrapped_anchor));
+                        if cell_position.is_some() && font_run_line_box(
+                            cell_face, cell_size, cell.style.bold, cell.style.italic, cell_position,
+                        ).is_none() {
+                            unmodeled_position = true;
+                        }
+                        one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic,
+                            wrapped_anchor, cell_position));
                     } else {
                         let mut covered_units = 0;
                         for run in &cell.runs {
@@ -22359,10 +22366,22 @@ impl<'a> WorkbookHost<'a> {
                             let run_size = if run.dressed { run.size.unwrap_or(cell_size) } else { cell_size };
                             let bold = if run.dressed { run.bold } else { cell.style.bold };
                             let italic = if run.dressed { run.italic } else { cell.style.italic };
-                            one_line_fonts.push((run_face, run_size, bold, italic, wrapped_anchor));
+                            let position = if run.dressed { run.vert_align.as_deref() } else { cell_position };
+                            if position.is_some() && font_run_line_box(
+                                run_face, run_size, bold, italic, position,
+                            ).is_none() {
+                                unmodeled_position = true;
+                            }
+                            one_line_fonts.push((run_face, run_size, bold, italic, wrapped_anchor, position));
                         }
                         if covered_units < text_units {
-                            one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic, wrapped_anchor));
+                            if cell_position.is_some() && font_run_line_box(
+                                cell_face, cell_size, cell.style.bold, cell.style.italic, cell_position,
+                            ).is_none() {
+                                unmodeled_position = true;
+                            }
+                            one_line_fonts.push((cell_face, cell_size, cell.style.bold, cell.style.italic,
+                                wrapped_anchor, cell_position));
                         }
                     }
                 } else {
@@ -22371,7 +22390,7 @@ impl<'a> WorkbookHost<'a> {
             }
             if unmodeled_position {
                 px = px.max(row.height.unwrap_or(sheet.default_row_height) / 0.75);
-            } else if let Some((height, _)) = font_row_line_box(&face, size, one_line_fonts) {
+            } else if let Some((height, _)) = font_position_row_line_box(&face, size, one_line_fonts) {
                 px = retained_px.max(f32::from(height));
             }
             px += f32::from(u8::from(thick_top)) + f32::from(u8::from(thick_bottom));
@@ -34514,12 +34533,27 @@ impl Host for WorkbookHost<'_> {
                 let held = style_face_boolean(&value, "Font.Superscript")?.unwrap_or(false);
                 let which = if name.eq_ignore_ascii_case("superscript") { "superscript" } else { "subscript" };
                 let position=if which=="superscript" {oxicells_core::ir::CellFontPosition::Superscript} else {oxicells_core::ir::CellFontPosition::Subscript};
+                let current = self.uniform_font(range, |dress| match dress.vert_align.as_deref() {
+                    Some("superscript") => 1,
+                    Some("subscript") => -1,
+                    _ => 0,
+                })?;
+                // Superscript=False normalizes a mixed font; Subscript=False
+                // leaves a mixed font unchanged.
+                let clear_position = !held && match current {
+                    Some(current) => current == if which == "superscript" { 1 } else { -1 },
+                    None => which == "superscript",
+                };
                 self.set_range_style(range,|_,style| {
                     if held {style.font_position=Some(position);}
-                    else if style.font_position==Some(position) {style.font_position=None;}
+                    else if clear_position {style.font_position=None;}
                 })?;
                 self.redress_runs(range, |dress| {
-                    dress.vert_align = held.then(|| which.to_string());
+                    if held {
+                        dress.vert_align = Some(which.to_string());
+                    } else if clear_position {
+                        dress.vert_align = None;
+                    }
                 });
                 // A cell with no runs keeps it beside its style, the one
                 // putting the other off: measured, Superscript True and then
@@ -34527,10 +34561,11 @@ impl Host for WorkbookHost<'_> {
                 for at in self.touched(range) {
                     if held {
                         self.raised.insert(at, which);
-                    } else if self.raised.get(&at) == Some(&which) {
+                    } else if clear_position {
                         self.raised.remove(&at);
                     }
                 }
+                if held || clear_position { self.refit_rows(range)?; }
                 return Ok(true);
             }
             // A recorder writes the whole of a cell's font: these are the
@@ -75592,6 +75627,66 @@ End Function"#;
         }
     }
 
+
+
+
+    #[test]
+    fn mixed_position_false_setters_match_font_uniformity_rules() {
+        for (initial, property, expected) in [
+            ("Superscript", "Superscript", "15:False:False"),
+            ("Superscript", "Subscript", "18:True:True"),
+            ("Subscript", "Superscript", "15:False:False"),
+            ("Subscript", "Subscript", "19.5:True:True"),
+        ] {
+            let mut book = workbook();
+            book.default_style.font_name = Some("Arial".to_string());
+            book.default_style.font_size = Some(8.0);
+            book.default_style.font_reference = None;
+            book.sheets[0].rows.clear();
+            book.sheets[0].normal_font = Some(("Arial".to_string(), 8.0));
+            book.sheets[0].column_width_font = Some("Arial".to_string());
+            book.sheets[0].default_row_height = 11.25;
+            let module = parse_module(&format!(
+                "Public Function Probe() As String\n                 Range(\"A1\").Font.Name = \"Arial\"\n                 Range(\"A1\").Font.Size = 12\n                 Range(\"A1\").Value2 = \"Mg\"\n                 Rows(1).AutoFit\n                 Range(\"A1\").Characters(1, 1).Font.{initial} = True\n                 Range(\"A1\").Font.{property} = False\n                 Probe = CStr(Rows(1).RowHeight) & \":\" & IsNull(Range(\"A1\").Font.Superscript) & \":\" & IsNull(Range(\"A1\").Font.Subscript)\n                 End Function\n"
+            )).unwrap();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            assert_eq!(
+                execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                Value::String(expected.to_string()),
+                "{initial}, {property}",
+            );
+        }
+    }
+
+    #[test]
+    fn raised_and_lowered_fonts_refit_rows_like_autofit() {
+        for (face, normal_size, italic, property, expected) in [
+            ("Arial", 8.0, false, "Superscript", 18.0),
+            ("Courier New", 20.0, true, "Subscript", 26.25),
+        ] {
+            for explicit in [false, true] {
+                let mut book = workbook();
+                book.default_style.font_name = Some("Arial".to_string());
+                book.default_style.font_size = Some(normal_size);
+                book.default_style.font_reference = None;
+                book.sheets[0].rows.clear();
+                book.sheets[0].normal_font = Some(("Arial".to_string(), normal_size));
+                book.sheets[0].column_width_font = Some("Arial".to_string());
+                book.sheets[0].default_row_height = if normal_size == 8.0 { 11.25 } else { 25.5 };
+                let italic = if italic { "True" } else { "False" };
+                let fit = if explicit { "Rows(1).AutoFit\n" } else { "" };
+                let module = parse_module(&format!(
+                    "Public Function Probe() As Double\n                     Range(\"A1\").Font.Name = \"{face}\"\n                     Range(\"A1\").Font.Size = 12\n                     Range(\"A1\").Font.Italic = {italic}\n                     Range(\"A1\").Value2 = \"M\"\n                     Rows(1).AutoFit\n                     Range(\"A1\").Font.{property} = True\n{fit}                     Probe = Rows(1).RowHeight\nEnd Function\n"
+                )).unwrap();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                assert_eq!(
+                    execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                    Value::Double(expected),
+                    "{face}, {property}, explicit={explicit}",
+                );
+            }
+        }
+    }
 
     #[test]
     fn font_weight_and_slant_refit_automatic_rows() {

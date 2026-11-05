@@ -848,12 +848,12 @@ function rowHeightOf(face, size, normal = null, bold = false, italic = false, me
 }
 
 const rowLineHeights = new Map();
-function rowFontHeightOf(face, size, fonts) {
-  const key = JSON.stringify([face, size, fonts]);
+function rowFontHeightOf(face, size, fonts, positioned = false) {
+  const key = JSON.stringify([positioned, face, size, fonts]);
   if (!rowLineHeights.has(key)) {
     let px;
     try {
-      px = vbaProjectApi.row_font_height_px(face, size, fonts) ?? undefined;
+      px = (positioned ? vbaProjectApi.row_font_position_height_px : vbaProjectApi.row_font_height_px)(face, size, fonts) ?? undefined;
     } catch {
       px = undefined;
     }
@@ -1355,6 +1355,8 @@ function layout() {
         const measured = explainRow({
           sheet, index, row, columns: cols, heightOf: rowHeightOf, advance: step,
           fontRowHeightOf: rowFontHeightOf,
+          fontPositionRowHeightOf: typeof vbaProjectApi.row_font_position_height_px === 'function'
+            ? (face, size, fonts) => rowFontHeightOf(face, size, fonts, true) : undefined,
         });
         px = measured.px;
         rememberRowHeight(sheet, row, measured);

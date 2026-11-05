@@ -157,5 +157,60 @@ is('a recorded column is spoken for by its cell',
     },
   }).px, 18);
 
+
+// Raised and lowered characters share a row's ascent and descent.
+const positionedSheet = {
+  normal_font: ['Arial', 8], column_width_font: 'Arial',
+  default_row_height: 11.25, rows: [], merge_cells: [],
+};
+const positionRequests = [];
+const positionHeight = (face, size) => size === 8 ? 15 : 20;
+const mixedPositionRow = {
+  index: 1, cells: [{
+    col: 0, value: { String: 'Mg' }, style: { font_name: 'Arial', font_size: 12 },
+    runs: [
+      { text: 'M', dressed: true, font: 'Arial', size: 12, vert_align: 'superscript' },
+      { text: 'g', dressed: true, font: 'Arial', size: 12, vert_align: 'subscript' },
+    ],
+  }],
+};
+const mixedPosition = explainRow({
+  sheet: positionedSheet, index: 1, row: mixedPositionRow, columns: [0, 100],
+  heightOf: positionHeight, advance: () => 13,
+  fontPositionRowHeightOf: (face, size, fonts) => {
+    positionRequests.push([face, size, fonts]);
+    return 27;
+  },
+});
+is('a raised and lowered run share the measured Excel row', mixedPosition.px, 27);
+is('the row calculation receives both effective run positions', positionRequests, [
+  ['Arial', 8, [
+    ['Arial', 12, false, false, false, 'superscript'],
+    ['Arial', 12, false, false, false, 'subscript'],
+  ]],
+]);
+rememberRowHeight(positionedSheet, mixedPositionRow, mixedPosition);
+is('the mixed-position row retains the measured height for save', mixedPositionRow.height, 20.25);
+
+const wholePositionRow = {
+  index: 2, cells: [{
+    col: 0, value: { String: 'M' },
+    style: { font_name: 'Arial', font_size: 12, font_position: 'superscript' },
+  }],
+};
+const wholeRequests = [];
+const wholePosition = explainRow({
+  sheet: positionedSheet, index: 2, row: wholePositionRow, columns: [0, 100],
+  heightOf: positionHeight, advance: () => 13,
+  fontPositionRowHeightOf: (face, size, fonts) => {
+    wholeRequests.push(fonts);
+    return 24;
+  },
+});
+is('a whole-cell raised font uses the shared row calculation', wholePosition.px, 24);
+is('a plain run inherits the whole-cell position', wholeRequests, [
+  [['Arial', 12, false, false, false, 'superscript']],
+]);
+
 console.log(failures ? `\n${failures} failed` : '\nall good');
 process.exit(failures ? 1 : 0);
