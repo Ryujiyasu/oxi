@@ -3687,7 +3687,6 @@ struct WorkbookHost<'a> {
     find_format_font_color_index: Option<i64>,
     find_format_font_name: Option<Option<String>>,
     find_format_font_size: Option<f32>,
-    find_format_font_style: Option<(bool, bool)>,
     find_format_font_theme: Option<usize>,
     find_format_font_theme_font: Option<i64>,
     find_format_font_tint: Option<f64>,
@@ -3723,7 +3722,7 @@ struct WorkbookHost<'a> {
     replace_format_font_name: Option<Option<String>>,
     replace_format_font_paint_actions: Vec<FormatFontPaintAction>,
     replace_format_font_size: Option<f32>,
-    replace_format_font_style: Option<(bool, bool)>,
+    replace_format_font_flags_set: bool,
     replace_format_font_theme_font: Option<i64>,
     replace_format_font_touched: bool,
     replace_format_formula_hidden: Option<bool>,
@@ -3967,7 +3966,6 @@ impl<'a> WorkbookHost<'a> {
             find_format_font_color_index: None,
             find_format_font_name: None,
             find_format_font_size: None,
-            find_format_font_style: None,
             find_format_font_theme: None,
             find_format_font_theme_font: None,
             find_format_font_tint: None,
@@ -4003,7 +4001,7 @@ impl<'a> WorkbookHost<'a> {
             replace_format_font_name: None,
             replace_format_font_paint_actions: Vec::new(),
             replace_format_font_size: None,
-            replace_format_font_style: None,
+            replace_format_font_flags_set: false,
             replace_format_font_theme_font: None,
             replace_format_font_touched: false,
             replace_format_formula_hidden: None,
@@ -18794,13 +18792,10 @@ impl<'a> WorkbookHost<'a> {
         let cell = self.cell_here(address.sheet, address.row, address.column);
         let style = cell.map(|cell| cell.style).unwrap_or_else(|| self.template_style(address));
         let marks = self.marks_of(address);
-        if self.find_format_bold.is_some_and(|wanted| style.bold != wanted) {
+        if self.find_format_bold == Some(true) && !style.bold {
             return false;
         }
-        if self.find_format_italic.is_some_and(|wanted| style.italic != wanted) {
-            return false;
-        }
-        if self.find_format_font_style.is_some_and(|(bold, italic)| style.bold != bold || style.italic != italic) {
+        if self.find_format_italic == Some(true) && !style.italic {
             return false;
         }
         if self.find_format_subscript.is_some_and(|wanted| (style.font_position == Some(oxicells_core::ir::CellFontPosition::Subscript)) != wanted) {
@@ -19130,7 +19125,7 @@ impl<'a> WorkbookHost<'a> {
         let target_range = self.range(target).ok_or_else(|| "ReplaceFormat target is not a Range".to_string())?;
         let font_touched = self.replace_format_font_touched;
         let shared_start=self.file_io.shared_format_edits.len();
-        let bold = self.replace_format_bold.unwrap_or(false);
+        let bold = self.replace_format_bold;
         let italic = self.replace_format_italic;
         let strikethrough = self.replace_format_strikethrough;
         let underline = self.replace_format_underline;
@@ -19161,12 +19156,16 @@ impl<'a> WorkbookHost<'a> {
             && underline.is_none() && name.is_none() && size.is_none() && face_actions.is_empty()
             && subscript.is_none() && superscript.is_none();
         if font_touched {
-            // A paint-only criterion preserves the target's font style;
-            // style criteria retain the separately measured Bold default.
+            // Explicitly cleared face criteria preserve the corresponding
+            // target flag; other font criteria keep their measured defaults.
             let Value::Object(font) = self.get(target, "Font")?.ok_or_else(|| "Range.Font is unavailable".to_string())? else {
                 return Err("Range.Font did not return a Font object".to_string());
             };
-            if !paint_only {self.set(&font,"Bold",Value::Boolean(bold))?;}
+            if !paint_only {
+                if let Some(value) = bold.or_else(|| (!self.replace_format_font_flags_set).then_some(false)) {
+                    self.set(&font, "Bold", Value::Boolean(value))?;
+                }
+            }
             if let Some(value) = italic {
                 self.set(&font, "Italic", Value::Boolean(value))?;
             }
@@ -25536,7 +25535,6 @@ struct ApplicationProperties {
     find_format_font_color_index: Option<i64>,
     find_format_font_name: Option<Option<String>>,
     find_format_font_size: Option<f32>,
-    find_format_font_style: Option<(bool, bool)>,
     find_format_font_theme: Option<usize>,
     find_format_font_theme_font: Option<i64>,
     find_format_font_tint: Option<f64>,
@@ -25572,7 +25570,7 @@ struct ApplicationProperties {
     replace_format_font_name: Option<Option<String>>,
     replace_format_font_paint_actions: Vec<FormatFontPaintAction>,
     replace_format_font_size: Option<f32>,
-    replace_format_font_style: Option<(bool, bool)>,
+    replace_format_font_flags_set: bool,
     replace_format_font_theme_font: Option<i64>,
     replace_format_font_touched: bool,
     replace_format_formula_hidden: Option<bool>,
@@ -25626,7 +25624,6 @@ impl ApplicationProperties {
             find_format_font_color_index: std::mem::take(&mut host.find_format_font_color_index),
             find_format_font_name: std::mem::take(&mut host.find_format_font_name),
             find_format_font_size: std::mem::take(&mut host.find_format_font_size),
-            find_format_font_style: std::mem::take(&mut host.find_format_font_style),
             find_format_font_theme: std::mem::take(&mut host.find_format_font_theme),
             find_format_font_theme_font: std::mem::take(&mut host.find_format_font_theme_font),
             find_format_font_tint: std::mem::take(&mut host.find_format_font_tint),
@@ -25678,7 +25675,7 @@ impl ApplicationProperties {
                 &mut host.replace_format_font_paint_actions,
             ),
             replace_format_font_size: std::mem::take(&mut host.replace_format_font_size),
-            replace_format_font_style: std::mem::take(&mut host.replace_format_font_style),
+            replace_format_font_flags_set: std::mem::take(&mut host.replace_format_font_flags_set),
             replace_format_font_theme_font: std::mem::take(
                 &mut host.replace_format_font_theme_font,
             ),
@@ -25750,7 +25747,6 @@ impl ApplicationProperties {
         host.find_format_font_color_index = self.find_format_font_color_index;
         host.find_format_font_name = self.find_format_font_name;
         host.find_format_font_size = self.find_format_font_size;
-        host.find_format_font_style = self.find_format_font_style;
         host.find_format_font_theme = self.find_format_font_theme;
         host.find_format_font_theme_font = self.find_format_font_theme_font;
         host.find_format_font_tint = self.find_format_font_tint;
@@ -25786,7 +25782,7 @@ impl ApplicationProperties {
         host.replace_format_font_name = self.replace_format_font_name;
         host.replace_format_font_paint_actions = self.replace_format_font_paint_actions;
         host.replace_format_font_size = self.replace_format_font_size;
-        host.replace_format_font_style = self.replace_format_font_style;
+        host.replace_format_font_flags_set = self.replace_format_font_flags_set;
         host.replace_format_font_theme_font = self.replace_format_font_theme_font;
         host.replace_format_font_touched = self.replace_format_font_touched;
         host.replace_format_formula_hidden = self.replace_format_formula_hidden;
@@ -25856,10 +25852,6 @@ impl ApplicationProperties {
         std::mem::swap(
             &mut left.find_format_font_size,
             &mut right.find_format_font_size,
-        );
-        std::mem::swap(
-            &mut left.find_format_font_style,
-            &mut right.find_format_font_style,
         );
         std::mem::swap(
             &mut left.find_format_font_theme,
@@ -25996,8 +25988,8 @@ impl ApplicationProperties {
             &mut right.replace_format_font_size,
         );
         std::mem::swap(
-            &mut left.replace_format_font_style,
-            &mut right.replace_format_font_style,
+            &mut left.replace_format_font_flags_set,
+            &mut right.replace_format_font_flags_set,
         );
         std::mem::swap(
             &mut left.replace_format_font_theme_font,
@@ -29052,7 +29044,6 @@ impl Host for WorkbookHost<'_> {
                         self.find_format_font_theme = None;
                         self.find_format_font_tint = None;
                         self.find_format_font_theme_font = None;
-                        self.find_format_font_style = None;
                         self.find_format_subscript = None;
                         self.find_format_superscript = None;
                         self.find_format_interior_color = None;
@@ -29088,7 +29079,7 @@ impl Host for WorkbookHost<'_> {
                         self.replace_format_font_paint_actions.clear();
                         self.replace_format_font_theme_font = None;
                         self.replace_format_font_face_actions.clear();
-                        self.replace_format_font_style = None;
+                        self.replace_format_font_flags_set = false;
                         self.replace_format_subscript = None;
                         self.replace_format_superscript = None;
                         self.replace_format_interior_color = None;
@@ -31435,7 +31426,7 @@ impl Host for WorkbookHost<'_> {
                 }
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("bold") => {
-                return Ok(Some(self.find_format_bold.map(Value::Boolean).unwrap_or(Value::Empty)));
+                return Ok(Some(self.find_format_bold.map(Value::Boolean).unwrap_or(Value::Null)));
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("background") => {
                 return Ok(Some(Value::Null));
@@ -31444,12 +31435,12 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::Empty));
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("italic") => {
-                return Ok(Some(self.find_format_italic.map(Value::Boolean).unwrap_or(Value::Empty)));
+                return Ok(Some(self.find_format_italic.map(Value::Boolean).unwrap_or(Value::Null)));
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("fontstyle") => {
-                return Ok(Some(self.find_format_font_style.map(|(bold, italic)| Value::String(match (bold, italic) {
-                    (true, true) => "Bold Italic", (true, false) => "Bold", (false, true) => "Italic", (false, false) => "Regular",
-                }.to_string())).unwrap_or(Value::Empty)));
+                return Ok(Some(self.find_format_bold.zip(self.find_format_italic)
+                    .map(|(bold, italic)| Value::String(font_style_name(bold, italic, self.error_language).into()))
+                    .unwrap_or(Value::Null)));
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("subscript") => {
                 return Ok(Some(self.find_format_subscript.map(Value::Boolean).unwrap_or(Value::Empty)));
@@ -31581,9 +31572,11 @@ impl Host for WorkbookHost<'_> {
                 }
             }
             Some(HostObject::ReplaceFormatFont) if name.eq_ignore_ascii_case("bold") => {
-                return Ok(Some(if self.replace_format_font_touched {
+                return Ok(Some(if self.replace_format_font_flags_set {
+                    self.replace_format_bold.map(Value::Boolean).unwrap_or(Value::Null)
+                } else if self.replace_format_font_touched {
                     Value::Boolean(self.replace_format_bold.unwrap_or(false))
-                } else { Value::Empty }));
+                } else { Value::Null }));
             }
             Some(HostObject::ReplaceFormatFont) if name.eq_ignore_ascii_case("background") => {
                 return Ok(Some(Value::Null));
@@ -31592,12 +31585,12 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::Empty));
             }
             Some(HostObject::ReplaceFormatFont) if name.eq_ignore_ascii_case("italic") => {
-                return Ok(Some(self.replace_format_italic.map(Value::Boolean).unwrap_or(Value::Empty)));
+                return Ok(Some(self.replace_format_italic.map(Value::Boolean).unwrap_or(Value::Null)));
             }
             Some(HostObject::ReplaceFormatFont) if name.eq_ignore_ascii_case("fontstyle") => {
-                return Ok(Some(self.replace_format_font_style.map(|(bold, italic)| Value::String(match (bold, italic) {
-                    (true, true) => "Bold Italic", (true, false) => "Bold", (false, true) => "Italic", (false, false) => "Regular",
-                }.to_string())).unwrap_or(Value::Empty)));
+                return Ok(Some(self.replace_format_bold.zip(self.replace_format_italic)
+                    .map(|(bold, italic)| Value::String(font_style_name(bold, italic, self.error_language).into()))
+                    .unwrap_or(Value::Null)));
             }
             Some(HostObject::ReplaceFormatFont) if name.eq_ignore_ascii_case("subscript") => {
                 return Ok(Some(self.replace_format_subscript.map(Value::Boolean).unwrap_or(Value::Empty)));
@@ -33317,7 +33310,9 @@ impl Host for WorkbookHost<'_> {
                 return Err(host_error(1004, "this Font property cannot be set on CellFormat"));
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("fontstyle") => {
-                self.find_format_font_style = if matches!(value, Value::Empty | Value::Missing | Value::Null) { None } else { Some(font_style_flags(&value, "FindFormat.Font.FontStyle")?) };
+                let flags = format_font_style(&value)?;
+                self.find_format_bold = flags.map(|flags| flags.0);
+                self.find_format_italic = flags.map(|flags| flags.1);
                 return Ok(true);
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("subscript") => {
@@ -33329,19 +33324,15 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("bold") => {
-                self.find_format_bold = match value {
-                    Value::Empty | Value::Missing | Value::Null => None,
-                    Value::Boolean(value) => Some(value),
-                    _ => return Err("FindFormat.Font.Bold must be True or False".to_string()),
-                };
+                let held = format_font_boolean(&value, "FindFormat.Font.Bold")?;
+                self.find_format_bold = held;
+                if held.is_some() { self.find_format_italic.get_or_insert(false); }
                 return Ok(true);
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("italic") => {
-                self.find_format_italic = match value {
-                    Value::Empty | Value::Missing | Value::Null => None,
-                    Value::Boolean(value) => Some(value),
-                    _ => return Err("FindFormat.Font.Italic must be True or False".to_string()),
-                };
+                let held = format_font_boolean(&value, "FindFormat.Font.Italic")?;
+                self.find_format_italic = held;
+                if held.is_some() { self.find_format_bold.get_or_insert(false); }
                 return Ok(true);
             }
             Some(HostObject::FindFormatFont) if name.eq_ignore_ascii_case("strikethrough") => {
@@ -33604,31 +33595,31 @@ impl Host for WorkbookHost<'_> {
                 self.replace_format_merge_cells = style_face_boolean(&value, "ReplaceFormat.MergeCells")?;
                 return Ok(true);
             }
+            Some(HostObject::ReplaceFormatFont) if name.eq_ignore_ascii_case("fontstyle") => {
+                let flags = format_font_style(&value)?;
+                self.replace_format_bold = flags.map(|flags| flags.0);
+                self.replace_format_italic = flags.map(|flags| flags.1);
+                self.replace_format_font_flags_set = true;
+                self.replace_format_font_touched = true;
+                return Ok(true);
+            }
+            Some(HostObject::ReplaceFormatFont) if name.eq_ignore_ascii_case("bold") || name.eq_ignore_ascii_case("italic") => {
+                let held = format_font_boolean(&value, &format!("ReplaceFormat.Font.{name}"))?;
+                let (asked, other) = if name.eq_ignore_ascii_case("bold") {
+                    (&mut self.replace_format_bold, &mut self.replace_format_italic)
+                } else {
+                    (&mut self.replace_format_italic, &mut self.replace_format_bold)
+                };
+                *asked = held;
+                if held.is_some() { other.get_or_insert(false); }
+                self.replace_format_font_flags_set = true;
+                self.replace_format_font_touched = true;
+                return Ok(true);
+            }
             Some(HostObject::ReplaceFormatFont) => {
                 self.replace_format_font_touched = true;
                 match name.to_ascii_lowercase().as_str() {
                     "background" | "outlinefont" | "shadow" => return Err(host_error(1004, "this Font property cannot be set on CellFormat")),
-                    "bold" => self.replace_format_bold = match value {
-                        Value::Empty | Value::Missing | Value::Null => None,
-                        Value::Boolean(value) => Some(value),
-                        _ => return Err("ReplaceFormat.Font.Bold must be True or False".to_string()),
-                    },
-                    "italic" => self.replace_format_italic = match value {
-                        Value::Empty | Value::Missing | Value::Null => None,
-                        Value::Boolean(value) => Some(value),
-                        _ => return Err("ReplaceFormat.Font.Italic must be True or False".to_string()),
-                    },
-                    "fontstyle" => {
-                        let flags = if matches!(value, Value::Empty | Value::Missing | Value::Null) { None } else { Some(font_style_flags(&value, "ReplaceFormat.Font.FontStyle")?) };
-                        self.replace_format_font_style = flags;
-                        if let Some((bold, italic)) = flags {
-                            self.replace_format_bold = Some(bold);
-                            self.replace_format_italic = Some(italic);
-                        } else {
-                            self.replace_format_bold = None;
-                            self.replace_format_italic = None;
-                        }
-                    }
                     "subscript" => self.replace_format_subscript = style_face_boolean(&value, "ReplaceFormat.Font.Subscript")?,
                     "superscript" => self.replace_format_superscript = style_face_boolean(&value, "ReplaceFormat.Font.Superscript")?,
                     "strikethrough" => self.replace_format_strikethrough = match value {
@@ -36044,18 +36035,21 @@ fn dress_underline(dress: &Dress) -> i64 {
     }
 }
 
-fn font_style_flags(value: &Value, property: &str) -> Result<(bool, bool), String> {
-    let Value::String(style) = value else {
-        return Err(format!("{property} takes a style's name"));
-    };
-    let style = style.to_ascii_lowercase();
-    let bold = style.contains("bold") || style.contains('\u{592a}') && style.contains('\u{5b57}');
-    let italic = style.contains("italic") || style.contains('\u{659c}') && style.contains('\u{4f53}');
-    let regular = style == "regular" || style == "normal" || style.contains('\u{6a19}') && style.contains('\u{6e96}');
-    if !regular && !bold && !italic {
-        return Err(format!("{property} cannot be given {style:?}"));
+fn format_font_style(value: &Value) -> Result<Option<(bool, bool)>, String> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Empty | Value::Missing | Value::Error(_) => Ok(Some((false, false))),
+        _ => cell_font_style(value).map(Some),
     }
-    Ok((bold, italic))
+}
+
+fn format_font_boolean(value: &Value, property: &str) -> Result<Option<bool>, String> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Error(_) => Ok(Some(false)),
+        _ => application_switch(value, property).map(Some)
+            .map_err(|error| host_error(1004, error)),
+    }
 }
 
 fn style_face_boolean(value: &Value, property: &str) -> Result<Option<bool>, String> {
@@ -42753,7 +42747,6 @@ struct WorkbookHostState {
     find_format_font_color_index: Option<i64>,
     find_format_font_name: Option<Option<String>>,
     find_format_font_size: Option<f32>,
-    find_format_font_style: Option<(bool, bool)>,
     find_format_font_theme: Option<usize>,
     find_format_font_theme_font: Option<i64>,
     find_format_font_tint: Option<f64>,
@@ -42789,7 +42782,7 @@ struct WorkbookHostState {
     replace_format_font_name: Option<Option<String>>,
     replace_format_font_paint_actions: Vec<FormatFontPaintAction>,
     replace_format_font_size: Option<f32>,
-    replace_format_font_style: Option<(bool, bool)>,
+    replace_format_font_flags_set: bool,
     replace_format_font_theme_font: Option<i64>,
     replace_format_font_touched: bool,
     replace_format_formula_hidden: Option<bool>,
@@ -42825,13 +42818,13 @@ struct WorkbookHostState {
 
 impl<'a> WorkbookHost<'a> {
     fn into_parts(self) -> (WorkbookStorage<'a>,WorkbookHostState) {
-        let Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = self;
-        (workbook,WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects })
+        let Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_flags_set, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = self;
+        (workbook,WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_flags_set, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects })
     }
 
     fn resume_storage(workbook:WorkbookStorage<'a>, state: WorkbookHostState) -> Self {
-        let WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = state;
-        Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_style, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_style, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects }
+        let WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_flags_set, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = state;
+        Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_flags_set, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects }
     }
 }
 
@@ -75730,6 +75723,116 @@ End Function"#;
 
 
 
+
+    #[test]
+    fn find_replace_font_flags_keep_native_types_and_coercions() {
+        for language in [ErrorLanguage::English, ErrorLanguage::Japanese] {
+            for target in ["FindFormat", "ReplaceFormat"] {
+                for (assignments, bold, italic, error) in [
+                    (r#"@.FontStyle = "Bold""#,Some(true),Some(false),0),
+                    (r#"@.FontStyle = "Bold Italic""#,Some(true),Some(true),0),
+                    (r#"@.FontStyle = "Bold  Italic""#,Some(false),Some(false),0),
+                    (r#"@.FontStyle = "not bold""#,Some(false),Some(false),0),
+                    ("@.FontStyle = 12.5",Some(false),Some(false),0),
+                    ("@.FontStyle = True",Some(false),Some(false),0),
+                    ("@.FontStyle = Empty",Some(false),Some(false),0),
+                    ("@.FontStyle = CVErr(2015)",Some(false),Some(false),0),
+                    ("@.FontStyle = Null",None,None,0),
+                    ("@.Bold = True",Some(true),Some(false),0),
+                    ("@.Italic = True",Some(false),Some(true),0),
+                    ("@.Bold = Empty",Some(false),Some(false),0),
+                    ("@.Bold = Null",None,None,0),
+                    ("@.Italic = CVErr(2015)",Some(false),Some(false),0),
+                    (r#"@.Bold = "1""#,Some(true),Some(false),0),
+                    (r##"@.Bold = "#TRUE#""##,Some(true),Some(false),0),
+                    (r#"@.Italic = "0""#,Some(false),Some(false),0),
+                    (r#"@.Bold = " True""#,None,None,1004),
+                    ("@.FontStyle = \"Bold Italic\"\n@.Bold = Null",None,Some(true),0),
+                    ("@.FontStyle = \"Bold Italic\"\n@.Italic = Null",Some(true),None,0),
+                    ("@.FontStyle = \"Bold Italic\"\n@.Bold = False",Some(false),Some(true),0),
+                ] {
+                    let font=format!("Application.{target}.Font");
+                    let assignments=assignments.replace('@',&font);
+                    let module=parse_module(&format!(r#"Public Function Probe() As String
+Application.{target}.Clear
+Dim clear As Boolean
+clear = IsNull({font}.FontStyle) And IsNull({font}.Bold) And IsNull({font}.Italic)
+ThisWorkbook.Saved = True
+On Error Resume Next
+{assignments}
+Probe = CStr(clear) & ":" & CStr(Err.Number) & ":" & CStr(ThisWorkbook.Saved) & ":" & CStr(VarType({font}.FontStyle)) & ":" & Held({font}.FontStyle) & ":" & Held({font}.Bold) & ":" & Held({font}.Italic)
+End Function
+Public Function Held(v As Variant) As String
+If IsNull(v) Then
+Held = "Null"
+Else
+Held = CStr(v)
+End If
+End Function
+"#)).unwrap();
+                    let mut book=workbook();
+                    let mut host=WorkbookHost::new(&mut book,0).unwrap();host.error_language=language;
+                    let flag=|v|match v {Some(true)=>"True",Some(false)=>"False",None=>"Null"};
+                    let style=bold.zip(italic).map(|(b,i)|font_style_name(b,i,language));
+                    let expected=format!("True:{error}:True:{}:{}:{}:{}",if style.is_some(){8}else{1},style.unwrap_or("Null"),flag(bold),flag(italic));
+                    assert_eq!(execute_with_host(&module,"Probe",vec![],&mut host).unwrap(),Value::String(expected),
+                        "{target}: {assignments}, {language:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn find_replace_font_flags_follow_native_matching_and_partial_clears() {
+        for (criteria,expected) in [
+            ("Application.FindFormat.Font.Bold = False",
+                "$A$1,$A$2,$A$3,$A$4,"),
+            ("Application.FindFormat.Font.Bold = True",
+                "$A$2,$A$4,$A$2,$A$4,"),
+            ("Application.FindFormat.Font.FontStyle = \"Bold Italic\"\nApplication.FindFormat.Font.Bold = Null",
+                "$A$3,$A$4,$A$3,$A$4,"),
+        ] {
+            let module=parse_module(&format!(r#"Public Function Probe() As String
+Range("A1:A4").Value2 = "x"
+Range("A2").Font.Bold = True
+Range("A3").Font.Italic = True
+Range("A4").Font.Bold = True
+Range("A4").Font.Italic = True
+Application.FindFormat.Clear
+{criteria}
+Dim r As Range
+Dim i As Long
+Set r = Range("A4")
+For i = 1 To 4
+Set r = Range("A1:A4").Find("x", After:=r, LookIn:=xlValues, LookAt:=xlWhole, SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False, MatchByte:=False, SearchFormat:=True)
+Probe = Probe & r.Address & ","
+Next i
+End Function
+"#)).unwrap();
+            let mut book=workbook();let mut host=WorkbookHost::new(&mut book,0).unwrap();
+            assert_eq!(execute_with_host(&module,"Probe",vec![],&mut host).unwrap(),Value::String(expected.into()),"{criteria}");
+        }
+        let module=parse_module(r#"Public Function Probe() As String
+Range("A1:A4").Value2 = "x"
+Range("A2").Font.Bold = True
+Range("A3").Font.Italic = True
+Range("A4").Font.Bold = True
+Range("A4").Font.Italic = True
+Application.ReplaceFormat.Clear
+Application.ReplaceFormat.Font.FontStyle = "Bold Italic"
+Application.ReplaceFormat.Font.Bold = Null
+Range("A1:A4").Replace "x", "y", xlWhole, xlByRows, False, False, False, True
+Dim i As Long
+For i = 1 To 4
+Probe = Probe & CStr(Cells(i,1).Font.Bold) & ":" & CStr(Cells(i,1).Font.Italic) & ","
+Next i
+End Function
+"#).unwrap();
+        let mut book=workbook();let mut host=WorkbookHost::new(&mut book,0).unwrap();
+        assert_eq!(execute_with_host(&module,"Probe",vec![],&mut host).unwrap(),
+            Value::String("False:True,True:True,False:True,True:True,".into()));
+    }
+
     #[test]
     fn cell_font_style_requires_exact_names_and_accepts_scalar_variants() {
         for language in [ErrorLanguage::English,ErrorLanguage::Japanese] {
@@ -78199,7 +78302,7 @@ End Sub
                 "1\t$A$10".to_string(),
                 "$A$11".to_string(),
                 "255\t$A$12".to_string(),
-                "\t0".to_string(),
+                "Null\t0".to_string(),
                 "#,##0".to_string(),
                 "$A$4".to_string(),
                 "$A$2".to_string(),
@@ -78214,7 +78317,7 @@ End Sub
                 "True\t65535".to_string(),
                 "$A$3".to_string(),
                 "$A$3".to_string(),
-                "\t0".to_string(),
+                "Null\t0".to_string(),
             ]
         );
     }
