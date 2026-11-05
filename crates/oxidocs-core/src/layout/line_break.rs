@@ -3757,7 +3757,14 @@ impl<'a> LineBreaker<'a> {
                     // em under the balancing setting (any font, across runs); a
                     // lone space between Latin words keeps its natural advance.
                     let is_sp = |c: char| c == ' ' || c == '\u{00a0}';
-                    let bal_space_run = grid_char_pitch.is_none()
+                    // OXI_BAL_SPACE_RUN_GRID (2026-11-05, default ON, opt-out _DISABLE):
+                    // the space-run rule holds on a character grid too, at half the
+                    // cell. blind-J ja/legal__10f9c779 (linesAndChars, ＭＳ 明朝 10,
+                    // balance): Word advances each of «令和»'s 43 + 5 leading ASCII
+                    // spaces 5.03 (the full-width ones 9.95); Oxi left them at
+                    // Century's 2.5 and the date sat 110pt left.
+                    let bal_space_run = (grid_char_pitch.is_none()
+                        || !crate::env_flag!("OXI_BAL_SPACE_RUN_GRID_DISABLE"))
                         && !crate::env_flag!("OXI_BAL_SPACE_RUN_DISABLE")
                         && (chars_vec.get(char_index.wrapping_sub(1)).copied()
                             .or_else(|| if char_index == 0 {
