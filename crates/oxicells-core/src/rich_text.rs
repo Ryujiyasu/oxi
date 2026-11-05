@@ -65,8 +65,12 @@ fn run(
         writer
             .write_event(Event::Start(BytesStart::new(&name)))
             .map_err(failure)?;
-        for (name,set) in [("b",format.bold),("i",format.italic),("u",format.underline)] {
+        for (name,set) in [("b",format.bold),("i",format.italic),("strike",format.strikethrough)] {
             if set {property(writer,prefix,name,"","")?;}
+        }
+        if format.underline {
+            if let Some(kind)=format.underline_kind {property(writer,prefix,"u","val",kind.as_str())?;}
+            else {property(writer,prefix,"u","","")?;}
         }
         if let Some(size)=format.size {property(writer,prefix,"sz","val",&size.to_string())?;}
         let reference=format.font_reference.as_ref();
@@ -247,6 +251,8 @@ mod font_roundtrip_tests {
             font_charset:style.font_charset,..Default::default()};
         let mut painted=original.clone();
         painted.text="\u{FFFD}".into();painted.color=Some("FF0000".into());
+        painted.strikethrough=true;painted.underline=true;
+        painted.underline_kind=Some(crate::ir::CellUnderlineKind::DoubleAccounting);
         let reference=painted.font_reference.get_or_insert_with(Default::default);
         reference.theme=None;reference.indexed=None;reference.automatic=false;reference.tint=None;
         let mut tail=original;tail.text="b".into();
@@ -265,6 +271,11 @@ mod font_roundtrip_tests {
         assert!(!cell.runs[0].dressed);
         let low=&cell.runs[1];
         assert_eq!(low.text,"\u{FFFD}");
+        assert!(low.strikethrough);
+        assert!(low.underline);
+        assert_eq!(low.underline_kind,Some(crate::ir::CellUnderlineKind::DoubleAccounting));
+        assert!(!cell.runs[0].strikethrough);
+        assert!(!cell.runs[2].strikethrough);
         assert_eq!(low.color.as_deref(),Some("FF0000"));
         assert_eq!(low.font_family,Some(2));
         let reference=low.font_reference.as_ref().unwrap();

@@ -240,11 +240,19 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
                     "i" if in_run_props => {
                         current_run.italic = get_attr(&e, "val").as_deref() != Some("0");
                     }
+                    "strike" if in_run_props => {
+                        current_run.strikethrough = is_true(get_attr(&e, "val").as_deref().or(Some("1")));
+                    }
                     "u" if in_run_props => {
-                        current_run.underline = !matches!(
-                            get_attr(&e, "val").as_deref(),
-                            Some("0") | Some("none")
-                        );
+                        use crate::ir::CellUnderlineKind;
+                        let value=get_attr(&e,"val");
+                        current_run.underline = !matches!(value.as_deref(),Some("0")|Some("none"));
+                        current_run.underline_kind=match value.as_deref() {
+                            Some("double")=>Some(CellUnderlineKind::Double),
+                            Some("singleAccounting")=>Some(CellUnderlineKind::SingleAccounting),
+                            Some("doubleAccounting")=>Some(CellUnderlineKind::DoubleAccounting),
+                            _=>None,
+                        };
                     }
                     "vertAlign" if in_run_props => {
                         current_run.vert_align = get_attr(&e, "val");
@@ -291,6 +299,7 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
                                 && !run.bold
                                 && !run.italic
                                 && !run.underline
+                                && !run.strikethrough
                                 && run.color.is_none()
                         }) {
                             current.runs.clear();

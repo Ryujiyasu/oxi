@@ -1589,6 +1589,8 @@ struct Dress {
     bold: bool,
     italic: bool,
     underline: bool,
+    underline_kind: Option<oxicells_core::ir::CellUnderlineKind>,
+    strikethrough: bool,
     size: Option<f32>,
     font: Option<String>,
     api_font: Option<String>,
@@ -1605,6 +1607,8 @@ impl Dress {
             bold: style.bold,
             italic: style.italic,
             underline: style.underline,
+            underline_kind: style.underline_kind,
+            strikethrough: style.strikethrough,
             size: style.font_size,
             font: style.font_name.clone(),
             api_font: style.latin_font_name().map(str::to_string),
@@ -1627,6 +1631,8 @@ impl Dress {
             bold: run.bold,
             italic: run.italic,
             underline: run.underline,
+            underline_kind: run.underline_kind,
+            strikethrough: run.strikethrough,
             size: run.size.or(style.font_size),
             font: run.font.clone().or_else(|| style.font_name.clone()),
             api_font: run.font_reference.as_ref().and_then(|r|r.latin_name.clone())
@@ -1671,6 +1677,7 @@ impl Dress {
 
     fn write_font(&self, style: &mut CellStyle) {
         style.bold=self.bold;style.italic=self.italic;style.underline=self.underline;
+        style.underline_kind=self.underline_kind;style.strikethrough=self.strikethrough;
         style.font_size=self.size;style.font_name=self.font.clone();style.font_color=self.color.clone();
         style.font_reference=self.reference.clone();style.font_family=self.family;style.font_charset=self.charset;
         style.font_position=match self.vert_align.as_deref() {
@@ -1730,6 +1737,7 @@ fn redress(cell: &mut Cell, text: &[u16], dresses: &[Dress]) {
         runs.push(TextRun {
             text:String::from_utf16_lossy(&text[at..end]),size:dress.size,font:dress.font.clone(),
             bold:dress.bold,italic:dress.italic,underline:dress.underline,color:dress.color.clone(),
+            underline_kind:dress.underline_kind,strikethrough:dress.strikethrough,
             dressed:at!=0 || *dress!=plain,vert_align:dress.vert_align.clone(),
             font_reference:dress.reference.clone(),font_family:dress.family,font_charset:dress.charset,
         });
@@ -11593,9 +11601,13 @@ impl<'a> WorkbookHost<'a> {
         } else if name.eq_ignore_ascii_case("italic") {
             self.uniform_character_dress(at, start, length, |dress| dress.italic)
                 .map(Value::Boolean)
+        } else if name.eq_ignore_ascii_case("strikethrough") {
+            self.uniform_character_dress(at,start,length,|dress|dress.strikethrough).map(Value::Boolean)
+        } else if name.eq_ignore_ascii_case("fontstyle") {
+            self.uniform_character_dress(at,start,length,|dress|(dress.bold,dress.italic))
+                .map(|(bold,italic)|Value::String(font_style_name(bold,italic,self.error_language).into()))
         } else if name.eq_ignore_ascii_case("underline") {
-            self.uniform_character_dress(at, start, length, |dress| dress.underline)
-                .map(|held| Value::Integer(if held { UNDERLINE_SINGLE } else { UNDERLINE_NONE }))
+            self.uniform_character_dress(at, start, length, dress_underline).map(Value::Integer)
         } else if name.eq_ignore_ascii_case("size") {
             self.uniform_character_dress(at, start, length, |dress| dress.size)
                 .map(|held| Value::Double(f64::from(held.unwrap_or(default_size))))
@@ -11606,11 +11618,13 @@ impl<'a> WorkbookHost<'a> {
             self.uniform_character_dress(at, start, length, |dress| dress.color.clone())
                 .map(|held| style_color_value(Some(held), BLACK))
         } else if name.eq_ignore_ascii_case("colorindex") {
-            self.uniform_character_dress(at, start, length, |dress| dress.color.clone())
-                .map(|held| match colour_to_packed(held.as_deref()) {
-                    None => Value::Integer(1),
-                    Some(packed) => Value::Integer(nearest_palette_index(packed)),
-                })
+            self.uniform_character_dress(at,start,length,font_paint_reference).map(|paint| {
+                let color=resolved_interior_color(Some(&paint),true,
+                    &workbook_office_theme_palette(&self.workbook.theme_colors),&self.indexed_colour_palette());
+                Value::Integer(if paint.automatic || paint.indexed.is_some_and(|index|index>=64) {COLOUR_AUTOMATIC}
+                    else if let Some(index @ 8..=63)=paint.indexed {i64::from(index)-7}
+                    else {self.nearest_palette_index(color)})
+            })
         } else if name.eq_ignore_ascii_case("superscript") || name.eq_ignore_ascii_case("subscript") {
             let position = if name.eq_ignore_ascii_case("superscript") { 1 } else { -1 };
             self.uniform_character_dress(at, start, length, |dress| match dress.vert_align.as_deref() {
@@ -11684,24 +11698,20 @@ impl<'a> WorkbookHost<'a> {
                 return Ok(true);
             };
             self.dress_characters(at, start, length, |dress| dress.italic = held)?;
+        } else if name.eq_ignore_ascii_case("strikethrough") {
+            let Some(held)=style_face_boolean(&value,"Font.Strikethrough")? else {return Ok(true);};
+            self.dress_characters(at,start,length,|dress|dress.strikethrough=held)?;
+        } else if name.eq_ignore_ascii_case("fontstyle") {
+            let (bold,italic)=cell_font_style(&value)?;
+            self.dress_characters(at,start,length,|dress| {dress.bold=bold;dress.italic=italic;})?;
         } else if name.eq_ignore_ascii_case("underline") {
-            let held = match &value {
-                Value::Boolean(held) => *held,
-                value if any_whole_number(value).is_some() => {
-                    any_whole_number(value).unwrap_or_default() != UNDERLINE_NONE
-                }
-                _ => return Err("Font.Underline takes True, False, or an underline style".to_string()),
-            };
-            self.dress_characters(at, start, length, |dress| dress.underline = held)?;
+            let (held,kind)=cell_font_underline(&value)?;
+            self.dress_characters(at,start,length,|dress| {dress.underline=held;dress.underline_kind=kind;})?;
         } else if name.eq_ignore_ascii_case("size") {
             let held = font_size(&value)?;
             self.dress_characters(at, start, length, |dress| dress.size = held)?;
         } else if name.eq_ignore_ascii_case("name") {
-            let held = match &value {
-                Value::String(named) if named.is_empty() => None,
-                Value::String(named) => Some(named.clone()),
-                _ => return Err("Font.Name must be a name".to_string()),
-            };
+            let held=cell_font_name(&value)?;
             let normal=self.workbook.default_style.clone();
             let imported=held.as_deref().zip(normal.latin_font_name()).is_some_and(|(a,b)|a.eq_ignore_ascii_case(b));
             self.dress_characters(at,start,length,|dress| {
@@ -11716,7 +11726,7 @@ impl<'a> WorkbookHost<'a> {
             self.theme_paint.remove(&(at,Paint::Font));
         } else if name.eq_ignore_ascii_case("colorindex") {
             let held = self.palette_choice(&value, COLOUR_AUTOMATIC, "Font.ColorIndex")?;
-            let automatic=any_whole_number(&value)==Some(COLOUR_AUTOMATIC);
+            let automatic=matches!(any_whole_number(&value),Some(COLOUR_AUTOMATIC)|Some(0));
             self.dress_characters(at,start,length,|dress|dress.set_color(held.clone(),automatic))?;
             self.theme_paint.remove(&(at,Paint::Font));
         } else if name.eq_ignore_ascii_case("superscript") || name.eq_ignore_ascii_case("subscript")
@@ -23184,6 +23194,21 @@ impl<'a> WorkbookHost<'a> {
         self.apply_sort(range, &keys, &[], header, match_case, sideways)
     }
 
+    fn format_assignment_range(&self, receiver: &ObjectRef, name: &str) -> Option<CellRange> {
+        if self.gone(receiver) { return None; }
+        self.format_intent_request(receiver, name, &Value::Empty)
+            .map(|(range, _)| range)
+            .or_else(|| {
+                let (at, _, _) = self.characters_font_of(receiver)?;
+                match name.to_ascii_lowercase().as_str() {
+                    "name" | "size" | "bold" | "italic" | "underline" | "strikethrough" | "fontstyle" |
+                    "superscript" | "subscript" | "color" | "colorindex" |
+                    "themecolor" | "tintandshade" | "themefont" => Some(CellRange::single(at)),
+                    _ => None,
+                }
+            })
+    }
+
     fn format_intent_request(&self, receiver:&ObjectRef, name:&str, value:&Value)
         -> Option<(CellRange,Option<oxicells_core::ir::CellFormatComponent>)> {
         use oxicells_core::ir::CellFormatComponent as Part;
@@ -31808,15 +31833,7 @@ impl Host for WorkbookHost<'_> {
                 let bold = self.uniform_font(range, |dress| dress.bold)?;
                 let italic = self.uniform_font(range, |dress| dress.italic)?;
                 return Ok(Some(match (bold, italic) {
-                    (Some(bold), Some(italic)) => Value::String(
-                        match (bold, italic) {
-                            (false, false) => "Regular",
-                            (true, false) => "Bold",
-                            (false, true) => "Italic",
-                            (true, true) => "Bold Italic",
-                        }
-                        .to_string(),
-                    ),
+                    (Some(bold), Some(italic)) => Value::String(font_style_name(bold,italic,self.error_language).into()),
                     _ => Value::Null,
                 }));
             }
@@ -31828,25 +31845,12 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("strikethrough") {
                 // This one IS a Boolean, where Underline beside it is not.
                 return self
-                    .uniform_style(range, |style| style.strikethrough)
+                    .uniform_font(range, |dress| dress.strikethrough)
                     .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
             }
             if name.eq_ignore_ascii_case("underline") {
-                // Not a Boolean: Excel answers with the STYLE of rule under
-                // the writing. A cell nobody has underlined answers
-                // `xlUnderlineStyleNone`, and one that has answers
-                // `xlUnderlineStyleSingle` — which is also what it answers
-                // after `Font.Underline = True`.
-                // A double rule or an accounting one is kept beside the
-                // cell, since the IR says only whether there is a rule.
-                return self
-                    .uniform_marked(range, |style, marks| {
-                        if !style.underline {
-                            return UNDERLINE_NONE;
-                        }
-                        marks.underline.unwrap_or(UNDERLINE_SINGLE)
-                    })
-                    .map(|value| Some(value.map(Value::Integer).unwrap_or(Value::Null)));
+                return self.uniform_font(range,dress_underline)
+                    .map(|value|Some(value.map(Value::Integer).unwrap_or(Value::Null)));
             }
             if name.eq_ignore_ascii_case("name") {
                 // As with the alignment, what comes back is what the cells
@@ -33100,6 +33104,10 @@ impl Host for WorkbookHost<'_> {
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
         let shared_format=self.shared_format_request(receiver,name,&value);
         let format_intent=self.format_intent_request(receiver,name,&value);
+        let format_assignment = self.format_assignment_range(receiver, name);
+        if let Some(range) = format_assignment {
+            self.guard_formats(range.sheet, "formatting cells")?;
+        }
         let assign=|| {
         if name.eq_ignore_ascii_case("iconset") && self.condition_id(receiver).is_some() {
             if let Value::Object(object) = &value { return Ok(self.set_from_object(receiver, name, object)?.unwrap_or(false)); }
@@ -33134,7 +33142,7 @@ impl Host for WorkbookHost<'_> {
         // Colors, themes and dimensions keep the copied cells live instead.
         if self.clipboard.is_some() || matches!(&value,Value::Null) {
             let member=name.to_ascii_lowercase();
-            let font=self.range_font(receiver).is_some();
+            let font=self.range_font(receiver).is_some() || self.characters_font_of(receiver).is_some();
             let range=self.range(receiver).is_some();
             if self.clipboard.is_some() &&
                 (((font || self.characters_font_of(receiver).is_some())
@@ -33150,11 +33158,37 @@ impl Host for WorkbookHost<'_> {
                 return Err(host_error(13,"Type mismatch"));
             }
             if matches!(&value,Value::Null)
-                && ((font && matches!(member.as_str(),"name"|"size"|"color"|"colorindex"|"underline"))
+                && ((font && matches!(member.as_str(),"name"|"size"|"color"|"colorindex"|"underline"|
+                        "bold"|"italic"|"superscript"|"subscript"|"strikethrough"|"fontstyle"))
                     || (range && matches!(member.as_str(),"numberformat"|"numberformatlocal"))) {
                 return Ok(true);
             }
         }
+        // Cell fonts accept absent scalar values differently from Find/Replace formats.
+        // Apply this after Copy mode is cleared and after the formatting permission guard.
+        let cell_font=self.range_font(receiver).is_some() || self.characters_font_of(receiver).is_some();
+        let member=name.to_ascii_lowercase();
+        if cell_font {
+            if matches!(&value,Value::Error(_)) && matches!(member.as_str(),
+                "name"|"size"|"bold"|"italic"|"underline"|"superscript"|"subscript"|"strikethrough"|"fontstyle") {
+                return Ok(true);
+            }
+            if member=="name" && (matches!(&value,Value::Empty) || matches!(&value,Value::String(s) if s.is_empty())) {
+                return Ok(true);
+            }
+            if member=="size" && matches!(&value,Value::Empty) {
+                return Err(host_error(1004,"Unable to set the Size property of the Font class"));
+            }
+        }
+        let value=if cell_font {
+            match (member.as_str(),value) {
+                ("color"|"colorindex",Value::Empty|Value::Error(_))=>Value::Integer(0),
+                ("size",Value::Boolean(true))=>Value::Integer(1),
+                ("name",Value::Boolean(v))=>Value::String(if v {"TRUE"} else {"FALSE"}.into()),
+                ("fontstyle",Value::Empty)=>Value::String(String::new()),
+                (_,value)=>value,
+            }
+        } else {value};
         if self.blocks(receiver).is_some()
             && (name.eq_ignore_ascii_case("hasspill")
                 || name.eq_ignore_ascii_case("spillingtorange")
@@ -34357,12 +34391,7 @@ impl Host for WorkbookHost<'_> {
             if self.set_font_paint(range,name,&value)? {return Ok(true);}
             // Measured: FontStyle = "Bold Italic" sets both.
             if name.eq_ignore_ascii_case("fontstyle") {
-                let Value::String(asked) = &value else {
-                    return Err("Font.FontStyle takes a style's name".to_string());
-                };
-                let lower = asked.to_lowercase();
-                let bold = lower.contains("bold");
-                let italic = lower.contains("italic");
+                let (bold,italic)=cell_font_style(&value)?;
                 self.set(receiver, "Bold", Value::Boolean(bold))?;
                 self.set(receiver, "Italic", Value::Boolean(italic))?;
                 return Ok(true);
@@ -34404,6 +34433,7 @@ impl Host for WorkbookHost<'_> {
                     return Ok(true);
                 };
                 self.set_range_style(range, |_, style| style.strikethrough = struck)?;
+                self.redress_runs(range,|dress|dress.strikethrough=struck);
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("underline") {
@@ -34436,7 +34466,13 @@ impl Host for WorkbookHost<'_> {
                         _ => None,
                     };
                 })?;
-                self.redress_runs(range, |dress| dress.underline = underline);
+                let kind=match styled {
+                    Some(-4119)=>Some(oxicells_core::ir::CellUnderlineKind::Double),
+                    Some(4)=>Some(oxicells_core::ir::CellUnderlineKind::SingleAccounting),
+                    Some(5)=>Some(oxicells_core::ir::CellUnderlineKind::DoubleAccounting),
+                    _=>None,
+                };
+                self.redress_runs(range, |dress| {dress.underline=underline;dress.underline_kind=kind;});
                 for at in self.touched(range) {
                     match styled {
                         Some(rule) => {
@@ -34450,21 +34486,7 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("name") {
-                let named = match &value {
-                    Value::String(named) if named.is_empty() => None,
-                    Value::String(named) => Some(named.clone()),
-                    Value::Integer(number) => Some(number.to_string()),
-                    value if any_number(value).is_some() => {
-                        let number = any_number(value).unwrap_or_default();
-                        Some(if number.fract() == 0.0 {
-                            format!("{}", number as i64)
-                        } else {
-                            number.to_string()
-                        })
-                    }
-                    Value::Empty | Value::Missing => None,
-                    _ => return Err("Font.Name must be a name".to_string()),
-                };
+                let named=cell_font_name(&value)?;
                 let fallback=self.workbook.default_style.latin_font_name().unwrap_or("Calibri").to_string();
                 let changed: std::collections::HashSet<_>=self.touched(range).into_iter().filter(|at| {
                     let style=self.cell_here(at.sheet,at.row,at.column).map(|cell|cell.style).unwrap_or_else(||self.template_style(*at));
@@ -34585,6 +34607,7 @@ impl Host for WorkbookHost<'_> {
             // block goes through.
             if name.eq_ignore_ascii_case("themefont") {
                 let asked=any_whole_number(&value).unwrap_or(0);
+                if !(0..=2).contains(&asked) {return Err(host_error(5,"invalid font theme"));}
                 let fonts=&self.workbook.theme_fonts;
                 let render=match asked {
                     1=>fonts.major.clone(),2=>fonts.minor.clone(),_=>None,
@@ -35031,6 +35054,7 @@ impl Host for WorkbookHost<'_> {
         if matches!(&result,Ok(true)) {
             if let Some((range,part))=format_intent {self.finish_format_intent(range,part,name)?;}
             if let Some(request)=shared_format {self.finish_shared_format(request);}
+            if format_assignment.is_some() { self.saved = false; }
         }
         result
     }
@@ -35956,6 +35980,65 @@ fn notes_pinned_open(workbook: &Workbook) -> Vec<Note> {
         }
     }
     notes
+}
+
+fn cell_font_name(value: &Value) -> Result<Option<String>,String> {
+    match value {
+        Value::String(name)=>Ok(Some(name.clone())),
+        Value::Integer(number)=>Ok(Some(number.to_string())),
+        value if any_number(value).is_some()=>{
+            let number=any_number(value).unwrap_or_default();
+            Ok(Some(if number.fract()==0.0 {format!("{}",number as i64)} else {number.to_string()}))
+        },
+        _=>Err("Font.Name must be a name".into()),
+    }
+}
+
+fn cell_font_style(value: &Value) -> Result<(bool,bool),String> {
+    let Value::String(style)=value else {return Err("Font.FontStyle takes a style's name".into());};
+    let lower=style.to_ascii_lowercase();
+    Ok((lower.contains("bold") || lower.contains("太字"),lower.contains("italic") || lower.contains("斜体")))
+}
+
+fn font_style_name(bold: bool, italic: bool, language: ErrorLanguage) -> &'static str {
+    match (language,bold,italic) {
+        (ErrorLanguage::Japanese,false,false)=>"標準",
+        (ErrorLanguage::Japanese,true,false)=>"太字",
+        (ErrorLanguage::Japanese,false,true)=>"斜体",
+        (ErrorLanguage::Japanese,true,true)=>"太字 斜体",
+        (_,false,false)=>"Regular",
+        (_,true,false)=>"Bold",
+        (_,false,true)=>"Italic",
+        (_,true,true)=>"Bold Italic",
+    }
+}
+
+fn cell_font_underline(value: &Value) -> Result<(bool,Option<oxicells_core::ir::CellUnderlineKind>),String> {
+    use oxicells_core::ir::CellUnderlineKind;
+    let asked=match value {
+        Value::Boolean(true)=>UNDERLINE_SINGLE,
+        Value::Boolean(false)=>UNDERLINE_NONE,
+        value=>any_whole_number(value).ok_or_else(||host_error(1004,"that is not an underline style"))?,
+    };
+    match asked {
+        UNDERLINE_SINGLE=>Ok((true,None)),
+        UNDERLINE_NONE|1=>Ok((false,None)),
+        -4119|3=>Ok((true,Some(CellUnderlineKind::Double))),
+        4=>Ok((true,Some(CellUnderlineKind::SingleAccounting))),
+        5=>Ok((true,Some(CellUnderlineKind::DoubleAccounting))),
+        _=>Err(host_error(1004,"that is not an underline style")),
+    }
+}
+
+fn dress_underline(dress: &Dress) -> i64 {
+    use oxicells_core::ir::CellUnderlineKind;
+    if !dress.underline {return UNDERLINE_NONE;}
+    match dress.underline_kind {
+        Some(CellUnderlineKind::Double)=>-4119,
+        Some(CellUnderlineKind::SingleAccounting)=>4,
+        Some(CellUnderlineKind::DoubleAccounting)=>5,
+        _=>UNDERLINE_SINGLE,
+    }
 }
 
 fn font_style_flags(value: &Value, property: &str) -> Result<(bool, bool), String> {
@@ -75641,6 +75724,179 @@ End Function"#;
 
 
 
+
+
+    #[test]
+    fn cell_font_absent_values_keep_native_state() {
+        for target in ["Range(\"A1\").Font","Range(\"A1\").Characters(1, 2).Font"] {
+            for (property,input,getter,expected) in [
+                ("Name","Empty","Name","False:False:Meiryo"),
+                ("Name","\"\"","Name","False:False:Meiryo"),
+                ("Name","CVErr(2042)","Name","False:False:Meiryo"),
+                ("Name","True","Name","False:False:TRUE"),
+                ("Name","False","Name","False:False:FALSE"),
+                ("Name","0","Name","False:False:0"),
+                ("Size","Empty","Size","True:True:24"),
+                ("Size","True","Size","False:False:1"),
+                ("Size","Null","Size","False:False:24"),
+                ("Bold","CVErr(2042)","Bold","False:False:True"),
+                ("Superscript","Null","Superscript","False:False:True"),
+                ("Strikethrough","CVErr(2042)","Strikethrough","False:False:True"),
+                ("Color","Empty","ColorIndex","False:False:1"),
+                ("ColorIndex","CVErr(2042)","ColorIndex","False:False:-4105"),
+                ("FontStyle","Empty","FontStyle","False:False:Regular"),
+                ("FontStyle","Null","FontStyle","False:False:Bold Italic"),
+                ("Underline","-9999","Underline","True:True:2"),
+                ("ThemeFont","3","Name","True:True:Meiryo"),
+            ] {
+                let mut book=workbook();
+                let module=parse_module(&format!(r#"Public Function Probe() As String
+Range("A1").Value2 = "abcd"
+With Range("A1").Font
+.Name = "Meiryo"
+.Size = 24
+.Bold = True
+.Italic = True
+.Strikethrough = True
+.Superscript = True
+.Underline = 2
+.Color = 255
+End With
+ThisWorkbook.Saved = True
+On Error Resume Next
+{target}.{property} = {input}
+Dim failed As Boolean
+failed = Err.Number <> 0
+Err.Clear
+Probe = CStr(failed) & ":" & CStr(ThisWorkbook.Saved) & ":" & CStr({target}.{getter})
+End Function
+"#)).unwrap();
+                let mut host=WorkbookHost::new(&mut book,0).unwrap();
+                assert_eq!(execute_with_host(&module,"Probe",vec![],&mut host).unwrap(),
+                    Value::String(expected.into()),"{target}.{property} = {input}");
+            }
+        }
+    }
+
+    #[test]
+    fn character_font_styles_and_strike_survive_save_and_reimport() {
+        let seed=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let module=parse_module(r#"Public Function Setup() As String
+Range("A1").Value2 = "abcd"
+Range("A1").Font.Strikethrough = True
+Range("A1").Characters(2, 1).Font.Strikethrough = False
+Range("A1").Characters(3, 1).Font.FontStyle = "太字 斜体"
+Range("A1").Characters(4, 1).Font.Underline = -4119
+Setup = Snapshot()
+End Function
+Public Function Snapshot() As String
+Snapshot = CStr(Range("A1").Characters(1, 1).Font.Strikethrough) & ":" & CStr(Range("A1").Characters(2, 1).Font.Strikethrough) & ":" & CStr(Range("A1").Characters(3, 1).Font.Strikethrough) & ":" & Range("A1").Characters(3, 1).Font.FontStyle & ":" & CStr(Range("A1").Characters(4, 1).Font.Underline) & ":" & CStr(IsNull(Range("A1").Font.Strikethrough)) & ":" & CStr(IsNull(Range("A1").Font.Underline))
+End Function
+Public Function ClearStrike() As Boolean
+Range("A1").Font.Strikethrough = False
+ClearStrike = Range("A1").Characters(1, 4).Font.Strikethrough
+End Function
+"#).unwrap();
+        for (language,style) in [(ErrorLanguage::English,"Bold Italic"),(ErrorLanguage::Japanese,"太字 斜体")] {
+            let expected=Value::String(format!("True:False:True:{style}:-4119:True:True"));
+            let mut book=oxicells_core::parse_xlsx_preserving_values(seed).unwrap();
+            {
+                let mut host=WorkbookHost::new(&mut book,0).unwrap();host.error_language=language;
+                assert_eq!(execute_with_host(&module,"Setup",vec![],&mut host).unwrap(),expected);
+            }
+            let mut editor=oxicells_core::editor::XlsxEditor::new(seed).unwrap();
+            editor.apply_workbook(&book).unwrap();
+            let bytes=editor.save().unwrap();
+            let mut book=oxicells_core::parse_xlsx_preserving_values(&bytes).unwrap();
+            let mut host=WorkbookHost::new(&mut book,0).unwrap();host.error_language=language;
+            assert_eq!(execute_with_host(&module,"Snapshot",vec![],&mut host).unwrap(),expected);
+            assert_eq!(execute_with_host(&module,"ClearStrike",vec![],&mut host).unwrap(),Value::Boolean(false));
+        }
+    }
+
+
+    #[test]
+    fn cell_font_underline_reads_uniform_character_kind() {
+        for initial in [UNDERLINE_NONE,UNDERLINE_SINGLE,-4119] {
+            for assigned in [UNDERLINE_SINGLE,-4119,4,5] {
+                for start in [1,2] {
+                    let mut book=workbook();
+                    let module=parse_module(&format!(r#"Public Function Probe() As Variant
+Range("A1").Value2 = "MgA"
+Range("A1").Font.Underline = {initial}
+Range("A1").Characters({start}, 1).Font.Underline = {assigned}
+Probe = Range("A1").Font.Underline
+End Function
+"#)).unwrap();
+                    let mut host=WorkbookHost::new(&mut book,0).unwrap();
+                    let expected=if initial==assigned {Value::Integer(initial)} else {Value::Null};
+                    assert_eq!(execute_with_host(&module,"Probe",vec![],&mut host).unwrap(),expected,
+                        "initial {initial}, assigned {assigned}, character {start}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn successful_formatting_marks_workbook_unsaved() {
+        for assignment in [
+            "Range(\"A1\").Font.Bold = False",
+            "Range(\"A1\").Characters(1, 2).Font.Bold = False",
+            "Rows(1).Font.Size = 12",
+            "Columns(1).Font.Italic = True",
+            "Cells.Font.Name = \"Arial\"",
+            "Range(\"A1\").NumberFormat = \"General\"",
+            "Range(\"A1\").WrapText = False",
+            "Range(\"A1\").Interior.Color = 255",
+            "Range(\"A1\").Locked = True",
+            "Range(\"A1\").FormulaHidden = False",
+            "Range(\"A1\").Font.Bold = Null",
+            "Range(\"A1\").Characters(1, 2).Font.Superscript = Null",
+        ] {
+            let mut book = workbook();
+            let module = parse_module(&format!(
+                "Public Function Probe() As Boolean\n\
+                 Range(\"A1\").Value2 = \"MgA\"\n\
+                 Range(\"A1\").Font.Name = \"Arial\"\n\
+                 Range(\"A1\").Font.Size = 12\n\
+                 ThisWorkbook.Saved = True\n\
+                 {assignment}\n\
+                 Probe = ThisWorkbook.Saved\n\
+                 End Function\n"
+            )).unwrap();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            assert_eq!(
+                execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                Value::Boolean(false),
+                "{assignment}",
+            );
+        }
+    }
+
+    #[test]
+    fn rejected_formatting_preserves_workbook_saved_state() {
+        for target in ["Range(\"A1\").Font", "Range(\"A1\").Characters(1, 2).Font"] {
+            for value in ["True", "Null"] {
+                let mut book = workbook();
+                let module = parse_module(&format!(
+                    "Public Function Probe() As String\n\
+                     Range(\"A1\").Value2 = \"MgA\"\n\
+                     ActiveSheet.Protect \"\"\n\
+                     ThisWorkbook.Saved = True\n\
+                     On Error Resume Next\n\
+                     {target}.Bold = {value}\n\
+                     Probe = CStr(Err.Number) & \":\" & CStr(ThisWorkbook.Saved)\n\
+                     End Function\n"
+                )).unwrap();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                assert_eq!(
+                    execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                    Value::String("1004:True".to_string()),
+                    "{target}, {value}",
+                );
+            }
+        }
+    }
 
     #[test]
     fn character_position_false_setters_use_whole_cell_uniformity() {
