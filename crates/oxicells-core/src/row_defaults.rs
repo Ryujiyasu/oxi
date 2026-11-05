@@ -3015,22 +3015,272 @@ pub fn font_text_row_height<'a>(
         }))
 }
 
+
+// Measured tiny multiline advances and their shared-line extents.
+const TINY_FLOW_PROFILE_0: &str = "OKEAAAAAACCACCAAAAEEAAAA";
+const TINY_FLOW_PROFILE_1: &str = "QMEAAAAAAAAACCAAAAGGAAAA";
+const TINY_FLOW_PROFILE_2: &str = "MIEAAACCAAAACCAECCCCAECC";
+const TINY_FLOW_PROFILE_3: &str = "OKEAAAAAACCAAAAGECCCAECC";
+const TINY_FLOW_PROFILE_4: &str = "MIEAAACCACCAECCCCACCACCA";
+const TINY_FLOW_PROFILE_5: &str = "OKEAAAAAAEEACACEEACCACCA";
+const TINY_FLOW_PROFILE_6: &str = "MIEAAACCACCAECCCCACCAGEC";
+const TINY_FLOW_PROFILE_7: &str = "MIEAAACCACCACCAECCCCACCA";
+const TINY_FLOW_PROFILE_8: &str = "OKEAAAAAAEEAAAAGECCCACCA";
+const TINY_FLOW_PROFILE_9: &str = "OKEAAACCAAAACCACCACCACCA";
+const TINY_FLOW_PROFILE_10: &str = "QMEAAAAAAEEAAAACCACCACCA";
+
+static TINY_FLOW_PROFILES: &[(&str, u8, u8, &str)] = &[
+    ("Aptos", 0, 0, TINY_FLOW_PROFILE_0),
+    ("Aptos", 0, 1, TINY_FLOW_PROFILE_1),
+    ("Aptos", 0, 2, TINY_FLOW_PROFILE_0),
+    ("Aptos", 1, 0, TINY_FLOW_PROFILE_0),
+    ("Aptos", 1, 1, TINY_FLOW_PROFILE_1),
+    ("Aptos", 1, 2, TINY_FLOW_PROFILE_0),
+    ("Aptos", 2, 0, TINY_FLOW_PROFILE_0),
+    ("Aptos", 2, 1, TINY_FLOW_PROFILE_1),
+    ("Aptos", 2, 2, TINY_FLOW_PROFILE_0),
+    ("Aptos", 3, 0, TINY_FLOW_PROFILE_0),
+    ("Aptos", 3, 1, TINY_FLOW_PROFILE_1),
+    ("Aptos", 3, 2, TINY_FLOW_PROFILE_0),
+    ("Aptos Display", 0, 0, TINY_FLOW_PROFILE_0),
+    ("Aptos Display", 0, 1, TINY_FLOW_PROFILE_1),
+    ("Aptos Display", 0, 2, TINY_FLOW_PROFILE_0),
+    ("Aptos Display", 1, 0, TINY_FLOW_PROFILE_0),
+    ("Aptos Display", 1, 1, TINY_FLOW_PROFILE_1),
+    ("Aptos Display", 1, 2, TINY_FLOW_PROFILE_0),
+    ("Aptos Display", 2, 0, TINY_FLOW_PROFILE_0),
+    ("Aptos Display", 2, 1, TINY_FLOW_PROFILE_1),
+    ("Aptos Display", 2, 2, TINY_FLOW_PROFILE_0),
+    ("Aptos Display", 3, 0, TINY_FLOW_PROFILE_0),
+    ("Aptos Display", 3, 1, TINY_FLOW_PROFILE_1),
+    ("Aptos Display", 3, 2, TINY_FLOW_PROFILE_0),
+    ("Aptos Narrow", 0, 0, TINY_FLOW_PROFILE_0),
+    ("Aptos Narrow", 0, 1, TINY_FLOW_PROFILE_1),
+    ("Aptos Narrow", 0, 2, TINY_FLOW_PROFILE_0),
+    ("Aptos Narrow", 1, 0, TINY_FLOW_PROFILE_0),
+    ("Aptos Narrow", 1, 1, TINY_FLOW_PROFILE_1),
+    ("Aptos Narrow", 1, 2, TINY_FLOW_PROFILE_0),
+    ("Aptos Narrow", 2, 0, TINY_FLOW_PROFILE_0),
+    ("Aptos Narrow", 2, 1, TINY_FLOW_PROFILE_1),
+    ("Aptos Narrow", 2, 2, TINY_FLOW_PROFILE_0),
+    ("Aptos Narrow", 3, 0, TINY_FLOW_PROFILE_0),
+    ("Aptos Narrow", 3, 1, TINY_FLOW_PROFILE_1),
+    ("Aptos Narrow", 3, 2, TINY_FLOW_PROFILE_0),
+    ("Arial", 0, 0, TINY_FLOW_PROFILE_0),
+    ("Arial", 0, 1, TINY_FLOW_PROFILE_1),
+    ("Arial", 0, 2, TINY_FLOW_PROFILE_0),
+    ("Arial", 1, 0, TINY_FLOW_PROFILE_0),
+    ("Arial", 1, 1, TINY_FLOW_PROFILE_1),
+    ("Arial", 1, 2, TINY_FLOW_PROFILE_0),
+    ("Arial", 2, 0, TINY_FLOW_PROFILE_0),
+    ("Arial", 2, 1, TINY_FLOW_PROFILE_1),
+    ("Arial", 2, 2, TINY_FLOW_PROFILE_0),
+    ("Arial", 3, 0, TINY_FLOW_PROFILE_0),
+    ("Arial", 3, 1, TINY_FLOW_PROFILE_1),
+    ("Arial", 3, 2, TINY_FLOW_PROFILE_0),
+    ("Calibri", 0, 0, TINY_FLOW_PROFILE_0),
+    ("Calibri", 0, 1, TINY_FLOW_PROFILE_1),
+    ("Calibri", 0, 2, TINY_FLOW_PROFILE_0),
+    ("Calibri", 1, 0, TINY_FLOW_PROFILE_0),
+    ("Calibri", 1, 1, TINY_FLOW_PROFILE_1),
+    ("Calibri", 1, 2, TINY_FLOW_PROFILE_0),
+    ("Calibri", 2, 0, TINY_FLOW_PROFILE_0),
+    ("Calibri", 2, 1, TINY_FLOW_PROFILE_1),
+    ("Calibri", 2, 2, TINY_FLOW_PROFILE_0),
+    ("Calibri", 3, 0, TINY_FLOW_PROFILE_0),
+    ("Calibri", 3, 1, TINY_FLOW_PROFILE_1),
+    ("Calibri", 3, 2, TINY_FLOW_PROFILE_0),
+    ("Cambria", 0, 0, TINY_FLOW_PROFILE_0),
+    ("Cambria", 0, 1, TINY_FLOW_PROFILE_1),
+    ("Cambria", 0, 2, TINY_FLOW_PROFILE_0),
+    ("Cambria", 1, 0, TINY_FLOW_PROFILE_0),
+    ("Cambria", 1, 1, TINY_FLOW_PROFILE_1),
+    ("Cambria", 1, 2, TINY_FLOW_PROFILE_0),
+    ("Cambria", 2, 0, TINY_FLOW_PROFILE_0),
+    ("Cambria", 2, 1, TINY_FLOW_PROFILE_1),
+    ("Cambria", 2, 2, TINY_FLOW_PROFILE_0),
+    ("Cambria", 3, 0, TINY_FLOW_PROFILE_0),
+    ("Cambria", 3, 1, TINY_FLOW_PROFILE_1),
+    ("Cambria", 3, 2, TINY_FLOW_PROFILE_0),
+    ("Courier New", 0, 0, TINY_FLOW_PROFILE_0),
+    ("Courier New", 0, 1, TINY_FLOW_PROFILE_1),
+    ("Courier New", 0, 2, TINY_FLOW_PROFILE_0),
+    ("Courier New", 1, 0, TINY_FLOW_PROFILE_0),
+    ("Courier New", 1, 1, TINY_FLOW_PROFILE_1),
+    ("Courier New", 1, 2, TINY_FLOW_PROFILE_0),
+    ("Courier New", 2, 0, TINY_FLOW_PROFILE_0),
+    ("Courier New", 2, 1, TINY_FLOW_PROFILE_1),
+    ("Courier New", 2, 2, TINY_FLOW_PROFILE_0),
+    ("Courier New", 3, 0, TINY_FLOW_PROFILE_0),
+    ("Courier New", 3, 1, TINY_FLOW_PROFILE_1),
+    ("Courier New", 3, 2, TINY_FLOW_PROFILE_0),
+    ("MS Mincho", 0, 0, TINY_FLOW_PROFILE_0),
+    ("MS Mincho", 0, 1, TINY_FLOW_PROFILE_1),
+    ("MS Mincho", 0, 2, TINY_FLOW_PROFILE_0),
+    ("MS Mincho", 1, 0, TINY_FLOW_PROFILE_0),
+    ("MS Mincho", 1, 1, TINY_FLOW_PROFILE_1),
+    ("MS Mincho", 1, 2, TINY_FLOW_PROFILE_0),
+    ("MS Mincho", 2, 0, TINY_FLOW_PROFILE_0),
+    ("MS Mincho", 2, 1, TINY_FLOW_PROFILE_1),
+    ("MS Mincho", 2, 2, TINY_FLOW_PROFILE_0),
+    ("MS Mincho", 3, 0, TINY_FLOW_PROFILE_0),
+    ("MS Mincho", 3, 1, TINY_FLOW_PROFILE_1),
+    ("MS Mincho", 3, 2, TINY_FLOW_PROFILE_0),
+    ("MS PGothic", 0, 0, TINY_FLOW_PROFILE_0),
+    ("MS PGothic", 0, 1, TINY_FLOW_PROFILE_1),
+    ("MS PGothic", 0, 2, TINY_FLOW_PROFILE_0),
+    ("MS PGothic", 1, 0, TINY_FLOW_PROFILE_0),
+    ("MS PGothic", 1, 1, TINY_FLOW_PROFILE_1),
+    ("MS PGothic", 1, 2, TINY_FLOW_PROFILE_0),
+    ("MS PGothic", 2, 0, TINY_FLOW_PROFILE_0),
+    ("MS PGothic", 2, 1, TINY_FLOW_PROFILE_1),
+    ("MS PGothic", 2, 2, TINY_FLOW_PROFILE_0),
+    ("MS PGothic", 3, 0, TINY_FLOW_PROFILE_0),
+    ("MS PGothic", 3, 1, TINY_FLOW_PROFILE_1),
+    ("MS PGothic", 3, 2, TINY_FLOW_PROFILE_0),
+    ("Meiryo", 0, 0, TINY_FLOW_PROFILE_0),
+    ("Meiryo", 0, 1, TINY_FLOW_PROFILE_1),
+    ("Meiryo", 0, 2, TINY_FLOW_PROFILE_0),
+    ("Meiryo", 1, 0, TINY_FLOW_PROFILE_0),
+    ("Meiryo", 1, 1, TINY_FLOW_PROFILE_1),
+    ("Meiryo", 1, 2, TINY_FLOW_PROFILE_0),
+    ("Meiryo", 2, 0, TINY_FLOW_PROFILE_0),
+    ("Meiryo", 2, 1, TINY_FLOW_PROFILE_1),
+    ("Meiryo", 2, 2, TINY_FLOW_PROFILE_0),
+    ("Meiryo", 3, 0, TINY_FLOW_PROFILE_0),
+    ("Meiryo", 3, 1, TINY_FLOW_PROFILE_1),
+    ("Meiryo", 3, 2, TINY_FLOW_PROFILE_0),
+    ("Times New Roman", 0, 0, TINY_FLOW_PROFILE_0),
+    ("Times New Roman", 0, 1, TINY_FLOW_PROFILE_1),
+    ("Times New Roman", 0, 2, TINY_FLOW_PROFILE_0),
+    ("Times New Roman", 1, 0, TINY_FLOW_PROFILE_0),
+    ("Times New Roman", 1, 1, TINY_FLOW_PROFILE_1),
+    ("Times New Roman", 1, 2, TINY_FLOW_PROFILE_0),
+    ("Times New Roman", 2, 0, TINY_FLOW_PROFILE_0),
+    ("Times New Roman", 2, 1, TINY_FLOW_PROFILE_1),
+    ("Times New Roman", 2, 2, TINY_FLOW_PROFILE_0),
+    ("Times New Roman", 3, 0, TINY_FLOW_PROFILE_0),
+    ("Times New Roman", 3, 1, TINY_FLOW_PROFILE_1),
+    ("Times New Roman", 3, 2, TINY_FLOW_PROFILE_0),
+    ("Yu Gothic", 0, 0, TINY_FLOW_PROFILE_0),
+    ("Yu Gothic", 0, 1, TINY_FLOW_PROFILE_1),
+    ("Yu Gothic", 0, 2, TINY_FLOW_PROFILE_0),
+    ("Yu Gothic", 1, 0, TINY_FLOW_PROFILE_0),
+    ("Yu Gothic", 1, 1, TINY_FLOW_PROFILE_1),
+    ("Yu Gothic", 1, 2, TINY_FLOW_PROFILE_0),
+    ("Yu Gothic", 2, 0, TINY_FLOW_PROFILE_0),
+    ("Yu Gothic", 2, 1, TINY_FLOW_PROFILE_1),
+    ("Yu Gothic", 2, 2, TINY_FLOW_PROFILE_0),
+    ("Yu Gothic", 3, 0, TINY_FLOW_PROFILE_0),
+    ("Yu Gothic", 3, 1, TINY_FLOW_PROFILE_1),
+    ("Yu Gothic", 3, 2, TINY_FLOW_PROFILE_0),
+    ("メイリオ", 0, 0, TINY_FLOW_PROFILE_2),
+    ("メイリオ", 0, 1, TINY_FLOW_PROFILE_3),
+    ("メイリオ", 0, 2, TINY_FLOW_PROFILE_2),
+    ("メイリオ", 1, 0, TINY_FLOW_PROFILE_2),
+    ("メイリオ", 1, 1, TINY_FLOW_PROFILE_3),
+    ("メイリオ", 1, 2, TINY_FLOW_PROFILE_2),
+    ("メイリオ", 2, 0, TINY_FLOW_PROFILE_2),
+    ("メイリオ", 2, 1, TINY_FLOW_PROFILE_3),
+    ("メイリオ", 2, 2, TINY_FLOW_PROFILE_2),
+    ("メイリオ", 3, 0, TINY_FLOW_PROFILE_2),
+    ("メイリオ", 3, 1, TINY_FLOW_PROFILE_3),
+    ("メイリオ", 3, 2, TINY_FLOW_PROFILE_2),
+    ("游ゴシック", 0, 0, TINY_FLOW_PROFILE_4),
+    ("游ゴシック", 0, 1, TINY_FLOW_PROFILE_5),
+    ("游ゴシック", 0, 2, TINY_FLOW_PROFILE_6),
+    ("游ゴシック", 1, 0, TINY_FLOW_PROFILE_7),
+    ("游ゴシック", 1, 1, TINY_FLOW_PROFILE_8),
+    ("游ゴシック", 1, 2, TINY_FLOW_PROFILE_7),
+    ("游ゴシック", 2, 0, TINY_FLOW_PROFILE_4),
+    ("游ゴシック", 2, 1, TINY_FLOW_PROFILE_5),
+    ("游ゴシック", 2, 2, TINY_FLOW_PROFILE_6),
+    ("游ゴシック", 3, 0, TINY_FLOW_PROFILE_7),
+    ("游ゴシック", 3, 1, TINY_FLOW_PROFILE_8),
+    ("游ゴシック", 3, 2, TINY_FLOW_PROFILE_7),
+    ("ＭＳ 明朝", 0, 0, TINY_FLOW_PROFILE_9),
+    ("ＭＳ 明朝", 0, 1, TINY_FLOW_PROFILE_10),
+    ("ＭＳ 明朝", 0, 2, TINY_FLOW_PROFILE_9),
+    ("ＭＳ 明朝", 1, 0, TINY_FLOW_PROFILE_9),
+    ("ＭＳ 明朝", 1, 1, TINY_FLOW_PROFILE_10),
+    ("ＭＳ 明朝", 1, 2, TINY_FLOW_PROFILE_9),
+    ("ＭＳ 明朝", 2, 0, TINY_FLOW_PROFILE_9),
+    ("ＭＳ 明朝", 2, 1, TINY_FLOW_PROFILE_10),
+    ("ＭＳ 明朝", 2, 2, TINY_FLOW_PROFILE_9),
+    ("ＭＳ 明朝", 3, 0, TINY_FLOW_PROFILE_9),
+    ("ＭＳ 明朝", 3, 1, TINY_FLOW_PROFILE_10),
+    ("ＭＳ 明朝", 3, 2, TINY_FLOW_PROFILE_9),
+    ("ＭＳ Ｐゴシック", 0, 0, TINY_FLOW_PROFILE_9),
+    ("ＭＳ Ｐゴシック", 0, 1, TINY_FLOW_PROFILE_10),
+    ("ＭＳ Ｐゴシック", 0, 2, TINY_FLOW_PROFILE_9),
+    ("ＭＳ Ｐゴシック", 1, 0, TINY_FLOW_PROFILE_9),
+    ("ＭＳ Ｐゴシック", 1, 1, TINY_FLOW_PROFILE_10),
+    ("ＭＳ Ｐゴシック", 1, 2, TINY_FLOW_PROFILE_9),
+    ("ＭＳ Ｐゴシック", 2, 0, TINY_FLOW_PROFILE_9),
+    ("ＭＳ Ｐゴシック", 2, 1, TINY_FLOW_PROFILE_10),
+    ("ＭＳ Ｐゴシック", 2, 2, TINY_FLOW_PROFILE_9),
+    ("ＭＳ Ｐゴシック", 3, 0, TINY_FLOW_PROFILE_9),
+    ("ＭＳ Ｐゴシック", 3, 1, TINY_FLOW_PROFILE_10),
+    ("ＭＳ Ｐゴシック", 3, 2, TINY_FLOW_PROFILE_9),
+];
+
+
+fn run_flow_height_bounds(
+    face: &str, size: f32, bold: bool, italic: bool, position: Option<&str>,
+) -> Option<LineHeightBounds> {
+    let kind = match position {
+        None | Some("baseline") => 0,
+        Some("superscript") => 1,
+        Some("subscript") => 2,
+        _ => return None,
+    };
+    let em = em_pixels(size);
+    if (1..=8).contains(&em) {
+        let flags = u8::from(bold) | (u8::from(italic) << 1);
+        let (_, _, _, packed) = TINY_FLOW_PROFILES.iter().find(|(held, style, run_kind, _)| {
+            held.eq_ignore_ascii_case(face) && *style == flags && *run_kind == kind
+        })?;
+        return Some(decoded_run_row_bounds(packed, em, false));
+    }
+    let mut bounds = run_height_bounds(face, size, bold, italic, position)?;
+    if bounds.baseline_min != bounds.baseline_max || bounds.descent_min != bounds.descent_max {
+        return None;
+    }
+    bounds.row_only = false;
+    Some(bounds)
+}
+
 /// Shared row height including the room below accounting underlines.
 pub fn font_decorated_text_row_height<'a>(
     normal_face: &str,
     normal_size: f32,
     cells: impl IntoIterator<Item = (&'a str, f32, bool, bool, bool, Option<&'a str>, u32, Option<CellUnderlineKind>)>,
 ) -> Option<u16> {
+    let cells = cells.into_iter().collect::<Vec<_>>();
+    let flow = cells.iter().any(|cell| cell.6 > 1) && cells.iter().all(|cell| !cell.4);
     let normal = run_height_bounds(normal_face, normal_size, false, false, None)?;
+    let normal_minimum = normal.height;
+    let normal = if flow {
+        run_flow_height_bounds(normal_face, normal_size, false, false, None)?
+    } else {
+        normal
+    };
     if normal.height >= 546 { return Some(546); }
     let mut low_baseline = normal.baseline_min;
     let mut high_baseline = normal.baseline_max;
     let mut low_descent = normal.descent_min;
     let mut high_descent = normal.descent_max;
-    let mut minimum = normal.height;
+    let mut minimum = normal_minimum;
     for (face, size, bold, italic, wrapped_anchor, position, lines, underline) in cells {
         let bounds = decorated_run_height_bounds(face, size, bold, italic, position, underline)?;
-        let bounds = if bounds.row_only && (wrapped_anchor || lines > 1)
+        let row_minimum = bounds.height;
+        let bounds = if flow {
+            if matches!(underline,
+                Some(CellUnderlineKind::SingleAccounting | CellUnderlineKind::DoubleAccounting)) {
+                return None;
+            }
+            run_flow_height_bounds(face, size, bold, italic, position)?
+        } else if bounds.row_only && (wrapped_anchor || lines > 1)
             && !matches!(position, None | Some("baseline"))
         {
             // Existing exact line boxes still define the supported flow sizes.
@@ -3060,6 +3310,7 @@ pub fn font_decorated_text_row_height<'a>(
             low_baseline = low_baseline.max(bounds.baseline_min.saturating_add(advance));
             high_baseline = high_baseline.max(bounds.baseline_max.saturating_add(advance));
             minimum = minimum.max(bounds.height.saturating_add(advance));
+            if flow { minimum = minimum.max(row_minimum); }
         }
     }
     let low = low_baseline.saturating_add(low_descent).max(minimum).min(546);
@@ -3327,6 +3578,22 @@ mod tests {
             Some((43, 37)),
         );
     }
+
+    #[test]
+    fn tiny_multiline_advances_share_the_last_line_extents() {
+        for (normal_size, face, position, lines, expected) in [
+            (8.0, "Arial", None, 2, 15),
+            (8.0, "Arial", None, 3, 22),
+            (8.0, "Arial", Some("superscript"), 3, 25),
+            (8.0, "メイリオ", Some("subscript"), 3, 19),
+            (20.0, "メイリオ", Some("subscript"), 7, 46),
+        ] {
+            assert_eq!(super::font_text_row_height("Arial", normal_size, [
+                (face, 1.0, false, false, false, position, lines),
+            ]), Some(expected));
+        }
+    }
+
     #[test]
     fn tiny_script_row_minimum_is_separate_from_its_vertical_extents() {
         assert_eq!(super::font_text_row_height("Arial", 1.0, [
