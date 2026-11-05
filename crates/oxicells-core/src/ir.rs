@@ -846,6 +846,10 @@ pub struct TextRun {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub underline: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline_kind: Option<CellUnderlineKind>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strikethrough: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
     /// Whether the run carried an `<rPr>` of its own.
     ///
