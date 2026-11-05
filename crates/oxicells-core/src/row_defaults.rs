@@ -329,6 +329,8 @@ static FONT_DEFAULT_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("游ゴシック", 40, 22, 16),
     ("游ゴシック", 42, 23, 17),
     ("游ゴシック", 44, 25, 18),
+    ("游ゴシック", 288, 154, 111),
+    ("Yu Gothic", 288, 154, 111),
     ("游ゴシック", 48, 26, 19),
     ("游ゴシック", 52, 27, 20),
     ("游ゴシック", 56, 32, 23),
@@ -533,6 +535,130 @@ static FONT_STYLE_LINE_BOXES: &[(&str, u16, bool, bool, u16, u16)] = &[
     ("Times New Roman", 288, true, true, 120, 98),
 ];
 
+/// Own line boxes for raised and lowered text, in 96-dpi pixels.
+static FONT_POSITION_LINE_BOXES: &[(&str, u16, bool, bool, u16, u16, u16, u16)] = &[
+    ("Arial", 32, false, false, 15, 12, 15, 12),
+    ("Arial", 32, true, false, 15, 12, 15, 12),
+    ("Arial", 32, false, true, 15, 12, 15, 12),
+    ("Arial", 32, true, true, 14, 12, 16, 13),
+    ("Arial", 44, false, false, 22, 19, 25, 19),
+    ("Arial", 44, true, false, 23, 19, 22, 17),
+    ("Arial", 44, false, true, 22, 19, 25, 19),
+    ("Arial", 44, true, true, 21, 18, 23, 18),
+    ("Arial", 48, false, false, 24, 21, 26, 20),
+    ("Arial", 48, true, false, 25, 21, 25, 19),
+    ("Arial", 48, false, true, 23, 20, 26, 20),
+    ("Arial", 48, true, true, 24, 21, 24, 19),
+    ("Arial", 96, false, false, 46, 39, 48, 37),
+    ("Arial", 96, true, false, 45, 38, 48, 37),
+    ("Arial", 96, false, true, 47, 39, 47, 36),
+    ("Arial", 96, true, true, 46, 39, 48, 37),
+    ("Arial", 288, false, false, 140, 118, 144, 110),
+    ("Arial", 288, true, false, 140, 117, 145, 110),
+    ("Arial", 288, false, true, 141, 118, 145, 110),
+    ("Arial", 288, true, true, 140, 117, 145, 110),
+    ("Calibri", 32, false, false, 17, 14, 17, 13),
+    ("Calibri", 32, true, false, 17, 14, 17, 13),
+    ("Calibri", 32, false, true, 17, 14, 17, 13),
+    ("Calibri", 32, true, true, 17, 14, 17, 13),
+    ("Calibri", 44, false, false, 23, 19, 24, 18),
+    ("Calibri", 44, true, false, 23, 19, 24, 18),
+    ("Calibri", 44, false, true, 23, 19, 24, 18),
+    ("Calibri", 44, true, true, 23, 19, 24, 18),
+    ("Calibri", 48, false, false, 24, 20, 25, 19),
+    ("Calibri", 48, true, false, 24, 20, 25, 19),
+    ("Calibri", 48, false, true, 24, 20, 25, 19),
+    ("Calibri", 48, true, true, 24, 20, 25, 19),
+    ("Calibri", 96, false, false, 48, 39, 48, 36),
+    ("Calibri", 96, true, false, 48, 39, 48, 36),
+    ("Calibri", 96, false, true, 48, 39, 48, 36),
+    ("Calibri", 96, true, true, 48, 39, 48, 36),
+    ("Calibri", 288, false, false, 141, 115, 143, 107),
+    ("Calibri", 288, true, false, 141, 115, 143, 107),
+    ("Calibri", 288, false, true, 141, 115, 143, 107),
+    ("Calibri", 288, true, true, 141, 115, 143, 107),
+    ("Times New Roman", 32, false, false, 15, 12, 17, 13),
+    ("Times New Roman", 32, true, false, 14, 12, 18, 14),
+    ("Times New Roman", 32, false, true, 15, 12, 17, 13),
+    ("Times New Roman", 32, true, true, 15, 12, 17, 13),
+    ("Times New Roman", 44, false, false, 24, 20, 22, 17),
+    ("Times New Roman", 44, true, false, 22, 19, 23, 18),
+    ("Times New Roman", 44, false, true, 24, 20, 22, 17),
+    ("Times New Roman", 44, true, true, 22, 18, 22, 17),
+    ("Times New Roman", 48, false, false, 25, 21, 25, 19),
+    ("Times New Roman", 48, true, false, 25, 21, 23, 18),
+    ("Times New Roman", 48, false, true, 25, 21, 25, 19),
+    ("Times New Roman", 48, true, true, 25, 21, 25, 19),
+    ("Times New Roman", 96, false, false, 47, 39, 47, 36),
+    ("Times New Roman", 96, true, false, 46, 39, 48, 37),
+    ("Times New Roman", 96, false, true, 46, 38, 47, 36),
+    ("Times New Roman", 96, true, true, 46, 39, 48, 37),
+    ("Times New Roman", 288, false, false, 142, 118, 144, 109),
+    ("Times New Roman", 288, true, false, 139, 117, 144, 110),
+    ("Times New Roman", 288, false, true, 142, 118, 144, 109),
+    ("Times New Roman", 288, true, true, 139, 117, 144, 110),
+    ("Courier New", 32, false, false, 15, 12, 17, 13),
+    ("Courier New", 32, true, false, 15, 12, 17, 13),
+    ("Courier New", 32, false, true, 16, 12, 16, 12),
+    ("Courier New", 32, true, true, 15, 12, 17, 13),
+    ("Courier New", 44, false, false, 23, 19, 24, 18),
+    ("Courier New", 44, true, false, 26, 21, 23, 17),
+    ("Courier New", 44, false, true, 24, 19, 23, 17),
+    ("Courier New", 44, true, true, 25, 20, 23, 17),
+    ("Courier New", 48, false, false, 26, 22, 25, 19),
+    ("Courier New", 48, true, false, 28, 23, 24, 18),
+    ("Courier New", 48, false, true, 27, 22, 26, 19),
+    ("Courier New", 48, true, true, 27, 22, 24, 18),
+    ("Courier New", 96, false, false, 48, 39, 48, 36),
+    ("Courier New", 96, true, false, 50, 40, 47, 35),
+    ("Courier New", 96, false, true, 48, 40, 49, 37),
+    ("Courier New", 96, true, true, 49, 39, 47, 35),
+    ("Courier New", 288, false, false, 145, 119, 145, 108),
+    ("Courier New", 288, true, false, 147, 118, 144, 106),
+    ("Courier New", 288, false, true, 145, 119, 145, 108),
+    ("Courier New", 288, true, true, 147, 118, 144, 106),
+    ("メイリオ", 32, false, false, 19, 13, 19, 13),
+    ("メイリオ", 32, true, false, 19, 13, 19, 13),
+    ("メイリオ", 32, false, true, 19, 13, 19, 13),
+    ("メイリオ", 32, true, true, 19, 13, 19, 13),
+    ("メイリオ", 44, false, false, 27, 19, 25, 17),
+    ("メイリオ", 44, true, false, 27, 19, 25, 17),
+    ("メイリオ", 44, false, true, 27, 19, 25, 17),
+    ("メイリオ", 44, true, true, 27, 19, 25, 17),
+    ("メイリオ", 48, false, false, 29, 21, 26, 18),
+    ("メイリオ", 48, true, false, 29, 21, 26, 18),
+    ("メイリオ", 48, false, true, 29, 21, 26, 18),
+    ("メイリオ", 48, true, true, 29, 21, 26, 18),
+    ("メイリオ", 96, false, false, 55, 39, 51, 35),
+    ("メイリオ", 96, true, false, 55, 39, 51, 35),
+    ("メイリオ", 96, false, true, 55, 39, 51, 35),
+    ("メイリオ", 96, true, true, 55, 39, 51, 35),
+    ("メイリオ", 288, false, false, 165, 117, 151, 103),
+    ("メイリオ", 288, true, false, 165, 117, 151, 103),
+    ("メイリオ", 288, false, true, 165, 117, 151, 103),
+    ("メイリオ", 288, true, true, 165, 117, 151, 103),
+    ("Aptos Narrow", 32, false, false, 16, 13, 17, 13),
+    ("Aptos Narrow", 32, true, false, 16, 13, 17, 13),
+    ("Aptos Narrow", 32, false, true, 16, 13, 17, 13),
+    ("Aptos Narrow", 32, true, true, 16, 13, 17, 13),
+    ("Aptos Narrow", 44, false, false, 22, 18, 24, 18),
+    ("Aptos Narrow", 44, true, false, 22, 18, 24, 18),
+    ("Aptos Narrow", 44, false, true, 22, 18, 24, 18),
+    ("Aptos Narrow", 44, true, true, 22, 18, 24, 18),
+    ("Aptos Narrow", 48, false, false, 24, 20, 25, 19),
+    ("Aptos Narrow", 48, true, false, 24, 20, 25, 19),
+    ("Aptos Narrow", 48, false, true, 24, 20, 25, 19),
+    ("Aptos Narrow", 48, true, true, 24, 20, 25, 19),
+    ("Aptos Narrow", 96, false, false, 47, 38, 48, 36),
+    ("Aptos Narrow", 96, true, false, 47, 38, 48, 36),
+    ("Aptos Narrow", 96, false, true, 47, 38, 48, 36),
+    ("Aptos Narrow", 96, true, true, 47, 38, 48, 36),
+    ("Aptos Narrow", 288, false, false, 141, 114, 145, 108),
+    ("Aptos Narrow", 288, true, false, 141, 114, 145, 108),
+    ("Aptos Narrow", 288, false, true, 141, 114, 145, 108),
+    ("Aptos Narrow", 288, true, true, 141, 114, 145, 108),
+];
+
 /// Differences between the measured line descent and the device descent.
 static FONT_DEVICE_DESCENT_OFFSETS: &[(&str, u16, i16)] = &[
     ("Aptos Narrow", 192, 1),
@@ -673,19 +799,73 @@ pub fn font_row_line_box<'a>(
     normal_size: f32,
     cells: impl IntoIterator<Item = (&'a str, f32, bool, bool, bool)>,
 ) -> Option<(u16, u16)> {
+    font_position_row_line_box(
+        normal_face,
+        normal_size,
+        cells.into_iter().map(|(face, size, bold, italic, anchor)| {
+            (face, size, bold, italic, anchor, None)
+        }),
+    )
+}
+
+/// A run's own line, including its raised or lowered position.
+pub fn font_run_line_box(
+    face: &str,
+    size: f32,
+    bold: bool,
+    italic: bool,
+    position: Option<&str>,
+) -> Option<(u16, u16)> {
+    let superscript = match position {
+        None | Some("baseline") => {
+            return font_cell_line_box(face, size, bold, italic, "", 0.0, false);
+        }
+        Some("superscript") => true,
+        Some("subscript") => false,
+        _ => return None,
+    };
+    let canonical = if face.eq_ignore_ascii_case("Meiryo") { "メイリオ" } else { face };
+    FONT_POSITION_LINE_BOXES.iter().find(|(held, points, held_bold, held_italic, ..)| {
+        *held == canonical && *held_bold == bold && *held_italic == italic
+            && f32::from(*points) / 4.0 == size
+    }).map(|(_, _, _, _, up_height, up_baseline, down_height, down_baseline)| {
+        if superscript { (*up_height, *up_baseline) } else { (*down_height, *down_baseline) }
+    })
+}
+
+/// The shared line of ordinary, raised and lowered runs in a row.
+pub fn font_position_row_line_box<'a>(
+    normal_face: &str,
+    normal_size: f32,
+    cells: impl IntoIterator<Item = (&'a str, f32, bool, bool, bool, Option<&'a str>)>,
+) -> Option<(u16, u16)> {
+    font_text_row_line_box(
+        normal_face, normal_size,
+        cells.into_iter().map(|(face, size, bold, italic, anchor, position)| {
+            (face, size, bold, italic, anchor, position, 1)
+        }),
+    )
+}
+
+/// Wrapped plain text shares the Normal font at its last baseline.
+pub fn font_text_row_line_box<'a>(
+    normal_face: &str,
+    normal_size: f32,
+    cells: impl IntoIterator<Item = (&'a str, f32, bool, bool, bool, Option<&'a str>, u32)>,
+) -> Option<(u16, u16)> {
     let (height, mut baseline) = font_line_box(normal_face, normal_size, false)?;
     let mut descent = height.saturating_sub(baseline);
-    for (face, size, bold, italic, wrapped_merge_anchor) in cells {
-        let (height, cell_baseline) = font_cell_line_box(
-            face, size, bold, italic, "", 0.0, false,
-        )?;
+    for (face, size, bold, italic, wrapped_merge_anchor, position, lines) in cells {
+        let (height, cell_baseline) = font_run_line_box(face, size, bold, italic, position)?;
         descent = descent.max(height.saturating_sub(cell_baseline));
         if !wrapped_merge_anchor {
-            baseline = baseline.max(cell_baseline);
+            let extra = u16::try_from(lines.saturating_sub(1)).unwrap_or(u16::MAX);
+            baseline = baseline.max(cell_baseline.saturating_add(height.saturating_mul(extra)));
         }
     }
     Some((baseline.saturating_add(descent), baseline))
 }
+
 
 fn em_pixels(points: f32) -> i32 {
     (points * 96.0 / 72.0).round() as i32
@@ -882,6 +1062,50 @@ mod tests {
                 ("Times New Roman", 6.0, false, false, false),
             ]).map(|line| line.0),
             Some(15),
+        );
+    }
+
+    #[test]
+    fn positioned_runs_share_the_normal_baseline_and_descent() {
+        assert_eq!(
+            super::font_position_row_line_box("Arial", 20.0, [
+                ("Courier New", 12.0, false, true, false, Some("subscript")),
+            ]),
+            Some((35, 28)),
+        );
+        assert_eq!(
+            super::font_position_row_line_box("Arial", 8.0, [
+                ("Arial", 12.0, false, false, false, Some("superscript")),
+            ]),
+            Some((24, 21)),
+        );
+        assert_eq!(
+            super::font_position_row_line_box("游ゴシック", 72.0, [
+                ("Arial", 72.0, false, false, false, Some("superscript")),
+            ]),
+            Some((161, 118)),
+        );
+    }
+
+    #[test]
+    fn wrapped_positions_share_the_last_baseline_once() {
+        assert_eq!(
+            super::font_text_row_line_box("Arial", 20.0, [
+                ("Arial", 12.0, false, false, false, Some("superscript"), 2),
+            ]),
+            Some((51, 45)),
+        );
+        assert_eq!(
+            super::font_text_row_line_box("Arial", 20.0, [
+                ("Arial", 12.0, false, false, false, Some("subscript"), 3),
+            ]),
+            Some((78, 72)),
+        );
+        assert_eq!(
+            super::font_text_row_line_box("Arial", 20.0, [
+                ("Arial", 12.0, false, false, false, None, 2),
+            ]),
+            Some((43, 37)),
         );
     }
 }

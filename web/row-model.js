@@ -187,7 +187,7 @@ export function sheetDefault(sheet, heightOf) {
 /// undefined for one that has never been measured. `advance(face, size, bold,
 /// italic, letter)` gives one character's width. `columns` holds the left edge
 /// of every column, so a wrapped cell knows the box it breaks inside.
-export function explainRow({ sheet, index, row, columns, heightOf, advance, fontRowHeightOf }) {
+export function explainRow({ sheet, index, row, columns, heightOf, advance, fontRowHeightOf, fontPositionRowHeightOf }) {
   const parts = [];
   const fallback = () => row?.height
     ? {
@@ -238,28 +238,33 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance, font
   let raise = 0;
   const normal = sheet.normal_font
     ? [sheet.column_width_font || sheet.normal_font[0], sheet.normal_font[1]] : null;
-  const aggregateLines = !!fontRowHeightOf && !!normal;
+  const aggregateLines = (!!fontRowHeightOf || !!fontPositionRowHeightOf) && !!normal;
   const lineFonts = [];
-  const richFontsOf = (cell, face, size, anchor) => {
+  const lineFont = (face, size, bold, italic, anchor, position, lines = 1) =>
+    fontPositionRowHeightOf
+      ? [face, size, bold, italic, anchor, position || null, lines]
+      : [face, size, bold, italic, anchor];
+  const richFontsOf = (cell, face, size, anchor, lines = 1) => {
     const style = cell.style || {};
-    if (!cell.runs?.length || !cellText(cell)) return [[face, size, !!style.bold, !!style.italic, anchor]];
+    if (!cell.runs?.length || !cellText(cell)) return [lineFont(face, size, !!style.bold, !!style.italic, anchor, style.font_position, lines)];
     const fonts = [];
     let covered = 0;
     for (const run of cell.runs) {
       if (!run.text) continue;
       covered += run.text.length;
       fonts.push(run.dressed
-        ? [run.font_reference?.latin_name || run.font || face, run.size ?? size, !!run.bold, !!run.italic, anchor]
-        : [face, size, !!style.bold, !!style.italic, anchor]);
+        ? lineFont(run.font_reference?.latin_name || run.font || face, run.size ?? size,
+            !!run.bold, !!run.italic, anchor, run.vert_align)
+        : lineFont(face, size, !!style.bold, !!style.italic, anchor, style.font_position));
     }
-    if (covered < cellText(cell).length) fonts.push([face, size, !!style.bold, !!style.italic, anchor]);
+    if (covered < cellText(cell).length) fonts.push(lineFont(face, size, !!style.bold, !!style.italic, anchor, style.font_position));
     return fonts;
   };
   for (const cell of row.cells || []) {
     const face = cell.style?.font_reference?.latin_name || cell.style?.font_name || 'Calibri';
     const size = cell.style?.font_size || 11;
     const rich = !!cell.runs?.length;
-    if (aggregateLines && (cell.style?.font_position || cell.runs?.some(run =>
+    if (aggregateLines && !fontPositionRowHeightOf && (cell.style?.font_position || cell.runs?.some(run =>
       run.vert_align && run.vert_align !== 'baseline'))) return { ...fallback(), parts };
     let px = heightOf(face, size, null,
       !!cell.style?.bold, !!cell.style?.italic);
@@ -300,8 +305,10 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance, font
       px = shared;
     }
     const wrappedAnchor = !!where?.anchor && !!cell.style?.wrap_text;
-    if (lines === 1) {
-      lineFonts.push(...richFontsOf(cell, face, size, wrappedAnchor));
+    if (lines > 1 && rich && (cell.style?.font_position || cell.runs?.some(run =>
+      run.vert_align && run.vert_align !== 'baseline'))) return { ...fallback(), parts };
+    if (lines === 1 || (!rich && fontPositionRowHeightOf)) {
+      lineFonts.push(...richFontsOf(cell, face, size, wrappedAnchor, lines));
     }
     const asked = aggregateLines && lines === 1 && (wrappedAnchor || rich) ? 0 : lines * px;
     parts.push({ kind: 'cell', px: asked, column: cell.col, what });
@@ -309,9 +316,11 @@ export function explainRow({ sheet, index, row, columns, heightOf, advance, font
   }
 
   if (aggregateLines && lineFonts.length) {
-    const shared = fontRowHeightOf(normal[0], normal[1], lineFonts);
+    const shared = fontPositionRowHeightOf
+      ? fontPositionRowHeightOf(normal[0], normal[1], lineFonts)
+      : fontRowHeightOf(normal[0], normal[1], lineFonts);
     if (shared === undefined) return { ...fallback(), parts };
-    parts.push({ kind: 'line', px: shared, what: 'the one-line cells share a baseline and descent' });
+    parts.push({ kind: 'line', px: shared, what: 'the cells share a baseline and descent' });
     raise = Math.max(raise, shared);
   }
 

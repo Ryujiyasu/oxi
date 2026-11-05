@@ -791,6 +791,33 @@ pub fn row_font_height_px(
     ).map(|(height, _)| height))
 }
 
+/// Row height including raised, lowered and wrapped text, in 96-dpi pixels.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn row_font_position_height_px(
+    normal_face: &str,
+    normal_size: f32,
+    cells: JsValue,
+) -> Result<Option<u16>, JsError> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum RowFont {
+        Text((String, f32, bool, bool, bool, Option<String>, u32)),
+        Line((String, f32, bool, bool, bool, Option<String>)),
+    }
+    let cells: Vec<RowFont> =
+        serde_wasm_bindgen::from_value(cells).map_err(|error| JsError::new(&error.to_string()))?;
+    Ok(oxicells_core::row_defaults::font_text_row_line_box(
+        normal_face, normal_size,
+        cells.iter().map(|cell| match cell {
+            RowFont::Text((face, size, bold, italic, anchor, position, lines)) =>
+                (face.as_str(), *size, *bold, *italic, *anchor, position.as_deref(), *lines),
+            RowFont::Line((face, size, bold, italic, anchor, position)) =>
+                (face.as_str(), *size, *bold, *italic, *anchor, position.as_deref(), 1),
+        }),
+    ).map(|(height, _)| height.min(546)))
+}
+
 /// Strikeout offset above the baseline and stroke thickness, in 96-dpi pixels.
 /// An unmeasured face returns an empty vector.
 #[cfg(feature = "suite")]
