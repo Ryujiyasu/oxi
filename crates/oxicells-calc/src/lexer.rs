@@ -1399,7 +1399,7 @@ fn parameter_kind(name: &str, index: usize, args: &[Option<AtNode>]) -> AtContex
         _ => {}
     }
     let Some(kinds) = parameter_kinds(name) else {
-        return AtContext::Array;
+        return if crate::functions::is_known_function(name) { AtContext::Array } else { AtContext::Range };
     };
     let letter = kinds.as_bytes().get(index).or_else(|| kinds.as_bytes().last()).copied();
     match letter {
@@ -1440,20 +1440,29 @@ fn may_answer_a_block(name: &str, args: &[Option<AtNode>]) -> bool {
         "INDEX" => args.iter().skip(1).take(2).any(loose_index)
             || (args.len() == 2 && args.first().and_then(Option::as_ref).is_some_and(index_uses_array_form)),
         "IF" => args.iter().skip(1).any(is_block),
-        "CHOOSE" => args.iter().skip(1).any(is_block),
+        "CHOOSE" => args.first().is_some_and(is_block) || args.iter().skip(1).any(is_block),
         "ROW" | "COLUMN" => args.first().is_some_and(is_block),
         _ => !crate::functions::is_known_function(name),
     }
 }
 
 fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>) {
+    mark_intersections_in(node, context, marks, false);
+}
+
+fn mark_intersections_in(node: &AtNode, context: AtContext, marks: &mut Vec<usize>, preserve_literal_arrays: bool) {
     match node {
         AtNode::Plain { .. } | AtNode::Symbol { multiple: false, .. } => {}
         AtNode::Written(operand) => {
             let context = if matches!(operand.as_ref(), AtNode::Call { name, .. } if name == "CELL") { AtContext::Array } else { AtContext::Range };
-            mark_intersections(operand, context, marks);
+            mark_intersections_in(operand, context, marks, preserve_literal_arrays);
         }
-        AtNode::Block { start, .. } | AtNode::Symbol { start, multiple: true, .. } => {
+        AtNode::Block { start, literal, .. } => {
+            if context == AtContext::Value && !(preserve_literal_arrays && *literal) {
+                marks.push(*start);
+            }
+        }
+        AtNode::Symbol { start, multiple: true, .. } => {
             if context == AtContext::Value {
                 marks.push(*start);
             }
@@ -1462,16 +1471,19 @@ fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>)
             let inner = if context == AtContext::Array { AtContext::Array } else { AtContext::Value };
             for part in parts {
                 let context = if context == AtContext::Range && is_value_array(part) { AtContext::Range } else { inner };
-                mark_intersections(part, context, marks);
+                mark_intersections_in(part, context, marks, preserve_literal_arrays);
             }
         }
         AtNode::Group(inner) => {
             if let [only] = inner.as_slice() {
-                mark_intersections(only, context, marks);
+                mark_intersections_in(only, context, marks, preserve_literal_arrays);
             }
         }
         AtNode::Call { start, name, args } => {
-            if (context == AtContext::Value && may_answer_a_block(name, args)) || (name == "CELL" && context == AtContext::Range) {
+            if (context == AtContext::Value && may_answer_a_block(name, args)
+                && !(preserve_literal_arrays && returns_value_array(name)))
+                || (name == "CELL" && context == AtContext::Range)
+                || (matches!(name.as_str(), "IFERROR" | "IFNA") && context == AtContext::Range && may_answer_a_block(name, args)) {
                 marks.push(*start);
             }
             for (index, arg) in args.iter().enumerate() {
@@ -1481,14 +1493,18 @@ fn mark_intersections(node: &AtNode, context: AtContext, marks: &mut Vec<usize>)
                     let context = if name == "CHOOSE" && index == 0 && context != AtContext::Value && is_value_array(arg) { AtContext::Array }
                         else if matches!(name.as_str(), "LET" | "LAMBDA") { AtContext::Range }
                         else { parameter_kind(name, index, args) };
-                    mark_intersections(arg, context, marks);
+                    // TRANSPOSE retains literal/value arrays through nested
+                    // scalar operations. References and control-function
+                    // results still receive their normal intersections.
+                    mark_intersections_in(arg, context, marks,
+                        preserve_literal_arrays || name == "TRANSPOSE" || !crate::functions::is_known_function(name));
                 }
             }
         }
         AtNode::Invoke { start, callee, args } => {
             if context == AtContext::Value { marks.push(*start); }
-            mark_intersections(callee, AtContext::Array, marks);
-            for arg in args.iter().flatten() { mark_intersections(arg, AtContext::Range, marks); }
+            mark_intersections_in(callee, AtContext::Array, marks, preserve_literal_arrays);
+            for arg in args.iter().flatten() { mark_intersections_in(arg, AtContext::Range, marks, preserve_literal_arrays); }
         }
     }
 }
@@ -3349,6 +3365,70 @@ mod tests {
         ] {
             assert_eq!(implied_intersections(written, &multi), kept, "{written}");
             assert_eq!(without_intersections(kept), written, "{kept}");
+        }
+    }
+
+    #[test]
+    fn legacy_udf_and_error_wrappers_keep_native_argument_contexts() {
+        for (given, expected) in [
+            ("=RankArgument(IFERROR(TRANSPOSE({1,2}),0))", "=@RankArgument(@IFERROR(TRANSPOSE({1,2}),0))"),
+            ("=SUM(IFERROR(TRANSPOSE({1,2}),0))", "=SUM(@IFERROR(TRANSPOSE({1,2}),0))"),
+            ("=SUMPRODUCT(IFERROR(TRANSPOSE({1,2}),0))", "=SUMPRODUCT(IFERROR(TRANSPOSE({1,2}),0))"),
+            ("=RankArgument(IFNA(TRANSPOSE({1,2}),0))", "=@RankArgument(@IFNA(TRANSPOSE({1,2}),0))"),
+            ("=SUM(IFNA(TRANSPOSE({1,2}),0))", "=SUM(@IFNA(TRANSPOSE({1,2}),0))"),
+            ("=SUMPRODUCT(IFNA(TRANSPOSE({1,2}),0))", "=SUMPRODUCT(IFNA(TRANSPOSE({1,2}),0))"),
+            ("=RankArgument(IFERROR({1,2},0))", "=@RankArgument(@IFERROR({1,2},0))"),
+            ("=SUM(IFERROR({1,2},0))", "=SUM(@IFERROR({1,2},0))"),
+            ("=SUMPRODUCT(IFERROR({1,2},0))", "=SUMPRODUCT(IFERROR({1,2},0))"),
+            ("=RankArgument(IFNA({1,2},0))", "=@RankArgument(@IFNA({1,2},0))"),
+            ("=SUM(IFNA({1,2},0))", "=SUM(@IFNA({1,2},0))"),
+            ("=SUMPRODUCT(IFNA({1,2},0))", "=SUMPRODUCT(IFNA({1,2},0))"),
+            ("=RankArgument(IFERROR(SEQUENCE(2),0))", "=@RankArgument(@IFERROR(SEQUENCE(2),0))"),
+            ("=SUM(IFERROR(SEQUENCE(2),0))", "=SUM(@IFERROR(SEQUENCE(2),0))"),
+            ("=SUMPRODUCT(IFERROR(SEQUENCE(2),0))", "=SUMPRODUCT(IFERROR(SEQUENCE(2),0))"),
+            ("=RankArgument(IFERROR(D1:E2,0))", "=@RankArgument(IFERROR(@D1:E2,0))"),
+            ("=SUM(IFERROR(D1:E2,0))", "=SUM(IFERROR(@D1:E2,0))"),
+            ("=SUMPRODUCT(IFERROR(D1:E2,0))", "=SUMPRODUCT(IFERROR(@D1:E2,0))"),
+            ("=RankArgument(IF(TRUE,TRANSPOSE({1,2}),0))", "=@RankArgument(IF(TRUE,TRANSPOSE({1,2}),0))"),
+            ("=SUM(IF(TRUE,TRANSPOSE({1,2}),0))", "=SUM(IF(TRUE,TRANSPOSE({1,2}),0))"),
+            ("=SUMPRODUCT(IF(TRUE,TRANSPOSE({1,2}),0))", "=SUMPRODUCT(IF(TRUE,TRANSPOSE({1,2}),0))"),
+            ("=RankArgument(CHOOSE({1,2},10,20))", "=@RankArgument(CHOOSE({1,2},10,20))"),
+            ("=SUM(CHOOSE({1,2},10,20))", "=SUM(CHOOSE({1,2},10,20))"),
+            ("=SUMPRODUCT(CHOOSE({1,2},10,20))", "=SUMPRODUCT(CHOOSE({1,2},10,20))"),
+            ("=RankArgument(D1:E2+0)", "=@RankArgument(@D1:E2+0)"),
+            ("=RankArgument({1,2}+0)", "=@RankArgument({1,2}+0)"),
+            ("=RankArgument(D1:E2*{1,2})", "=@RankArgument(@D1:E2*{1,2})"),
+            ("=RankArgument(LEN({1,2}))", "=@RankArgument(LEN({1,2}))"),
+            ("=RankArgument(N({1,2}))", "=@RankArgument(N({1,2}))"),
+            ("=RankArgument(TAKE(D1:E2+0,1))", "=@RankArgument(TAKE(D1:E2+0,1))"),
+        ] {
+            assert_eq!(implied_intersections(given, &|_| false), expected, "{given}");
+        }
+    }
+
+    #[test]
+    fn legacy_transpose_preserves_value_arrays_inside_udf_arguments() {
+        // Formula assignments and Formula2 readbacks from Excel. References
+        // still intersect, while literal arrays retain their rank and values.
+        for (given, expected) in [
+            ("=RankArgument(TRANSPOSE({1,2}))", "=@RankArgument(TRANSPOSE({1,2}))"),
+            ("=RankArgument(TRANSPOSE({1,2}+0))", "=@RankArgument(TRANSPOSE({1,2}+0))"),
+            ("=RankArgument(TRANSPOSE({1,2}+D1:E1))", "=@RankArgument(TRANSPOSE({1,2}+@D1:E1))"),
+            ("=RankArgument(TRANSPOSE({1,2}+D1:D2))", "=@RankArgument(TRANSPOSE({1,2}+@D1:D2))"),
+            ("=RankArgument(TRANSPOSE(TRANSPOSE({1,2})))", "=@RankArgument(TRANSPOSE(TRANSPOSE({1,2})))"),
+            ("=RankArgument(TRANSPOSE(SEQUENCE(2,2)))", "=@RankArgument(TRANSPOSE(SEQUENCE(2,2)))"),
+            ("=RankArgument(TRANSPOSE(TAKE({1,2;3,4},1)))", "=@RankArgument(TRANSPOSE(TAKE({1,2;3,4},1)))"),
+            ("=RankArgument(TRANSPOSE(CHOOSE({1,2},10,20)))", "=@RankArgument(TRANSPOSE(@CHOOSE({1,2},10,20)))"),
+            ("=RankArgument(TRANSPOSE(IF(TRUE,{1,2},0)))", "=@RankArgument(TRANSPOSE(@IF(TRUE,{1,2},0)))"),
+            ("=RankArgument(TRANSPOSE(IFERROR({1,2},0)))", "=@RankArgument(TRANSPOSE(@IFERROR({1,2},0)))"),
+            ("=RankArgument(TRANSPOSE(N({1,2})))", "=@RankArgument(TRANSPOSE(N({1,2})))"),
+            ("=RankArgument(TRANSPOSE(LEN({\"a\",\"bb\"})))", "=@RankArgument(TRANSPOSE(LEN({\"a\",\"bb\"})))"),
+            ("=RankArgument(TRANSPOSE(D1:E1))", "=@RankArgument(TRANSPOSE(@D1:E1))"),
+            ("=RankArgument(TRANSPOSE(D1:E1+0))", "=@RankArgument(TRANSPOSE(@D1:E1+0))"),
+            ("=RankArgument(TRANSPOSE(D1:E1*{1,2}))", "=@RankArgument(TRANSPOSE(@D1:E1*{1,2}))"),
+            ("=RankArgument(TRANSPOSE(LET(x,{1,2},x)))", "=@RankArgument(TRANSPOSE(@LET(x,{1,2},x)))"),
+        ] {
+            assert_eq!(implied_intersections(given, &|_| false), expected, "{given}");
         }
     }
 
