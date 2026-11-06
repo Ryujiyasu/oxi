@@ -1376,6 +1376,7 @@ impl<'a> WorkbookHost<'a> {
                     name_ref,
                     values_ref: Some(block_ref(self, first, column, last, column)),
                     x_ref: categories.then(|| block_ref(self, first, columns[0], last, columns[0])),
+                    typed_xs: None,
                     values: data_rows.iter().map(|r| number_at(self, *r, column)).collect(),
                     xs: data_rows
                         .iter()
@@ -1403,6 +1404,7 @@ impl<'a> WorkbookHost<'a> {
                     name_ref,
                     values_ref: Some(block_ref(self, row, first, row, last)),
                     x_ref: categories.then(|| block_ref(self, rows[0], first, rows[0], last)),
+                    typed_xs: None,
                     values: data_columns.iter().map(|c| number_at(self, row, *c)).collect(),
                     xs: data_columns
                         .iter()
@@ -1425,16 +1427,23 @@ impl<'a> WorkbookHost<'a> {
     /// left empty.
     fn series_formula(&self, id: u64, number: usize) -> Result<String, String> {
         let series = self.series(id, number)?;
+        let quote = |text: &str| format!("\"{}\"", text.replace('"', "\"\""));
+        let array = |items: Vec<String>| if items.is_empty() { String::new() }
+            else { format!("{{{}}}", items.join(",")) };
         let name = match (&series.name_ref, series.name.is_empty()) {
             (Some(reference), _) => reference.clone(),
-            (None, false) if !series.name.starts_with("系列") => format!("\"{}\"", series.name),
+            (None, false) if !series.name.starts_with("系列") => quote(&series.name),
             _ => String::new(),
         };
-        Ok(format!(
-            "=SERIES({name},{},{},{number})",
-            series.x_ref.clone().unwrap_or_default(),
-            series.values_ref.clone().unwrap_or_default()
-        ))
+        let categories = series.x_ref.clone().unwrap_or_else(|| {
+            series.typed_xs.as_ref().map(|items| array(items.iter().map(|value| {
+                let text = text_of_value(value);
+                if value.string_units().is_some() { quote(&text) } else { text }
+            }).collect())).unwrap_or_default()
+        });
+        let values = series.values_ref.clone().unwrap_or_else(||
+            array(series.values.iter().map(|value| text_of_value(&Value::Double(*value))).collect()));
+        Ok(format!("=SERIES({name},{categories},{values},{number})"))
     }
 
     fn cells_of_range_object(&self, value: &Value) -> Option<CellRange> {
@@ -2018,10 +2027,10 @@ impl<'a> WorkbookHost<'a> {
                     "formula" => Some(Value::String(self.series_formula(id, number)?)),
                     "values" => Some(Self::variant_row(series.values.iter().map(|v| Value::Double(*v)).collect())),
                     "xvalues" => Some(Self::variant_row(
-                        series.xs.iter().map(|x| match x.parse::<f64>() {
+                        series.typed_xs.clone().unwrap_or_else(|| series.xs.iter().map(|x| match x.parse::<f64>() {
                             Ok(number) => Value::Double(number),
                             Err(_) => Value::String(x.clone()),
-                        }).collect(),
+                        }).collect()),
                     )),
                     "points" => Some(self.part(DrawingPart::Points(id, number))),
                     "hasdatalabels" => Some(Value::Boolean(series.has_labels)),
@@ -3264,10 +3273,18 @@ impl<'a> WorkbookHost<'a> {
                             let reference = self.address_of(range);
                             let series = self.series_mut(id, number)?;
                             series.xs = texts;
+                            series.typed_xs = None;
                             series.x_ref = Some(reference);
                         } else if let Value::Array(listed) = &value {
                             let series = self.series_mut(id, number)?;
                             series.xs = listed.values.iter().map(text_of_value).collect();
+                            series.typed_xs = Some(listed.values.iter().map(|value| {
+                                if value.string_units().is_some() { value.clone() }
+                                else {
+                                    let text = text_of_value(value);
+                                    text.parse::<f64>().map(Value::Double).unwrap_or(Value::String(text))
+                                }
+                            }).collect());
                             series.x_ref = None;
                         }
                         true
@@ -3873,6 +3890,7 @@ impl<'a> WorkbookHost<'a> {
                         name_ref: None,
                         values_ref: None,
                         x_ref: None,
+                        typed_xs: None,
                         values: Vec::new(),
                         xs: Vec::new(),
                         color: None,
@@ -3893,6 +3911,7 @@ impl<'a> WorkbookHost<'a> {
                             name_ref: None,
                             values_ref: Some(reference),
                             x_ref: None,
+                            typed_xs: None,
                             xs: (1..=numbers.len()).map(|n| n.to_string()).collect(),
                             values: numbers,
                             color: None,

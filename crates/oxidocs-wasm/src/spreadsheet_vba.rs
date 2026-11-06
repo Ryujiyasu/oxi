@@ -58474,6 +58474,32 @@ End Function
     }
 
     #[test]
+    fn chart_literal_series_formulas_and_text_categories_match_native_vba() {
+        let module = parse_module(r#"Public Function Ask() As String
+            Dim chart As Object, item As Object, xs As Variant, result As String, index As Long
+            Set chart = ActiveSheet.ChartObjects.Add(20, 30, 240, 160).Chart
+            Set item = chart.SeriesCollection.NewSeries
+            item.Name = "Revenue"
+            item.Values = Array(1.25, 2.5, 3.75)
+            item.XValues = Array("1", "2", "3")
+            xs = item.XValues
+            result = item.Formula & "|" & CStr(VarType(xs))
+            result = result & "|" & CStr(LBound(xs)) & "|" & CStr(UBound(xs))
+            For index = LBound(xs) To UBound(xs)
+                result = result & "|" & CStr(VarType(xs(index))) & ":" & CStr(xs(index))
+            Next index
+            Ask = result
+        End Function"#).unwrap();
+        let mut book = workbook();
+        book.sheets[0].rows.clear();
+        let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+        host.error_language = ErrorLanguage::Japanese;
+        let result = execute_with_host(&module, "Ask", Vec::new(), &mut host).unwrap();
+        assert_eq!(result, Value::String(
+            "=SERIES(\"Revenue\",{\"1\",\"2\",\"3\"},{1.25,2.5,3.75},1)|8204|1|3|8:1|8:2|8:3".into()));
+    }
+
+    #[test]
     fn a_dated_cell_hands_over_a_date_and_a_dollar_cell_a_currency() {
         let mut workbook = workbook();
         let module = parse_module(
