@@ -43,9 +43,9 @@ const w=await import(pathToFileURL(input.pkg+'/oxidocs_wasm.js'));
 w.initSync({module:fs.readFileSync(input.pkg+'/oxidocs_wasm_bg.wasm')});
 const output={sources:{},cases:[]};
 for(const [fixture,meta] of Object.entries(input.fixtures)){
- const bytes=fs.readFileSync(input.root+'/'+meta.path),source=w.spreadsheet_vba_source(bytes);
+ const bytes=fs.readFileSync(input.root+'/'+meta.path),source=w.spreadsheet_vba_source(bytes,input.options.hostAnsiCodePage);
  if(hash(bytes)!==meta.sha256||hash(source)!==meta.source_sha256)throw Error('fixture changed: '+fixture);
- output.sources[fixture]={source,source_sha256:hash(source),fixture_sha256:hash(bytes),projectName:w.spreadsheet_vba_project_name(bytes)};
+ output.sources[fixture]={source,source_sha256:hash(source),fixture_sha256:hash(bytes),projectName:w.spreadsheet_vba_project_name(bytes,input.options.hostAnsiCodePage)};
  for(const c of input.cases.filter(c=>c.fixture===fixture)){
   try{
    const options={...input.options,projectName:output.sources[fixture].projectName,documentModules:w.spreadsheet_vba_document_modules(bytes)};
@@ -66,7 +66,7 @@ console.log(JSON.stringify(output));
 BROWSER_NODE = r"""
 
 import fs from 'node:fs';import path from 'node:path';import http from 'node:http';import {spawn} from 'node:child_process';import {once} from 'node:events';import {createHash,randomUUID} from 'node:crypto';
-const [root,pkg,receiptPath]=process.argv.slice(1),receipt=JSON.parse(fs.readFileSync(receiptPath,'utf8'));
+const [root,pkg,receiptPath,toolPath,replayMode='all']=process.argv.slice(1),receipt=JSON.parse(fs.readFileSync(receiptPath,'utf8'));
 const hash=b=>createHash('sha256').update(b).digest('hex'),cache=path.dirname(pkg),profile=path.join(cache,'owned-conformance-browser-'+randomUUID());
 const cases=receipt.manifest?.cases||receipt.case_input,options=receipt.manifest?.options||receipt.node_options;
 const artifactHashes=receipt.manifest?.artifact_hashes||Object.fromEntries(['oxidocs_wasm.js','oxidocs_wasm_bg.wasm'].map(n=>[n,receipt.oxi_artifact.artifacts[n].sha256]));
@@ -82,11 +82,14 @@ export async function run(useEditor=false){
  const runner=useEditor?await import(location.origin+'/web/vba-runner.js'):null;
  let result={userAgent:navigator.userAgent,mode:useEditor?'editor_worker':typeof document==='undefined'?'worker':'page',cases:[],saved_packages:{}};
  for(const [fixture,meta]of Object.entries(input.fixtures)){
-  const bytes=new Uint8Array(await(await fetch(location.origin+'/fixtures/'+fixture)).arrayBuffer()),source=w.spreadsheet_vba_source(bytes);
+  const bytes=new Uint8Array(await(await fetch(location.origin+'/fixtures/'+fixture)).arrayBuffer()),source=w.spreadsheet_vba_source(bytes,input.options.hostAnsiCodePage);
   if(await hash(bytes)!==meta.sha256||await hash(source)!==meta.source_sha256)throw Error('browser fixture mismatch '+fixture);
   for(const c of input.cases.filter(c=>c.fixture===fixture)){
    try{
-    const opts={...input.options,projectName:w.spreadsheet_vba_project_name(bytes),documentModules:w.spreadsheet_vba_document_modules(bytes)};
+    // Native capture reopens the workbook for every case. Match that project
+    // lifetime instead of retaining globals and package baselines across cases.
+    runner?.closeVbaProject();
+    const opts={...input.options,projectName:w.spreadsheet_vba_project_name(bytes,input.options.hostAnsiCodePage),documentModules:w.spreadsheet_vba_document_modules(bytes)};
     const r=runner?await runner.runVbaInWorker(w.parse_spreadsheet(bytes),source,c.procedure,c.args,0,meta.path.split('/').at(-1),opts,bytes):w.run_spreadsheet_vba_with_outcome(w.parse_spreadsheet(bytes),source,c.procedure,c.args,0,meta.path.split('/').at(-1),opts);
     const saved=w.edit_xlsx_from_workbook(bytes,r.workbook),reopened=w.parse_spreadsheet(saved);
     const cells=book=>book.sheets.map(s=>({name:s.name,rows:s.rows.map(row=>({index:row.index,cells:row.cells.map(cell=>({col:cell.col,value:cell.value,formula:cell.formula}))}))}));
@@ -103,9 +106,9 @@ export async function run(useEditor=false){
  result.seconds=(performance.now()-start)/1000;return result;
 }
 `;
-const input=JSON.stringify({cases,fixtures,options,artifactHashes,expectedSaved:Object.fromEntries(receipt.cases.map(c=>[c.id,c.saved_sha256]))});let child,edgeExit=false,server,ws,browserWs,diagnostics={},error;
+const input=JSON.stringify({cases,fixtures,options,artifactHashes,expectedSaved:Object.fromEntries(receipt.cases.map(c=>[c.id,c.saved_sha256]))});let child,edgeExit=false,server,ws,browserWs,diagnostics={request_sha256:hash(input),driver_sha256:hash(driver)},error;
 const sockets=new Set();
-function cdp(socket){let id=0,waiting=new Map();socket.addEventListener('message',event=>{let m=JSON.parse(event.data);if(waiting.has(m.id)){let p=waiting.get(m.id);waiting.delete(m.id);clearTimeout(p.timer);m.error?p.reject(Error(JSON.stringify(m.error))):p.resolve(m.result)}});return(method,params={})=>new Promise((resolve,reject)=>{let n=++id;const timer=setTimeout(()=>{waiting.delete(n);reject(Error('CDP timeout '+method))},180000);waiting.set(n,{resolve,reject,timer});socket.send(JSON.stringify({id:n,method,params}))})}
+function cdp(socket){let id=0,waiting=new Map();socket.addEventListener('message',event=>{let m=JSON.parse(event.data);if(waiting.has(m.id)){let p=waiting.get(m.id);waiting.delete(m.id);clearTimeout(p.timer);m.error?p.reject(Error(JSON.stringify(m.error))):p.resolve(m.result)}});return(method,params={})=>new Promise((resolve,reject)=>{let n=++id;const timer=setTimeout(()=>{waiting.delete(n);reject(Error('CDP timeout '+method))},900000);waiting.set(n,{resolve,reject,timer});socket.send(JSON.stringify({id:n,method,params}))})}
 try{
  fs.mkdirSync(profile);server=http.createServer((req,res)=>{const p=new URL(req.url,'http://localhost').pathname;res.setHeader('Cache-Control','no-store');
   if(p==='/request.json'){res.setHeader('Content-Type','application/json');return res.end(input)}
@@ -115,7 +118,7 @@ try{
   let file,mime;
   if(p.startsWith('/fixtures/')&&fixtures[p.slice(10)]){file=path.join(root,fixtures[p.slice(10)].path);mime='application/octet-stream'}
   if(p==='/pkg/oxidocs_wasm.js'||p==='/web/oxidocs_wasm.js'){file=path.join(pkg,'oxidocs_wasm.js');mime='text/javascript'}
-  if(p==='/pkg/oxidocs_wasm_bg.wasm'||p==='/web/oxidocs_wasm_bg.wasm'){file=path.join(pkg,'oxidocs_wasm_bg.wasm');mime='application/wasm'}
+  if(p==='/pkg/oxidocs_wasm_bg.wasm'||p==='/web/oxidocs_wasm_bg.wasm'){file=path.join(pkg,'oxidocs_wasm_bg.wasm');mime='application/wasm';res.setHeader('Cache-Control','public, max-age=3600, immutable')}
   if(p==='/web/vba-runner.js'||p==='/web/vba-worker.js'){file=path.join(root,p.slice(1));mime='text/javascript'}
   if(!file){res.statusCode=404;return res.end('not found')}
   res.setHeader('Content-Type',mime);fs.createReadStream(file).pipe(res);
@@ -132,12 +135,17 @@ try{
  browserWs=new WebSocket(version.webSocketDebuggerUrl);await once(browserWs,'open');const browserCall=cdp(browserWs);
  await call('Page.enable');await call('Page.navigate',{url:origin+'/'});
  for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,100));const q=await call('Runtime.evaluate',{expression:'location.origin',returnByValue:true});if(q.result.value===origin)break}
- async function evaluate(expression){const v=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true,timeout:180000});if(v.exceptionDetails)throw Error(JSON.stringify(v.exceptionDetails));return v.result.value}
- const page=await evaluate("(async()=>{const m=await import('/run.mjs');return await m.run()})()");
+ async function evaluate(expression){const v=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true,timeout:900000});if(v.exceptionDetails)throw Error(JSON.stringify(v.exceptionDetails));return v.result.value}
+ const prior=receipt.browser_capture;
+ const reusable=replayMode==='editor-only'&&prior?.request_sha256===diagnostics.request_sha256&&prior?.driver_sha256===diagnostics.driver_sha256&&prior?.artifact_guards_unchanged&&prior?.page?.cases.length===cases.length&&prior?.worker?.cases.length===cases.length&&prior.version?.['User-Agent']===version['User-Agent'];
+ if(replayMode==='editor-only'&&!reusable)throw Error('Previous page/Worker results cannot be reused: request, driver, artifact guards, case count or browser version changed');
+ diagnostics.reused_page_and_worker=!!reusable;
+ if(reusable)diagnostics.reused_browser_record_sha256=hash(JSON.stringify(prior));
+ const page=reusable?prior.page:await evaluate("(async()=>{const m=await import('/run.mjs');return await m.run()})()");
  console.log(JSON.stringify({event:'page_capture_finished',cases:page.cases.length,seconds:page.seconds}));
  diagnostics.page=page;
  const workerScript="onmessage=async()=>{try{const m=await import('"+origin+"/run.mjs');postMessage({value:await m.run()})}catch(e){postMessage({error:String(e)})}}";
- const worker=await evaluate("new Promise((resolve,reject)=>{const url=URL.createObjectURL(new Blob(["+JSON.stringify(workerScript)+"],{type:'text/javascript'})),w=new Worker(url,{type:'module'});w.onmessage=e=>{w.terminate();URL.revokeObjectURL(url);e.data.error?reject(Error(e.data.error)):resolve(e.data.value)};w.onerror=e=>{w.terminate();URL.revokeObjectURL(url);reject(Error(e.message))};w.postMessage(1)})");
+ const worker=reusable?prior.worker:await evaluate("new Promise((resolve,reject)=>{const url=URL.createObjectURL(new Blob(["+JSON.stringify(workerScript)+"],{type:'text/javascript'})),w=new Worker(url,{type:'module'});w.onmessage=e=>{w.terminate();URL.revokeObjectURL(url);e.data.error?reject(Error(e.data.error)):resolve(e.data.value)};w.onerror=e=>{w.terminate();URL.revokeObjectURL(url);reject(Error(e.message))};w.postMessage(1)})");
  console.log(JSON.stringify({event:'worker_capture_finished',cases:worker.cases.length,seconds:worker.seconds}));
  diagnostics.page=page;diagnostics.worker=worker;
  diagnostics.editor_worker_sources=Object.fromEntries(['vba-runner.js','vba-worker.js'].map(n=>[n,hash(fs.readFileSync(path.join(root,'web',n)))]));
@@ -177,13 +185,54 @@ finally{
  diagnostics.scope='Actual isolated headless Edge page, module Web Worker and the unchanged editor vba-runner.js/vba-worker.js route. Results and serialized package bytes compared with pinned Node evidence; DOM interaction is not covered.';
  receipt.browser_previous_attempts=[...(receipt.browser_previous_attempts||[]),...(receipt.browser_capture?[receipt.browser_capture]:[])];receipt.browser_capture=diagnostics;receipt.browser_driver_sha256=hash(fs.readFileSync(process.argv[4]));
  fs.writeFileSync(receiptPath,JSON.stringify(receipt)+'\n');
- console.log(JSON.stringify({passed:diagnostics.passed,page_cases:diagnostics.page?.cases.length,worker_cases:diagnostics.worker?.cases.length,editor_worker_cases:diagnostics.editor_worker?.cases.length,page_differences:diagnostics.page?.differences.length,worker_differences:diagnostics.worker?.differences.length,editor_worker_differences:diagnostics.editor_worker?.differences.length,error:diagnostics.error,exit:edgeExit,profile_removed:diagnostics.profile_removed}));
+ console.log(JSON.stringify({passed:diagnostics.passed,page_cases:diagnostics.page?.cases.length,worker_cases:diagnostics.worker?.cases.length,editor_worker_cases:diagnostics.editor_worker?.cases.length,page_differences:diagnostics.page?.differences?.length,worker_differences:diagnostics.worker?.differences?.length,editor_worker_differences:diagnostics.editor_worker?.differences?.length,error:diagnostics.error,exit:edgeExit,profile_removed:diagnostics.profile_removed}));
 }
 
 """
 
 
-def browser_capture(receipt_path, pkg, root):
+def package_xml_issues(package):
+    """Find malformed XML and unbound xsi:type prefixes, not schema validity."""
+    import io
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    problems = []
+    with zipfile.ZipFile(package) as archive:
+        for name in archive.namelist():
+            if not name.endswith((".xml", ".rels")):
+                continue
+            frames, pending = [], []
+            try:
+                for event, item in ET.iterparse(
+                    io.BytesIO(archive.read(name)), events=("start-ns", "start", "end")
+                ):
+                    if event == "start-ns":
+                        pending.append(item)
+                    elif event == "start":
+                        active = dict(frames[-1]) if frames else {
+                            "xml": "http://www.w3.org/XML/1998/namespace"
+                        }
+                        active.update(pending)
+                        pending.clear()
+                        frames.append(active)
+                        value = item.get("{http://www.w3.org/2001/XMLSchema-instance}type")
+                        if value and ":" in value and value.split(":", 1)[0] not in active:
+                            problems.append({"part": name, "unbound_xsi_type": value})
+                    else:
+                        frames.pop()
+            except ET.ParseError as error:
+                problems.append({"part": name, "xml_error": str(error)})
+    return problems
+
+
+def validate_fixture_package(path):
+    problems = package_xml_issues(path)
+    if problems:
+        raise ValueError(f"Invalid fixture XML in {path}: {problems[:3]}")
+
+
+def browser_capture(receipt_path, pkg, root, editor_only=False):
     """Run the pinned cases in an owned Edge page and module Web Worker."""
     report = json.loads(receipt_path.read_bytes())
     fixtures = report.get("manifest", {}).get("fixtures") or {
@@ -193,10 +242,118 @@ def browser_capture(receipt_path, pkg, root):
         path = (root / fixture["path"]).resolve()
         assert path.is_relative_to((root / "tests/fixtures/vba").resolve())
         assert sha(path.read_bytes()) == fixture["sha256"]
+        validate_fixture_package(path)
     process = subprocess.run(["node", "--max-old-space-size=4096", "--input-type=module", "-e", BROWSER_NODE,
-                              str(root), str(pkg), str(receipt_path), str(Path(__file__).resolve())])
+                              str(root), str(pkg), str(receipt_path), str(Path(__file__).resolve()),
+                              "editor-only" if editor_only else "all"])
     fresh = json.loads(receipt_path.read_bytes())
     return process.returncode == 0 and fresh.get("browser_capture", {}).get("passed") is True
+
+
+def browser_capture_batched(receipt_path, pkg, root, batch_size=20):
+    """Checkpoint full browser runs in bounded, independently owned batches."""
+    import uuid
+
+    report = json.loads(receipt_path.read_bytes())
+    manifest = report.get("manifest")
+    if not manifest or len(manifest["cases"]) <= batch_size:
+        return browser_capture(receipt_path, pkg, root)
+    expected = {case["id"]: case for case in report["cases"]}
+    ids = [case["id"] for case in manifest["cases"]]
+    if len(ids) != len(set(ids)) or set(ids) != set(expected):
+        raise ValueError("Browser manifest and measured case IDs differ")
+    fingerprint = sha(json.dumps({
+        "manifest": manifest, "expected": expected, "batch_size": batch_size,
+        "tool_sha256": sha(Path(__file__).read_bytes()),
+    }, sort_keys=True, separators=(",", ":")).encode())
+    checkpoint = report.get("browser_batch_checkpoint")
+    if checkpoint and checkpoint["fingerprint"] != fingerprint:
+        raise ValueError("Browser batch inputs or measurement tool changed; use a new receipt")
+    if not checkpoint:
+        checkpoint = {"fingerprint": fingerprint, "batch_size": batch_size, "attempts": []}
+        if report.get("browser_capture"):
+            report.setdefault("browser_previous_attempts", []).append(report["browser_capture"])
+    report["browser_batch_checkpoint"] = checkpoint
+
+    def persist():
+        receipt_path.write_text(json.dumps(report, ensure_ascii=True, separators=(",", ":")) + "\n",
+                                encoding="utf-8")
+
+    scratch = receipt_path.with_name(receipt_path.stem + ".browser-slice-" + uuid.uuid4().hex + ".json")
+    assert scratch.parent.resolve() == receipt_path.parent.resolve() and not scratch.exists()
+    captures = []
+    reused_batches = 0
+    try:
+        for offset in range(0, len(ids), batch_size):
+            selected = manifest["cases"][offset:offset + batch_size]
+            case_ids = [case["id"] for case in selected]
+            prior = next((item["capture"] for item in reversed(checkpoint["attempts"])
+                          if item["case_ids"] == case_ids and item["capture"].get("passed")), None)
+            if prior:
+                reused_batches += 1
+                captures.append(prior)
+                continue
+            fixtures = {case["fixture"] for case in selected}
+            plan = {**manifest, "cases": selected,
+                    "fixtures": {key: value for key, value in manifest["fixtures"].items()
+                                 if key in fixtures}}
+            scratch.write_text(json.dumps({
+                "manifest": plan, "cases": [expected[key] for key in case_ids],
+            }, ensure_ascii=True, separators=(",", ":")) + "\n", encoding="utf-8")
+            passed = browser_capture(scratch, pkg, root)
+            capture = json.loads(scratch.read_bytes()).get("browser_capture", {})
+            checkpoint["attempts"].append({"case_ids": case_ids, "capture": capture})
+            checkpoint["cases_complete"] = sum(len(item["page"]["cases"]) for item in captures)
+            report["browser_capture"] = {
+                "passed": False, "scope": "Full browser batches are not complete",
+                "error": None if passed else capture.get("error", "A browser comparison failed"),
+            }
+            if passed:
+                captures.append(capture)
+                checkpoint["cases_complete"] += len(case_ids)
+            persist()
+            print(json.dumps({"event": "browser_batch", "completed": checkpoint["cases_complete"],
+                              "planned": len(ids), "passed": passed}), flush=True)
+            if not passed:
+                return False
+        versions = {json.dumps({key: value for key, value in item["version"].items()
+                               if key != "webSocketDebuggerUrl"}, sort_keys=True)
+                    for item in captures}
+        if len(versions) != 1:
+            raise ValueError("Completed browser batches used different browser versions; use a new receipt")
+        combined = {
+            "passed": True, "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "version": captures[0]["version"], "batch_count": len(captures),
+            "reused_completed_batches": reused_batches,
+            "scope": "Actual isolated browser page, module Worker and fresh-project editor execution "
+                     "in checkpointed batches; compared with pinned Node evidence, not full API coverage",
+        }
+        for guard in ("owned_exit_verified", "profile_removed", "artifact_guards_unchanged",
+                      "editor_worker_guards_unchanged"):
+            combined[guard] = all(item.get(guard) is True for item in captures)
+        if not all(combined[guard] for guard in ("owned_exit_verified", "profile_removed",
+                                               "artifact_guards_unchanged", "editor_worker_guards_unchanged")):
+            raise ValueError("A completed browser batch lacks an ownership or source guard")
+        for route in ("page", "worker", "editor_worker"):
+            cases = {case["id"]: case for item in captures for case in item[route]["cases"]}
+            if len(cases) != len(ids) or set(cases) != set(ids):
+                raise ValueError("Incomplete browser route: " + route)
+            combined[route] = {
+                "mode": route, "cases": [cases[key] for key in ids],
+                "differences": [difference for item in captures
+                                for difference in item[route]["differences"]],
+                "seconds": sum(item[route]["seconds"] for item in captures),
+            }
+        combined["passed"] = not any(combined[route]["differences"]
+                                     for route in ("page", "worker", "editor_worker"))
+        checkpoint["cases_complete"] = len(ids)
+        report["browser_capture"] = combined
+        persist()
+        return combined["passed"]
+    finally:
+        assert scratch.parent.resolve() == receipt_path.parent.resolve()
+        if scratch.exists():
+            scratch.unlink()
 
 
 def capture(manifest_path, pkg, root):
@@ -224,6 +381,7 @@ def capture(manifest_path, pkg, root):
         path = (root / meta["path"]).resolve()
         assert path.is_relative_to((root / "tests/fixtures/vba").resolve())
         assert meta["reviewed"] and sha(path.read_bytes()) == meta["sha256"]
+        validate_fixture_package(path)
     for name, digest in plan["artifact_hashes"].items():
         assert Path(name).name == name and sha((pkg / name).read_bytes()) == digest
     assert plan["artifact_commit"] and len(plan["artifact_hashes"]["oxidocs_wasm_bg.wasm"]) == 64
@@ -515,6 +673,12 @@ def build(root, native=False, evidence_paths=(), target_artifact=None):
                               if status in outcomes), "未検証")
     fixtures = root / "tests/fixtures/vba"
     counts = dict(collections.Counter(p.suffix for p in fixtures.iterdir() if p.is_file()))
+    packages = sorted([*fixtures.glob("*.xlsm"), *fixtures.glob("*.xlsx")])
+    package_issues = {}
+    for path in packages:
+        issues = package_xml_issues(path)
+        if issues:
+            package_issues[path.name] = issues
     scope = [
         "Excel object model: properties, methods, events, including hidden members",
         "VBA syntax, compiler diagnostics, operators, coercion, arrays and ByRef",
@@ -532,7 +696,12 @@ def build(root, native=False, evidence_paths=(), target_artifact=None):
         "excel_declared_member_pairs": len(declared_pairs), "native": native_report,
         "gates": list(GATES), "scope": [{"domain": item, "status": "未検証"} for item in scope],
         "scope_note": "API operation totals do not enumerate the entire VBA language; no whole-goal percentage is defined.",
-        "fixture_file_counts": counts, "evidence_receipts": receipts,
+        "fixture_file_counts": counts,
+        "fixture_xml_validation": {
+            "packages": len(packages), "issues": package_issues,
+            "scope": "XML syntax and unbound xsi:type prefixes; not complete schema validation",
+        },
+        "evidence_receipts": receipts,
         "measured_batches": measured_batches,
         "operations_with_case_evidence": sum(bool(row["evidence"]) for row in rows.values()),
         "unmapped_evidence_ids": unmapped,
@@ -545,6 +714,8 @@ def build(root, native=False, evidence_paths=(), target_artifact=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--browser", type=Path, help="Replay an existing receipt in isolated Edge and a Web Worker")
+    parser.add_argument("--batch-size", type=int, default=20, help="Cases per checkpointed full browser batch (default: 20); editor-only keeps the supplied receipt intact")
+    parser.add_argument("--editor-only", action="store_true", help="With --browser, reuse completed matching page/Worker results and rerun only the editor route")
     parser.add_argument("--capture", type=Path, help="Run the reviewed manifest in this receipt file and replace it with fresh evidence")
     parser.add_argument("--pkg", type=Path, help="Existing WASM package to capture; hashes must match the manifest")
     parser.add_argument("--native", action="store_true", help="Read installed Excel typelib; does not launch Excel")
@@ -554,10 +725,17 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("pipeline_data/vba_conformance_audit.json"))
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
+    if args.batch_size < 1:
+        parser.error("--batch-size must be positive")
+    if args.editor_only and not args.browser:
+        parser.error("--editor-only requires --browser")
     if args.browser:
         if not args.pkg or args.capture:
             parser.error("--browser requires --pkg and cannot be combined with --capture")
-        raise SystemExit(0 if browser_capture(args.browser.resolve(), args.pkg.resolve(), root) else 1)
+        passed = (browser_capture(args.browser.resolve(), args.pkg.resolve(), root, True)
+                  if args.editor_only else
+                  browser_capture_batched(args.browser.resolve(), args.pkg.resolve(), root, args.batch_size))
+        raise SystemExit(0 if passed else 1)
     if args.capture:
         if not args.pkg:
             parser.error("--capture requires --pkg")
