@@ -108,9 +108,14 @@ try {
     assert.ok(descriptors.some(document => document.name === item.documents[0].name));
     assert.equal(descriptors.find(document => document.name === item.documents[0].name).codeName,
       item.metadata_before.find(document => document.name === item.documents[0].name).codeName);
-    for (const descriptor of descriptors) {
-      assert.equal(descriptor.sheetIndex, item.metadata_before.find(document => document.name === descriptor.name).sheetIndex, item.name);
-    }
+    // The explicit contexts above model live VBE renaming. In the persisted
+    // fixtures ArchiveHost does not match workbookPr's ThisWorkbook code name:
+    // its default instance is unbound, while the native workbook still exists.
+    const fileDocuments = item.metadata_before.map(document => document.name === 'ArchiveHost'
+      ? { name: 'ArchiveHost', baseType: 'Excel.Workbook', unbound: true } : document);
+    fileDocuments.push({ name: 'ThisWorkbook', baseType: 'Excel.Workbook', codeName: 'ThisWorkbook', hostOnly: true });
+    const byName = documents => [...documents].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    assert.deepEqual(byName(descriptors), byName(fileDocuments), item.name);
     const session = new wasm.SpreadsheetVbaSession();
     try { assert.deepEqual(session.document_modules(bytes), descriptors); }
     finally { session.free(); }

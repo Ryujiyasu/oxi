@@ -44062,7 +44062,15 @@ fn execute_workbook_invocation(
     let incoming = serde_json::to_vec(&workbook).map_err(|error| error.to_string())?;
     let previous_workbook:Option<Workbook>=session.as_ref().map(|previous|serde_json::from_slice(&previous.workbook))
         .transpose().map_err(|error|error.to_string())?;
-    let documents=context.document_modules.clone().unwrap_or_else(||session.as_ref().map(|previous|previous.documents.clone()).unwrap_or_default());
+    let inherited_documents = || session.as_ref().map(|previous|previous.documents.clone()).unwrap_or_default();
+    let documents = if let Some(documents) = context.document_modules.clone() {
+        documents
+    } else if let Some(package) = context.file_context.as_ref().and_then(|context|context.package_bytes.as_deref()) {
+        crate::vba_project::automatic_document_modules(package,
+            session.as_ref().map(|previous|previous.documents.as_slice()))?
+    } else {
+        inherited_documents()
+    };
     let mut document_names=std::collections::BTreeSet::new();
     let mut document_targets=std::collections::BTreeSet::new();
     for document in &documents {
@@ -44168,7 +44176,9 @@ fn execute_workbook_invocation(
         Some(previous) => {
             let state = if source_resets_project || documents_changed { None } else { previous.runtime };
             let old_workbook=previous_workbook.expect("loaded workbook");
-            let refreshed_positions=!documents_changed && context.document_modules.is_some() && documents.iter().any(|document| {
+            let refreshed_positions=!documents_changed
+                && (context.document_modules.is_some() || context.file_context.as_ref().is_some_and(|context|context.package_bytes.is_some()))
+                && documents.iter().any(|document| {
                 previous.documents.iter().find(|old|old.name.eq_ignore_ascii_case(&document.name)).is_some_and(|old|old.sheet_index!=document.sheet_index)
             });
             let mut host=WorkbookHost::resume_storage(
@@ -49483,6 +49493,70 @@ End Function
             assert_eq!(serde_json::to_value(&outcome.result).unwrap(),
                 serde_json::json!({"type":"string","value":expected}), "route={route}");
             book = outcome.workbook;
+        }
+    }
+
+    #[test]
+    fn macro_free_save_retains_loaded_document_bindings_and_counter() {
+        let source = r##"Attribute VB_Name = "Driver"
+Private counter As Long
+Public Function SaveCurrent(ByVal kind As Long) As String
+Application.DisplayAlerts = False
+Dim extension As String
+Select Case kind
+Case 51: extension = "xlsx"
+Case 52: extension = "xlsm"
+Case 53: extension = "xltm"
+Case 54: extension = "xltx"
+End Select
+ThisWorkbook.Worksheets(1).Range("A1").Value = "converted from macro"
+ThisWorkbook.SaveAs Filename:=ThisWorkbook.Path & "\owned-macro-free-state-copy-20261107." & extension, FileFormat:=kind
+counter = counter + 1
+SaveCurrent = CStr(counter) & "|" & CStr(ThisWorkbook.HasVBProject) & "|" & CStr(ThisWorkbook.FileFormat)
+End Function
+Public Function Report() As String
+Report = CStr(counter) & "|" & CStr(ThisWorkbook.HasVBProject) & "|" & CStr(ThisWorkbook.FileFormat)
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "ThisWorkbook"
+"##;
+        let fixture = include_bytes!("../../../tests/fixtures/vba/named_project_ascii.xlsm");
+        let package = crate::vba_project::write_project_source(fixture, source, Some(932)).unwrap();
+        // Native: SaveAs, a subsequent macro, and Save all retain counter=1,
+        // even when the package has no vbaProject.bin (formats 51 and 54).
+        for (format, extension, has_project) in [(51, "xlsx", false), (52, "xlsm", true),
+            (53, "xltm", true), (54, "xltx", false)] {
+          for reparse in [false, true] {
+            let mut session = None;
+            let context = |bytes:Vec<u8>, name:String| {
+                let mut context = failure_context();
+                context.file_name = Some(name.clone());
+                context.file_context = Some(file_io::FileContext {
+                    package_bytes: Some(bytes), full_name: Some(format!(r"C:\probe\{name}")),
+                    folders: vec![r"C:\probe".into()], ..Default::default()
+                });
+                // Use the production automatic package-binding path.
+                context
+            };
+            let first = execute_workbook_action_in_session(
+                oxicells_core::parse_xlsx_preserving_values(&package).unwrap(), source,
+                Some("Driver.SaveCurrent"), vec![Value::Integer(format)], 0,
+                context(package.clone(), "live-project.xlsm".into()), &mut session).unwrap();
+            let expected = format!("1|True|{format}");
+            assert!(first.error.is_none(), "format={format}: {:?}", first.error.as_ref().map(|e| &e.message));
+            assert_eq!(serde_json::to_value(&first.result).unwrap()["value"], expected);
+            let destination = format!("owned-macro-free-state-copy-20261107.{extension}");
+            let bytes = first.files.iter().find(|file|file.path.ends_with(&destination)).unwrap().bytes.clone();
+            assert_eq!(crate::vba_project::read_project_source_with_code_page(&bytes, Some(932)).unwrap().is_some(), has_project);
+            let mut book = if reparse { oxicells_core::parse_xlsx_preserving_values(&bytes).unwrap() } else { first.workbook };
+            for procedure in [Some("Driver.Report"), None, Some("Driver.Report")] {
+                let next = execute_workbook_action_in_session(book, source, procedure, vec![], 0,
+                    context(bytes.clone(), destination.clone()), &mut session).unwrap();
+                assert!(next.error.is_none(), "format={format}: {:?}", next.error.as_ref().map(|e| &e.message));
+                if procedure.is_some() { assert_eq!(serde_json::to_value(&next.result).unwrap()["value"], expected); }
+                book = next.workbook;
+            }
+          }
         }
     }
 

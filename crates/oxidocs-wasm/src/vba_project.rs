@@ -33,7 +33,9 @@ pub(crate) fn read_document_modules(
     // An attached object's package type overrides a stale stored VB_Base.
     // Only PROJECT's Document records qualify, never ordinary source classes.
     let mut project_documents = Vec::new();
-    if let Some(project) = open_workbook_project(package)? {
+    let project = open_workbook_project(package)?;
+    let has_project = project.is_some();
+    if let Some(project) = project {
         let module_names = identities(&project, None)?;
         let bytes = project
             .read_stream("/PROJECT")
@@ -89,7 +91,7 @@ pub(crate) fn read_document_modules(
                     base_type: "Excel.Workbook".into(),
                     code_name: Some(name.clone()),
                     sheet_index: None,
-                    host_only: true,
+                    host_only: has_project,
                     ..VbaDocumentModule::default()
                 });
             }
@@ -141,7 +143,7 @@ pub(crate) fn read_document_modules(
                         name,
                         base_type: base.into(),
                         sheet_index: Some(sheet_index),
-                        host_only: true,
+                        host_only: has_project,
                         ..VbaDocumentModule::default()
                     });
                 }
@@ -157,6 +159,30 @@ pub(crate) fn read_document_modules(
         return Err("duplicate VBA document code name".into());
     }
     Ok(documents)
+}
+
+/// A macro-free SaveAs removes the persisted project without unloading the
+/// open one. Package properties must not replace that live project's bindings.
+pub(crate) fn automatic_document_modules(
+    package: &[u8],
+    loaded: Option<&[crate::spreadsheet_vba::VbaDocumentModule]>,
+) -> Result<Vec<crate::spreadsheet_vba::VbaDocumentModule>, String> {
+    let current = read_document_modules(package)?;
+    if let Some(loaded) = loaded.filter(|_| open_workbook_project(package).is_ok_and(|project| project.is_none())) {
+        let mut retained = loaded.to_vec();
+        for document in retained.iter_mut().filter(|document| !document.unbound) {
+            let code_name = document.code_name.as_deref().unwrap_or(&document.name);
+            if let Some(property) = current.iter().find(|property|
+                property.code_name.as_deref().is_some_and(|name|name.eq_ignore_ascii_case(code_name))
+                && property.base_type.rsplit('.').next().unwrap_or_default()
+                    .eq_ignore_ascii_case(document.base_type.rsplit('.').next().unwrap_or_default()))
+            {
+                document.sheet_index = property.sheet_index;
+            }
+        }
+        return Ok(retained);
+    }
+    Ok(current)
 }
 
 fn native_document_base(source: &str) -> Option<&'static str> {
