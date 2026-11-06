@@ -3155,7 +3155,37 @@ impl<'a> ParagraphLayouter<'a> {
                             m.win_ascent * fs
                         })
                         .fold(0.0f32, f32::max);
-                    s773_cy + (text_only_line_heights[0] - max_asc).max(0.0)
+                    // OXI_S773_CJK_BELOW (2026-11-07, default ON, opt-out _DISABLE): with
+                    // 83/64 CJK text the part below the baseline is the visible text's own
+                    // 83/64 descent plus the line's auto-multiple leading, which blank runs
+                    // of a larger size still raise. `_pb_objline_cjk_slice.py` (ja/
+                    // reports__7b458f1a «毎日、同じころにでる»: 9pt MS Gothic text, 11pt
+                    // spaces, 13.33pt inline ovals, line 270 auto): exit pitch 21.50 = the
+                    // ovals' line below 4.38 = 2.60 + 1.78 (11pt leading); 9pt spaces 21.14
+                    // (2.60 + 1.46), line 240 19.70 (2.60); ovals x1.5 move only the entry.
+                    let vis: Vec<_> = lines[0]
+                        .fragments
+                        .iter()
+                        .filter(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
+                        .map(|f| (f.style.font_size.unwrap_or(para_font_size), self.metrics_for_text(&f.text, &f.style, &para.style)))
+                        .collect();
+                    let auto_factor = match para.style.line_spacing_rule.as_deref() {
+                        None | Some("auto") => para.style.line_spacing.filter(|l| *l >= 1.0),
+                        _ => None,
+                    };
+                    match auto_factor {
+                        Some(factor) if !crate::env_flag!("OXI_S773_CJK_BELOW_DISABLE")
+                            && !vis.is_empty()
+                            && vis.iter().all(|(_, m)| m.is_cjk_83_64_font()) =>
+                        {
+                            let desc = vis
+                                .iter()
+                                .map(|(fs, m)| (m.win_descent + (83.0 / 64.0 - 1.0) * (m.win_ascent + m.win_descent) * 0.5) * fs)
+                                .fold(0.0f32, f32::max);
+                            s773_cy + desc + text_only_line_heights[0] * (1.0 - 1.0 / factor)
+                        }
+                        _ => s773_cy + (text_only_line_heights[0] - max_asc).max(0.0),
+                    }
                 } else {
                     s773_cy
                 };
@@ -3475,6 +3505,11 @@ impl<'a> ParagraphLayouter<'a> {
                     // ~9.2 in Word (mark) vs Oxi 13.8 (the space run) — the
                     // +4.6 jump before SECTION TWO that pushed the checkbox
                     // table off p3.
+                    // OXI_CJK_WHITESPACE_MARK (2026-11-07, now default ON, opt-out _DISABLE):
+                    // the advance basis follows S1394 in a CJK document too.
+                    // `_pb_blankpara_size_slice.py` (ja/reports__7b458f1a's two «　»
+                    // paragraphs, 9pt mark): a 9pt / 10pt / 20pt run and no run all give
+                    // Word 50.28, a visible «Ａ» 53.04; Oxi advanced the 10pt run (53.07).
                     let s902_all_ws = !first_line.fragments.is_empty()
                         && first_line
                             .fragments
@@ -3482,12 +3517,12 @@ impl<'a> ParagraphLayouter<'a> {
                             .all(|f| LayoutEngine::mark_spacing_only_text(&f.text))
                         && (!self.doc_body_has_real_cjk
                             || (first_line.whitespace_paragraph
-                                && crate::env_flag!("OXI_CJK_WHITESPACE_MARK")))
+                                && !crate::env_flag!("OXI_CJK_WHITESPACE_MARK_DISABLE")))
                         && !crate::env_flag!("OXI_S902_DISABLE");
                     let s1080_mark_fs = !crate::env_flag!("OXI_S1080_DISABLE");
                     if (first_line.fragments.is_empty() || s902_all_ws)
                         && (!self.doc_body_has_real_cjk
-                            || (s902_all_ws && crate::env_flag!("OXI_CJK_WHITESPACE_MARK")))
+                            || (s902_all_ws && !crate::env_flag!("OXI_CJK_WHITESPACE_MARK_DISABLE")))
                         && !crate::env_flag!("OXI_S876_DISABLE")
                     {
                         // S1080: when S902 fires, the size fallback must come
@@ -7983,6 +8018,31 @@ impl<'a> ParagraphLayouter<'a> {
                     mixed && (!cjk || (matches!(para.style.line_spacing_rule.as_deref(), Some("exact") | Some("atLeast"))
                         && !crate::env_flag!("OXI_ATLEAST_UNION_CELL_DISABLE")))
                 });
+            // OXI_S837_MIXED (2026-11-07, default ON, opt-out _DISABLE): S837 seats the
+            // first visible fragment's baseline on the drawing's bottom, but a line of
+            // mixed sizes then lowers that fragment to the line's largest ascent (S1358).
+            // Take the lowering back so the shared baseline stays on the bottom.
+            // `_pb_objline_cjk_slice.py`: 9pt text after 11pt spaces, oval bottom
+            // 428.33 = text baseline 428.33; Oxi drew the text 1.72 lower.
+            let text_y_off = if line_idx == 0
+                && s837_fired_cy > 0.0
+                && line_has_mixed_sizes
+                && line_max_render_ascent > 0.0
+                && !crate::env_flag!("OXI_S837_DISABLE")
+                && !crate::env_flag!("OXI_S837_MIXED_DISABLE")
+                && !crate::env_flag!("OXI_S1358_DISABLE")
+            {
+                line.fragments
+                    .iter()
+                    .find(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
+                    .map_or(text_y_off, |f| {
+                        let fs = f.style.font_size.unwrap_or(para_font_size);
+                        let a = self.metrics_for_text(&f.text, &f.style, &para.style).baseline_ascent() * fs;
+                        text_y_off - (line_max_render_ascent - a).max(0.0)
+                    })
+            } else {
+                text_y_off
+            };
             // OXI_GRID_SCRIPT_NOT_MIXED (default ON, opt-out _DISABLE): on a
             // grid-snapped auto line whose runs share one size apart from its
             // super/subscripts, the plain runs stay where the plain line has them
