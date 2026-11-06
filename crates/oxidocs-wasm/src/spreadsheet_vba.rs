@@ -58500,6 +58500,109 @@ End Function
     }
 
 
+
+    #[test]
+    fn saved_chart_series_keep_references_and_literal_category_types() {
+        let module = parse_module(r#"Public Function Ask(ByVal sourceKind As Long, ByVal existing As Boolean) As String
+            Dim chart As Object, item As Object
+            If existing Then
+                Set chart = ThisWorkbook.Charts(1)
+            Else
+                Set chart = ActiveSheet.ChartObjects.Add(20, 30, 240, 160).Chart
+            End If
+            If sourceKind = 1 Then
+                Set item = chart.SeriesCollection.NewSeries
+                item.Name = "Revenue"
+                item.Values = Array(1.25, 2.5, 3.75)
+                item.XValues = Array("1", "2", "3")
+            Else
+                Range("A1").Value2 = "Category"
+                Range("B1").Value2 = "Revenue"
+                Range("A2").Value2 = 1
+                Range("A3").Value2 = 2
+                Range("A4").Value2 = 3
+                Range("B2").Value2 = 1.25
+                Range("B3").Value2 = 2.5
+                Range("B4").Value2 = 3.75
+                chart.SetSourceData Range("A1:B4")
+            End If
+            Ask = ReadBack(existing)
+        End Function
+        Public Function ReadBack(ByVal existing As Boolean) As String
+            Dim chart As Object, item As Object, xs As Variant
+            If existing Then
+                Set chart = ThisWorkbook.Charts(1)
+            Else
+                Set chart = ActiveSheet.ChartObjects(1).Chart
+            End If
+            Set item = chart.SeriesCollection(1)
+            xs = item.XValues
+            ReadBack = item.Formula & "|" & CStr(VarType(xs(1)))
+        End Function"#).unwrap();
+        let bytes = include_bytes!("../../../tests/fixtures/vba/uniform_chart_operations.xlsm");
+        for existing in [false, true] {
+            for kind in [1, 2] {
+                let mut book = oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+                let ledger = book.sheets.iter().position(|sheet| sheet.kind == oxicells_core::ir::SheetKind::Worksheet).unwrap();
+                let before = {
+                    let mut host = WorkbookHost::new(&mut book, ledger).unwrap();
+                    execute_with_host(&module, "Ask", vec![Value::Integer(kind), Value::Boolean(existing)], &mut host).unwrap()
+                };
+                let expected = if kind == 1 {
+                    "=SERIES(\"Revenue\",{\"1\",\"2\",\"3\"},{1.25,2.5,3.75},1)|8"
+                } else { "=SERIES(Sheet1!$A$1,,Sheet1!$A$2:$A$4,1)|5" };
+                assert_eq!(before, Value::String(expected.into()), "kind={kind}, existing={existing}");
+                let mut editor = oxicells_core::editor::XlsxEditor::new(bytes).unwrap();
+                editor.apply_workbook(&book).unwrap();
+                let saved = editor.save().unwrap();
+                let mut reopened = oxicells_core::parse_xlsx_preserving_values(&saved).unwrap();
+                let mut host = WorkbookHost::new(&mut reopened, ledger).unwrap();
+                let after = execute_with_host(&module, "ReadBack", vec![Value::Boolean(existing)], &mut host).unwrap();
+                assert_eq!(after, before, "kind={kind}, existing={existing}");
+            }
+        }
+    }
+
+
+    #[test]
+    fn saved_chart_sparse_caches_change_only_when_values_are_assigned() {
+        let fixture = include_bytes!("../../../tests/fixtures/vba/uniform_chart_operations.xlsm");
+        let mut initial = oxicells_core::parse_xlsx_preserving_values(fixture).unwrap();
+        let chart = initial.sheets.iter_mut().flat_map(|sheet| &mut sheet.drawings)
+            .find_map(|drawing| match &mut drawing.kind {
+                oxicells_core::ir::DrawingKind::Chart(chart) => Some(chart), _ => None,
+            }).unwrap();
+        chart.series.push(oxicells_core::ir::ChartSeries {
+            name: "Gap".into(), values: vec![Some(1.0), None, Some(3.0)], ..Default::default()
+        });
+        let mut seed = oxicells_core::editor::XlsxEditor::new(fixture).unwrap();
+        seed.apply_workbook(&initial).unwrap();
+        let bytes = seed.save().unwrap();
+        let module = parse_module(r#"Public Sub Rename()
+            ThisWorkbook.Charts(1).HasTitle = True
+            ThisWorkbook.Charts(1).ChartTitle.Text = "Renamed"
+        End Sub
+        Public Sub FillGap()
+            ThisWorkbook.Charts(1).SeriesCollection(1).Values = Array(1, 0, 3)
+        End Sub"#).unwrap();
+        for (procedure, middle) in [("Rename", None), ("FillGap", Some(0.0))] {
+            let mut book = oxicells_core::parse_xlsx_preserving_values(&bytes).unwrap();
+            let ledger = book.sheets.iter().position(|sheet| sheet.kind == oxicells_core::ir::SheetKind::Worksheet).unwrap();
+            let mut host = WorkbookHost::new(&mut book, ledger).unwrap();
+            execute_with_host(&module, procedure, Vec::new(), &mut host).unwrap();
+            drop(host);
+            let mut editor = oxicells_core::editor::XlsxEditor::new(&bytes).unwrap();
+            editor.apply_workbook(&book).unwrap();
+            let saved = editor.save().unwrap();
+            let reopened = oxicells_core::parse_xlsx_preserving_values(&saved).unwrap();
+            let chart = reopened.sheets.iter().flat_map(|sheet| &sheet.drawings)
+                .find_map(|drawing| match &drawing.kind {
+                    oxicells_core::ir::DrawingKind::Chart(chart) => Some(chart), _ => None,
+                }).unwrap();
+            assert_eq!(chart.series[0].values, vec![Some(1.0), middle, Some(3.0)], "{procedure}");
+        }
+    }
+
     #[test]
     fn chart_empty_type_defaults_and_failed_assignments_match_native_vba() {
         let module = parse_module(r#"Public Function Ask(ByVal kind As Long, ByVal addData As Boolean) As String

@@ -300,8 +300,8 @@ impl XlsxEditor {
         for chart in edited.sheets.iter().flat_map(|sheet|&sheet.drawings).filter_map(|drawing|match &drawing.kind {crate::ir::DrawingKind::Chart(chart)=>Some(chart),_=>None}) {
             if let Some(origin)=chart.origin_id {
                 let before=originals.get(&origin).ok_or_else(||XlsxError::InvalidData("chart source identity is not in this workbook".into()))?;
-                if before.title!=chart.title || crate::chart_edit::legend_position(before)!=crate::chart_edit::legend_position(chart) {
-                    if self.chart_edits.get(&origin).is_some_and(|(_,prior)|prior.title!=chart.title || crate::chart_edit::legend_position(prior)!=crate::chart_edit::legend_position(chart)) {
+                if before.title!=chart.title || crate::chart_edit::legend_position(before)!=crate::chart_edit::legend_position(chart) || crate::chart_edit::series_data_changed(before,chart) {
+                    if self.chart_edits.get(&origin).is_some_and(|(_,prior)|prior.title!=chart.title || crate::chart_edit::legend_position(prior)!=crate::chart_edit::legend_position(chart) || crate::chart_edit::series_data_changed(prior,chart)) {
                         return Err(XlsxError::InvalidData("conflicting edits for a shared chart source".into()));
                     }
                     self.chart_edits.insert(origin,((*before).clone(),chart.clone()));
@@ -11690,6 +11690,33 @@ mod tests {
             }
             assert_eq!(crate::chart_edit::chart_part_names(&mut output).unwrap().len(), original_count + 1);
         }
+    }
+
+
+    #[test]
+    fn existing_chart_series_data_survives_save() {
+        let bytes = include_bytes!("../../../tests/fixtures/vba/uniform_chart_operations.xlsm");
+        let mut book = crate::parse_xlsx_preserving_values(bytes).unwrap();
+        let chart = book.sheets.iter_mut().flat_map(|sheet| &mut sheet.drawings)
+            .find_map(|drawing| match &mut drawing.kind {
+                crate::ir::DrawingKind::Chart(chart) => Some(chart), _ => None,
+            }).unwrap();
+        assert!(chart.series.is_empty());
+        chart.series.push(crate::ir::ChartSeries {
+            name: "Revenue".into(), values: vec![Some(1.25), Some(2.5), Some(3.75)],
+            ..Default::default()
+        });
+        let mut editor = super::XlsxEditor::new(bytes).unwrap();
+        editor.apply_workbook(&book).unwrap();
+        let saved = editor.save().unwrap();
+        let reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();
+        let chart = reopened.sheets.iter().flat_map(|sheet| &sheet.drawings)
+            .find_map(|drawing| match &drawing.kind {
+                crate::ir::DrawingKind::Chart(chart) => Some(chart), _ => None,
+            }).unwrap();
+        assert_eq!(chart.series.len(), 1);
+        assert_eq!(chart.series[0].name, "Revenue");
+        assert_eq!(chart.series[0].values, vec![Some(1.25), Some(2.5), Some(3.75)]);
     }
 
     #[test]

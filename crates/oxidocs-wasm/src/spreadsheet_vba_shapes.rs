@@ -10,6 +10,7 @@
 //! 16.0 on a Japanese Office (shapes.vba, shapes2.vba, 2026-09-05).
 
 use super::*;
+use super::shapes_members::text_of_value;
 use oxicells_core::ir::{
     Anchor, Chart, ChartAxis, ChartSeries, Drawing, DrawingKind, GroupTransform, Legend, Shape, ShapeLine,
     ShapeParagraph, ShapeRun, ShapeText,
@@ -188,6 +189,8 @@ pub(super) struct SeriesRecord {
     /// API values of explicitly assigned categories, before display-text conversion.
     pub typed_xs: Option<Vec<Value>>,
     pub values: Vec<f64>,
+    /// Original sparse cache, retained until values are explicitly assigned.
+    pub sparse_values: Option<Vec<Option<f64>>>,
     pub xs: Vec<String>,
     pub color: Option<i64>,
     pub chart_type: Option<i64>,
@@ -577,12 +580,25 @@ impl<'a> WorkbookHost<'a> {
                                 .iter()
                                 .map(|series| SeriesRecord {
                                     name: series.name.clone(),
-                                    name_ref: None,
-                                    values_ref: None,
-                                    x_ref: None,
-                                    typed_xs: None,
+                                    name_ref: series.name_reference.clone(),
+                                    values_ref: series.values_reference.clone(),
+                                    x_ref: series.category_reference.clone(),
+                                    typed_xs: series.category_values.as_ref().filter(|xs| !xs.is_empty())
+                                        .map(|xs| xs.iter().map(|x| match x {
+                                            oxicells_core::ir::ChartCategoryValue::Number(n) => Value::Double(*n),
+                                            oxicells_core::ir::ChartCategoryValue::Text(s) => Value::String(s.clone()),
+                                            oxicells_core::ir::ChartCategoryValue::Blank => Value::Empty,
+                                        }).collect()),
                                     values: series.values.iter().map(|v| v.unwrap_or(0.0)).collect(),
-                                    xs: chart.categories.clone(),
+                                    sparse_values: Some(series.values.clone()),
+                                    xs: series.category_values.as_ref().filter(|xs| !xs.is_empty())
+                                        .map(|xs| xs.iter().map(|x| match x {
+                                            oxicells_core::ir::ChartCategoryValue::Number(n) => text_of_value(&Value::Double(*n)),
+                                            oxicells_core::ir::ChartCategoryValue::Text(s) => s.clone(),
+                                            oxicells_core::ir::ChartCategoryValue::Blank => String::new(),
+                                        }).collect()).unwrap_or_else(|| if !chart.categories.is_empty() {
+                                            chart.categories.clone()
+                                        } else { (1..=series.values.len()).map(|i| i.to_string()).collect() }),
                                     color: None,
                                     chart_type: None,
                                     has_labels: !series.labels.is_empty(),
@@ -1447,7 +1463,20 @@ impl<'a> WorkbookHost<'a> {
                 .iter()
                 .map(|series| ChartSeries {
                     name: series.name.clone(),
-                    values: series.values.iter().map(|v| Some(*v)).collect(),
+                    name_reference: series.name_ref.clone(),
+                    values_reference: series.values_ref.clone(),
+                    category_reference: series.x_ref.clone(),
+                    category_values: Some(series.typed_xs.as_ref().map(|xs| xs.iter().map(|value| {
+                        use oxicells_core::ir::ChartCategoryValue;
+                        if value.string_units().is_some() { ChartCategoryValue::Text(text_of_value(value)) }
+                        else if matches!(value, Value::Empty) { ChartCategoryValue::Blank }
+                        else { text_of_value(value).parse::<f64>().map(ChartCategoryValue::Number)
+                            .unwrap_or_else(|_| ChartCategoryValue::Text(text_of_value(value))) }
+                    }).collect()).unwrap_or_else(|| if series.x_ref.is_some() {
+                        series.xs.iter().map(|text| text.parse::<f64>().map(oxicells_core::ir::ChartCategoryValue::Number)
+                            .unwrap_or_else(|_| oxicells_core::ir::ChartCategoryValue::Text(text.clone()))).collect()
+                    } else { Vec::new() })),
+                    values: series.sparse_values.clone().unwrap_or_else(|| series.values.iter().map(|v| Some(*v)).collect()),
                     line: series.color.map(|colour| ShapeLine {
                         head_end: None,
                         tail_end: None,
