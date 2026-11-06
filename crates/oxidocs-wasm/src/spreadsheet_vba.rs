@@ -28658,7 +28658,15 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn default_member_error(&self, receiver: &ObjectRef) -> Option<i64> {
-        matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::IconSet(_))).then_some(450)
+        // Measured: an IconSet's default Item and a range's Borders' default
+        // Item want an index (450); a Validation has no default member at all
+        // (438) although both Borders and Validation carry a Value property.
+        // A single Border is not measured and keeps reading through Value.
+        match self.objects.get(host_object_index(receiver.handle)) {
+            Some(HostObject::IconSet(_) | HostObject::RangeBorders(_, BorderSelection::All)) => Some(450),
+            Some(HostObject::Validation(_) | HostObject::ValidationBlocks(_)) => Some(438),
+            _ => None,
+        }
     }
 
     fn automation_invocation_allowed(&self, receiver: &ObjectRef, name: &str, kind: u8) -> bool {
@@ -57613,6 +57621,44 @@ End Function
                 Value::Integer(if invocation == 2 && !missing { 18 } else { 4 })];
             let Value::Array(answer) = actual else { panic!("expected IconSet invocation results"); };
             assert_eq!(answer.values, expected, "invocation={invocation} missing={missing}");
+        }
+    }
+
+    #[test]
+    fn borders_and_validation_have_no_scalar_default_member() {
+        // Measured in Excel: both objects carry a Value property, yet neither
+        // answers as a value. `v = .Borders` asks Borders' default Item with
+        // no index (450); `v = .Validation` finds no default member (438).
+        // `Set` takes either, and VarType inspects them as objects.
+        let module = parse_module(r#"Public Function DefaultMemberProbe(ByVal which As Long) As Variant
+ On Error Resume Next
+ Dim v As Variant,o As Object
+ Err.Clear
+ Select Case which
+ Case 0:v=Range("B2").Borders
+ Case 1:v=Range("B2").Validation
+ Case 2:Set o=Range("B2").Borders
+ Case 3:Set o=Range("B2").Validation
+ Case 4:v=VarType(Range("B2").Borders)
+ Case 5:v=VarType(Range("B2").Validation)
+ End Select
+ DefaultMemberProbe=Array(Err.Number,v)
+End Function
+"#).unwrap();
+        for (which, number, value) in [
+            (0, 450, Value::Empty),
+            (1, 438, Value::Empty),
+            (2, 0, Value::Empty),
+            (3, 0, Value::Empty),
+            (4, 0, Value::Integer(9)),
+            (5, 0, Value::Integer(9)),
+        ] {
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            let actual = Runtime::new(&module).with_host(&mut host)
+                .call("DefaultMemberProbe", vec![Value::Integer(which)]).unwrap();
+            let Value::Array(answer) = actual else { panic!("expected the probe's pair"); };
+            assert_eq!(answer.values, vec![Value::Integer(number), value], "which={which}");
         }
     }
 
