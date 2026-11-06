@@ -49576,14 +49576,16 @@ Attribute VB_Name = "ThisWorkbook"
         // code names, fifteen calls per input across three measured probe sets.
         // Active objects remain usable while an unmatched default instance
         // reports 429, including after SaveCopyAs and a cold reopen.
+        // Six additional inputs use an unknown VB_Base GUID: PROJECT still
+        // declares the class and matching XML still supplies its native type.
         for (base, class, part, old_code_name, detached_code_name, active) in [
             ("Workbook", "ArchiveHost", "xl/workbook.xml", "ThisWorkbook", "ThisWorkbook", "ThisWorkbook"),
             ("Worksheet", "Ledger", "xl/worksheets/sheet1.xml", "Ledger", "DetachedLedger", "ThisWorkbook.Worksheets(1)"),
             ("Chart", "PlotHost", "xl/chartsheets/sheet1.xml", "PlotHost", "DetachedPlot", "ThisWorkbook.Charts(1)"),
         ] {
             for attached in [false, true] {
-              for stored_base in ["Workbook", "Worksheet", "Chart"] {
-                if !attached && stored_base != base { continue; }
+              for stored_base in ["Workbook", "Worksheet", "Chart", "Unknown"] {
+                if !attached && stored_base != base && stored_base != "Unknown" { continue; }
                 let code_name = if attached { class } else { detached_code_name };
                 let mut input = zip::ZipArchive::new(std::io::Cursor::new(fixture)).unwrap();
                 let mut output = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -49651,12 +49653,18 @@ AttachmentObjectType = TypeName(obj)
 End Function
 "#);
                 let guid = |kind| match kind { "Workbook" => "00020819", "Worksheet" => "00020820", "Chart" => "00020821", _ => unreachable!() };
-                let header = |kind| format!("Attribute VB_Name = \"{class}\"\nAttribute VB_Base = \"0{{{}-0000-0000-C000-000000000046}}\"", guid(kind));
+                let header = |kind| {
+                    let id = if kind == "Unknown" { "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF".into() }
+                        else { format!("{}-0000-0000-C000-000000000046", guid(kind)) };
+                    format!("Attribute VB_Name = \"{class}\"\nAttribute VB_Base = \"0{{{id}}}\"")
+                };
                 let original_source = original_source.replace("\r\n", "\n");
                 assert_eq!(original_source.matches(&header(base)).count(), 1);
                 let typed_source = original_source.replace(&header(base), &header(stored_base));
                 let source = format!("{typed_source}\n{driver}");
-                let mut bytes = crate::vba_project::write_project_source(&bytes, &source, Some(932)).unwrap();
+                let bytes = crate::vba_project::write_project_source(&bytes, &source, Some(932)).unwrap();
+              for automatic in [false, true] {
+                let mut bytes = bytes.clone();
                 let mut source = crate::vba_project::read_project_source_with_code_page(&bytes, Some(932)).unwrap().unwrap();
                 let mut book = Some(oxicells_core::parse_xlsx_preserving_values(&bytes).unwrap());
                 let mut session = None;
@@ -49670,6 +49678,10 @@ End Function
                     if phase == "saved-cold" { session = None; }
                   }
                   let documents = crate::vba_project::read_document_modules(&bytes).unwrap();
+                  let document = documents.iter().find(|document| document.name == class).unwrap();
+                  assert_eq!(document.unbound, !attached);
+                  assert_eq!(document.base_type, format!("Excel.{}",
+                      if !attached && stored_base == "Unknown" { "Workbook" } else { base }));
                   for route in 0..if stored_base == base { 15 } else { 6 } {
                     let expected = if route == 13 { if !attached && base != "Workbook" { "Empty" } else { base } }
                         else if route == 14 { if !attached && base != "Workbook" { object_required } else { "True" } }
@@ -49678,7 +49690,12 @@ End Function
                         else if !attached && matches!(route, 0..=3 | 6..=8 | 11..=12) { cannot_create }
                         else { match route { 0 | 5..=8 | 11 => base, 1 => "True", 2 | 4 | 12 => code_name, 3 => "False", _ => unreachable!() } };
                     let mut context = failure_context();
-                    context.document_modules = Some(documents.clone());
+                    context.document_modules = (!automatic).then(|| documents.clone());
+                    if automatic {
+                        context.file_context = Some(file_io::FileContext {
+                            package_bytes: Some(bytes.clone()), ..Default::default()
+                        });
+                    }
                     context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
                     let outcome = execute_workbook_action_in_session(book.take().unwrap(), &source,
                         Some("DocumentIdentityProbe.Probe"), vec![Value::Integer(route)], 0, context, &mut session);
@@ -49695,6 +49712,7 @@ End Function
                   }
                   if book.is_none() { break; }
                 }
+              }
               }
             }
         }

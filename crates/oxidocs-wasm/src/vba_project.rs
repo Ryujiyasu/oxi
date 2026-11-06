@@ -67,14 +67,15 @@ pub(crate) fn read_document_modules(
                 continue;
             }
             let source = module_source(&project, module, identity, None)?;
-            if let Some(base) = native_document_base(&source) {
-                project_documents.push(VbaDocumentModule {
-                    name: identity.name.clone(),
-                    base_type: base.into(),
-                    unbound: true,
-                    ..VbaDocumentModule::default()
-                });
-            }
+            // PROJECT declares the document even when VB_Base is unknown.
+            // Excel normalizes an unknown unbound base to Workbook on save.
+            // Matching package code names still supply the actual native type.
+            project_documents.push(VbaDocumentModule {
+                name: identity.name.clone(),
+                base_type: native_document_base(&source).unwrap_or("Excel.Workbook").into(),
+                unbound: true,
+                ..VbaDocumentModule::default()
+            });
         }
     }
     for (element, name) in &entries {
