@@ -566,6 +566,7 @@ impl<'a> WorkbookHost<'a> {
         chart.has_title = false;
         chart.title.clear();
         chart.title_from_data = false;
+        chart.title_default_is_explicit = false;
         self.redraw(id)
     }
 
@@ -1106,6 +1107,7 @@ impl<'a> WorkbookHost<'a> {
             has_title: false,
             title: String::new(),
             title_from_data: false,
+            title_default_is_explicit: false,
             title_generation: 0,
             has_legend: true,
             legend_position: -4152,
@@ -1832,6 +1834,20 @@ impl<'a> WorkbookHost<'a> {
         let chart = self.chart(id)?;
         let xy = matches!(chart_kind(kind), "scatter" | "bubble");
         if series.implicit_categories {
+            // A missing category expression inherits an existing text category
+            // axis in a multi-series category chart, including newly added series.
+            let shared_text = chart.series.iter().any(|other| !other.implicit_categories
+                && (other.text_category_gaps || other.typed_xs.as_ref()
+                    .is_some_and(|values| values.iter().any(|value| value.string_units().is_some()))));
+            if !xy && chart.series.len() > 1 && shared_text && !chart.category_axis_labels.is_empty() {
+                let mut labels = chart.category_axis_reference.as_deref()
+                    .and_then(|reference| self.category_reference_values(reference))
+                    .map(|values| values.iter().map(text_of_value).collect::<Vec<_>>())
+                    .unwrap_or_else(|| chart.category_axis_labels.clone());
+                labels.resize(count, String::new());
+                labels.truncate(count);
+                return Ok(labels.into_iter().map(Value::String).collect());
+            }
             if series.categories_imported && xy && chart.series.len() > 1 {
                 return Ok((1..=count).map(|i| Value::Double(i as f64)).collect());
             }
@@ -2549,9 +2565,9 @@ impl<'a> WorkbookHost<'a> {
             }
             DrawingPart::ChartTitle(id, generation) => {
                 let chart = self.chart_title_record(id, generation)?.clone();
-                let pending_removal = chart.title_from_data && chart.has_title && chart.title.is_empty()
-                    && chart.series.len() != 1 && !matches!(chart_kind(chart.chart_type), "pie" | "ofPie");
-                let derived = chart.title_from_data.then(|| chart.data_title()).flatten();
+                let derived = (chart.title_from_data || chart.title_default_is_explicit)
+                    .then(|| chart.data_title()).flatten();
+                let pending_removal = chart.title_from_data && chart.has_title && derived.is_none();
                 let shown = if pending_removal { String::new() }
                 else if let Some(title) = derived { title.to_string() }
                 else if chart.title.is_empty() {
@@ -2560,14 +2576,23 @@ impl<'a> WorkbookHost<'a> {
                         _ => "グラフ タイトル".to_string(),
                     }
                 } else {
-                    chart.title
+                    chart.title.clone()
                 };
-                if pending_removal && matches!(lower.as_str(), "text" | "caption") {
-                    let chart = self.chart_mut(id)?;
-                    chart.has_title = false;
-                    chart.title_generation = chart.title_generation.checked_add(1)
-                        .ok_or_else(|| host_error(7, "Chart title identity space is exhausted"))?;
-                    self.redraw(id)?;
+                if matches!(lower.as_str(), "text" | "caption") {
+                    if pending_removal {
+                        let chart = self.chart_mut(id)?;
+                        chart.has_title = false;
+                        chart.title.clear();
+                        chart.title_default_is_explicit = false;
+                        chart.title_generation = chart.title_generation.checked_add(1)
+                            .ok_or_else(|| host_error(7, "Chart title identity space is exhausted"))?;
+                        self.redraw(id)?;
+                    } else if derived.is_some() && (!chart.title_from_data || chart.title != shown) {
+                        let chart = self.chart_mut(id)?;
+                        chart.title_from_data = true;
+                        chart.title = shown.clone();
+                        self.redraw(id)?;
+                    }
                 }
                 Ok(match lower.as_str() {
                     "text" | "caption" => Some(Value::String(shown)),
@@ -3711,8 +3736,10 @@ impl<'a> WorkbookHost<'a> {
                                 }
                                 chart.title.clear();
                                 chart.title_from_data = false;
+                                chart.title_default_is_explicit = false;
                             }
                             if chart.has_title && chart.title.is_empty() {
+                                chart.title_default_is_explicit = true;
                                 let title = chart.data_title().map(str::to_string);
                                 chart.title_from_data = title.is_some();
                                 chart.title = title.unwrap_or_else(|| "\u{30b0}\u{30e9}\u{30d5} \u{30bf}\u{30a4}\u{30c8}\u{30eb}".into());
@@ -3886,6 +3913,7 @@ impl<'a> WorkbookHost<'a> {
                     let chart = self.chart_mut(id)?;
                     chart.title = title;
                     chart.title_from_data = false;
+                    chart.title_default_is_explicit = false;
                     chart.has_title = !chart.title.is_empty();
                     self.redraw(id)?;
                     return Ok(true);

@@ -59135,6 +59135,124 @@ End Function
 
 
 
+
+    #[test]
+    fn explicit_default_titles_match_native_after_edits_and_fresh_file_open() {
+        let controls: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/vba/chart_import_contracts.json")).unwrap();
+        let fixture = include_bytes!("../../../tests/fixtures/vba/chart_boundary_operations.xlsm");
+        let original_source = crate::vba_project::read_project_source_with_code_page(fixture, Some(932)).unwrap().unwrap();
+        let source = format!("{original_source}\n{}", r#"Attribute VB_Name = "DefaultTitle"
+Public Function Probe(ByVal action As String) As String
+    Dim target As Object, item As Object, i As Long, observed As String
+    On Error GoTo failed
+    Set target = ThisWorkbook.Charts(1)
+    Select Case action
+    Case "restore"
+        target.HasTitle = False
+        target.HasTitle = True
+        Probe = target.ChartTitle.Text
+        Exit Function
+    Case "rename"
+        For i = 1 To target.SeriesCollection.Count
+            target.SeriesCollection(i).Name = "Renamed" & CStr(i)
+        Next i
+    Case "pie": target.ChartType = 5
+    Case "line": target.ChartType = 4
+    Case "delete_last"
+        If target.SeriesCollection.Count > 0 Then target.SeriesCollection(target.SeriesCollection.Count).Delete
+    Case "add_named"
+        Set item = target.SeriesCollection.NewSeries
+        item.Name = "Added"
+        item.Values = Array(1#, 2#, 3#)
+    Case "pie_read_line_read"
+        target.ChartType = 5
+        observed = target.ChartTitle.Text
+        target.ChartType = 4
+    Case "add_read_remove_read"
+        Do While target.SeriesCollection.Count > 0
+            target.SeriesCollection(target.SeriesCollection.Count).Delete
+        Loop
+        Set item = target.SeriesCollection.NewSeries
+        item.Name = "Added"
+        item.Values = Array(1#, 2#, 3#)
+        observed = target.ChartTitle.Text
+        target.SeriesCollection(1).Delete
+    Case "pie_then_line"
+        target.ChartType = 5
+        target.ChartType = 4
+    Case "text"
+        Probe = target.ChartTitle.Text
+        Exit Function
+    End Select
+    Probe = CStr(target.HasTitle)
+    Exit Function
+failed:
+    Probe = "error(" & CStr(Err.Number) & ":" & Err.Source & ":" & Err.Description & ")"
+End Function
+"#);
+        let mut differences = Vec::new();
+        let initial = controls["default_title_cases"].as_array().unwrap();
+        let transitions = controls["default_title_transition_cases"].as_array().unwrap();
+        for case in initial.iter().chain(transitions).chain(controls["default_title_binding_cases"].as_array().unwrap()) {
+            let origin = if case.get("input_case").is_some() {
+                initial.iter().find(|c| c["id"] == case["input_case"]).unwrap()
+            } else { case };
+            let mut input = zip::ZipArchive::new(std::io::Cursor::new(fixture)).unwrap();
+            let mut output = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            for i in 0..input.len() {
+                let entry = input.by_index(i).unwrap();
+                if entry.name() == "xl/charts/chart1.xml" {
+                    output.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+                    std::io::Write::write_all(&mut output, origin["xml"].as_str().unwrap().as_bytes()).unwrap();
+                } else { output.raw_copy_file(entry).unwrap(); }
+            }
+            let bytes = output.finish().unwrap().into_inner();
+            let mut book = oxicells_core::parse_xlsx_preserving_values(&bytes).unwrap();
+            let mut session = None;
+            let mut calls = vec![("BoundaryInspection.BoundaryState", vec![], origin["native_cold"].as_str().unwrap().to_string())];
+            if let Some(action) = case["action"].as_str() {
+                calls.push(("DefaultTitle.Probe", vec![Value::String(action.into())],
+                    if case["has_title_before_read"].as_bool().unwrap() { "True" } else { "False" }.into()));
+                if let Some(text) = case["text"].as_str() {
+                    calls.push(("DefaultTitle.Probe", vec![Value::String("text".into())], text.into()));
+                }
+            } else {
+                calls.push(("DefaultTitle.Probe", vec![Value::String("restore".into())], origin["native_text"].as_str().unwrap().to_string()));
+            }
+            calls.push(("BoundaryInspection.BoundaryState", vec![], case["native_live"].as_str().unwrap().to_string()));
+            for (step, (procedure, args, expected)) in calls.into_iter().enumerate() {
+                let mut context = failure_context();
+                context.document_modules = Some(crate::vba_project::read_document_modules(&bytes).unwrap());
+                context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+                let outcome = execute_workbook_action_in_session(book, &source, Some(procedure),
+                    args, 0, context, &mut session).unwrap();
+                let actual = serde_json::to_value(&outcome.result).unwrap();
+                if outcome.error.is_some() || actual != serde_json::json!({"type":"string","value":expected}) {
+                    differences.push(format!("{} step={step}: {actual}; expected={expected}; error={:?}",
+                        case["id"], outcome.error.as_ref().map(|e| &e.message)));
+                }
+                book = outcome.workbook;
+            }
+            let mut editor = oxicells_core::editor::XlsxEditor::new(&bytes).unwrap();
+            editor.apply_workbook(&book).unwrap();
+            let saved = editor.save().unwrap();
+            let saved_source = crate::vba_project::read_project_source_with_code_page(&saved, Some(932)).unwrap().unwrap();
+            assert_eq!(saved_source, original_source);
+            let mut context = failure_context();
+            context.document_modules = Some(crate::vba_project::read_document_modules(&saved).unwrap());
+            context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+            let cold = execute_workbook_vba(oxicells_core::parse_xlsx_preserving_values(&saved).unwrap(),
+                &saved_source, "BoundaryInspection.BoundaryState", vec![], 0, context).unwrap();
+            if cold.error.is_some() || serde_json::to_value(&cold.result).unwrap()
+                != serde_json::json!({"type":"string","value":case["native_cold"]}) {
+                differences.push(format!("{} cold: {}; expected={}", case["id"],
+                    serde_json::to_value(&cold.result).unwrap(), case["native_cold"]));
+            }
+        }
+        assert!(differences.is_empty(), "{} differences: {:?}", differences.len(), differences.iter().take(8).collect::<Vec<_>>());
+    }
+
     #[test]
     fn explicit_title_removal_and_source_defaults_match_native_live_and_cold_state() {
         let controls: serde_json::Value = serde_json::from_str(include_str!(

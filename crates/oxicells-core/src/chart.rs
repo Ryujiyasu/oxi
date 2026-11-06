@@ -59,8 +59,9 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     let mut buf = Vec::new();
 
     let mut chart = Chart::default();
-    let (title, automatic_title) = title_state(xml).unwrap_or_default();
-    chart.title_from_data = title.is_none() && automatic_title;
+    let (title, automatic_title, explicit_default) = title_state(xml).unwrap_or_default();
+    chart.title_from_data = title.is_none() && (automatic_title || explicit_default);
+    chart.title_default_is_explicit = explicit_default;
     chart.title = title;
     let mut series: Vec<ChartSeries> = Vec::new();
     let mut current = ChartSeries::default();
@@ -601,16 +602,20 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     chart.series = series;
     // An explicitly enabled automatic title is materialized on file open.
     // Pie and of-pie plots use the first series even when more are stored.
-    if chart.title.is_none() && automatic_title
+    if chart.title.is_none() && (automatic_title || explicit_default)
         && (chart.series.len() == 1 || matches!(chart.kind.as_str(), "pie" | "ofPie"))
     {
         chart.title = chart.series.first()
             .filter(|series| !series.name.is_empty() || series.explicit_empty_name || series.name_reference.is_some())
             .map(|series| series.name.clone());
     }
+    if explicit_default && chart.title.is_none() {
+        chart.title = Some("\u{30b0}\u{30e9}\u{30d5} \u{30bf}\u{30a4}\u{30c8}\u{30eb}".into());
+        chart.title_from_data = false;
+    }
     // Automatic titles and shared category labels use source order, while
     // the SeriesCollection follows each series' explicit order.
-    if chart.title_from_data { chart.title_from_data_cache = chart.title.clone(); }
+    if chart.title_from_data || explicit_default { chart.title_from_data_cache = chart.title.clone(); }
     let orders = series_positions(xml, "order");
     let mut ordered: Vec<_> = chart.series.into_iter().enumerate().collect();
     ordered.sort_by_key(|(index, _)| orders.get(*index).copied().flatten().unwrap_or(*index));
@@ -787,11 +792,12 @@ fn number(value: &Option<String>) -> Option<f64> {
 }
 
 /// Only the chart's own title, not a series, axis or extension's text.
-fn title_state(xml:&str)->Option<(Option<String>,bool)> {
+fn title_state(xml:&str)->Option<(Option<String>,bool,bool)> {
     use quick_xml::{reader::NsReader,name::ResolveResult};
     let mut reader=NsReader::from_str(xml);
     let mut parents:Vec<(String,bool,bool)>=Vec::new();
     let mut title=None;
+    let mut title_present=false;
     let mut depth=None;
     let mut automatic=false;
     loop {
@@ -805,8 +811,11 @@ fn title_state(xml:&str)->Option<(Option<String>,bool)> {
                     automatic=matches!(get_attr(element,"val").as_deref(),Some("0"|"false"));
                 }
                 if chart && name=="title" && parents.len()==2 && parents[0].0=="chartSpace" && parents[0].1 && parents[1].0=="chart" && parents[1].1 {
-                    title=Some(String::new());
+                    title_present=true;
                     if matches!(event,Event::Start(_)) {depth=Some(parents.len()+1);}
+                }
+                if chart && name=="tx" && depth==Some(parents.len()) {
+                    title=Some(String::new());
                 }
                 if matches!(event,Event::Start(_)) {parents.push((name,chart,drawing));}
             }
@@ -822,7 +831,8 @@ fn title_state(xml:&str)->Option<(Option<String>,bool)> {
             _=>{}
         }
     }
-    Some((title,automatic))
+    let explicit_default=title_present && title.is_none();
+    Some((title,automatic,explicit_default))
 }
 
 #[cfg(test)]

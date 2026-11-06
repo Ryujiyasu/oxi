@@ -295,9 +295,12 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
         return Err(XlsxError::InvalidData("new chart contains a non-finite value".into()));
     }
     let mut out = format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><c:chartSpace xmlns:c=\"{C}\" xmlns:a=\"{A}\"><c:chart>");
-    let automatic_title = chart.title_from_data && chart.title == chart.title_from_data_cache;
+    let automatic_title = (chart.title_from_data || chart.title_default_is_explicit)
+        && chart.title == chart.title_from_data_cache;
     let source_order = chart.source_series_indices();
-    if !automatic_title {
+    if automatic_title && chart.title_default_is_explicit {
+        out.push_str("<c:title><c:overlay val=\"0\"/></c:title>");
+    } else if !automatic_title {
         if let Some(title) = &chart.title { out.push_str(&format!("<c:title>{}<c:overlay val=\"0\"/></c:title>", rich(title))); }
     }
     out.push_str(&format!("<c:autoTitleDeleted val=\"{}\"/>", u8::from(chart.title.is_none() && !automatic_title)));
@@ -896,8 +899,11 @@ pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<St
     };
     let mut output = xml.to_string();
     if plot_options_changed(before, after) { output = patch_plot_options(&output, before, after, chart_ns, drawing_ns)?; }
-    if before.title != after.title || before.title_from_data != after.title_from_data {
-        let automatic_title = after.title_from_data && after.title == after.title_from_data_cache;
+    if before.title != after.title || before.title_from_data != after.title_from_data
+        || before.title_default_is_explicit != after.title_default_is_explicit
+        || before.title_from_data_cache != after.title_from_data_cache {
+        let automatic_title = (after.title_from_data || after.title_default_is_explicit)
+            && after.title == after.title_from_data_cache;
         let explicit_title = if automatic_title { None } else { after.title.as_ref() };
         let title=explicit_title.map(|text|format!(
             "<c:title xmlns:c=\"{chart_ns}\" xmlns:a=\"{drawing_ns}\"><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t xml:space=\"preserve\">{}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val=\"0\"/></c:title>",escape(text))).unwrap_or_default();
@@ -911,6 +917,15 @@ pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<St
                 }
             } else {
                 output = replace_child(&output, "title", &title)?;
+            }
+        } else if automatic_title && after.title_default_is_explicit {
+            if let Ok((children, _)) = children_at(&output, &["chartSpace", "chart", "title"]) {
+                if let Some((_, start, end)) = children.iter().find(|(name, _, _)| name == "tx") {
+                    output = format!("{}{}", &output[..*start], &output[*end..]);
+                }
+            } else {
+                output = replace_child(&output, "title",
+                    &format!("<c:title xmlns:c=\"{chart_ns}\"><c:overlay val=\"0\"/></c:title>"))?;
             }
         } else {
             output = replace_child(&output, "title", "")?;
@@ -958,6 +973,45 @@ pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<St
 mod filtered_category_source_tests {
     use super::*;
     use crate::{chart::parse_chart_xml, ir::ChartCategoryValue, parser::Theme};
+
+
+    #[test]
+    fn explicit_default_titles_preserve_native_text_and_empty_title_containers() {
+        let controls: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/vba/chart_import_contracts.json")).unwrap();
+        let mut differences = Vec::new();
+        for case in controls["default_title_cases"].as_array().unwrap() {
+            for strict in [false, true] {
+                let mut xml = case["xml"].as_str().unwrap().to_string();
+                if strict {
+                    xml = xml.replace(C, "http://purl.oclc.org/ooxml/drawingml/chart")
+                        .replace(A, "http://purl.oclc.org/ooxml/drawingml/main");
+                }
+                let before = parse_chart_xml(&xml, &Theme::default()).unwrap();
+                let expected = case["native_text"].as_str().unwrap();
+                if before.title.as_deref() != Some(expected) {
+                    differences.push(format!("{} strict={strict}: {:?} != {expected:?}", case["id"], before.title));
+                }
+                let mut after = before.clone();
+                // Change a separate modeled property to exercise both save paths.
+                after.legend = None;
+                for saved in [patch_chart(&xml, &before, &after).unwrap(), new_chart_xml(&after).unwrap()] {
+                    let parsed = parse_chart_xml(&saved, &Theme::default()).unwrap();
+                    if parsed.title.as_deref() != Some(expected) {
+                        differences.push(format!("{} strict={strict} saved: {:?}", case["id"], parsed.title));
+                    }
+                    let (children, _) = children_at(&saved, &["chartSpace", "chart", "title"]).unwrap();
+                    assert!(!children.iter().any(|(name, _, _)| name == "tx"), "{}", case["id"]);
+                }
+                // A direct IR title edit must override the cached default source.
+                after.title = Some("Literal & <title>".into());
+                for saved in [patch_chart(&xml, &before, &after).unwrap(), new_chart_xml(&after).unwrap()] {
+                    assert_eq!(parse_chart_xml(&saved, &Theme::default()).unwrap().title, after.title);
+                }
+            }
+        }
+        assert!(differences.is_empty(), "{} differences: {:?}", differences.len(), differences);
+    }
 
     #[test]
     fn automatic_title_cache_does_not_override_explicit_ir_edits() {

@@ -175,6 +175,7 @@ pub(super) struct ChartRecord {
     pub has_title: bool,
     pub title: String,
     pub title_from_data: bool,
+    pub title_default_is_explicit: bool,
     pub title_generation: u64,
     pub has_legend: bool,
     /// xlLegendPositionRight -4152, Bottom -4107, Left -4131, Top -4160.
@@ -725,6 +726,7 @@ impl<'a> WorkbookHost<'a> {
                             has_title: chart.title.is_some(),
                             title: chart.title.clone().unwrap_or_default(),
                             title_from_data: chart.title_from_data && chart.title == chart.title_from_data_cache,
+                            title_default_is_explicit: chart.title_default_is_explicit && chart.title == chart.title_from_data_cache,
                             title_generation: 0,
                             has_legend: chart.legend.is_some(),
                             title_auto: false,
@@ -1602,7 +1604,7 @@ impl<'a> WorkbookHost<'a> {
             chart.category_axis_labels.clone()
         } else { chart.series.first().map(|series| series.xs.clone()).unwrap_or_default() };
         let title = if chart.has_title {
-                Some(if chart.title_from_data { chart.data_title().unwrap_or(&chart.title).to_string() }
+                Some(if chart.title_from_data || chart.title_default_is_explicit { chart.data_title().unwrap_or(&chart.title).to_string() }
                     else { chart.title.clone() })
             }
             else if chart.title_auto && chart.series.len() == 1 && chart.series[0].name_ref.is_some() {
@@ -1616,7 +1618,8 @@ impl<'a> WorkbookHost<'a> {
             // A single named series selected at chart creation acquires its title
             // when Excel saves the chart, while the live HasTitle remains false.
             title_from_data: chart.title_from_data,
-            title_from_data_cache: if chart.title_from_data { title.clone() } else { None },
+            title_default_is_explicit: chart.title_default_is_explicit,
+            title_from_data_cache: if chart.title_from_data || chart.title_default_is_explicit { title.clone() } else { None },
             source_series_order: if chart.source_series_order.iter().copied().eq(0..chart.series.len()) {
                 Vec::new()
             } else { chart.source_series_order.clone() },
