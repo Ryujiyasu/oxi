@@ -263,7 +263,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                         }
                     }
                     "legendPos" => legend.position = value.unwrap_or_default(),
-                    "val" => reading = Reading::Values,
+                    "val" | "yVal" => reading = Reading::Values,
                     "cat" | "xVal" => reading = Reading::Categories,
                     "tx" => reading = Reading::SeriesName,
                     "numCache" | "strCache" | "strLit" | "numLit" => in_cache = true,
@@ -317,7 +317,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                     }
                     "r" => in_run = false,
                     "numCache" | "strCache" | "strLit" | "numLit" => in_cache = false,
-                    "val" | "cat" | "xVal" | "tx" => reading = Reading::Nothing,
+                    "val" | "yVal" | "cat" | "xVal" | "tx" => reading = Reading::Nothing,
                     "ln" => in_line = false,
                     "marker" => {
                         in_marker = false;
