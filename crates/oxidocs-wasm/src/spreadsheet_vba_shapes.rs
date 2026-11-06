@@ -189,6 +189,8 @@ pub(super) struct SeriesRecord {
     pub x_ref: Option<String>,
     /// API values of explicitly assigned categories, before display-text conversion.
     pub typed_xs: Option<Vec<Value>>,
+    /// An omitted category expression uses the chart family's default labels.
+    pub implicit_categories: bool,
     pub values: Vec<f64>,
     /// Original sparse cache, retained until values are explicitly assigned.
     pub sparse_values: Option<Vec<Option<f64>>>,
@@ -512,12 +514,17 @@ fn arrow_size_name(size: i64) -> String {
 }
 
 pub(super) fn chart_plot_options(kind: i64) -> oxicells_core::ir::ChartPlotOptions {
-    use oxicells_core::ir::{ChartPlotOptions, ChartStacking};
+    use oxicells_core::ir::{ChartBarShape, ChartPlotOptions, ChartStacking};
     let mut options = ChartPlotOptions::default();
-    options.horizontal = matches!(kind, 57..=62);
+    options.three_dimensional = matches!(kind, 54..=56 | 60..=62 | 70 | 78 | 79 | 92..=112 | -4100 | -4101 | -4102 | -4098);
+    options.depth_series = matches!(kind, -4100 | 98 | 105 | 112);
+    options.bar_shape = match kind { 92..=98 => ChartBarShape::Cylinder, 99..=105 => ChartBarShape::Cone,
+        106..=112 => ChartBarShape::Pyramid, _ => ChartBarShape::Box };
+    options.explosion = matches!(kind, 69 | 70 | 80).then_some(25);
+    options.horizontal = matches!(kind, 57..=62 | 95..=97 | 102..=104 | 109..=111);
     options.stacking = match kind {
-        52 | 55 | 58 | 61 | 63 | 66 | 76 | 78 => ChartStacking::Stacked,
-        53 | 56 | 59 | 62 | 64 | 67 | 77 | 79 => ChartStacking::Percent,
+        52 | 55 | 58 | 61 | 63 | 66 | 76 | 78 | 93 | 96 | 100 | 103 | 107 | 110 => ChartStacking::Stacked,
+        53 | 56 | 59 | 62 | 64 | 67 | 77 | 79 | 94 | 97 | 101 | 104 | 108 | 111 => ChartStacking::Percent,
         _ => ChartStacking::None,
     };
     options.markers = match kind {
@@ -532,10 +539,26 @@ pub(super) fn chart_plot_options(kind: i64) -> oxicells_core::ir::ChartPlotOptio
 }
 
 pub(super) fn chart_type_of(chart: &Chart) -> i64 {
-    use oxicells_core::ir::ChartStacking;
+    use oxicells_core::ir::{ChartBarShape, ChartStacking};
     let options = &chart.plot_options;
     let level = match options.stacking { ChartStacking::None => 0, ChartStacking::Stacked => 1, ChartStacking::Percent => 2 };
     let markers = options.markers.unwrap_or(true);
+    let exploded = options.explosion.unwrap_or(0) > 0;
+    if options.three_dimensional {
+        return match chart.kind.as_str() {
+            "bar" => {
+                let start = match options.bar_shape { ChartBarShape::Cylinder => 92, ChartBarShape::Cone => 99,
+                    ChartBarShape::Pyramid => 106, ChartBarShape::Box => 54 };
+                if options.depth_series { if start == 54 { -4100 } else { start + 6 } }
+                else if options.horizontal { if start == 54 { 60 + level } else { start + 3 + level } }
+                else { start + level }
+            },
+            "line" => -4101,
+            "area" => match level { 0 => -4098, 1 => 78, _ => 79 },
+            "pie" => if exploded { 70 } else { -4102 },
+            _ => 51,
+        };
+    }
     match chart.kind.as_str() {
         "bar" => if options.horizontal { 57 + level } else { 51 + level },
         "line" => if markers { 65 + level } else { match level { 0 => 4, 1 => 63, _ => 64 } },
@@ -543,8 +566,8 @@ pub(super) fn chart_type_of(chart: &Chart) -> i64 {
         "scatter" => if options.smooth { if markers { 72 } else { 73 } }
             else if options.connected.unwrap_or(true) { if markers { 74 } else { 75 } } else { -4169 },
         "radar" => if options.filled { 82 } else if markers { 81 } else { -4151 },
-        "pie" => 5,
-        "doughnut" => -4120,
+        "pie" => if exploded { 69 } else { 5 },
+        "doughnut" => if exploded { 80 } else { -4120 },
         _ => 51,
     }
 }
@@ -556,9 +579,9 @@ pub(super) fn chart_kind(chart_type: i64) -> &'static str {
         4 | 63 | 64 | 65 | 66 | 67 | 68 | -4101 => "line",
         5 | 69 | 70 | 71 | -4102 => "pie",
         -4120 | 80 => "doughnut",
-        1 | 76 | 77 | 78 | -4098 => "area",
+        1 | 76 | 77 | 78 | 79 | -4098 => "area",
         -4169 | 72 | 73 | 74 | 75 => "scatter",
-        -4151 | 81 | 82 | -4152 | 15 | 91 | 92 | 93 => "radar",
+        -4151 | 81 | 82 | -4152 | 15 | 91 => "radar",
         _ => "bar",
     }
 }
@@ -616,12 +639,17 @@ impl<'a> WorkbookHost<'a> {
                                     name_ref: series.name_reference.clone(),
                                     values_ref: series.values_reference.clone(),
                                     x_ref: series.category_reference.clone(),
+                                    implicit_categories: series.category_reference.is_none() && series.category_values.as_ref()
+                                        .map_or(chart.categories.is_empty(), Vec::is_empty),
                                     typed_xs: series.category_values.as_ref().filter(|xs| !xs.is_empty())
                                         .map(|xs| xs.iter().map(|x| match x {
                                             oxicells_core::ir::ChartCategoryValue::Number(n) => Value::Double(*n),
                                             oxicells_core::ir::ChartCategoryValue::Text(s) => Value::String(s.clone()),
                                             oxicells_core::ir::ChartCategoryValue::Blank => Value::Empty,
-                                        }).collect()),
+                                        }).collect()).or_else(|| {
+                                            (series.category_values.is_none() && !chart.categories.is_empty())
+                                                .then(|| chart.categories.iter().cloned().map(Value::String).collect())
+                                        }),
                                     values: series.values.iter().map(|v| v.unwrap_or(0.0)).collect(),
                                     sparse_values: Some(series.values.clone()),
                                     xs: series.category_values.as_ref().filter(|xs| !xs.is_empty())
@@ -1270,6 +1298,7 @@ impl<'a> WorkbookHost<'a> {
                     chart.plot_fill=original.plot_fill.clone();
                     chart.shapes=original.shapes.clone();
                     for (series, previous) in chart.series.iter_mut().zip(&original.series) {
+                        if !plot_modified { series.explosion=previous.explosion; }
                         if series.line.is_none() { series.line=previous.line.clone(); }
                         if chart.kind==original.kind && chart.plot_options.markers==original.plot_options.markers {
                             series.marker=previous.marker.clone();
@@ -1522,6 +1551,7 @@ impl<'a> WorkbookHost<'a> {
                 .iter()
                 .map(|series| ChartSeries {
                     name: series.name.clone(),
+                    explosion: chart_plot_options(chart.chart_type).explosion,
                     name_reference: series.name_ref.clone(),
                     values_reference: series.values_ref.clone(),
                     category_reference: series.x_ref.clone(),

@@ -182,9 +182,14 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
             out.push_str("<c:spPr><a:ln><a:noFill/></a:ln></c:spPr>");
         } else if let Some(line) = &series.line { out.push_str(&format!("<c:spPr>{}</c:spPr>", paint(line))); }
         if let Some(value) = &series.marker { out.push_str(&marker(value)); }
-        else if matches!(kind, "line" | "scatter" | "radar") {
+        else if matches!(kind, "line" | "scatter" | "radar") && !(kind == "line" && options.three_dimensional) {
             out.push_str(&format!("<c:marker><c:symbol val=\"{}\"/></c:marker>",
                 if options.markers.unwrap_or(true) { "auto" } else { "none" }));
+        }
+        if matches!(kind, "pie" | "doughnut") {
+            if let Some(amount) = series.explosion.or(options.explosion) {
+                out.push_str(&format!("<c:explosion val=\"{amount}\"/>"));
+            }
         }
         for point in &series.points {
             out.push_str(&format!("<c:dPt><c:idx val=\"{}\"/>", point.index));
@@ -236,16 +241,16 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
     let options = &chart.plot_options;
     let grouping = match options.stacking {
         ChartStacking::Stacked => "stacked", ChartStacking::Percent => "percentStacked",
-        ChartStacking::None => if chart.kind == "bar" { "clustered" } else { "standard" },
+        ChartStacking::None => if chart.kind == "bar" && !options.depth_series { "clustered" } else { "standard" },
     };
     let (plot, settings, axes) = match chart.kind.as_str() {
-        "bar" => ("barChart", format!("<c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>",
+        "bar" => (if options.three_dimensional { "bar3DChart" } else { "barChart" }, format!("<c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>",
             if options.horizontal { "bar" } else { "col" }), true),
-        "line" => ("lineChart", format!("<c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>"), true),
-        "area" => ("areaChart", format!("<c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>"), true),
+        "line" => (if options.three_dimensional { "line3DChart" } else { "lineChart" }, format!("<c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>"), true),
+        "area" => (if options.three_dimensional { "area3DChart" } else { "areaChart" }, format!("<c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>"), true),
         "scatter" => ("scatterChart", format!("<c:scatterStyle val=\"{}\"/><c:varyColors val=\"0\"/>",
             if options.smooth { "smoothMarker" } else { "lineMarker" }), true),
-        "pie" => ("pieChart", "<c:varyColors val=\"1\"/>".into(), false),
+        "pie" => (if options.three_dimensional { "pie3DChart" } else { "pieChart" }, "<c:varyColors val=\"1\"/>".into(), false),
         "doughnut" => ("doughnutChart", "<c:varyColors val=\"1\"/>".into(), false),
         "radar" => ("radarChart", format!("<c:radarStyle val=\"{}\"/><c:varyColors val=\"0\"/>",
             if options.filled { "filled" } else { "marker" }), true),
@@ -264,19 +269,36 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
     }
     let mut out = format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><c:chartSpace xmlns:c=\"{C}\" xmlns:a=\"{A}\"><c:chart>");
     if let Some(title) = &chart.title { out.push_str(&format!("<c:title>{}<c:overlay val=\"0\"/></c:title>", rich(title))); }
-    out.push_str(&format!("<c:autoTitleDeleted val=\"{}\"/><c:plotArea>{}<c:{plot}>{settings}", u8::from(chart.title.is_none()), layout(chart.plot.as_ref(), true)));
+    out.push_str(&format!("<c:autoTitleDeleted val=\"{}\"/>", u8::from(chart.title.is_none())));
+    if options.three_dimensional {
+        out.push_str(&format!("<c:view3D><c:rotX val=\"15\"/><c:rotY val=\"{}\"/><c:rAngAx val=\"0\"/></c:view3D>",
+            if chart.kind == "pie" { 0 } else { 20 }));
+    }
+    out.push_str(&format!("<c:plotArea>{}<c:{plot}>{settings}", layout(chart.plot.as_ref(), true)));
     for (index, value) in chart.series.iter().enumerate() { out.push_str(&series(value, index, &chart.categories, chart.kind == "scatter", options, &chart.kind)); }
-    if chart.kind == "line" {
+    if chart.kind == "line" && !options.three_dimensional {
         let markers = chart.series.is_empty() || options.markers.unwrap_or(true);
         out.push_str(&format!("<c:marker val=\"{}\"/><c:smooth val=\"{}\"/>", u8::from(markers), u8::from(options.smooth)));
     }
-    if chart.kind == "bar" && options.stacking != ChartStacking::None { out.push_str("<c:overlap val=\"100\"/>"); }
+    if chart.kind == "bar" && options.three_dimensional {
+        use crate::ir::ChartBarShape;
+        let shape = match options.bar_shape { ChartBarShape::Box => "box", ChartBarShape::Cylinder => "cylinder",
+            ChartBarShape::Cone => "cone", ChartBarShape::Pyramid => "pyramid" };
+        out.push_str(&format!("<c:shape val=\"{shape}\"/>"));
+    }
+    if chart.kind == "bar" && !options.three_dimensional && options.stacking != ChartStacking::None { out.push_str("<c:overlap val=\"100\"/>"); }
     if chart.kind == "doughnut" { out.push_str("<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/>"); }
-    if axes { out.push_str("<c:axId val=\"1\"/><c:axId val=\"2\"/>"); }
+    let depth_axis = options.three_dimensional && (options.depth_series || chart.kind == "line"
+        || (chart.kind == "area" && options.stacking == ChartStacking::None));
+    if axes {
+        out.push_str("<c:axId val=\"1\"/><c:axId val=\"2\"/>");
+        if depth_axis { out.push_str("<c:axId val=\"3\"/>"); }
+    }
     out.push_str(&format!("</c:{plot}>"));
     if axes {
         out.push_str(&axis(chart.category_axis.as_ref(), if chart.kind == "scatter" { "valAx" } else { "catAx" }, 1, 2, "b"));
         out.push_str(&axis(chart.value_axis.as_ref(), "valAx", 2, 1, "l"));
+        if depth_axis { out.push_str(&axis(None, "serAx", 3, 2, "b")); }
     }
     if let Some(color) = &chart.plot_fill { out.push_str(&format!("<c:spPr><a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill></c:spPr>", escape(color))); }
     out.push_str("</c:plotArea>");
@@ -367,6 +389,8 @@ fn replace_child(xml: &str, name: &str, replacement: &str) -> Result<String, Xls
         "autoTitleDeleted" => ranges
             .iter()
             .find(|(found, _, _)| found != "title")
+            .map(|(_, start, _)| *start),
+        "view3D" => ranges.iter().find(|(found, _, _)| matches!(found.as_str(), "floor" | "sideWall" | "backWall" | "plotArea" | "legend"))
             .map(|(_, start, _)| *start),
         "legend" => ranges
             .iter()
@@ -482,12 +506,13 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
     for (i, series) in after.series.iter().enumerate().skip(existing.len()) {
         // Reuse the new-series serializer for modeled formatting, then insert
         // only the series, retaining the original plot, axes and extensions.
-        let kind = if scatter { "scatter" } else { "bar" };
+        let kind = if scatter { "scatter" } else if matches!(before.kind.as_str(), "pie" | "doughnut") { &before.kind } else { "bar" };
         let generated = new_chart_xml(&Chart {
             kind: kind.into(), categories: after.categories.clone(),
-            series: vec![series.clone()], ..Default::default()
+            plot_options: after.plot_options.clone(), series: vec![series.clone()], ..Default::default()
         })?;
-        let tag = if scatter { "scatterChart" } else { "barChart" };
+        let tag = if scatter { "scatterChart" } else if kind == "pie" { if after.plot_options.three_dimensional { "pie3DChart" } else { "pieChart" } }
+            else if kind == "doughnut" { "doughnutChart" } else if after.plot_options.three_dimensional { "bar3DChart" } else { "barChart" };
         let (ranges, _) = children_at(&generated, &["chartSpace", "chart", "plotArea", tag])?;
         let (_, begin, finish) = ranges.iter().find(|(name, _, _)| name == "ser").unwrap();
         let fragment = generated[*begin..*finish]
@@ -514,6 +539,7 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
 
 pub(crate) fn plot_options_changed(before: &Chart, after: &Chart) -> bool {
     before.kind != after.kind || before.plot_options != after.plot_options
+        || before.series.iter().zip(&after.series).any(|(a, b)| a.explosion != b.explosion)
 }
 
 fn patch_plot_options(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing_ns: &str) -> Result<String, XlsxError> {
@@ -561,21 +587,31 @@ fn patch_plot_options(xml: &str, before: &Chart, after: &Chart, ns: &str, drawin
             .map(|(_, a, _)| *a).min().unwrap_or(end) - prefix.len())
     };
     for (name, begin, end) in &old_settings {
-        let retain = name == "extLst" || name == "dLbls" || (same_kind
-            && !matches!(name.as_str(), "ser" | "axId" | "barDir" | "grouping" | "scatterStyle" | "radarStyle" | "marker" | "smooth" | "overlap" | "varyColors"));
+        let retain = name == "extLst" || name == "dLbls" || (old_tag == new_tag
+            && !matches!(name.as_str(), "ser" | "axId" | "barDir" | "grouping" | "scatterStyle" | "radarStyle" | "marker" | "smooth" | "overlap" | "varyColors" | "shape"));
         if !retain { continue; }
         // These source properties precede the plot's axes; extension lists are last.
         let successors: &[&str] = match name.as_str() {
-            "dLbls" => &["dropLines", "hiLowLines", "upDownBars", "gapWidth", "overlap", "serLines", "marker", "smooth", "firstSliceAng", "holeSize", "axId", "extLst"],
-            "gapWidth" => &["overlap", "serLines", "axId", "extLst"],
+            "dLbls" => &["dropLines", "hiLowLines", "upDownBars", "gapWidth", "gapDepth", "overlap", "shape", "serLines", "marker", "smooth", "firstSliceAng", "holeSize", "axId", "extLst"],
+            "gapWidth" => &["gapDepth", "overlap", "serLines", "shape", "axId", "extLst"],
+            "gapDepth" => &["shape", "axId", "extLst"],
             "dropLines" => &["hiLowLines", "upDownBars", "marker", "smooth", "axId", "extLst"],
             "hiLowLines" => &["upDownBars", "marker", "smooth", "axId", "extLst"],
             "upDownBars" => &["marker", "smooth", "axId", "extLst"],
             "extLst" => &[],
             _ => &["axId", "extLst"],
         };
-        let at = child_position(&plot, successors)?;
-        plot.insert_str(at, &xml[*begin..*end]);
+        let prefix = format!("<c:chartSpace xmlns:c=\"{ns}\" xmlns:a=\"{drawing_ns}\"><c:chart><c:plotArea>");
+        let wrapped = format!("{prefix}{plot}</c:plotArea></c:chart></c:chartSpace>");
+        let (fields, _) = children_at(&wrapped, &["chartSpace", "chart", "plotArea", new_tag])?;
+        if let Some((_, a, b)) = fields.iter().find(|(tag, _, _)| tag == name) {
+            // A retained setting replaces a generated default rather than
+            // introducing duplicate single-valued OOXML children.
+            plot.replace_range(a - prefix.len()..b - prefix.len(), &xml[*begin..*end]);
+        } else {
+            let at = child_position(&plot, successors)?;
+            plot.insert_str(at, &xml[*begin..*end]);
+        }
     }
     let axis_id = |fragment: &str| -> Result<String, XlsxError> {
         let mut reader = Reader::from_str(fragment);
@@ -612,6 +648,17 @@ fn patch_plot_options(xml: &str, before: &Chart, after: &Chart, ns: &str, drawin
     edits.sort_by_key(|(a, b, _)| (*a, *b));
     let mut output = xml.to_string();
     for (a, b, replacement) in edits.into_iter().rev() { output.replace_range(a..b, &replacement); }
+    if before.plot_options.three_dimensional != after.plot_options.three_dimensional {
+        if after.plot_options.three_dimensional {
+            let (fields, _) = children_at(&generated, &["chartSpace", "chart"])?;
+            if let Some((_, a, b)) = fields.iter().find(|(name, _, _)| name == "view3D") {
+                let view = generated[*a..*b].replacen("<c:view3D>", &format!("<c:view3D xmlns:c=\"{ns}\">"), 1);
+                output = replace_child(&output, "view3D", &view)?;
+            }
+        } else {
+            for tag in ["view3D", "floor", "sideWall", "backWall"] { output = replace_child(&output, tag, "")?; }
+        }
+    }
     if keep_axes && before.plot_options.horizontal != after.plot_options.horizontal && after.kind == "bar" {
         for tag in ["catAx", "dateAx", "valAx"] {
             if let Ok((fields, _)) = children_at(&output, &["chartSpace", "chart", "plotArea", tag]) {
@@ -879,6 +926,111 @@ mod scoped_namespace_tests {
             let parsed = crate::chart::parse_chart_xml(&patched, &crate::parser::Theme::default()).unwrap();
             assert_eq!(parsed.kind, after.kind);
             assert!(series_data_equal(&parsed.series[0], &after.series[0]));
+        }
+    }
+}
+
+#[cfg(test)]
+mod spatial_plot_tests {
+    use super::*;
+    use crate::ir::{ChartBarShape, ChartPlotOptions, ChartSeries, ChartStacking};
+
+    #[test]
+    fn spatial_plot_choices_and_independent_slice_separation_roundtrip() {
+        for (kind, options) in [
+            ("bar", ChartPlotOptions { three_dimensional: true, ..Default::default() }),
+            ("bar", ChartPlotOptions { three_dimensional: true, depth_series: true, bar_shape: ChartBarShape::Cylinder, ..Default::default() }),
+            ("bar", ChartPlotOptions { three_dimensional: true, horizontal: true, stacking: ChartStacking::Percent, bar_shape: ChartBarShape::Pyramid, ..Default::default() }),
+            ("line", ChartPlotOptions { three_dimensional: true, ..Default::default() }),
+            ("area", ChartPlotOptions { three_dimensional: true, stacking: ChartStacking::Stacked, ..Default::default() }),
+            ("pie", ChartPlotOptions { three_dimensional: true, explosion: Some(25), ..Default::default() }),
+            ("doughnut", ChartPlotOptions { explosion: Some(25), ..Default::default() }),
+        ] {
+            let chart = Chart { kind: kind.into(), plot_options: options.clone(),
+                series: vec![ChartSeries { name: "Revenue".into(), values: vec![Some(1.0)], explosion: options.explosion, ..Default::default() }],
+                ..Default::default() };
+            let xml = new_chart_xml(&chart).unwrap();
+            let restored = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+            assert_eq!(restored.kind, chart.kind);
+            assert_eq!(restored.plot_options, options, "{kind}");
+            assert_eq!(restored.series[0].explosion, chart.series[0].explosion);
+            if kind == "bar" { assert!(!xml.contains("<c:overlap")); }
+            if kind == "line" { assert!(!xml.contains("<c:marker")); }
+        }
+        let chart = Chart { kind: "pie".into(), series: vec![
+            ChartSeries { explosion: Some(25), values: vec![Some(1.0)], ..Default::default() },
+            ChartSeries { explosion: Some(0), values: vec![Some(2.0)], ..Default::default() },
+        ], ..Default::default() };
+        let xml = new_chart_xml(&chart).unwrap();
+        let restored = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+        assert_eq!(restored.series.iter().map(|s| s.explosion).collect::<Vec<_>>(), vec![Some(25), Some(0)]);
+    }
+
+    #[test]
+    fn changing_dimensions_inserts_and_removes_view_and_depth_axes() {
+        for strict in [false, true] {
+            let initial = Chart { kind: "bar".into(), series: vec![ChartSeries {
+                name: "Revenue".into(), values: vec![Some(1.0)], ..Default::default()
+            }], ..Default::default() };
+            let mut xml = new_chart_xml(&initial).unwrap();
+            if strict { xml = xml.replace(C, "http://purl.oclc.org/ooxml/drawingml/chart")
+                .replace(A, "http://purl.oclc.org/ooxml/drawingml/main"); }
+            let mut before = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+            for (three_dimensional, depth_series) in [(true, false), (true, true), (false, false)] {
+                let mut after = before.clone();
+                after.plot_options.three_dimensional = three_dimensional;
+                after.plot_options.depth_series = depth_series;
+                after.series[0].values = vec![Some(7.0)];
+                xml = patch_chart(&xml, &before, &after).unwrap();
+                assert_eq!(xml.contains(":view3D"), three_dimensional);
+                assert_eq!(xml.contains(":serAx"), depth_series);
+                let (fields, _) = children_at(&xml, &["chartSpace", "chart"]).unwrap();
+                if three_dimensional {
+                    let view = fields.iter().position(|(tag, _, _)| tag == "view3D").unwrap();
+                    let plot = fields.iter().position(|(tag, _, _)| tag == "plotArea").unwrap();
+                    assert!(view < plot);
+                }
+                before = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+                assert_eq!(before.plot_options.three_dimensional, three_dimensional);
+                assert_eq!(before.plot_options.depth_series, depth_series);
+                assert_eq!(before.series[0].values, vec![Some(7.0)]);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod retained_spatial_properties_tests {
+    use super::*;
+    use crate::ir::{ChartBarShape, ChartPlotOptions, ChartSeries};
+    #[test]
+    fn subtype_edits_keep_retained_property_order_and_single_values() {
+        let chart = Chart { kind: "bar".into(), plot_options: ChartPlotOptions { three_dimensional: true, ..Default::default() },
+            series: vec![ChartSeries { values: vec![Some(1.0)], ..Default::default() }], ..Default::default() };
+        let xml = new_chart_xml(&chart).unwrap().replace("<c:shape", "<c:gapWidth val=\"200\"/><c:gapDepth val=\"100\"/><c:shape")
+            .replace("<c:rotX val=\"15\"/>", "<c:rotX val=\"39\"/>");
+        let before = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+        let mut after = before.clone();after.plot_options.bar_shape = ChartBarShape::Cylinder;
+        let changed = patch_chart(&xml, &before, &after).unwrap();
+        let (fields, _) = children_at(&changed, &["chartSpace", "chart", "plotArea", "bar3DChart"]).unwrap();
+        let position = |name| fields.iter().position(|(tag, _, _)| tag == name).unwrap();
+        assert!(position("gapWidth") < position("gapDepth"));
+        assert!(position("gapDepth") < position("shape"));
+        assert!(changed.contains("<c:rotX val=\"39\"/>"));
+        assert_eq!(fields.iter().filter(|(tag, _, _)| tag == "shape").count(), 1);
+
+        let chart = Chart { kind: "doughnut".into(), series: chart.series.clone(), ..Default::default() };
+        let xml = new_chart_xml(&chart).unwrap().replace("<c:holeSize val=\"50\"/>", "<c:holeSize val=\"75\"/>")
+            .replace("<c:firstSliceAng val=\"0\"/>", "<c:firstSliceAng val=\"35\"/>");
+        let before = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+        let mut after = before.clone();after.plot_options.explosion = Some(25);
+        let changed = patch_chart(&xml, &before, &after).unwrap();
+        let (fields, _) = children_at(&changed, &["chartSpace", "chart", "plotArea", "doughnutChart"]).unwrap();
+        for (tag, expected) in [("holeSize", "75"), ("firstSliceAng", "35")] {
+            let values: Vec<_> = fields.iter().filter(|(name, _, _)| name == tag)
+                .map(|(_, a, b)| &changed[*a..*b]).collect();
+            assert_eq!(values.len(), 1, "{tag}");
+            assert!(values[0].contains(&format!("val=\"{expected}\"")));
         }
     }
 }
