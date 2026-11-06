@@ -357,7 +357,7 @@ impl XlsxEditor {
                 let existed = original_sheet.drawings.iter().any(|original| original.name.as_ref() == Some(name));
                 let is_new_ole = drawing.ole_prog_id.is_some() && drawing.ole_embedded_package.is_some()
                     && drawing.ole_source_name.is_none();
-                if !existed && (matches!(&drawing.kind, crate::ir::DrawingKind::Shape(_)) || drawing.ole_source_name.is_some() || is_new_ole) {
+                if !existed && (matches!(&drawing.kind, crate::ir::DrawingKind::Shape(_) | crate::ir::DrawingKind::Chart(_)) || drawing.ole_source_name.is_some() || is_new_ole) {
                     self.drawing_additions.entry(original_index).or_default().push(drawing.clone());
                     continue;
                 }
@@ -2501,11 +2501,16 @@ fn drawing_addition_package(
     let mut ole_additions: HashMap<usize, Vec<crate::ir::Drawing>> = HashMap::new();
     let mut fresh_ole_additions: HashMap<usize, Vec<crate::ir::Drawing>> = HashMap::new();
     let mut fresh_ole_parts: HashMap<usize, String> = HashMap::new();
-    for (sheet, drawings) in additions {
+    let mut chart_additions: BTreeMap<String, Vec<crate::ir::Drawing>> = BTreeMap::new();
+    let mut ordered_additions: Vec<_> = additions.iter().collect();
+    ordered_additions.sort_unstable_by_key(|(sheet, _)| **sheet);
+    for (sheet, drawings) in ordered_additions {
         let ole: Vec<_> = drawings.iter().filter(|drawing| drawing.ole_source_name.is_some()).cloned().collect();
         let fresh_ole: Vec<_> = drawings.iter().filter(|drawing| drawing.ole_source_name.is_none()
             && drawing.ole_prog_id.is_some() && drawing.ole_embedded_package.is_some()).cloned().collect();
+        let charts: Vec<_> = drawings.iter().filter(|drawing| matches!(drawing.kind, crate::ir::DrawingKind::Chart(_))).cloned().collect();
         let regular: Vec<_> = drawings.iter().filter(|drawing| drawing.ole_source_name.is_none()
+            && !matches!(drawing.kind, crate::ir::DrawingKind::Chart(_))
             && !(drawing.ole_prog_id.is_some() && drawing.ole_embedded_package.is_some())).cloned().collect();
         if !ole.is_empty() {
             if !existing_parts.contains_key(sheet) {
@@ -2517,7 +2522,7 @@ fn drawing_addition_package(
         let part = if let Some(part) = existing_parts.get(sheet) {
             part.clone()
         } else {
-            if regular.is_empty() && fresh_ole.is_empty() { continue; }
+            if regular.is_empty() && fresh_ole.is_empty() && charts.is_empty() { continue; }
             let sheet_path = sheet_paths.get(*sheet).filter(|path| !path.is_empty()).ok_or_else(|| XlsxError::InvalidData(format!("sheet {sheet} is not in the source workbook while adding a shape")))?;
             let drawing_path = unique_part_path(&names, "xl/drawings", "drawing", ".xml");
             names.insert(drawing_path.clone());
@@ -2549,10 +2554,63 @@ fn drawing_addition_package(
             fresh_ole_parts.insert(*sheet, drawing_path.clone());
             drawing_path
         };
+        chart_additions.entry(part.clone()).or_default().extend(charts);
         if existing_parts.contains_key(sheet) {
             part_additions.entry(part.clone()).or_default().extend(regular);
             if !fresh_ole.is_empty() { fresh_ole_parts.insert(*sheet, part); }
         }
+    }
+
+    // Chart frames and chart parts are separate package objects. Link each
+    // new chart from its drawing and preserve every original chart part.
+    let original_charts = crate::chart_edit::chart_part_names(archive)?;
+    for (part, drawings) in chart_additions {
+        if drawings.is_empty() { continue; }
+        let mut xml = plan.new_parts.iter().find(|(path, _)| path == &part).map(|(_, xml)| xml.clone())
+            .or_else(|| plan.parts.get(&part).cloned());
+        if xml.is_none() { xml = Some(archive.read_part(&part)?); }
+        let mut xml = xml.expect("drawing XML loaded");
+        let rels_path = sheet_rels_path(&part);
+        let original_rels = archive.try_read_part(&rels_path)?;
+        let mut rels = plan.relationship_xml.get(&rels_path).cloned()
+            .or_else(|| plan.new_parts.iter().find(|(path, _)| path == &rels_path).map(|(_, xml)| xml.clone()))
+            .or(original_rels.clone())
+            .unwrap_or_else(|| "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"></Relationships>".into());
+        for drawing in drawings {
+            let crate::ir::DrawingKind::Chart(chart) = &drawing.kind else { unreachable!() };
+            let path = unique_part_path(&names, "xl/charts", "chart", ".xml");
+            names.insert(path.clone());
+            let chart_xml = if let Some(origin) = chart.origin_id {
+                let source = original_charts.get(origin as usize)
+                    .ok_or_else(|| XlsxError::InvalidData("copied chart source is not in this workbook".into()))?;
+                let original = archive.read_part(source)?;
+                let before = crate::chart::parse_chart_xml(&original, &crate::parser::Theme::default())
+                    .ok_or_else(|| XlsxError::InvalidData("copied chart source cannot be read".into()))?;
+                if let Some(source_rels) = archive.try_read_part(&sheet_rels_path(source))? {
+                    plan.new_parts.push((sheet_rels_path(&path), source_rels));
+                }
+                crate::chart_edit::patch_chart(&original, &before, chart)?
+            } else { crate::chart_edit::new_chart_xml(chart)? };
+            plan.new_parts.push((path.clone(), chart_xml));
+            plan.content_types.push((path.clone(), "application/vnd.openxmlformats-officedocument.drawingml.chart+xml".into()));
+            let previous: std::collections::HashSet<_> = parse_relationships(&rels)
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?.into_keys().collect();
+            rels = append_relationship(Some(&rels),
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart",
+                &relative_sheet_target(&part, &path))?;
+            let current = parse_relationships(&rels).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            let relationship = current.keys().find(|id| !previous.contains(*id))
+                .ok_or_else(|| XlsxError::InvalidData("new chart relationship id was not allocated".into()))?;
+            let id = max_drawing_shape_id(&xml)?.checked_add(1)
+                .ok_or_else(|| XlsxError::InvalidData("chart drawing id overflow".into()))?;
+            xml = append_xml_child(&xml, "wsDr", &write_chart_frame(&drawing, id, relationship))?;
+        }
+        if let Some((_, contents)) = plan.new_parts.iter_mut().find(|(path, _)| path == &part) {
+            *contents = xml;
+        } else { plan.parts.insert(part, xml); }
+        if original_rels.is_some() { plan.relationship_xml.insert(rels_path, rels); }
+        else if let Some((_, contents)) = plan.new_parts.iter_mut().find(|(path, _)| path == &rels_path) { *contents = rels; }
+        else { plan.new_parts.push((rels_path, rels)); }
     }
 
     for (sheet, drawings) in fresh_ole_additions {
@@ -2818,9 +2876,13 @@ fn drawing_addition_package(
         plan.parts.insert(vml_path, patch_vml_ole_styles(&xml, &edits)?);
     }
     for (sheet, order) in drawing_order_edits {
-        let Some(part) = existing_parts.get(sheet) else { continue };
-        let xml = plan.parts.remove(part).map_or_else(|| archive.read_part(part), Ok)?;
-        plan.parts.insert(part.clone(), patch_drawing_order(&xml, order)?);
+        let Some(part) = existing_parts.get(sheet).or_else(|| fresh_ole_parts.get(sheet)) else { continue };
+        let fresh = plan.new_parts.iter().position(|(path, _)| path == part);
+        let xml = if let Some(index) = fresh { plan.new_parts[index].1.clone() }
+            else { plan.parts.remove(part).map_or_else(|| archive.read_part(part), Ok)? };
+        let xml = patch_drawing_order(&xml, order)?;
+        if let Some(index) = fresh { plan.new_parts[index].1 = xml; }
+        else { plan.parts.insert(part.clone(), xml); }
     }
     Ok(plan)
 }
@@ -3792,6 +3854,22 @@ fn rewrite_ole_object_anchor(events: Vec<Event<'static>>, drawing: &crate::ir::D
     Ok(output)
 }
 
+fn write_chart_frame(drawing: &crate::ir::Drawing, id: u32, relationship: &str) -> String {
+    let marker = |tag: &str, anchor: crate::ir::Anchor| format!(
+        "<xdr:{tag}><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:{tag}>",
+        anchor.col, anchor.col_off, anchor.row, anchor.row_off,
+    );
+    let (tag, second) = match drawing.to {
+        Some(to) => ("twoCellAnchor", marker("to", to)),
+        None => {
+            let (width, height) = drawing.extent.unwrap_or_default();
+            ("oneCellAnchor", format!("<xdr:ext cx=\"{width}\" cy=\"{height}\"/>"))
+        }
+    };
+    format!("<xdr:{tag} xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">{}{second}<xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"{id}\" name=\"{}\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/></xdr:xfrm><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:id=\"{}\"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:{tag}>",
+        marker("from", drawing.from), escape(drawing.name.as_deref().unwrap_or("Chart")), escape(relationship))
+}
+
 fn append_drawing_shapes_xml(
     xml: &str,
     drawings: &[crate::ir::Drawing],
@@ -3901,7 +3979,7 @@ fn drawing_color_modifiers(brightness: Option<f32>) -> String {
     }
 }
 
-fn write_drawing_color(color: &str, theme: Option<usize>, legacy: Option<u8>, brightness: Option<f32>, shade: Option<f32>) -> String {
+pub(crate) fn write_drawing_color(color: &str, theme: Option<usize>, legacy: Option<u8>, brightness: Option<f32>, shade: Option<f32>) -> String {
     let mods = shade.filter(|value| value.is_finite()).map(|value| format!("<a:shade val=\"{}\"/>", (value * 100_000.0).round() as i32)).unwrap_or_else(|| drawing_color_modifiers(brightness));
     if let Some(theme) = theme {
         let name = match theme {
@@ -11568,6 +11646,50 @@ mod tests {
         let imported=crate::ir::CellFormatReference::for_style(0);
         assert_eq!(cell.style.format_reference.as_deref(),Some(&imported));
         assert!(!cell.style.bold);
+    }
+
+    #[test]
+    fn new_embedded_charts_survive_save_without_replacing_existing_charts() {
+        for bytes in [
+            include_bytes!("../../../tests/fixtures/vba/chart_persistence_sheet_title_legend.xlsm").as_slice(),
+            include_bytes!("../../../tests/fixtures/vba/chart_persistence_embedded_title_legend.xlsm").as_slice(),
+        ] {
+            let mut book = crate::parse_xlsx_preserving_values(bytes).unwrap();
+            let ledger = book.sheets.iter().position(|sheet| sheet.kind == crate::ir::SheetKind::Worksheet).unwrap();
+            let existing = book.sheets[ledger].drawings.len();
+            let mut added = book.sheets.iter().flat_map(|sheet| &sheet.drawings)
+                .find(|drawing| matches!(drawing.kind, crate::ir::DrawingKind::Chart(_))).unwrap().clone();
+            added.name = Some("Uniform & Embedded".into());
+            added.from = crate::ir::Anchor { row: 0, col: 0, col_off: 254_000, row_off: 381_000 };
+            added.to = None;
+            added.extent = Some((3_048_000, 2_032_000));
+            let crate::ir::DrawingKind::Chart(chart) = &mut added.kind else { unreachable!() };
+            chart.origin_id = None;
+            chart.title = Some("Revenue & <total>\n2026".into());
+            chart.legend.as_mut().unwrap().position = "l".into();
+            let wanted = chart.clone();
+            book.sheets[ledger].drawings.push(added.clone());
+            let mut editor = super::XlsxEditor::new(bytes).unwrap();
+            editor.apply_workbook(&book).unwrap();
+            let saved = editor.save().unwrap();
+            let reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();
+            assert_eq!(reopened.sheets[ledger].drawings.len(), existing + 1);
+            let drawing = reopened.sheets[ledger].drawings.iter()
+                .find(|drawing| drawing.name == added.name).unwrap();
+            assert_eq!(drawing.from, added.from);
+            assert_eq!(drawing.extent, added.extent);
+            let crate::ir::DrawingKind::Chart(chart) = &drawing.kind else { panic!("new chart became a different drawing") };
+            assert_eq!(chart.title, wanted.title);
+            assert_eq!(crate::chart_edit::legend_position(chart), Some("l"));
+            let mut original = oxidocs_common::archive::OoxmlArchive::new(bytes).unwrap();
+            let mut output = oxidocs_common::archive::OoxmlArchive::new(&saved).unwrap();
+            let original_parts = crate::chart_edit::chart_part_names(&mut original).unwrap();
+            let original_count = original_parts.len();
+            for part in original_parts {
+                assert_eq!(output.read_part(&part).unwrap(), original.read_part(&part).unwrap());
+            }
+            assert_eq!(crate::chart_edit::chart_part_names(&mut output).unwrap().len(), original_count + 1);
+        }
     }
 
     #[test]
