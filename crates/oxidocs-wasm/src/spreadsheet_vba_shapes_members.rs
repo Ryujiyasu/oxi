@@ -1074,6 +1074,7 @@ impl<'a> WorkbookHost<'a> {
     fn add_chart(&mut self, sheet: usize, left: f64, top: f64, width: f64, height: f64, chart_type: i64) -> Result<u64, String> {
         let chart = ChartRecord {
             chart_type,
+            plot_modified: true,
             series: Vec::new(),
             has_title: false,
             title: String::new(),
@@ -3227,6 +3228,7 @@ impl<'a> WorkbookHost<'a> {
                             // A 3-D bubble type set before any series collapses to
                             // plain bubbles and remains so when data is added.
                             chart.chart_type = if kind == 87 && chart.series.is_empty() { 15 } else { kind };
+                            chart.plot_modified = true;
                             for series in &mut chart.series {
                                 series.chart_type = None;
                             }
@@ -3345,6 +3347,7 @@ impl<'a> WorkbookHost<'a> {
                         self.series_mut(id, number)?.chart_type = Some(kind);
                         if single {
                             self.chart_mut(id)?.chart_type = kind;
+                            self.chart_mut(id)?.plot_modified = true;
                         }
                         true
                     }

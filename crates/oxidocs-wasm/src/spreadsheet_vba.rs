@@ -58603,6 +58603,58 @@ End Function
         }
     }
 
+
+    #[test]
+    fn saved_chart_plot_kinds_and_subtypes_match_native_controls() {
+        let module = parse_module(r#"Public Sub Configure(ByVal kind As Long, ByVal data As Boolean, ByVal existing As Boolean)
+            Dim chart As Object, item As Object
+            If existing Then
+                Set chart = ThisWorkbook.Charts(1)
+            Else
+                Set chart = ActiveSheet.ChartObjects.Add(20, 30, 240, 160).Chart
+            End If
+            chart.ChartType = kind
+            If data Then
+                Set item = chart.SeriesCollection.NewSeries
+                item.Name = "Revenue"
+                item.Values = Array(1.25, 2.5, 3.75)
+                item.XValues = Array("1", "2", "3")
+            End If
+        End Sub
+        Public Function ReadKind(ByVal existing As Boolean) As Long
+            If existing Then
+                ReadKind = ThisWorkbook.Charts(1).ChartType
+            Else
+                ReadKind = ActiveSheet.ChartObjects(1).Chart.ChartType
+            End If
+        End Function"#).unwrap();
+        let bytes = include_bytes!("../../../tests/fixtures/vba/uniform_chart_operations.xlsm");
+        let empty = [51, 52, 53, 57, 58, 59, 4, 63, 64, 5, -4120, 1, 76, -4169, 73, 74, 75, -4151, 81];
+        let populated = [51, 52, 53, 57, 58, 59, 4, 63, 64, 65, 66, 67, 5, -4120, 1, 76, 77, -4169, 72, 73, 74, 75, -4151, 81, 82];
+        for existing in [false, true] {
+            for (data, kinds) in [(false, empty.as_slice()), (true, populated.as_slice())] {
+                for &kind in kinds {
+                    let mut book = oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+                    let ledger = book.sheets.iter().position(|sheet| sheet.kind == oxicells_core::ir::SheetKind::Worksheet).unwrap();
+                    let mut host = WorkbookHost::new(&mut book, ledger).unwrap();
+                    execute_with_host(&module, "Configure",
+                        vec![Value::Integer(kind), Value::Boolean(data), Value::Boolean(existing)], &mut host).unwrap();
+                    drop(host);
+                    let mut editor = oxicells_core::editor::XlsxEditor::new(bytes).unwrap();
+                    editor.apply_workbook(&book).unwrap();
+                    let saved = editor.save().unwrap();
+                    let mut reopened = oxicells_core::parse_xlsx_preserving_values(&saved).unwrap();
+                    let mut host = WorkbookHost::new(&mut reopened, ledger).unwrap();
+                    let actual = execute_with_host(&module, "ReadKind", vec![Value::Boolean(existing)], &mut host).unwrap();
+                    let expected = if data { kind } else { match kind {
+                        4 => 65, 63 => 66, 64 => 67, 73 => 72, 75 | -4169 => 74, -4151 => 81, _ => kind,
+                    }};
+                    assert_eq!(any_whole_number(&actual), Some(expected), "kind={kind}, data={data}, existing={existing}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn chart_empty_type_defaults_and_failed_assignments_match_native_vba() {
         let module = parse_module(r#"Public Function Ask(ByVal kind As Long, ByVal addData As Boolean) As String
