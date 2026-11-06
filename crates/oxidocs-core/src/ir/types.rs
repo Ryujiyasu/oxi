@@ -727,6 +727,12 @@ pub struct RunStyle {
     /// boxes carry duplicated runs this way.
     #[serde(default)]
     pub no_fill: bool,
+    /// OXI_TEXT_GLOW: `w14:glow` -- (radius pt, 0xRRGGBB, opacity 0..1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_glow: Option<(f32, u32, f32)>,
+    /// OXI_TEXT_GLOW: `w14:textOutline` with a solid fill -- (width pt, 0xRRGGBB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_line: Option<(f32, u32)>,
     /// Complex script font size in points (w:szCs, half-points / 2)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_cs: Option<f32>,
@@ -885,6 +891,8 @@ impl Default for RunStyle {
             emboss: false,
             imprint: false,
             no_fill: false,
+            text_glow: None,
+            text_line: None,
             font_size_cs: None,
             bold_cs: false,
             italic_cs: false,

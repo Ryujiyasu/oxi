@@ -9046,6 +9046,12 @@ fn parse_drawing(
                                                     if let Block::Image(img) = b {
                                                         if i == 0 { img.paragraph_space_before = before; }
                                                         if i == last { img.paragraph_space_after = after; }
+                                                        // OXI_TXBX_IMAGE_LINE: the line's style and runs
+                                                        if i == last && img.host_paragraph.is_none()
+                                                            && std::env::var_os("OXI_TXBX_IMAGE_LINE_DISABLE").is_none()
+                                                        {
+                                                            img.host_paragraph = Some(Box::new(pr.paragraph.clone()));
+                                                        }
                                                     }
                                                 }
                                             } else {
@@ -12948,6 +12954,81 @@ fn parse_run_properties(
                     // the helper reads the modifiers and this element's End
                     let col = parse_color_modifiers(reader, &base, &local);
                     text_fill_stops.push((text_fill_pos, col));
+                    continue;
+                }
+                // OXI_TEXT_GLOW (2026-11-06, default ON, opt-out _DISABLE): <w14:glow rad>
+                // and a solid <w14:textOutline w>, painted by the renderer around the
+                // glyphs. blind-J en/creative__045bc787's header «BEAUMONT CAREER TECHNICAL
+                // HIGH SCHOOL» (white on darkBlue highlight, glow accent6 rad 4.18 alpha 70%,
+                // outline accent6 0.5pt): Word's PDF composites the orange halo over the
+                // blue (51,28,109 between the letters); Oxi drew plain white on blue.
+                if (local == "glow" || local == "textOutline") && e.name().as_ref().starts_with(b"w14:")
+                    && std::env::var_os("OXI_TEXT_GLOW_DISABLE").is_none()
+                {
+                    let mut size = 0.0f32;
+                    for attr in e.attributes().flatten() {
+                        let k = local_name(attr.key.as_ref());
+                        if k == "rad" || k == "w" {
+                            size = String::from_utf8_lossy(&attr.value).parse::<f32>().unwrap_or(0.0) / 12700.0;
+                        }
+                    }
+                    let (mut color, mut alpha, mut filled, mut sd) = (None::<u32>, 1.0f32, true, 1);
+                    loop {
+                        match reader.read_event()? {
+                            Event::Start(c) | Event::Empty(c) if {
+                                let l = local_name(c.name().as_ref());
+                                (l == "srgbClr" || l == "schemeClr") && color.is_none()
+                            } => {
+                                let l = local_name(c.name().as_ref());
+                                let mut base = String::from("000000");
+                                for attr in c.attributes().flatten() {
+                                    if local_name(attr.key.as_ref()) == "val" {
+                                        let v = String::from_utf8_lossy(&attr.value).to_string();
+                                        base = if l == "srgbClr" { v } else { ctx.theme.resolve(&v).cloned().unwrap_or(base) };
+                                    }
+                                }
+                                color = u32::from_str_radix(base.trim_start_matches('#'), 16).ok();
+                            }
+                            // shade / lumMod / lumOff on the colour (satMod is left out)
+                            Event::Empty(c) if color.is_some() && matches!(local_name(c.name().as_ref()).as_str(), "shade" | "lumMod" | "lumOff") => {
+                                let l = local_name(c.name().as_ref());
+                                let v = c.attributes().flatten().find(|a| local_name(a.key.as_ref()) == "val")
+                                    .and_then(|a| String::from_utf8_lossy(&a.value).parse::<f32>().ok()).unwrap_or(100000.0) / 100000.0;
+                                if let Some(cv) = color {
+                                    let ch = |sh: u32| {
+                                        let x = ((cv >> sh) & 0xFF) as f32 / 255.0;
+                                        let y = match l.as_str() { "lumOff" => x + v, _ => x * v };
+                                        ((y.clamp(0.0, 1.0) * 255.0).round() as u32) << sh
+                                    };
+                                    color = Some(ch(16) | ch(8) | ch(0));
+                                }
+                            }
+                            Event::Empty(c) if local_name(c.name().as_ref()) == "alpha" => {
+                                for attr in c.attributes().flatten() {
+                                    if local_name(attr.key.as_ref()) == "val" {
+                                        alpha = String::from_utf8_lossy(&attr.value).parse::<f32>().unwrap_or(100000.0) / 100000.0;
+                                    }
+                                }
+                            }
+                            Event::Empty(c) if local_name(c.name().as_ref()) == "noFill" => filled = false,
+                            Event::Start(_) => sd += 1,
+                            Event::End(_) => {
+                                sd -= 1;
+                                if sd == 0 {
+                                    break;
+                                }
+                            }
+                            Event::Eof => break,
+                            _ => {}
+                        }
+                    }
+                    if let (Some(c), true) = (color, filled) {
+                        if local == "glow" && size > 0.0 {
+                            style.text_glow = Some((size, c, alpha));
+                        } else if local == "textOutline" && size > 0.0 {
+                            style.text_line = Some((size, c));
+                        }
+                    }
                     continue;
                 }
                 // OXI_TEXT_SHADOW_LINE: <w14:shadow blurRad dist dir> (EMU / 60000ths deg).

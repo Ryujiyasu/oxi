@@ -2861,6 +2861,10 @@ pub struct TextEffects {
     pub outline: bool,
     /// S1327: w14:textFill noFill -- renderers paint nothing for the run.
     pub no_fill: bool,
+    /// OXI_TEXT_GLOW: (radius pt, 0xRRGGBB, opacity) painted under the glyphs.
+    pub glow: Option<(f32, u32, f32)>,
+    /// OXI_TEXT_GLOW: a solid w14:textOutline (width pt, 0xRRGGBB).
+    pub line: Option<(f32, u32)>,
 }
 
 #[derive(Clone)]
@@ -9255,6 +9259,8 @@ cells={} pitch={:.2} text={:?}",
                     imprint: style.imprint,
                     outline: style.outline,
                     no_fill: style.no_fill,
+                    glow: style.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
+                    line: style.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                 },
             },
         );
@@ -10585,8 +10591,40 @@ cells={} pitch={:.2} text={:?}",
                         },
                     ));
                     cursor.advance(img.height);
+                    // OXI_TXBX_IMAGE_LINE (2026-11-06, default ON, opt-out _DISABLE): the
+                    // picture's line takes its paragraph's auto multiple over the run
+                    // face's natural height on top of the picture, and its after collapses
+                    // with the next paragraph's before like any text-box paragraph's.
+                    // `_pb_txbx_img_gap_gen.py` (slice of blind-J en/creative__045bc787's
+                    // left box, line 276, the picture in a Segoe UI 10pt run): picture
+                    // bottom -> next baseline 13.27 + max(after, before) (0/0 13.27, 10/10
+                    // 23.35, 20/10 and 10/20 33.31), 15.31 at 20pt (+0.15 x 13.3 / 26.6);
+                    // Oxi 11.26 + after + before. The «Cosmetology» column sat 8pt low.
+                    let img_line = std::env::var_os("OXI_TXBX_IMAGE_LINE_DISABLE").is_none();
+                    if img_line {
+                        if let Some(host) = img.host_paragraph.as_deref() {
+                            let factor = host.style.line_spacing.unwrap_or(1.0);
+                            if matches!(host.style.line_spacing_rule.as_deref(), None | Some("auto")) && factor > 1.0 {
+                                let run = host.runs.iter().find(|r| r.style.font_size.is_some());
+                                if crate::env_flag!("OXI_DBG_TXBX_IMG") {
+                                    eprintln!("[TXBXIMG] runs={} sizes={:?}", host.runs.len(),
+                                        host.runs.iter().map(|r| (r.style.font_size, r.style.font_family.clone(), r.text.len())).collect::<Vec<_>>());
+                                }
+                                if let Some(run) = run {
+                                    let fs = self.resolve_font_size(&run.style, &host.style);
+                                    let nat = self.metrics_for(&run.style, &host.style).natural_line_height_hhea(fs);
+                                    cursor.advance((factor - 1.0) * nat);
+                                }
+                            }
+                        }
+                    }
                     if std::env::var_os("OXI_TXBX_IMAGE_ONLY_DISABLE").is_none() {
-                        cursor.advance(img.paragraph_space_after.max(0.0));
+                        if img_line && txbx_after_on {
+                            txbx_prev_after = img.paragraph_space_after.max(0.0);
+                            txbx_prev_para = None;
+                        } else {
+                            cursor.advance(img.paragraph_space_after.max(0.0));
+                        }
                     }
                 }
                 Block::UnsupportedElement(_) => {}
@@ -10797,6 +10835,16 @@ cells={} pitch={:.2} text={:?}",
                     if let LayoutContent::Text { font_family: Some(f), font_size, text, .. } = &elements[i].content {
                         let symbolic = matches!(f.as_str(), "Symbol" | "Wingdings" | "Wingdings 2" | "Wingdings 3")
                             || text.chars().all(|c| ('\u{E000}'..='\u{F8FF}').contains(&c) || c.is_whitespace());
+                        // OXI_CLNSP_SYM_UNION (2026-11-06, default ON, opt-out _DISABLE): a
+                        // Symbol-face list bullet is part of the line's union box (its
+                        // 1.005em ascent tops the text's). blind-J en/creative__045bc787's
+                        // side box (Helvetica Bold 12, line 276, Symbol «•» markers): Word
+                        // steps a bullet line 16.7 and a continuation line 15.9, so the
+                        // items drifted 0.8pt each (8.3pt by the last); with the bullet in
+                        // the union each lands within 0.1-1.2. en/policies__009ab5c3 (the
+                        // case that took the bullet out of the single-face read) does not move.
+                        let symbolic = symbolic
+                            && !(f == "Symbol" && !crate::env_flag!("OXI_CLNSP_SYM_UNION_DISABLE"));
                         if !symbolic && !out.iter().any(|(g, z)| g == f && (*z - *font_size).abs() < 0.01) {
                             out.push((f.clone(), *font_size));
                         }
