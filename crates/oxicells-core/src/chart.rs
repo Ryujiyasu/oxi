@@ -10,7 +10,6 @@
 
 use oxidocs_common::xml_utils::{get_attr, local_name};
 use quick_xml::events::Event;
-use quick_xml::Reader;
 
 use crate::ir::{
     Chart, ChartAxis, ChartCategoryValue, ChartPoint, ChartSeries, DataLabel, Frame, Legend, Marker, ShapeLine,
@@ -56,7 +55,7 @@ struct Painted {
 /// Returns `None` for a chart of a kind nothing draws yet, so a bar chart
 /// leaves the grid as it was rather than half a picture.
 pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
-    let mut reader = Reader::from_str(xml);
+    let mut reader = quick_xml::reader::NsReader::from_str(xml);
     let mut buf = Vec::new();
 
     let mut chart = Chart::default();
@@ -87,6 +86,8 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     let mut numeric_categories = false;
     let mut category_count = 0;
     let mut category_cache_seen = false;
+    let mut active_categories_seen = false;
+    let mut parents: Vec<(String, bool, bool)> = Vec::new();
     let mut in_formula = false;
     let mut text = String::new();
     let mut in_value = false;
@@ -101,7 +102,27 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     let mut label_offset: Option<(f64, f64)> = None;
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        let event = reader.read_resolved_event_into(&mut buf);
+        let native = matches!(&event, Ok((quick_xml::name::ResolveResult::Bound(ns), _))
+            if matches!(ns.as_ref(), b"http://schemas.openxmlformats.org/drawingml/2006/chart"
+                | b"http://purl.oclc.org/ooxml/drawingml/chart"));
+        let extension = matches!(&event, Ok((quick_xml::name::ResolveResult::Bound(ns), _))
+            if ns.as_ref() == b"http://schemas.microsoft.com/office/drawing/2012/chart");
+        let direct_series = parents.last().is_some_and(|(name, native, _)| *native && name == "ser");
+        let xy = parents.iter().rev().find(|(name, native, _)| *native && name.ends_with("Chart"))
+            .is_some_and(|(name, _, _)| matches!(name.as_str(), "scatterChart" | "bubbleChart"));
+        let filtered_title = parents.len() >= 4
+            && parents[parents.len() - 1].0 == "filteredCategoryTitle" && parents[parents.len() - 1].2
+            && parents[parents.len() - 2].0 == "ext" && parents[parents.len() - 2].1
+            && parents[parents.len() - 3].0 == "extLst" && parents[parents.len() - 3].1
+            && parents[parents.len() - 4].0 == "ser" && parents[parents.len() - 4].1;
+        match &event {
+            Ok((_, Event::Start(element))) =>
+                parents.push((local_name(element.name().as_ref()), native, extension)),
+            Ok((_, Event::End(_))) => { parents.pop(); }
+            _ => {}
+        }
+        match event.map(|(_, event)| event) {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 let name = local_name(e.name().as_ref());
                 let value = get_attr(e, "val");
@@ -123,6 +144,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                         bubble_size_count = 0;
                         category_count = 0;
                         category_cache_seen = false;
+                        active_categories_seen = false;
                         numeric_categories = false;
                     }
                     "explosion" if whose.last() == Some(&Whose::Series) => {
@@ -281,7 +303,11 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                         }
                     }
                     "legendPos" => legend.position = value.unwrap_or_default(),
-                    "val" | "yVal" => reading = Reading::Values,
+                    "val" | "yVal" => {
+                        reading = if native && direct_series && ((name == "yVal") == xy) {
+                            Reading::Values
+                        } else { Reading::Nothing };
+                    },
                     "bubbleSize" => {
                         reading = Reading::BubbleSizes;
                         current.bubble_sizes = Some(Vec::new());
@@ -295,7 +321,21 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                     "ptCount" if reading == Reading::Categories => {
                         category_count = value.as_deref().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
                     }
-                    "cat" | "xVal" => reading = Reading::Categories,
+                    "cat" | "xVal" => {
+                        let active = native && direct_series && ((name == "xVal") == xy);
+                        let filtered = extension && name == "cat" && filtered_title && !active_categories_seen;
+                        if active || filtered {
+                            categories.clear();
+                            typed_categories.clear();
+                            category_count = 0;
+                            category_cache_seen = false;
+                            numeric_categories = false;
+                            current.category_reference = None;
+                            current.category_values_filtered = filtered;
+                            active_categories_seen |= active;
+                            reading = Reading::Categories;
+                        } else { reading = Reading::Nothing; }
+                    },
                     "tx" => {
                         reading = Reading::SeriesName;
                         if whose.last() == Some(&Whose::Series) {
@@ -511,7 +551,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                             for (i, number) in &bubble_sizes { held[*i] = Some(*number); }
                             current.bubble_sizes = Some(held);
                         }
-                        if chart.categories.is_empty() && !categories.is_empty() {
+                        if !current.category_values_filtered && chart.categories.is_empty() && !categories.is_empty() {
                             let last =
                                 categories.iter().map(|(at, _)| *at).max().unwrap_or(0);
                             let mut held = vec![String::new(); last + 1];

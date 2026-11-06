@@ -1386,6 +1386,7 @@ impl<'a> WorkbookHost<'a> {
                     x_ref: categories.then(|| block_ref(self, first, columns[0], last, columns[0])),
                     implicit_categories: !categories,
                     categories_imported: false,
+                    category_values_filtered: false,
                     text_category_gaps: false,
                     typed_xs: None,
                     sparse_values: None,
@@ -1422,6 +1423,7 @@ impl<'a> WorkbookHost<'a> {
                     x_ref: categories.then(|| block_ref(self, rows[0], first, rows[0], last)),
                     implicit_categories: !categories,
                     categories_imported: false,
+                    category_values_filtered: false,
                     text_category_gaps: false,
                     typed_xs: None,
                     sparse_values: None,
@@ -1828,6 +1830,9 @@ impl<'a> WorkbookHost<'a> {
                 if text_domain && values.is_empty() { values.resize(count, Value::String(String::new())); }
                 values.truncate(count);
                 return Ok(values);
+            }
+            if text_domain && series.category_values_filtered {
+                return Ok((1..=count).map(|i| Value::Double(i as f64)).collect());
             }
             if text_domain {
                 let mut labels = if chart.series.len() > 1 {
@@ -3734,6 +3739,7 @@ impl<'a> WorkbookHost<'a> {
                             series.typed_xs = None;
                             series.implicit_categories = false;
                             series.categories_imported = false;
+                            series.category_values_filtered = false;
                             series.text_category_gaps = false;
                             series.x_ref = Some(reference);
                         } else if let Value::Array(listed) = &value {
@@ -3741,6 +3747,7 @@ impl<'a> WorkbookHost<'a> {
                             series.xs = listed.values.iter().map(text_of_value).collect();
                             series.implicit_categories = false;
                             series.categories_imported = false;
+                            series.category_values_filtered = false;
                             series.text_category_gaps = false;
                             series.typed_xs = Some(listed.values.iter().map(|value| {
                                 if value.string_units().is_some() { value.clone() }
@@ -4386,6 +4393,7 @@ impl<'a> WorkbookHost<'a> {
                         x_ref: None,
                         implicit_categories: true,
                         categories_imported: false,
+                        category_values_filtered: false,
                         text_category_gaps: false,
                         typed_xs: None,
                         sparse_values: None,
@@ -4415,6 +4423,7 @@ impl<'a> WorkbookHost<'a> {
                             x_ref: None,
                             implicit_categories: true,
                             categories_imported: false,
+                            category_values_filtered: false,
                             text_category_gaps: false,
                             typed_xs: None,
                             sparse_values: None,
@@ -4630,6 +4639,7 @@ impl<'a> WorkbookHost<'a> {
                 series.typed_xs = None;
                 series.implicit_categories = false;
                 series.categories_imported = false;
+                series.category_values_filtered = false;
                 series.text_category_gaps = false;
                 series.x_ref = Some(reference);
             }

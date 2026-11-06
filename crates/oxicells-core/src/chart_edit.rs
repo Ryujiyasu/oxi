@@ -50,6 +50,7 @@ fn series_data_equal(a: &crate::ir::ChartSeries, b: &crate::ir::ChartSeries) -> 
         && a.name_reference == b.name_reference && a.values_reference == b.values_reference
         && a.category_reference == b.category_reference && a.category_values == b.category_values
         && a.text_category_gaps == b.text_category_gaps
+        && a.category_values_filtered == b.category_values_filtered
         && a.bubble_sizes == b.bubble_sizes && a.bubble_sizes_reference == b.bubble_sizes_reference
         && a.shaded_bubbles == b.shaded_bubbles
 }
@@ -227,13 +228,17 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
             if let Some(position) = &series.label_pos { out.push_str(&format!("<c:dLblPos val=\"{}\"/>", escape(position))); }
             out.push_str("<c:showVal val=\"0\"/></c:dLbls>");
         }
-        out.push_str(&cats);
+        if !series.category_values_filtered || scatter { out.push_str(&cats); }
         out.push_str(&values);
         if kind == "bubble" {
             out.push_str(&bubble_series_data(series, C));
             out.push_str(&format!("<c:bubble3D val=\"{}\"/>", u8::from(series.shaded_bubbles)));
         }
         if matches!(kind, "line" | "scatter") { out.push_str(&format!("<c:smooth val=\"{}\"/>", u8::from(options.smooth))); }
+        if series.category_values_filtered && !scatter && !cats.is_empty() {
+            out.push_str(&format!("<c:extLst><c:ext uri=\"{{02D57815-91ED-43cb-92C2-25804820EDAC}}\">{}</c:ext></c:extLst>",
+                filtered_category_title(&cats, C)));
+        }
         out.push_str("</c:ser>"); out
     }
     fn axis(axis: Option<&ChartAxis>, tag: &str, id: u32, cross: u32, position: &str) -> String {
@@ -499,6 +504,64 @@ fn series_fragment_envelope(xml: &str, at: usize, ns: &str) -> Result<(String, S
     }
 }
 
+/// Category expressions retained for formulas but excluded from the plotted axis.
+fn filtered_category_title(categories: &str, ns: &str) -> String {
+    if categories.is_empty() { return String::new(); }
+    let body = &categories[categories.find('>').unwrap() + 1..categories.rfind("</").unwrap()];
+    format!("<c15:filteredCategoryTitle xmlns:c15=\"http://schemas.microsoft.com/office/drawing/2012/chart\" xmlns:c=\"{ns}\"><c15:cat>{body}</c15:cat></c15:filteredCategoryTitle>")
+}
+
+fn patch_filtered_category_title(fragment: &str, categories: &str, open: &str, close: &str, ns: &str) -> Result<String, XlsxError> {
+    use quick_xml::{name::ResolveResult, reader::NsReader};
+    let wrapped = format!("{open}{fragment}{close}");
+    let mut reader = NsReader::from_str(&wrapped);
+    let mut parents: Vec<(String, bool)> = Vec::new();
+    let mut start = None;
+    let mut range = None;
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+        let native = matches!(&namespace, ResolveResult::Bound(ns) if matches!(ns.as_ref(),
+            b"http://schemas.openxmlformats.org/drawingml/2006/chart" | b"http://purl.oclc.org/ooxml/drawingml/chart"));
+        let extension = matches!(&namespace, ResolveResult::Bound(ns) if ns.as_ref() == b"http://schemas.microsoft.com/office/drawing/2012/chart");
+        let at_extension = parents.len() == 4 && parents.iter().all(|(_, native)| *native)
+            && parents.iter().map(|(name, _)| name.as_str()).eq(["chartSpace", "ser", "extLst", "ext"]);
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let name = local_name(element.name().as_ref());
+                if extension && name == "filteredCategoryTitle" && at_extension {
+                    if matches!(event, Event::Empty(_)) {
+                        range = Some((before, reader.buffer_position() as usize));
+                    } else { start = Some((before, parents.len() + 1)); }
+                }
+                if matches!(event, Event::Start(_)) { parents.push((name, native)); }
+            }
+            Event::End(_) => {
+                if let Some((begin, depth)) = start {
+                    if depth == parents.len() { range = Some((begin, reader.buffer_position() as usize)); start = None; }
+                }
+                parents.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    let title = filtered_category_title(categories, ns);
+    let revised = if let Some((begin, end)) = range {
+        format!("{}{}{}", &wrapped[..begin], title, &wrapped[end..])
+    } else if title.is_empty() { wrapped.clone() }
+    else {
+        let extension = format!("<c:ext xmlns:c=\"{ns}\" uri=\"{{02D57815-91ED-43cb-92C2-25804820EDAC}}\">{title}</c:ext>");
+        if let Ok((_, end)) = children_at(&wrapped, &["chartSpace", "ser", "extLst"]) {
+            format!("{}{}{}", &wrapped[..end], extension, &wrapped[end..])
+        } else {
+            let (_, end) = children_at(&wrapped, &["chartSpace", "ser"])?;
+            format!("{}<c:extLst xmlns:c=\"{ns}\">{extension}</c:extLst>{}", &wrapped[..end], &wrapped[end..])
+        }
+    };
+    Ok(revised[open.len()..revised.len() - close.len()].to_string())
+}
+
 fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing_ns: &str) -> Result<String, XlsxError> {
     // Keep the source namespace bindings while inspecting individual series.
     let (plots, _) = children_at(xml, &["chartSpace", "chart", "plotArea"])?;
@@ -540,11 +603,22 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
             let cats_changed = previous.is_none_or(|old|
                 old.category_reference != series.category_reference || old.category_values != series.category_values
                 || old.text_category_gaps != series.text_category_gaps
+                || old.category_values_filtered != series.category_values_filtered
                 || ((old.category_values.is_none() || series.category_values.is_none()) && before.categories != after.categories));
             let values_changed = previous.is_none_or(|old| old.values != series.values || old.values_reference != series.values_reference);
             let mut fragment = xml[*start..*finish].to_string();
             if name_changed { fragment = replace(&fragment, "tx", &name, &open, &close)?; }
-            if cats_changed { fragment = replace(&fragment, if scatter { "xVal" } else { "cat" }, &cats, &open, &close)?; }
+            if cats_changed {
+                if series.category_values_filtered && !scatter {
+                    fragment = patch_filtered_category_title(&fragment, &cats, &open, &close, ns)?;
+                    fragment = replace(&fragment, "cat", "", &open, &close)?;
+                } else {
+                    fragment = replace(&fragment, if scatter { "xVal" } else { "cat" }, &cats, &open, &close)?;
+                    if previous.is_some_and(|old| old.category_values_filtered) {
+                        fragment = patch_filtered_category_title(&fragment, "", &open, &close, ns)?;
+                    }
+                }
+            }
             if values_changed { fragment = replace(&fragment, if scatter { "yVal" } else { "val" }, &values, &open, &close)?; }
             if plot == "bubbleChart" {
                 if previous.is_none_or(|old| old.bubble_sizes != series.bubble_sizes || old.bubble_sizes_reference != series.bubble_sizes_reference) {
@@ -632,18 +706,34 @@ fn patch_plot_options(xml: &str, before: &Chart, after: &Chart, ns: &str, drawin
     let (new_settings, _) = children_at(&generated, &new_path)?;
     let old_series = ordered_source_series(xml, &old_settings);
     let new_series: Vec<_> = new_settings.iter().filter(|(name, _, _)| name == "ser").collect();
-    let (old_series_fields, _) = children_at(xml, &["chartSpace", "chart", "plotArea", old_tag.as_str(), "ser"])
+    let (new_series_fields, _) = children_at(&generated, &["chartSpace", "chart", "plotArea", new_tag, "ser"])
         .unwrap_or_default();
     for (i, (_, begin, end)) in new_series.iter().enumerate().rev() {
         if let Some((_, old_begin, old_end)) = old_series.get(i) {
-            let additions: String = old_series_fields.iter().filter(|(name, a, b)|
-                name == "extLst" && a >= old_begin && b <= old_end).map(|(_, a, b)| &xml[*a..*b]).collect();
+            let (open, close) = series_fragment_envelope(xml, *old_begin, ns)?;
+            let fragment = &xml[*old_begin..*old_end];
+            let (fields, _) = children_at(&format!("{open}{fragment}{close}"), &["chartSpace", "ser"])?;
+            let mut additions: String = fields.iter().filter(|(name, _, _)| name == "extLst")
+                .map(|(_, a, b)| &fragment[a - open.len()..b - open.len()]).collect();
             if !additions.is_empty() {
-                let at = end - new_start - "</c:ser>".len();
-                plot.insert_str(at, &additions);
+                let series = &after.series[i];
+                let scatter = matches!(after.kind.as_str(), "scatter" | "bubble");
+                let (_, categories, _) = series_data_parts(series, &after.categories, scatter, ns);
+                let categories = if series.category_values_filtered && !scatter { categories.as_str() } else { "" };
+                let revised = patch_filtered_category_title(fragment, categories, &open, &close, ns)?;
+                let wrapped = format!("{open}{revised}{close}");
+                let (fields, _) = children_at(&wrapped, &["chartSpace", "ser"])?;
+                additions = fields.iter().filter(|(name, _, _)| name == "extLst")
+                    .map(|(_, a, b)| &wrapped[*a..*b]).collect();
+                if let Some((_, a, b)) = new_series_fields.iter().find(|(name, a, b)|
+                    name == "extLst" && a >= begin && b <= end) {
+                    plot.replace_range(a - new_start..b - new_start, &additions);
+                } else {
+                    let at = end - new_start - "</c:ser>".len();
+                    plot.insert_str(at, &additions);
+                }
             }
         }
-        let _ = begin;
     }
     let same_kind = before.kind == after.kind;
     let child_position = |fragment: &str, successors: &[&str]| -> Result<usize, XlsxError> {
@@ -820,6 +910,86 @@ pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<St
         output = patch_series_data(&output, before, after, chart_ns, drawing_ns)?;
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod filtered_category_source_tests {
+    use super::*;
+    use crate::{chart::parse_chart_xml, ir::ChartCategoryValue, parser::Theme};
+
+    #[test]
+    fn mixed_plot_series_keep_each_plots_numeric_sources() {
+        let categories = "<c:xVal><c:numLit><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>33</c:v></c:pt></c:numLit></c:xVal>";
+        let line = "<c:lineChart><c:ser><c:val><c:numLit><c:pt idx=\"0\"><c:v>11</c:v></c:pt></c:numLit></c:val></c:ser></c:lineChart>";
+        let scatter = format!("<c:scatterChart><c:ser>{categories}<c:yVal><c:numLit><c:pt idx=\"0\"><c:v>22</c:v></c:pt></c:numLit></c:yVal></c:ser></c:scatterChart>");
+        for reversed in [false, true] {
+            let plots = if reversed { format!("{scatter}{line}") } else { format!("{line}{scatter}") };
+            let xml = format!("<c:chartSpace xmlns:c=\"{C}\"><c:chart><c:plotArea>{plots}</c:plotArea></c:chart></c:chartSpace>");
+            let chart = parse_chart_xml(&xml, &Theme::default()).unwrap();
+            let (line, scatter) = if reversed { (&chart.series[1], &chart.series[0]) }
+                else { (&chart.series[0], &chart.series[1]) };
+            assert_eq!(line.values, [Some(11.0)]);
+            assert_eq!(scatter.values, [Some(22.0)]);
+            assert_eq!(scatter.category_values, Some(vec![ChartCategoryValue::Number(33.0)]));
+        }
+    }
+
+    #[test]
+    fn filtered_category_sources_survive_creation_and_edits_without_becoming_axis_labels() {
+        let controls: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/vba/chart_import_contracts.json")).unwrap();
+        let mut checked = 0;
+        for case in controls["category_cases"].as_array().unwrap() {
+            if !case["id"].as_str().unwrap().starts_with("filtered:")
+                && !case["id"].as_str().unwrap().starts_with("native_saved:") { continue; }
+            let source = case["xml"].as_str().unwrap();
+            let chart = parse_chart_xml(source, &Theme::default()).unwrap();
+            if !chart.series.iter().any(|series| series.category_values_filtered) { continue; }
+            checked += 1;
+            for strict in [false, true] {
+                let xml = if strict {
+                    source.replace(C, "http://purl.oclc.org/ooxml/drawingml/chart")
+                        .replace(A, "http://purl.oclc.org/ooxml/drawingml/main")
+                } else { source.to_string() };
+                let before = parse_chart_xml(&xml, &Theme::default()).unwrap();
+                assert!(before.categories.is_empty());
+                let created = parse_chart_xml(&new_chart_xml(&before).unwrap(), &Theme::default()).unwrap();
+                for (expected, actual) in before.series.iter().zip(&created.series) {
+                    assert_eq!(actual.category_values, expected.category_values, "{}", case["id"]);
+                    assert!(actual.category_values_filtered);
+                }
+                let mut after = before.clone();
+                after.series[0].values[0] = Some(91.0);
+                after.series[0].category_values = Some(vec![ChartCategoryValue::Text("Edited".into())]);
+                after.series[0].text_category_gaps = false;
+                let patched = patch_chart(&xml, &before, &after).unwrap();
+                let read = parse_chart_xml(&patched, &Theme::default()).unwrap();
+                assert_eq!(read.series[0].category_values, after.series[0].category_values);
+                assert!(read.series[0].category_values_filtered);
+                assert_eq!(read.series[0].values[0], Some(91.0));
+                assert!(read.categories.is_empty());
+                assert_eq!(read.series.get(1), before.series.get(1));
+                assert_eq!(patched.matches("uniqueId").count(), xml.matches("uniqueId").count());
+                let mut options = after.clone();
+                options.plot_options.markers = Some(!after.plot_options.markers.unwrap_or(true));
+                let changed_plot = patch_chart(&patched, &after, &options).unwrap();
+                assert_eq!(changed_plot.matches(":extLst>").count(), patched.matches(":extLst>").count());
+                let read_plot = parse_chart_xml(&changed_plot, &Theme::default()).unwrap();
+                assert!(read_plot.categories.is_empty());
+                assert!(read_plot.series[0].category_values_filtered);
+                assert_eq!(read_plot.series[0].category_values, options.series[0].category_values);
+                assert_eq!(read_plot.series[0].values, options.series[0].values);
+                let mut explicit = after.clone();
+                explicit.series[0].category_values_filtered = false;
+                let reactivated = patch_chart(&patched, &after, &explicit).unwrap();
+                let read = parse_chart_xml(&reactivated, &Theme::default()).unwrap();
+                assert!(!read.series[0].category_values_filtered);
+                assert_eq!(read.series[0].category_values, explicit.series[0].category_values);
+                assert_eq!(read.series.get(1), before.series.get(1));
+            }
+        }
+        assert_eq!(checked, 10);
+    }
 }
 
 #[cfg(test)]

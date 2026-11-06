@@ -202,6 +202,7 @@ pub(super) struct SeriesRecord {
     pub implicit_categories: bool,
     /// Imported categories have completed the file-open normalization step.
     pub categories_imported: bool,
+    pub category_values_filtered: bool,
     pub text_category_gaps: bool,
     pub values: Vec<f64>,
     /// Original sparse cache, retained until values are explicitly assigned.
@@ -674,6 +675,7 @@ impl<'a> WorkbookHost<'a> {
                                     } else { series.name.clone() },
                                     name_auto: series.name.is_empty() && !series.explicit_empty_name && series.name_reference.is_none(),
                                     categories_imported: true,
+                                    category_values_filtered: series.category_values_filtered,
                                     text_category_gaps: series.text_category_gaps,
                                     name_ref: series.name_reference.clone(),
                                     values_ref: series.values_reference.clone(),
@@ -1615,6 +1617,7 @@ impl<'a> WorkbookHost<'a> {
                     bubble_sizes_reference: series.bubble_sizes_ref.clone(),
                     shaded_bubbles: series.shaded_bubbles,
                     category_reference: series.x_ref.clone(),
+                    category_values_filtered: series.category_values_filtered,
                     text_category_gaps: series.text_category_gaps,
                     category_values: Some(series.typed_xs.as_ref().map(|xs| xs.iter().map(|value| {
                         use oxicells_core::ir::ChartCategoryValue;
