@@ -1663,6 +1663,9 @@ pub struct Frame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ChartSeries {
     pub name: String,
+    /// An explicitly empty name differs from an omitted, automatically named series.
+    #[serde(default)]
+    pub explicit_empty_name: bool,
     /// Bubble areas use an independent numeric cache; absence differs from an
     /// explicitly supplied empty cache or a cache containing missing points.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -46,7 +46,7 @@ pub(crate) fn legend_position(chart: &Chart) -> Option<&str> {
 
 
 fn series_data_equal(a: &crate::ir::ChartSeries, b: &crate::ir::ChartSeries) -> bool {
-    a.name == b.name && a.values == b.values
+    a.name == b.name && a.explicit_empty_name == b.explicit_empty_name && a.values == b.values
         && a.name_reference == b.name_reference && a.values_reference == b.values_reference
         && a.category_reference == b.category_reference && a.category_values == b.category_values
         && a.bubble_sizes == b.bubble_sizes && a.bubble_sizes_reference == b.bubble_sizes_reference
@@ -90,7 +90,9 @@ fn series_data_parts(series: &crate::ir::ChartSeries, shared: &[String], scatter
         format!("<c:strRef><c:f>{}</c:f><c:strCache><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>{}</c:v></c:pt></c:strCache></c:strRef>",
             escape(reference.trim_start_matches('=')), escape(&series.name))
     } else { format!("<c:v>{}</c:v>", escape(&series.name)) };
-    let name = format!("<c:tx xmlns:c=\"{ns}\">{name}</c:tx>");
+    let name = if series.name.is_empty() && !series.explicit_empty_name && series.name_reference.is_none() {
+        String::new()
+    } else { format!("<c:tx xmlns:c=\"{ns}\">{name}</c:tx>") };
     let legacy: Vec<_> = if scatter {
         (0..series.values.len()).map(|i| ChartCategoryValue::Number(
             shared.get(i).and_then(|v| v.parse::<f64>().ok()).unwrap_or((i + 1) as f64))).collect()
@@ -526,7 +528,7 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
         let replacement = if let Some(series) = after.series.get(i) {
             let (name, cats, values) = series_data_parts(series, &after.categories, scatter, ns);
             let previous = before.series.get(i);
-            let name_changed = previous.is_none_or(|old| old.name != series.name || old.name_reference != series.name_reference);
+            let name_changed = previous.is_none_or(|old| old.name != series.name || old.explicit_empty_name != series.explicit_empty_name || old.name_reference != series.name_reference);
             let cats_changed = previous.is_none_or(|old|
                 old.category_reference != series.category_reference || old.category_values != series.category_values
                 || ((old.category_values.is_none() || series.category_values.is_none()) && before.categories != after.categories));

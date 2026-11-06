@@ -1375,6 +1375,7 @@ impl<'a> WorkbookHost<'a> {
                         Some(_) => text_at(self, rows[0], column),
                         None => format!("系列{}", series.len() + 1),
                     },
+                    name_auto: name_ref.is_none(),
                     name_ref,
                     values_ref: Some(block_ref(self, first, column, last, column)),
                     bubble_sizes: None,
@@ -1382,6 +1383,7 @@ impl<'a> WorkbookHost<'a> {
                     shaded_bubbles: false,
                     x_ref: categories.then(|| block_ref(self, first, columns[0], last, columns[0])),
                     implicit_categories: !categories,
+                    categories_imported: false,
                     typed_xs: None,
                     sparse_values: None,
                     values: data_rows.iter().map(|r| number_at(self, *r, column)).collect(),
@@ -1408,6 +1410,7 @@ impl<'a> WorkbookHost<'a> {
                         Some(_) => text_at(self, row, columns[0]),
                         None => format!("系列{}", series.len() + 1),
                     },
+                    name_auto: name_ref.is_none(),
                     name_ref,
                     values_ref: Some(block_ref(self, row, first, row, last)),
                     bubble_sizes: None,
@@ -1415,6 +1418,7 @@ impl<'a> WorkbookHost<'a> {
                     shaded_bubbles: false,
                     x_ref: categories.then(|| block_ref(self, rows[0], first, rows[0], last)),
                     implicit_categories: !categories,
+                    categories_imported: false,
                     typed_xs: None,
                     sparse_values: None,
                     values: data_columns.iter().map(|c| number_at(self, row, *c)).collect(),
@@ -1444,7 +1448,7 @@ impl<'a> WorkbookHost<'a> {
             else { format!("{{{}}}", items.join(",")) };
         let name = match (&series.name_ref, series.name.is_empty()) {
             (Some(reference), _) => reference.clone(),
-            (None, false) if !series.name.starts_with("系列") => quote(&series.name),
+            (None, false) if !series.name_auto => quote(&series.name),
             _ => String::new(),
         };
         let categories = series.x_ref.clone().unwrap_or_else(|| {
@@ -1536,32 +1540,87 @@ impl<'a> WorkbookHost<'a> {
 
 
 
-    pub(super) fn add_chart_sheet(&mut self, args: &[Value]) -> Result<Value, String> {
-        if args.len() > 4 { return Err(host_error(450, "Charts.Add takes Before, After, Count and Type")); }
-        if let Some(kind) = args.get(3).filter(|v| !matches!(v, Value::Missing)) {
-            if any_whole_number(kind) != Some(-4109) { return Err(host_error(1004, "Charts.Add needs a chart sheet type")); }
-        }
-        let count = match args.get(2).filter(|v| !matches!(v, Value::Missing)) {
-            Some(v) => any_whole_number(v).filter(|n| *n >= 1).ok_or_else(|| host_error(1004, "invalid chart sheet count"))?,
-            None => 1,
+
+    fn sheet_add_failure(&self) -> String {
+        host_error_described(1004, match self.error_language {
+            ErrorLanguage::Japanese => "'Add' メソッドは失敗しました: 'Sheets' オブジェクト",
+            ErrorLanguage::English => "Method 'Add' of object 'Sheets' failed",
+        })
+    }
+
+    pub(super) fn add_sheet_collection(&mut self, collection: HostObject, args: &[Value]) -> Result<Value, String> {
+        if args.len() > 4 { return Err(host_error(450, "Sheet Add argument count")); }
+        let given = |i: usize| args.get(i).filter(|v| !matches!(v, Value::Missing | Value::Null));
+        let chart = match (collection, given(3)) {
+            (HostObject::Charts, None) => true,
+            (HostObject::Charts, Some(_)) => return Err(self.sheet_add_failure()),
+            (_, None | Some(Value::Boolean(true))) => false,
+            (_, Some(Value::String(path))) => {
+                let path = if path.rsplit(['/', '\\']).next().is_some_and(|s| s.contains('.')) { path.clone() } else { format!("{path}.xlsx") };
+                return Err(self.copy_access_failure(&path));
+            },
+            (_, Some(kind)) => match any_whole_number(kind) {
+                Some(-4109) => true, Some(-4167) => false,
+                _ => return Err(self.sheet_add_failure()),
+            },
         };
-        let mut placement: Vec<_> = args.iter().take(2).cloned().collect();
+        let count = match given(2) {
+            None => 1,
+            Some(Value::Boolean(v)) => i64::from(*v),
+            Some(value) => {
+                let number = match value {
+                    Value::String(s) => s.trim().parse::<f64>().ok(),
+                    _ => any_number(value),
+                }.ok_or_else(|| self.sheet_add_failure())?;
+                let rounded = number.trunc();
+                if !rounded.is_finite() || rounded < 1.0 || rounded > i32::MAX as f64 { return Err(self.sheet_add_failure()); }
+                rounded as i64
+            },
+        };
+        if count < 1 { return Err(self.sheet_add_failure()); }
+        let placed = |v: &Value| match v {
+            Value::Object(o) => self.worksheet(o).ok_or_else(|| self.sheet_add_failure()),
+            _ => Err(self.sheet_add_failure()),
+        };
+        let before = given(0).map(placed).transpose()?;
+        let after = given(1).map(placed).transpose()?;
+        if before.is_some() && after.is_some() { return Err(self.sheet_add_failure()); }
+        let mut at = match (before, after) {
+            (Some(i), _) => i,
+            (_, Some(i)) => i + usize::from(!chart),
+            _ => self.active_sheet,
+        };
+        // Retain a range object, whose sheet identity follows insertion.
+        let source = if chart && self.workbook.sheets[self.active_sheet].kind.is_worksheet()
+            && self.selection.addresses().any(|a| self.cell_here(a.sheet, a.row, a.column).is_some_and(|c| !matches!(c.value, CellValue::Empty))) {
+            Some(self.object(HostObject::Range(self.selection)))
+        } else { None };
         let mut result = Value::Empty;
         for _ in 0..count {
-            self.add_worksheet(&placement)?;
-            let sheet = self.active_sheet;
-            let prefix = if self.error_language == ErrorLanguage::Japanese { "\u{30b0}\u{30e9}\u{30d5}" } else { "Chart" };
-            let mut number = 1;
-            let name = loop {
-                let name = format!("{prefix}{number}");
-                if !self.workbook.sheets.iter().any(|s| s.name.eq_ignore_ascii_case(&name)) { break name; }
-                number += 1;
+            let destination = if at < self.workbook.sheets.len() {
+                vec![self.object(HostObject::Worksheet(at))]
+            } else {
+                vec![Value::Missing, self.object(HostObject::Worksheet(self.workbook.sheets.len()-1))]
             };
-            self.workbook.sheets[sheet].kind = oxicells_core::ir::SheetKind::Chart;
-            self.workbook.sheets[sheet].name = name;
-            let id = self.add_chart(sheet, 0.0, 0.0, 720.0, 540.0, 51)?;
-            result = self.part(DrawingPart::Chart(id));
-            placement = vec![result.clone()];
+            let worksheet_counter = self.sheet_counter;
+            result = self.add_worksheet(&destination).map_err(|_| self.sheet_add_failure())?;
+            at = self.active_sheet;
+            if chart {
+                self.sheet_counter = worksheet_counter;
+                let prefix = if self.error_language == ErrorLanguage::Japanese { "グラフ" } else { "Chart" };
+                let name = loop {
+                    self.chart_sheet_counter += 1;
+                    let candidate = format!("{prefix}{}", self.chart_sheet_counter);
+                    if !self.workbook.sheets.iter().any(|s| s.name.eq_ignore_ascii_case(&candidate)) { break candidate; }
+                };
+                self.workbook.sheets[at].kind = oxicells_core::ir::SheetKind::Chart;
+                self.workbook.sheets[at].name = name;
+                let id = self.add_chart(at, 0.0, 0.0, 720.0, 540.0, 51)?;
+                if let Some(Value::Object(object)) = &source {
+                    if let Some(range) = self.range(object) { self.set_source_data(id, range, false)?; }
+                }
+                result = self.part(DrawingPart::Chart(id));
+            }
         }
         Ok(result)
     }
@@ -1730,7 +1789,25 @@ impl<'a> WorkbookHost<'a> {
                 else { Value::Double(i as f64) }
             }).collect());
         }
-        let mut values = series.typed_xs.clone().unwrap_or_else(|| series.xs.iter().map(|x| match x.parse::<f64>() {
+        let imported_values = if series.categories_imported && matches!(kind, 68 | 71) {
+            let values = if let Some(reference) = &series.x_ref {
+                let context = split_sheet_reference(reference).0
+                    .and_then(|name| self.workbook.sheets.iter().position(|sheet| same_sheet_name(&sheet.name, &name)))
+                    .unwrap_or(self.active_sheet);
+                self.reference_areas(context, reference, NameReach::Workbook).ok()
+                    .map(|areas| areas.into_iter().flat_map(CellRange::addresses)
+                        .map(|address| self.cell_value(address)).collect::<Vec<_>>())
+                    .unwrap_or_else(|| series.typed_xs.clone().unwrap_or_default())
+            } else { series.typed_xs.clone().unwrap_or_default() };
+            if !values.iter().any(|value| value.string_units().is_some()) {
+                return Err(host_error_described(-2_147_467_259, match self.error_language {
+                    ErrorLanguage::Japanese => "'XValues' メソッドは失敗しました: 'Series' オブジェクト",
+                    ErrorLanguage::English => "Method 'XValues' of object 'Series' failed",
+                }));
+            }
+            Some(values)
+        } else { None };
+        let mut values = imported_values.or_else(|| series.typed_xs.clone()).unwrap_or_else(|| series.xs.iter().map(|x| match x.parse::<f64>() {
             Ok(number) => Value::Double(number),
             Err(_) => Value::String(x.clone()),
         }).collect());
@@ -2402,7 +2479,7 @@ impl<'a> WorkbookHost<'a> {
                 let chart = self.chart(id)?.clone();
                 let shown = if chart.title.is_empty() {
                     match chart.series.as_slice() {
-                        [only] => only.name.clone(),
+                        [only] if !only.name_auto => only.name.clone(),
                         _ => "グラフ タイトル".to_string(),
                     }
                 } else {
@@ -3533,7 +3610,7 @@ impl<'a> WorkbookHost<'a> {
                             if !chart.has_title {chart.title.clear();}
                             if chart.has_title && chart.title.is_empty() {
                                 chart.title = match chart.series.as_slice() {
-                                    [only] => only.name.clone(),
+                                    [only] if !only.name_auto => only.name.clone(),
                                     _ => "グラフ タイトル".to_string(),
                                 };
                             }
@@ -3559,12 +3636,14 @@ impl<'a> WorkbookHost<'a> {
             DrawingPart::Series(id, number) => {
                 let taken = match lower.as_str() {
                     "name" => {
+                        if matches!(value, Value::Null) { return Err(host_error(13, "Type mismatch")); }
                         let series = self.series_mut(id, number)?;
                         match &value {
                             // `="S2"` is a name written as a formula.
                             Value::String(text) => {
                                 let bare = text.strip_prefix('=').unwrap_or(text);
                                 series.name = bare.trim_matches('"').to_string();
+                                series.name_auto = false;
                                 series.name_ref = None;
                             }
                             Value::Object(_) => {
@@ -3573,12 +3652,16 @@ impl<'a> WorkbookHost<'a> {
                                     let reference = self.address_of(range);
                                     let series = self.series_mut(id, number)?;
                                     series.name = text;
+                                    series.name_auto = false;
                                     series.name_ref = Some(reference);
                                 }
                             }
                             other => {
                                 let text = text_of_value(other);
-                                self.series_mut(id, number)?.name = text;
+                                let series = self.series_mut(id, number)?;
+                                series.name = text;
+                                series.name_auto = false;
+                                series.name_ref = None;
                             }
                         }
                         true
@@ -3610,11 +3693,13 @@ impl<'a> WorkbookHost<'a> {
                             series.xs = texts;
                             series.typed_xs = None;
                             series.implicit_categories = false;
+                            series.categories_imported = false;
                             series.x_ref = Some(reference);
                         } else if let Value::Array(listed) = &value {
                             let series = self.series_mut(id, number)?;
                             series.xs = listed.values.iter().map(text_of_value).collect();
                             series.implicit_categories = false;
+                            series.categories_imported = false;
                             series.typed_xs = Some(listed.values.iter().map(|value| {
                                 if value.string_units().is_some() { value.clone() }
                                 else {
@@ -4250,6 +4335,7 @@ impl<'a> WorkbookHost<'a> {
                     let number = chart.series.len() + 1;
                     chart.series.push(SeriesRecord {
                         name: format!("系列{number}"),
+                        name_auto: true,
                         name_ref: None,
                         values_ref: None,
                         bubble_sizes: None,
@@ -4257,6 +4343,7 @@ impl<'a> WorkbookHost<'a> {
                         shaded_bubbles: false,
                         x_ref: None,
                         implicit_categories: true,
+                        categories_imported: false,
                         typed_xs: None,
                         sparse_values: None,
                         values: Vec::new(),
@@ -4276,6 +4363,7 @@ impl<'a> WorkbookHost<'a> {
                         let number = chart.series.len() + 1;
                         chart.series.push(SeriesRecord {
                             name: format!("系列{number}"),
+                            name_auto: true,
                             name_ref: None,
                             values_ref: Some(reference),
                             bubble_sizes: None,
@@ -4283,6 +4371,7 @@ impl<'a> WorkbookHost<'a> {
                             shaded_bubbles: false,
                             x_ref: None,
                             implicit_categories: true,
+                            categories_imported: false,
                             typed_xs: None,
                             sparse_values: None,
                             xs: (1..=numbers.len()).map(|n| n.to_string()).collect(),
@@ -4496,6 +4585,7 @@ impl<'a> WorkbookHost<'a> {
                 series.xs = texts;
                 series.typed_xs = None;
                 series.implicit_categories = false;
+                series.categories_imported = false;
                 series.x_ref = Some(reference);
             }
             "bubblesizes" => {
@@ -4509,6 +4599,7 @@ impl<'a> WorkbookHost<'a> {
                 let text = self.range_texts(range).into_iter().next().unwrap_or_default();
                 let series = self.series_mut(id, number)?;
                 series.name = text;
+                series.name_auto = false;
                 series.name_ref = Some(reference);
             }
             _ => return Ok(None),
