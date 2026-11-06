@@ -73639,6 +73639,62 @@ End Function
     }
 
     #[test]
+    fn transpose_udf_argument_shapes_match_native_excel() {
+        let source = include_str!("../../../tests/fixtures/vba/worksheet_array_argument_rank.bas");
+        let fixture = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let cases = [
+            ("TRANSPOSE({1})", "RankRoot", None, "Variant():False|A1:1:1|5:1"),
+            ("TRANSPOSE({1})", "RankFormula", Some(false), "Variant():False|A1:1:1|5:1|again:Variant():False|A1:1:1|5:1"),
+            ("TRANSPOSE({1})", "RankFormula", Some(true), "Variant():False|A1:1:1|5:1|again:Variant():False|A1:1:1|5:1"),
+            ("TRANSPOSE({1,2})", "RankRoot", None, "Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("TRANSPOSE({1,2})", "RankFormula", Some(false), "Variant():False|A2:1:2:1:1|5:1|5:2|again:Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("TRANSPOSE({1,2})", "RankFormula", Some(true), "Variant():False|A2:1:2:1:1|5:1|5:2|again:Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("TRANSPOSE({1;2})", "RankRoot", None, "Variant():False|A1:1:2|5:1|5:2"),
+            ("TRANSPOSE({1;2})", "RankFormula", Some(false), "Variant():False|A1:1:2|5:1|5:2|again:Variant():False|A1:1:2|5:1|5:2"),
+            ("TRANSPOSE({1;2})", "RankFormula", Some(true), "Variant():False|A1:1:2|5:1|5:2|again:Variant():False|A1:1:2|5:1|5:2"),
+            ("TRANSPOSE({1,2;3,4})", "RankRoot", None, "Variant():False|A2:1:2:1:2|5:1|5:3|5:2|5:4"),
+            ("TRANSPOSE({1,2;3,4})", "RankFormula", Some(false), "Variant():False|A2:1:2:1:2|5:1|5:3|5:2|5:4|again:Variant():False|A2:1:2:1:2|5:1|5:3|5:2|5:4"),
+            ("TRANSPOSE({1,2;3,4})", "RankFormula", Some(true), "Variant():False|A2:1:2:1:2|5:1|5:3|5:2|5:4|again:Variant():False|A2:1:2:1:2|5:1|5:3|5:2|5:4"),
+            ("TRANSPOSE(1)", "RankRoot", None, "Double:False|V|5:1"),
+            ("TRANSPOSE(1)", "RankFormula", Some(false), "Double:False|V|5:1|again:Double:False|V|5:1"),
+            ("TRANSPOSE(1)", "RankFormula", Some(true), "Double:False|V|5:1|again:Double:False|V|5:1"),
+            ("TRANSPOSE(D1:E1)", "RankRoot", None, "Variant():False|A2:1:2:1:1|5:1|S:1:-10179"),
+            ("TRANSPOSE(D1:E1)", "RankFormula", Some(false), "Variant():False|A2:1:2:1:1|5:1|S:1:-10179|again:Variant():False|A2:1:2:1:1|5:1|S:1:-10179"),
+            ("TRANSPOSE(D1:E1)", "RankFormula", Some(true), "Error:False|V|E:エラー 2015|again:Error:False|V|E:エラー 2015"),
+            ("TRANSPOSE(D1:D2)", "RankRoot", None, "Variant():False|A1:1:2|5:1|5:2"),
+            ("TRANSPOSE(D1:D2)", "RankFormula", Some(false), "Variant():False|A1:1:2|5:1|5:2|again:Variant():False|A1:1:2|5:1|5:2"),
+            ("TRANSPOSE(D1:D2)", "RankFormula", Some(true), "Double:False|V|5:1|again:Double:False|V|5:1"),
+            ("TRANSPOSE(D1:E2)", "RankRoot", None, "Variant():False|A2:1:2:1:2|5:1|5:2|S:1:-10179|S:1:-8704"),
+            ("TRANSPOSE(D1:E2)", "RankFormula", Some(false), "Variant():False|A2:1:2:1:2|5:1|5:2|S:1:-10179|S:1:-8704|again:Variant():False|A2:1:2:1:2|5:1|5:2|S:1:-10179|S:1:-8704"),
+            ("TRANSPOSE(D1:E2)", "RankFormula", Some(true), "Error:False|V|E:エラー 2015|again:Error:False|V|E:エラー 2015"),
+            ("TRANSPOSE(TRANSPOSE({1,2}))", "RankRoot", None, "Variant():False|A1:1:2|5:1|5:2"),
+            ("TRANSPOSE(TRANSPOSE({1,2}))", "RankFormula", Some(false), "Variant():False|A1:1:2|5:1|5:2|again:Variant():False|A1:1:2|5:1|5:2"),
+            ("TRANSPOSE(TRANSPOSE({1,2}))", "RankFormula", Some(true), "Variant():False|A1:1:2|5:1|5:2|again:Variant():False|A1:1:2|5:1|5:2"),
+            ("TRANSPOSE({1,2})+0", "RankRoot", None, "Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("TRANSPOSE({1,2})+0", "RankFormula", Some(false), "Variant():False|A2:1:2:1:1|5:1|5:2|again:Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("TRANSPOSE({1,2})+0", "RankFormula", Some(true), "Variant():False|A2:1:2:1:1|5:1|5:2|again:Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("IF(TRUE,TRANSPOSE({1,2}),0)", "RankRoot", None, "Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("IF(TRUE,TRANSPOSE({1,2}),0)", "RankFormula", Some(false), "Variant():False|A2:1:2:1:1|5:1|5:2|again:Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("IF(TRUE,TRANSPOSE({1,2}),0)", "RankFormula", Some(true), "Variant():False|A2:1:2:1:1|5:1|5:2|again:Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("IFERROR(TRANSPOSE({1,2}),0)", "RankRoot", None, "Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("IFERROR(TRANSPOSE({1,2}),0)", "RankFormula", Some(false), "Variant():False|A2:1:2:1:1|5:1|5:2|again:Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("IFERROR(TRANSPOSE({1,2}),0)", "RankFormula", Some(true), "Double:False|V|5:1|again:Double:False|V|5:1"),
+            ("LET(x,TRANSPOSE({1,2}),x)", "RankRoot", None, "Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("LET(x,TRANSPOSE({1,2}),x)", "RankFormula", Some(false), "Variant():False|A2:1:2:1:1|5:1|5:2|again:Variant():False|A2:1:2:1:1|5:1|5:2"),
+            ("LET(x,TRANSPOSE({1,2}),x)", "RankFormula", Some(true), "Variant():False|A2:1:2:1:1|5:1|5:2|again:Variant():False|A2:1:2:1:1|5:1|5:2"),
+        ];
+        for (expression, method, legacy, expected) in cases {
+            let book = oxicells_core::parse_xlsx(fixture).unwrap();
+            let mut args = vec![Value::String(expression.to_string())];
+            if let Some(legacy) = legacy { args.push(Value::Boolean(legacy)); }
+            let outcome = execute_workbook_action(book, source, Some(method), args, 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{expression}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap(),
+                serde_json::json!({"type":"string","value":expected}), "{expression}, legacy {legacy:?}");
+        }
+    }
+
+    #[test]
     fn evaluate_array_argument_rank_matches_native_excel() {
         let source = include_str!("../../../tests/fixtures/vba/worksheet_array_argument_rank.bas");
         let rows: Vec<_> = include_str!("../../../tests/fixtures/vba/worksheet_array_argument_rank.tsv").lines()
