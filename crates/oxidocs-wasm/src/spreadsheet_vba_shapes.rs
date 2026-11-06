@@ -185,6 +185,8 @@ pub(super) struct SeriesRecord {
     pub name_ref: Option<String>,
     pub values_ref: Option<String>,
     pub x_ref: Option<String>,
+    /// API values of explicitly assigned categories, before display-text conversion.
+    pub typed_xs: Option<Vec<Value>>,
     pub values: Vec<f64>,
     pub xs: Vec<String>,
     pub color: Option<i64>,
@@ -578,6 +580,7 @@ impl<'a> WorkbookHost<'a> {
                                     name_ref: None,
                                     values_ref: None,
                                     x_ref: None,
+                                    typed_xs: None,
                                     values: series.values.iter().map(|v| v.unwrap_or(0.0)).collect(),
                                     xs: chart.categories.clone(),
                                     color: None,
