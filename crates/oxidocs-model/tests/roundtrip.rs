@@ -65,7 +65,7 @@ fn sample() -> DocxModel {
             ),
             Block::Table(Table {
                 props: tbl,
-                grid: Element::new("w:tblGrid").with_child(Element::new("w:gridCol").with_attr("w:w", "4000")),
+                grid: Some(Element::new("w:tblGrid").with_child(Element::new("w:gridCol").with_attr("w:w", "4000"))),
                 rows: vec![RowItem::Row(Row { props_ex: None, props: Some(trpr), cells: vec![cell("A")], attrs: vec![] })],
             }),
             Block::Paragraph(Paragraph {
@@ -81,6 +81,7 @@ fn sample() -> DocxModel {
             Note { attrs: vec![("w:id".into(), "1".into())], content: vec![para(vec![run("note", &[])], &[])] },
         ]),
         endnotes: None,
+        ..Default::default()
     }
 }
 

@@ -117,6 +117,31 @@ pub fn build_docx_with_template(content: JsValue, template: &[u8]) -> Result<Vec
     Ok(oxidocs_core::build_docx_with_template(&blocks, template))
 }
 
+/// Read a .docx into the document model and return it as JSON.
+///
+/// The model says everything the file says: body, sections, headers and
+/// footers, notes, comments, styles, numbering, settings, theme. A feature
+/// the model cannot express is an error naming it, never silently dropped.
+#[wasm_bindgen]
+pub fn docx_to_model(data: &[u8]) -> Result<String, JsError> {
+    let model = oxidocs_model::DocxModel::read(data).map_err(|e| JsError::new(&e.to_string()))?;
+    serde_json::to_string(&model).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Build a .docx from a document model given as JSON (the shape
+/// `docx_to_model` returns). With `template`, any document-wide part the
+/// model leaves out (styles, numbering, settings, theme, fonts) is taken
+/// from the template.
+#[wasm_bindgen]
+pub fn docx_from_model(model_json: &str, template: Option<Vec<u8>>) -> Result<Vec<u8>, JsError> {
+    let model = oxidocs_model::from_json(model_json).map_err(|e| JsError::new(&e.to_string()))?;
+    let template = match template {
+        Some(bytes) => Some(oxidocs_model::Package::read(&bytes).map_err(|e| JsError::new(&e.to_string()))?),
+        None => None,
+    };
+    model.write(template.as_ref()).map_err(|e| JsError::new(&e.to_string()))
+}
+
 #[wasm_bindgen]
 pub fn parse_document(data: &[u8]) -> Result<JsValue, JsError> {
     let doc = oxidocs_core::parse_docx(data)

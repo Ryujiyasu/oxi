@@ -34,7 +34,7 @@ pub const PPR_BASE: &[&str] = &[
 
 /// EG_RPrBase (§17.3.2.28) and CT_RPr's rPrChange.
 pub const RPR: &[&str] = &[
-    "w:rStyle", "w:rFonts", "w:b", "w:bCs", "w:i", "w:iCs", "w:caps",
+    "w:ins", "w:del", "w:moveFrom", "w:moveTo", "w:rStyle", "w:rFonts", "w:b", "w:bCs", "w:i", "w:iCs", "w:caps",
     "w:smallCaps", "w:strike", "w:dstrike", "w:outline", "w:shadow",
     "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish",
     "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position",
@@ -132,6 +132,7 @@ pub fn container_order(parent: &str, name: &str) -> Option<&'static [&'static st
     Some(match (parent, name) {
         ("w:pPrChange", "w:pPr") => PPR_BASE,
         ("w:rPrChange", "w:rPr") => RPR,
+        ("w:style" | "w:lvl" | "w:pPrDefault" | "w:tblStylePr", "w:pPr") => PPR_BASE,
         ("w:pPr", "w:rPr") => PARA_RPR,
         (_, "w:pPr") => PPR,
         (_, "w:rPr") => RPR,
@@ -144,10 +145,20 @@ pub fn container_order(parent: &str, name: &str) -> Option<&'static [&'static st
     })
 }
 
+/// Elements outside the schema that real generators write and Word opens
+/// (it skips them). Listed one by one so a name missing from the tables
+/// above still fails loudly; each is kept where the file put it.
+///
+/// - `w:sz-cs`: a complex-script size as Apple Pages exports it.
+pub const KNOWN_FOREIGN: &[&str] = &["w:sz-cs"];
+
 /// Extension namespaces Word appends after the schema children of a run or
 /// paragraph property bag (text effects, ligatures, ...). Kept whole.
 pub fn is_extension(name: &str) -> bool {
-    ["w14:", "w15:", "w16:", "w16se:", "w16cid:", "w16du:", "w16sdtdh:", "w16cex:"]
-        .iter()
-        .any(|p| name.starts_with(p))
+    // mc:AlternateContent offers a newer form of a property (an emoji font
+    // choice, a text effect) with a fallback; it is kept whole.
+    name == "mc:AlternateContent"
+        || ["w14:", "w15:", "w16:", "w16se:", "w16cid:", "w16du:", "w16sdtdh:", "w16cex:"]
+            .iter()
+            .any(|p| name.starts_with(p))
 }

@@ -31,7 +31,9 @@ impl std::fmt::Display for Diff {
     }
 }
 
-const DROPPED: &[&str] = &["w:proofErr", "w:lastRenderedPageBreak"];
+/// Layout caches and editing-session records (the settings' w:rsids, a
+/// style's w:rsid).
+const DROPPED: &[&str] = &["w:proofErr", "w:lastRenderedPageBreak", "w:rsids", "w:rsid"];
 
 struct Canon<'a> {
     pkg: &'a Package,
@@ -53,6 +55,7 @@ impl<'a> Canon<'a> {
         self.element_in("", e, rels)
     }
 
+
     fn element_in(&mut self, parent: &str, e: &Element, rels: &HashMap<String, Rel>) -> Element {
         let normalized;
         let e = if e.name == "w:tr" && e.child("w:trHeight").is_some() {
@@ -65,7 +68,9 @@ impl<'a> Canon<'a> {
             .attrs
             .iter()
             .filter(|(k, _)| {
-                !is_session_attr(k) && !k.starts_with("xmlns") && k != "mc:Ignorable" && k != "xml:space"
+                // Markup-compatibility processing hints and namespace
+                // declarations say how to read the file, not what it says.
+                !is_session_attr(k) && !k.starts_with("xmlns") && !k.starts_with("mc:") && k != "xml:space"
             })
             .map(|(k, v)| {
                 if k.starts_with("r:") && !v.is_empty() {
@@ -142,13 +147,41 @@ fn is_bag(parent: &str, name: &str) -> bool {
     schema::container_order(parent, name).is_some() && matches!(name, "w:pPr" | "w:rPr" | "w:tblPr" | "w:trPr" | "w:tcPr" | "w:tblPrEx" | "w:sectPr")
 }
 
-/// The order a property container (or nested property group) uses.
+/// The order a property container (or nested property group, or a list of
+/// named settings) uses. Children of these are sets: order means nothing.
 fn bag_order(parent: &str, name: &str) -> Option<&'static [&'static str]> {
+    use crate::docparts::{ABSTRACT_META, FONT, LEVEL_META, SETTINGS, STYLE_META, WEB_SETTINGS};
     if is_bag(parent, name) {
         return schema::container_order(parent, name);
     }
-    schema::nested(parent, name)
+    if let Some(o) = schema::nested(parent, name) {
+        return Some(o);
+    }
+    Some(match name {
+        "w:settings" => SETTINGS,
+        "w:webSettings" => WEB_SETTINGS,
+        "w:style" | "w:tblStylePr" => STYLE_ORDER,
+        "w:lvl" => LEVEL_ORDER,
+        "w:abstractNum" => ABSTRACT_ORDER,
+        "w:font" => FONT,
+        _ => {
+            let _ = (STYLE_META, LEVEL_META, ABSTRACT_META);
+            return None;
+        }
+    })
 }
+
+const STYLE_ORDER: &[&str] = &[
+    "w:name", "w:aliases", "w:basedOn", "w:next", "w:link", "w:autoRedefine",
+    "w:hidden", "w:uiPriority", "w:semiHidden", "w:unhideWhenUsed", "w:qFormat",
+    "w:locked", "w:personal", "w:personalCompose", "w:personalReply", "w:rsid",
+    "w:pPr", "w:rPr", "w:tblPr", "w:trPr", "w:tcPr", "w:tblStylePr",
+];
+const LEVEL_ORDER: &[&str] = &[
+    "w:start", "w:numFmt", "w:lvlRestart", "w:pStyle", "w:isLgl", "w:suff", "w:lvlText",
+    "w:lvlPicBulletId", "w:legacy", "w:lvlJc", "w:pPr", "w:rPr",
+];
+const ABSTRACT_ORDER: &[&str] = &["w:nsid", "w:multiLevelType", "w:tmpl", "w:name", "w:styleLink", "w:numStyleLink", "w:lvl"];
 
 /// Move a row height written straight under w:tr into its trPr.
 fn hoist_row_height(e: &Element) -> Element {
@@ -211,6 +244,40 @@ fn short(n: &Node) -> String {
     }
 }
 
+/// Prefixes that markup compatibility names in a part (mc:Choice Requires,
+/// mc:Ignorable) but the part never declares. Canonical comparison cannot see
+/// these, yet Word refuses such a file.
+pub fn undeclared_prefixes(pkg: &Package) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (name, bytes) in &pkg.files {
+        if !name.ends_with(".xml") {
+            continue;
+        }
+        let text = crate::package::decode(bytes);
+        let mut declared: Vec<&str> = Vec::new();
+        for (i, _) in text.match_indices("xmlns:") {
+            let rest = &text[i + 6..];
+            if let Some(end) = rest.find('=') {
+                declared.push(&rest[..end]);
+            }
+        }
+        for key in ["Requires=\"", "Ignorable=\""] {
+            for (i, _) in text.match_indices(key) {
+                let rest = &text[i + key.len()..];
+                let Some(end) = rest.find('"') else { continue };
+                for p in rest[..end].split_whitespace() {
+                    if !declared.contains(&p) {
+                        out.push((name.clone(), p.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Compare the content of two packages: the main document (with everything
 /// its relationships reach) and the note parts.
 pub fn compare(a: &Package, b: &Package) -> Vec<Diff> {
@@ -231,18 +298,34 @@ pub fn compare(a: &Package, b: &Package) -> Vec<Diff> {
             diffs.extend(compare_linked(a, &ma, b, &mb));
         }
     }
-    for rel_type in [REL_FOOTNOTES, REL_ENDNOTES] {
-        let pa = a.rels(&ma).into_iter().find(|r| r.rel_type == rel_type).map(|r| r.target);
-        let pb = b.rels(&mb).into_iter().find(|r| r.rel_type == rel_type).map(|r| r.target);
+    // Notes, and every document-wide part the main document links to
+    // (styles, numbering, settings, theme, font table, comments, ...).
+    let mut kinds: Vec<String> = vec![REL_FOOTNOTES.to_string(), REL_ENDNOTES.to_string()];
+    for r in a.rels(&ma).into_iter().chain(b.rels(&mb)) {
+        if !r.external && !crate::package::is_content_rel(&r.rel_type) && !kinds.contains(&r.rel_type) {
+            kinds.push(r.rel_type);
+        }
+    }
+    for rel_type in &kinds {
+        let pa = a.rels(&ma).into_iter().find(|r| &r.rel_type == rel_type).map(|r| r.target);
+        let pb = b.rels(&mb).into_iter().find(|r| &r.rel_type == rel_type).map(|r| r.target);
         let kind = rel_type.rsplit('/').next().unwrap().to_string();
         match (pa, pb) {
             (None, None) => {}
             (Some(x), Some(y)) => {
                 let ex = ca.part(&x);
                 let ey = cb.part(&y);
-                if let (Some(ex), Some(ey)) = (ex, ey) {
-                    if let Some((path, detail)) = first_difference(&ex, &ey, "") {
-                        diffs.push(Diff { part: kind, path, detail });
+                match (ex, ey) {
+                    (Some(ex), Some(ey)) => {
+                        if let Some((path, detail)) = first_difference(&ex, &ey, "") {
+                            diffs.push(Diff { part: kind, path, detail });
+                        }
+                    }
+                    // Binary parts (a VBA project, fonts) compare as bytes.
+                    _ => {
+                        if a.files.get(&x) != b.files.get(&y) {
+                            diffs.push(Diff { part: kind, path: String::new(), detail: "bytes differ".into() });
+                        }
                     }
                 }
             }

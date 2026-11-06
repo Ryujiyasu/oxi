@@ -11,7 +11,8 @@ use std::io::{Cursor, Read, Write};
 
 use serde::{Deserialize, Serialize};
 
-use crate::content::{self, Block, Part, PartSink, Resolver};
+use crate::content::{self, Block, Object, Part, PartSink, Resolver};
+use crate::docparts::{self, Numbering, Styles};
 use crate::props::{Props, Unsupported};
 use crate::xml::{self, Element, Node};
 
@@ -29,6 +30,11 @@ const CT_FOOTNOTES: &str = "application/vnd.openxmlformats-officedocument.wordpr
 const CT_ENDNOTES: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml";
 const CT_RELS: &str = "application/vnd.openxmlformats-package.relationships+xml";
 
+const REL_BASE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+const REL_SWE: &str = "http://schemas.microsoft.com/office/2007/relationships/stylesWithEffects";
+const REL_PEOPLE: &str = "http://schemas.microsoft.com/office/2011/relationships/people";
+const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
+
 /// Relationship types that point at the document's content. Everything else
 /// a template's document links to (styles, numbering, settings, theme,
 /// fonts, comments, custom XML ...) is document-wide and is carried over.
@@ -40,7 +46,7 @@ const CONTENT_RELS: &[&str] = &[
     "/chartEx", "/ink", "/model3d", "/hdphoto", "/svgImage", "/subDocument",
 ];
 
-fn is_content_rel(rel_type: &str) -> bool {
+pub fn is_content_rel(rel_type: &str) -> bool {
     CONTENT_RELS.iter().any(|s| rel_type.ends_with(s)) && !rel_type.ends_with("/customXml")
 }
 
@@ -267,6 +273,71 @@ pub struct DocxModel {
     pub footnotes: Option<Vec<Note>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endnotes: Option<Vec<Note>>,
+
+    // Document-wide parts. A writer given a template takes any of these the
+    // model leaves empty from the template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub styles: Option<Styles>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub styles_with_effects: Option<Styles>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering: Option<Numbering>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<Object>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_settings: Option<Object>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_table: Option<Object>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<Object>,
+    /// The theme part (colours, fonts, effects), applied whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<Part>,
+    /// Custom XML data stores (content controls bind to them).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_xml: Vec<Part>,
+    /// The building-blocks (glossary) document, applied whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glossary: Option<Part>,
+    /// Data parts Word keeps for its own features, carried whole: keyboard
+    /// customizations, Office intelligence (editor suggestions) state,
+    /// document tasks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub app_data: Vec<Part>,
+    /// Comments: each a w:comment with its id, author, date and content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments: Option<Vec<Note>>,
+    /// Comment threads and resolved state (w15:commentsEx), durable ids
+    /// (w16cid:commentsIds) and extensible data (w16cex:commentsExtensible).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments_extended: Option<Object>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments_ids: Option<Object>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments_extensible: Option<Object>,
+}
+
+/// Which document-wide part a relationship type names.
+fn doc_part_kind(rel_type: &str) -> Option<&'static str> {
+    let tail = rel_type.rsplit('/').next().unwrap_or("");
+    Some(match tail {
+        "styles" => "styles",
+        "stylesWithEffects" => "stylesWithEffects",
+        "numbering" => "numbering",
+        "settings" => "settings",
+        "webSettings" => "webSettings",
+        "fontTable" => "fontTable",
+        "people" => "people",
+        "theme" => "theme",
+        "customXml" => "customXml",
+        "glossaryDocument" => "glossaryDocument",
+        "keyMapCustomizations" | "intelligence" | "documenttasks" => "appData",
+        "comments" => "comments",
+        "commentsExtended" => "commentsExtended",
+        "commentsIds" => "commentsIds",
+        "commentsExtensible" => "commentsExtensible",
+        _ => return None,
+    })
 }
 
 struct PartResolver<'a> {
@@ -300,7 +371,7 @@ fn load_part(pkg: &Package, rel: &Rel, depth: usize) -> Result<Part, Unsupported
             rels.push((r.id.clone(), load_part(pkg, &r, depth + 1)?));
         }
     }
-    let name = rel.target.strip_prefix("word/").unwrap_or(&rel.target).to_string();
+    let name = relative("word/document.xml", &rel.target);
     Ok(Part::Internal {
         rel_type: rel.rel_type.clone(),
         name,
@@ -321,6 +392,49 @@ impl Resolver for PartResolver<'_> {
 }
 
 impl DocxModel {
+    /// Whether the model itself carries a document-wide part of this kind.
+    fn provides(&self, kind: &str) -> bool {
+        match kind {
+            "styles" => self.styles.is_some(),
+            "stylesWithEffects" => self.styles_with_effects.is_some(),
+            "numbering" => self.numbering.is_some(),
+            "settings" => self.settings.is_some(),
+            "webSettings" => self.web_settings.is_some(),
+            "fontTable" => self.font_table.is_some(),
+            "people" => self.people.is_some(),
+            "theme" => self.theme.is_some(),
+            "customXml" => !self.custom_xml.is_empty(),
+            "glossaryDocument" => self.glossary.is_some(),
+            "appData" => !self.app_data.is_empty(),
+            "comments" => self.comments.is_some(),
+            "commentsExtended" => self.comments_extended.is_some(),
+            "commentsIds" => self.comments_ids.is_some(),
+            "commentsExtensible" => self.comments_extensible.is_some(),
+            _ => false,
+        }
+    }
+
+    /// The same document without its document-wide parts, for writing over
+    /// a template that supplies them.
+    pub fn without_document_parts(mut self) -> DocxModel {
+        self.styles = None;
+        self.styles_with_effects = None;
+        self.numbering = None;
+        self.settings = None;
+        self.web_settings = None;
+        self.font_table = None;
+        self.people = None;
+        self.theme = None;
+        self.custom_xml.clear();
+        self.glossary = None;
+        self.app_data.clear();
+        self.comments = None;
+        self.comments_extended = None;
+        self.comments_ids = None;
+        self.comments_extensible = None;
+        self
+    }
+
     pub fn read(bytes: &[u8]) -> Result<DocxModel, Error> {
         let pkg = Package::read(bytes)?;
         DocxModel::from_package(&pkg)
@@ -358,6 +472,68 @@ impl DocxModel {
                     model.body = body;
                 }
                 other => return Err(Error::Unsupported(Unsupported { path: format!("w:document/{other}") })),
+            }
+        }
+        for rel in pkg.rels(&main) {
+            if rel.external || is_content_rel(&rel.rel_type) {
+                continue;
+            }
+            let Some(kind) = doc_part_kind(&rel.rel_type) else {
+                return Err(Error::Unsupported(Unsupported { path: format!("document part {}", rel.rel_type) }));
+            };
+            let mut pres = PartResolver::new(pkg, &rel.target);
+            match kind {
+                "styles" | "stylesWithEffects" => {
+                    let st = Styles::read(&pkg.xml(&rel.target)?)?;
+                    if kind == "styles" {
+                        model.styles = Some(st);
+                    } else {
+                        model.styles_with_effects = Some(st);
+                    }
+                }
+                "numbering" => model.numbering = Some(Numbering::read(&pkg.xml(&rel.target)?, &mut pres)?),
+                "settings" => {
+                    model.settings = Some(docparts::read_settings_bag(&pkg.xml(&rel.target)?, "w:settings", docparts::SETTINGS, &mut pres)?)
+                }
+                "webSettings" => {
+                    model.web_settings = Some(docparts::read_settings_bag(&pkg.xml(&rel.target)?, "w:webSettings", docparts::WEB_SETTINGS, &mut pres)?)
+                }
+                "fontTable" => model.font_table = Some(docparts::read_font_table(&pkg.xml(&rel.target)?, &mut pres)?),
+                "people" => model.people = Some(docparts::read_people(&pkg.xml(&rel.target)?, &mut pres)?),
+                "theme" => model.theme = Some(load_part(pkg, &rel, 0)?),
+                "customXml" => model.custom_xml.push(load_part(pkg, &rel, 0)?),
+                "glossaryDocument" => model.glossary = Some(load_part(pkg, &rel, 0)?),
+                "appData" => model.app_data.push(load_part(pkg, &rel, 0)?),
+                "comments" => {
+                    let root = pkg.xml(&rel.target)?;
+                    if root.name != "w:comments" {
+                        return Err(Error::Unsupported(Unsupported { path: format!("comments/{}", root.name) }));
+                    }
+                    let mut out = Vec::new();
+                    for c in root.elements() {
+                        if c.name != "w:comment" {
+                            return Err(Error::Unsupported(Unsupported { path: format!("w:comments/{}", c.name) }));
+                        }
+                        let attrs = c.attrs.iter().filter(|(k, _)| !crate::props::is_session_attr(k)).cloned().collect();
+                        out.push(Note { attrs, content: content::read_blocks(c, "w:comment", &mut pres)? });
+                    }
+                    model.comments = Some(out);
+                }
+                "commentsExtended" => {
+                    model.comments_extended = Some(docparts::read_list(&pkg.xml(&rel.target)?, "w15:commentsEx", &["w15:commentEx"], &mut pres)?)
+                }
+                "commentsIds" => {
+                    model.comments_ids = Some(docparts::read_list(&pkg.xml(&rel.target)?, "w16cid:commentsIds", &["w16cid:commentId"], &mut pres)?)
+                }
+                "commentsExtensible" => {
+                    model.comments_extensible = Some(docparts::read_list(
+                        &pkg.xml(&rel.target)?,
+                        "w16cex:commentsExtensible",
+                        &["w16cex:commentExtensible", "w16cex:extLst"],
+                        &mut pres,
+                    )?)
+                }
+                _ => unreachable!(),
             }
         }
         for rel in pkg.rels(&main) {
@@ -465,7 +641,7 @@ struct OutPackage {
 
 impl OutPackage {
     fn unique_name(&self, hint: &str) -> String {
-        let hint = format!("word/{}", hint.trim_start_matches('/'));
+        let hint = resolve("word/document.xml", hint.trim_start_matches('/'));
         if !self.files.contains_key(&hint) {
             return hint;
         }
@@ -636,7 +812,7 @@ impl DocxModel {
             }
             out.files.insert("_rels/.rels".into(), rels_doc(&root_out));
             for r in t.rels(&t_main) {
-                if is_content_rel(&r.rel_type) {
+                if is_content_rel(&r.rel_type) || doc_part_kind(&r.rel_type).map(|k| self.provides(k)) == Some(true) {
                     continue;
                 }
                 taken.push(r.id.clone());
@@ -698,8 +874,74 @@ impl DocxModel {
             note_parts.push((name, rel));
         }
 
+        // Document-wide parts the model carries.
+        let mut doc_part_names: Vec<(String, String)> = Vec::new();
+        {
+            type Build<'b> = Box<dyn Fn(&mut dyn PartSink) -> Element + 'b>;
+            let mut typed: Vec<(&str, &str, String, Build)> = Vec::new();
+            if let Some(s) = &self.styles {
+                typed.push(("styles.xml", "styles", format!("{CT_WML}styles+xml"), Box::new(move |_| s.write())));
+            }
+            if let Some(s) = &self.styles_with_effects {
+                typed.push(("stylesWithEffects.xml", "stylesWithEffects", "application/vnd.ms-word.stylesWithEffects+xml".into(), Box::new(move |_| s.write())));
+            }
+            if let Some(n) = &self.numbering {
+                typed.push(("numbering.xml", "numbering", format!("{CT_WML}numbering+xml"), Box::new(move |k| n.write(k))));
+            }
+            if let Some(list) = &self.comments {
+                typed.push(("comments.xml", "comments", format!("{CT_WML}comments+xml"), Box::new(move |k| {
+                    let mut root = Element::new("w:comments");
+                    for n in list {
+                        let mut kids = Vec::new();
+                        content::write_blocks(&n.content, k, &mut kids);
+                        root.children.push(Node::Element(Element { name: "w:comment".into(), attrs: n.attrs.clone(), children: kids }));
+                    }
+                    root
+                })));
+            }
+            for (obj, file, kind, ct) in [
+                (&self.comments_extended, "commentsExtended.xml", "commentsExtended", format!("{CT_WML}commentsExtended+xml")),
+                (&self.comments_ids, "commentsIds.xml", "commentsIds", format!("{CT_WML}commentsIds+xml")),
+                (&self.comments_extensible, "commentsExtensible.xml", "commentsExtensible", format!("{CT_WML}commentsExtensible+xml")),
+                (&self.settings, "settings.xml", "settings", format!("{CT_WML}settings+xml")),
+                (&self.web_settings, "webSettings.xml", "webSettings", format!("{CT_WML}webSettings+xml")),
+                (&self.font_table, "fontTable.xml", "fontTable", format!("{CT_WML}fontTable+xml")),
+                (&self.people, "people.xml", "people", format!("{CT_WML}people+xml")),
+            ] {
+                if let Some(o) = obj {
+                    typed.push((file, kind, ct, Box::new(move |k| content::write_object(o, k))));
+                }
+            }
+            for (file, kind, ct, build) in typed {
+                let name = out.unique_name(file);
+                let mut sink = PartRels::new(&mut out, &name, Vec::new());
+                let root = build(&mut sink);
+                let rels = std::mem::take(&mut sink.rels);
+                drop(sink);
+                out.put(&name, &ct, xml::write(&root, true).into_bytes());
+                if !rels.is_empty() {
+                    out.files.insert(rels_path(&name), rels_doc(&rels));
+                }
+                let rel_type = match kind {
+                    "stylesWithEffects" => REL_SWE.to_string(),
+                    "people" => REL_PEOPLE.to_string(),
+                    "commentsExtended" => "http://schemas.microsoft.com/office/2011/relationships/commentsExtended".to_string(),
+                    "commentsIds" => "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds".to_string(),
+                    "commentsExtensible" => "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible".to_string(),
+                    k => format!("{REL_BASE}{k}"),
+                };
+                doc_part_names.push((rel_type, name));
+            }
+        }
+
         // The document itself.
         let mut sink = PartRels::new(&mut out, &main, taken);
+        for (rel_type, name) in &doc_part_names {
+            sink.link(rel_type, name);
+        }
+        for p in self.theme.iter().chain(self.custom_xml.iter()).chain(self.glossary.iter()).chain(self.app_data.iter()) {
+            sink.add(p);
+        }
         let mut body = Vec::new();
         content::write_blocks(&self.body, &mut sink, &mut body);
         // Section breaks inside paragraphs and the final section name their

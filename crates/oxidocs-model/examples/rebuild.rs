@@ -81,6 +81,37 @@ fn sabotage(v: &mut serde_json::Value, kind: &str, in_hf: bool) -> bool {
                         notes.pop();
                         return true;
                     }
+                    ("style", "styles", Value::Object(st)) => {
+                        if let Some(Value::Array(list)) = st.get_mut("styles") {
+                            if let Some(Value::Object(first)) = list.first_mut() {
+                                first.insert("meta".into(), Value::Array(vec![]));
+                                if let Some(Value::Array(a)) = first.get_mut("attrs") {
+                                    a.push(serde_json::json!(["w:customStyle", "1"]));
+                                }
+                                return true;
+                            }
+                        }
+                    }
+                    ("theme", "theme", Value::Object(t)) => {
+                        if let Some(Value::Object(i)) = t.get_mut("Internal") {
+                            if let Some(Value::Array(bytes)) = i.get_mut("data") {
+                                // Flip the case of a letter inside an attribute value
+                                // (a typeface or colour name) in the middle of the part.
+                                let mid = bytes.len() / 2;
+                                let mut in_value = false;
+                                for (k, slot) in bytes.iter_mut().enumerate() {
+                                    let b = slot.as_u64().unwrap_or(0) as u8;
+                                    if b == b'"' {
+                                        in_value = !in_value;
+                                    }
+                                    if k > mid && in_value && b.is_ascii_alphabetic() {
+                                        *slot = Value::from((b ^ 0x20) as u64);
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     ("prop", "attrs", Value::Array(a)) if !a.is_empty() && !in_hf => {
                         if let Some(Value::Array(pair)) = a.first_mut() {
                             if let Some(Value::String(val)) = pair.get_mut(1) {
@@ -106,13 +137,22 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let blank = args.iter().any(|a| a == "--blank");
     let check = args.iter().any(|a| a == "--sabotage");
+    // --keep DIR writes every rebuilt file there (to hand to Word).
+    let keep = args.iter().position(|a| a == "--keep").map(|i| {
+        let dir = PathBuf::from(args.get(i + 1).cloned().expect("--keep DIR"));
+        args.drain(i..=i + 1);
+        dir
+    });
+    if let Some(dir) = &keep {
+        std::fs::create_dir_all(dir).unwrap();
+    }
     args.retain(|a| a != "--blank" && a != "--sabotage");
     if check {
         let corpus = PathBuf::from(args.first().cloned().unwrap_or_else(|| "tools/golden-test/documents/docx".into()));
         let mut files = Vec::new();
         docs(&corpus, &mut files);
         files.sort();
-        for kind in ["text", "header", "image", "note", "prop"] {
+        for kind in ["text", "header", "image", "note", "prop", "style", "theme"] {
             let (mut tried, mut caught) = (0, 0);
             let mut missed = Vec::new();
             for f in &files {
@@ -123,7 +163,7 @@ fn main() {
                 if !sabotage(&mut v, kind, false) {
                     continue;
                 }
-                let Ok(broken) = serde_json::from_value::<oxidocs_model::DocxModel>(v) else { continue };
+                let Ok(broken) = oxidocs_model::from_json(&v.to_string()) else { continue };
                 let Ok(out) = broken.write((!blank).then_some(&pkg)) else { continue };
                 tried += 1;
                 if canon::compare(&pkg, &Package::read(&out).unwrap()).is_empty() {
@@ -159,14 +199,26 @@ fn main() {
             Ok(Err(Error::Unsupported(u))) => (format!("unsupported {}", u.path), format!("unsupported {}", feature(&u.path))),
             Ok(Err(e)) => (format!("error {e}"), format!("error {}", e.to_string().chars().take(60).collect::<String>())),
             Ok(Ok(out)) => {
+                if let Some(dir) = &keep {
+                    std::fs::write(dir.join(f.file_name().unwrap()), &out).unwrap();
+                }
                 let a = Package::read(&bytes).unwrap();
                 let b = Package::read(&out).unwrap();
                 let diffs = canon::compare(&a, &b);
-                if diffs.is_empty() {
+                // Word refuses a part that names an undeclared prefix; only
+                // count it when the original was clean.
+                let ours: Vec<_> = canon::undeclared_prefixes(&b)
+                    .into_iter()
+                    .filter(|x| !canon::undeclared_prefixes(&a).contains(x))
+                    .collect();
+                if !ours.is_empty() {
+                    (format!("undeclared prefix {ours:?}"), "undeclared prefix".to_string())
+                } else if diffs.is_empty() {
                     ("ok".to_string(), "ok".to_string())
                 } else {
                     let d = &diffs[0];
-                    (format!("differs {d}"), format!("differs {} {}", d.part, feature(&d.path)))
+                    let all: Vec<String> = diffs.iter().take(3).map(|d| d.to_string()).collect();
+                    (format!("differs {}", all.join(" | ")), format!("differs {} {}", d.part, feature(&d.path)))
                 }
             }
         };

@@ -148,15 +148,30 @@ impl Element {
         }
     }
 
-    /// The canonical prefixes used anywhere in this subtree.
+    /// The canonical prefixes used anywhere in this subtree, including those
+    /// markup compatibility names in attribute VALUES (mc:Choice Requires,
+    /// mc:Ignorable): a consumer resolves those too, and an undeclared one
+    /// makes Word refuse the file.
     pub fn prefixes(&self, out: &mut std::collections::BTreeSet<String>) {
         if let Some((p, _)) = self.name.split_once(':') {
             out.insert(p.to_string());
         }
-        for (k, _) in &self.attrs {
+        for (k, v) in &self.attrs {
             if let Some((p, _)) = k.split_once(':') {
                 if p != "xmlns" {
                     out.insert(p.to_string());
+                }
+            }
+            let names_prefixes = matches!(
+                k.as_str(),
+                "Requires" | "mc:Ignorable" | "mc:ProcessContent" | "mc:PreserveElements" | "mc:PreserveAttributes" | "mc:MustUnderstand"
+            );
+            if names_prefixes {
+                for word in v.split_whitespace() {
+                    let p = word.split(':').next().unwrap_or(word);
+                    if uri_for(p).is_some() {
+                        out.insert(p.to_string());
+                    }
                 }
             }
         }
@@ -353,6 +368,14 @@ mod tests {
         assert_eq!(e.elements().next().unwrap().name, "w:body");
         let out = write(&e, true);
         assert!(out.contains(r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p/></w:body></w:document>"#), "{out}");
+    }
+
+    #[test]
+    fn declares_a_prefix_only_named_in_a_requires_value() {
+        // Word refuses a part whose mc:Choice requires an undeclared prefix.
+        let e = parse(r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"><mc:AlternateContent><mc:Choice Requires="wpg"><w:t/></mc:Choice></mc:AlternateContent></w:r>"#).unwrap();
+        let out = write(&e, true);
+        assert!(out.contains(r#"xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup""#), "{out}");
     }
 
     #[test]

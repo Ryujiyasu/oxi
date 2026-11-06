@@ -77,6 +77,9 @@ pub enum Inline {
     Marker(Marker),
     /// Office Math (m:oMath / m:oMathPara).
     Math(Object),
+    /// Run content written straight into the paragraph, outside any run (a
+    /// w:br some generators put between runs). Kept where it was written.
+    Loose(RunItem),
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -115,6 +118,9 @@ pub enum RunItem {
     Ruby(Ruby),
     /// w:drawing, w:pict, w:object, mc:AlternateContent, w:contentPart.
     Object(Object),
+    /// Run properties written out of place: after the content, or a second
+    /// rPr in the same run.
+    Props(Props),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -186,7 +192,9 @@ pub struct Marker {
 pub struct Table {
     pub props: Props,
     /// Grid column widths as written (w:gridCol w:w), with any grid change.
-    pub grid: Element,
+    /// Some generators leave the grid out; then so does the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<Element>,
     pub rows: Vec<RowItem>,
 }
 
@@ -496,6 +504,11 @@ fn read_inline(e: &Element, path: &str, res: &mut dyn Resolver, out: &mut Vec<In
             Inline::Revision(read_revision(e, &here, res, &mut |c, p, r, v| read_inline(c, p, r, v))?)
         }
         "m:oMath" | "m:oMathPara" => Inline::Math(read_object(e, res)?),
+        "w:br" | "w:tab" | "w:cr" | "w:t" => {
+            let holder = Element { name: "w:r".into(), attrs: vec![], children: vec![Node::Element(e.clone())] };
+            let mut run = read_run(&holder, path, res)?;
+            Inline::Loose(run.content.remove(0))
+        }
         _ => return unsupported(here),
     };
     out.push(item);
@@ -511,10 +524,13 @@ pub fn read_run(e: &Element, path: &str, res: &mut dyn Resolver) -> Result<Run, 
             continue;
         }
         let item = match name {
-            "w:rPr" => {
+            "w:rPr" if run.props.is_none() && run.content.is_empty() => {
                 run.props = Some(Props::read("w:r", c)?);
                 continue;
             }
+            // A second rPr, or one after the content: some generators write
+            // these. Kept where the file put it.
+            "w:rPr" => RunItem::Props(Props::read("w:r", c)?),
             "w:t" => RunItem::Text(text_of(c)),
             "w:delText" => RunItem::DeletedText(text_of(c)),
             "w:instrText" => RunItem::InstrText(text_of(c)),
@@ -581,7 +597,7 @@ fn read_ruby(e: &Element, path: &str, res: &mut dyn Resolver) -> Result<Ruby, Un
 
 fn read_table(e: &Element, path: &str, res: &mut dyn Resolver) -> Result<Table, Unsupported> {
     let mut props = Props::new("w:tblPr");
-    let mut grid = Element::new("w:tblGrid");
+    let mut grid = None;
     let mut rows = Vec::new();
     for c in e.elements() {
         match c.name.as_str() {
@@ -594,7 +610,7 @@ fn read_table(e: &Element, path: &str, res: &mut dyn Resolver) -> Result<Table, 
                 }
                 let mut g = c.clone();
                 strip_session(&mut g);
-                grid = g;
+                grid = Some(g);
             }
             _ => read_row_item(c, path, res, &mut rows)?,
         }
@@ -815,6 +831,13 @@ pub fn write_inline(i: &Inline, sink: &mut dyn PartSink) -> Element {
         Inline::Revision(r) => write_revision(r, sink, &mut |x, k| write_inline(x, k)),
         Inline::Marker(m) => el(&m.name, &m.attrs),
         Inline::Math(o) => write_object(o, sink),
+        Inline::Loose(item) => {
+            let run = write_run(&Run { content: vec![item.clone()], ..Default::default() }, sink);
+            match run.children.into_iter().next() {
+                Some(Node::Element(e)) => e,
+                _ => Element::new("w:r"),
+            }
+        }
     }
 }
 
@@ -868,6 +891,7 @@ pub fn write_run(r: &Run, sink: &mut dyn PartSink) -> Element {
                 rb
             }
             RunItem::Object(o) => write_object(o, sink),
+            RunItem::Props(p) => p.element().clone(),
         };
         e.children.push(Node::Element(c));
     }
@@ -877,7 +901,9 @@ pub fn write_run(r: &Run, sink: &mut dyn PartSink) -> Element {
 fn write_table(t: &Table, sink: &mut dyn PartSink) -> Element {
     let mut e = Element::new("w:tbl");
     e.children.push(Node::Element(t.props.element().clone()));
-    e.children.push(Node::Element(t.grid.clone()));
+    if let Some(g) = &t.grid {
+        e.children.push(Node::Element(g.clone()));
+    }
     for r in &t.rows {
         e.children.push(Node::Element(write_row_item(r, sink)));
     }

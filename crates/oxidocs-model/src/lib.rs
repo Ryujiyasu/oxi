@@ -16,6 +16,7 @@
 
 pub mod canon;
 pub mod content;
+pub mod docparts;
 pub mod package;
 pub mod props;
 pub mod schema;
@@ -25,6 +26,17 @@ pub use content::{Block, Cell, CellItem, Inline, Paragraph, Row, RowItem, Run, R
 pub use package::{DocxModel, Error, Package};
 pub use props::{Props, Unsupported};
 
+/// Parse a model from JSON. Nested tables and grouped shapes go deeper than
+/// serde_json's default limit of 128 levels, so the limit is lifted.
+pub fn from_json(json: &str) -> Result<DocxModel, serde_json::Error> {
+    use serde::Deserialize;
+    let mut de = serde_json::Deserializer::from_str(json);
+    de.disable_recursion_limit();
+    let model = DocxModel::deserialize(&mut de)?;
+    de.end()?;
+    Ok(model)
+}
+
 /// Read a document into the model, pass it through JSON (so only plain data
 /// survives), and write it again. With `template`, the original's
 /// document-wide parts are reused; without, the model must say everything.
@@ -32,6 +44,10 @@ pub fn rebuild(bytes: &[u8], template: bool) -> Result<Vec<u8>, Error> {
     let pkg = Package::read(bytes)?;
     let model = DocxModel::from_package(&pkg)?;
     let json = serde_json::to_string(&model).map_err(|e| Error::Xml(e.to_string()))?;
-    let model: DocxModel = serde_json::from_str(&json).map_err(|e| Error::Xml(e.to_string()))?;
-    model.write(template.then_some(&pkg))
+    let model = from_json(&json).map_err(|e| Error::Xml(e.to_string()))?;
+    if template {
+        model.without_document_parts().write(Some(&pkg))
+    } else {
+        model.write(None)
+    }
 }

@@ -156,7 +156,9 @@ fn sort(e: &mut Element, order: &[&str]) {
 
 /// Attributes that only record editing sessions; never meaningful.
 pub fn is_session_attr(name: &str) -> bool {
-    name.starts_with("w:rsid") || name == "w14:paraId" || name == "w14:textId"
+    // Paragraph ids (w14:paraId) are NOT session data: comment threads and
+    // their resolved state point at them.
+    name.starts_with("w:rsid")
 }
 
 fn check(e: &Element, order: &'static [&'static str], path: &str) -> Result<Element, Unsupported> {
@@ -172,7 +174,7 @@ fn check(e: &Element, order: &'static [&'static str], path: &str) -> Result<Elem
             Node::Text(_) => return unsupported(format!("{path}/#text")),
         };
         let here = format!("{path}/{}", c.name);
-        if schema::is_extension(&c.name) {
+        if schema::is_extension(&c.name) || schema::KNOWN_FOREIGN.contains(&c.name.as_str()) {
             out.children.push(Node::Element(c.clone()));
             continue;
         }
