@@ -1558,6 +1558,9 @@ pub struct Chart {
     /// What the category axis is labelled with, shared by every series.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub categories: Vec<String>,
+    /// Shared category labels can refer to cells independently of series order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_reference: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_axis: Option<ChartAxis>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1689,7 +1692,8 @@ pub struct ChartSeries {
     /// vector means categories were omitted; None supports older IR producers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category_values: Option<Vec<ChartCategoryValue>>,
-    /// An all-missing text cache cannot reveal its domain from its values.
+    /// Missing text categories and an explicitly empty category source cannot
+    /// reveal their text semantics from their values alone.
     #[serde(default)]
     pub text_category_gaps: bool,
     /// One per category. A gap in the data is a `None`, and the line either

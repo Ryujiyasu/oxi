@@ -99,7 +99,7 @@ fn series_data_parts(series: &crate::ir::ChartSeries, shared: &[String], scatter
             shared.get(i).and_then(|v| v.parse::<f64>().ok()).unwrap_or((i + 1) as f64))).collect()
     } else { shared.iter().map(|v| ChartCategoryValue::Text(v.clone())).collect() };
     let categories = series.category_values.as_deref().unwrap_or(&legacy);
-    let cats = if categories.is_empty() && series.category_reference.is_none() { String::new() } else {
+    let cats = if categories.is_empty() && series.category_reference.is_none() && !series.text_category_gaps { String::new() } else {
         let is_numeric = !series.text_category_gaps && categories.iter().all(|v| matches!(v, ChartCategoryValue::Number(_) | ChartCategoryValue::Blank));
         let body = if is_numeric {
             let values: Vec<_> = categories.iter().map(|v| match v {
@@ -452,6 +452,13 @@ fn replace_child(xml: &str, name: &str, replacement: &str) -> Result<String, Xls
 
 
 
+fn ordered_source_series<'a>(xml: &str, fields: &'a [(String, usize, usize)]) -> Vec<&'a (String, usize, usize)> {
+    let orders = crate::chart::series_positions(xml, "order");
+    let mut series: Vec<_> = fields.iter().filter(|(name, _, _)| name == "ser").enumerate().collect();
+    series.sort_by_key(|(index, _)| orders.get(*index).copied().flatten().unwrap_or(*index));
+    series.into_iter().map(|(_, fragment)| fragment).collect()
+}
+
 fn series_fragment_envelope(xml: &str, at: usize, ns: &str) -> Result<(String, String), XlsxError> {
     use std::collections::BTreeMap;
     let mut reader = Reader::from_str(xml);
@@ -502,7 +509,7 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
     let plot = plots[0].0.as_str();
     let path = ["chartSpace", "chart", "plotArea", plot];
     let (children, end) = children_at(xml, &path)?;
-    let existing: Vec<_> = children.iter().filter(|(name, _, _)| name == "ser").collect();
+    let existing = ordered_source_series(xml, &children);
     let scatter = matches!(plot, "scatterChart" | "bubbleChart");
     let replace = |fragment: &str, tag: &str, replacement: &str, open: &str, close: &str| -> Result<String, XlsxError> {
         let wrapped = format!("{open}{fragment}{close}");
@@ -553,7 +560,17 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
         edits.push((*start, *finish, replacement));
     }
     let mut appended = String::new();
+    let next_position = |field| match crate::chart::series_positions(xml, field).into_iter().enumerate()
+        .map(|(index, value)| value.unwrap_or(index)).max() {
+            Some(value) => value.checked_add(1), None => Some(0),
+        };
+    let next_order = next_position("order");
+    let next_id = next_position("idx");
     for (i, series) in after.series.iter().enumerate().skip(existing.len()) {
+        let next = |position: Option<usize>| position.and_then(|value| value.checked_add(i - existing.len()))
+            .ok_or_else(|| XlsxError::InvalidData("series identifiers cannot be extended".into()));
+        let new_order = next(next_order)?;
+        let new_id = next(next_id)?;
         // Reuse the new-series serializer for modeled formatting, then insert
         // only the series, retaining the original plot, axes and extensions.
         let kind = if plot == "bubbleChart" { "bubble" } else if scatter { "scatter" } else if matches!(before.kind.as_str(), "pie" | "doughnut" | "ofPie") { &before.kind } else { "bar" };
@@ -568,8 +585,8 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
         let fragment = generated[*begin..*finish]
             .replacen("<c:ser>", &format!("<c:ser xmlns:c=\"{ns}\" xmlns:a=\"{drawing_ns}\">"), 1)
             .replace(&format!("xmlns:c=\"{C}\""), &format!("xmlns:c=\"{ns}\""))
-            .replacen("<c:idx val=\"0\"/>", &format!("<c:idx val=\"{i}\"/>"), 1)
-            .replacen("<c:order val=\"0\"/>", &format!("<c:order val=\"{i}\"/>"), 1);
+            .replacen("<c:idx val=\"0\"/>", &format!("<c:idx val=\"{new_id}\"/>"), 1)
+            .replacen("<c:order val=\"0\"/>", &format!("<c:order val=\"{new_order}\"/>"), 1);
         appended.push_str(&fragment);
     }
     if !appended.is_empty() {
@@ -613,7 +630,7 @@ fn patch_plot_options(xml: &str, before: &Chart, after: &Chart, ns: &str, drawin
     let mut plot = generated[*new_start..*new_end].to_string();
     let new_path = ["chartSpace", "chart", "plotArea", new_tag.as_str()];
     let (new_settings, _) = children_at(&generated, &new_path)?;
-    let old_series: Vec<_> = old_settings.iter().filter(|(name, _, _)| name == "ser").collect();
+    let old_series = ordered_source_series(xml, &old_settings);
     let new_series: Vec<_> = new_settings.iter().filter(|(name, _, _)| name == "ser").collect();
     let (old_series_fields, _) = children_at(xml, &["chartSpace", "chart", "plotArea", old_tag.as_str(), "ser"])
         .unwrap_or_default();
@@ -1310,6 +1327,53 @@ mod ofpie_data_tests {
             assert_eq!(read.series[1].name, "Other");
             assert_eq!(read.plot_options.of_pie, before.plot_options.of_pie);
         }
+    }
+
+
+    #[test]
+    fn ordered_series_edits_and_appends_preserve_source_identity() {
+        let controls: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/vba/chart_import_contracts.json")).unwrap();
+        let mut checked = 0;
+        for case in controls["category_cases"].as_array().unwrap().iter()
+            .filter(|case| case["id"].as_str().unwrap().ends_with(":two_unique_order_swapped")) {
+            let xml = case["xml"].as_str().unwrap();
+            for sparse in [false, true] {
+                let xml = if sparse {
+                    xml.replace("<c:order val=\"1\"/>", "<c:order val=\"20\"/>")
+                        .replace("<c:order val=\"0\"/>", "<c:order val=\"10\"/>")
+                        .replace("<c:idx val=\"0\"/>", "<c:idx val=\"40\"/>")
+                        .replace("<c:idx val=\"1\"/>", "<c:idx val=\"7\"/>")
+                } else { xml.to_string() };
+                let before = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+                assert_eq!(before.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Cost", "Revenue"]);
+                let mut after = before.clone();
+                after.series[0].values[0] = Some(91.0);
+                let patched = patch_chart(&xml, &before, &after).unwrap();
+                let read = crate::chart::parse_chart_xml(&patched, &crate::parser::Theme::default()).unwrap();
+                assert_eq!(read.series[0].name, "Cost");
+                assert_eq!(read.series[0].values[0], Some(91.0));
+                assert_eq!(read.series[1], before.series[1], "{}", case["id"]);
+                assert_eq!(read.categories, before.categories);
+                let mut later = after.series[0].clone(); later.name = "Later".into();
+                after.series.push(later);
+                let appended = patch_chart(&xml, &before, &after).unwrap();
+                let read = crate::chart::parse_chart_xml(&appended, &crate::parser::Theme::default()).unwrap();
+                assert_eq!(read.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Cost", "Revenue", "Later"]);
+                assert_eq!(read.series[0].values[0], Some(91.0));
+                assert_eq!(read.series[1], before.series[1]);
+                let mut ids = crate::chart::series_positions(&appended, "idx");
+                ids.sort(); ids.dedup(); assert_eq!(ids.len(), 3);
+                assert_eq!(read.category_reference, before.category_reference);
+                if !sparse {
+                    let exhausted = xml.replace("<c:idx val=\"0\"/>",
+                        &format!("<c:idx val=\"{}\"/>", usize::MAX));
+                    assert!(patch_chart(&exhausted, &before, &after).is_err());
+                }
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 20);
     }
 
     #[test]

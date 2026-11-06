@@ -523,8 +523,8 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                         let mut typed = vec![ChartCategoryValue::Blank;
                             category_count.max(typed_categories.iter().map(|(i, _)| i + 1).max().unwrap_or(0))];
                         for (i, value) in typed_categories.drain(..) { typed[i] = value; }
-                        current.text_category_gaps = category_cache_seen && !numeric_categories
-                            && typed.iter().all(|value| matches!(value, ChartCategoryValue::Blank));
+                        current.text_category_gaps = category_cache_seen && (typed.is_empty() || (!numeric_categories
+                            && typed.iter().all(|value| matches!(value, ChartCategoryValue::Blank))));
                         current.category_values = Some(typed);
                         categories.clear();
                         series.push(current.clone());
@@ -556,6 +556,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
         buf.clear();
     }
 
+    chart.category_reference = series.first().and_then(|series| series.category_reference.clone());
     chart.series = series;
     // An explicitly enabled automatic title is materialized on file open.
     // Pie and of-pie plots use the first series even when more are stored.
@@ -566,6 +567,12 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
             .filter(|series| !series.name.is_empty() || series.explicit_empty_name || series.name_reference.is_some())
             .map(|series| series.name.clone());
     }
+    // Automatic titles and shared category labels use source order, while
+    // the SeriesCollection follows each series' explicit order.
+    let orders = series_positions(xml, "order");
+    let mut ordered: Vec<_> = chart.series.into_iter().enumerate().collect();
+    ordered.sort_by_key(|(index, _)| orders.get(*index).copied().flatten().unwrap_or(*index));
+    chart.series = ordered.into_iter().map(|(_, series)| series).collect();
     // An empty chart is still an object: VBA can name it, set its properties
     // and add series later. Keep it even when there is nothing to plot yet.
     if chart.kind.is_empty() {
@@ -575,6 +582,41 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     Some(chart)
 }
 
+
+/// Source positions are independent of the series' persistent identifiers.
+pub(crate) fn series_positions(xml: &str, field: &str) -> Vec<Option<usize>> {
+    use quick_xml::{reader::NsReader, name::ResolveResult};
+    let mut reader = NsReader::from_str(xml);
+    let mut parents: Vec<(String, bool)> = Vec::new();
+    let mut positions = Vec::new();
+    loop {
+        let Ok((namespace, event)) = reader.read_resolved_event() else { break };
+        let chart_namespace = matches!(namespace, ResolveResult::Bound(ref ns)
+            if matches!(ns.as_ref(), b"http://schemas.openxmlformats.org/drawingml/2006/chart"
+                | b"http://purl.oclc.org/ooxml/drawingml/chart"));
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let name = local_name(element.name().as_ref());
+                let at_plot = parents.len() >= 4 && parents.iter().all(|(_, chart)| *chart)
+                    && parents[0].0 == "chartSpace" && parents[1].0 == "chart"
+                    && parents[2].0 == "plotArea" && parents[3].0.ends_with("Chart");
+                if chart_namespace && name == "ser" && parents.len() == 4 && at_plot {
+                    positions.push(None);
+                } else if chart_namespace && name == field && parents.len() == 5 && at_plot
+                    && parents[4].0 == "ser" {
+                    if let Some(position) = positions.last_mut() {
+                        *position = get_attr(element, "val").and_then(|value| value.parse().ok());
+                    }
+                }
+                if matches!(event, Event::Start(_)) { parents.push((name, chart_namespace)); }
+            }
+            Event::End(_) => { parents.pop(); }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    positions
+}
 
 /// Plot-wide settings and the first series jointly determine the visible plot.
 /// A canonical scatter plot can say "lineMarker" while hiding its series line.

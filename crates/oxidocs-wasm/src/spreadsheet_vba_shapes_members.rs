@@ -1076,6 +1076,8 @@ impl<'a> WorkbookHost<'a> {
             chart_type,
             plot_modified: true,
             of_pie: chart_plot_options(chart_type).of_pie,
+            category_axis_labels: Vec::new(),
+            category_axis_reference: None,
             series: Vec::new(),
             has_title: false,
             title: String::new(),
@@ -1746,10 +1748,13 @@ impl<'a> WorkbookHost<'a> {
     fn series_point_count(&self, id: u64, number: usize) -> Result<usize, String> {
         let series = self.series(id, number)?;
         let kind = series.chart_type.unwrap_or(self.chart(id)?.chart_type);
-        Ok(if matches!(kind, 15 | 87) {
+        let count = if matches!(kind, 15 | 87) {
             series.bubble_sizes.as_ref().map_or(series.values.len(), |sizes| series.values.len().min(sizes.len()))
         } else if matches!(kind, 68 | 71) && !series.values.is_empty() { series.values.len() + 1 }
-        else { series.values.len() })
+        else { series.values.len() };
+        Ok(if series.categories_imported && matches!(chart_kind(kind), "scatter" | "bubble") {
+            series.typed_xs.as_ref().filter(|xs| !xs.is_empty()).map_or(count, |xs| count.min(xs.len()))
+        } else { count })
     }
 
     fn cells_of_range_object(&self, value: &Value) -> Option<CellRange> {
@@ -1782,36 +1787,67 @@ impl<'a> WorkbookHost<'a> {
             .collect()
     }
 
+    fn category_reference_values(&self, reference: &str) -> Option<Vec<Value>> {
+        let context = split_sheet_reference(reference).0
+            .and_then(|name| self.workbook.sheets.iter().position(|sheet| same_sheet_name(&sheet.name, &name)))
+            .unwrap_or(self.active_sheet);
+        self.reference_areas(context, reference, NameReach::Workbook).ok()
+            .map(|areas| areas.into_iter().flat_map(CellRange::addresses)
+                .map(|address| self.cell_value(address)).collect())
+    }
+
     fn series_categories(&self, id: u64, number: usize) -> Result<Vec<Value>, String> {
         let series = self.series(id, number)?;
         let kind = series.chart_type.unwrap_or(self.chart(id)?.chart_type);
         let count = self.series_point_count(id, number)?;
+        let chart = self.chart(id)?;
+        let xy = matches!(chart_kind(kind), "scatter" | "bubble");
         if series.implicit_categories {
+            if series.categories_imported && xy && chart.series.len() > 1 {
+                return Ok((1..=count).map(|i| Value::Double(i as f64)).collect());
+            }
             return Ok((1..=count).map(|i| {
                 if matches!(kind, 5 | 68 | 69 | 70 | 71 | -4102 | -4120 | 80) { Value::Empty }
                 else if chart_plot_options(kind).horizontal || matches!(kind, 15 | 87) { Value::String(i.to_string()) }
                 else { Value::Double(i as f64) }
             }).collect());
         }
-        let imported_values = if series.categories_imported && matches!(kind, 68 | 71) {
-            let values = if let Some(reference) = &series.x_ref {
-                let context = split_sheet_reference(reference).0
-                    .and_then(|name| self.workbook.sheets.iter().position(|sheet| same_sheet_name(&sheet.name, &name)))
-                    .unwrap_or(self.active_sheet);
-                self.reference_areas(context, reference, NameReach::Workbook).ok()
-                    .map(|areas| areas.into_iter().flat_map(CellRange::addresses)
-                        .map(|address| self.cell_value(address)).collect::<Vec<_>>())
-                    .unwrap_or_else(|| series.typed_xs.clone().unwrap_or_default())
-            } else { series.typed_xs.clone().unwrap_or_default() };
-            if !values.iter().any(|value| value.string_units().is_some()) {
+        if series.categories_imported {
+            let fallback = || series.typed_xs.clone().unwrap_or_else(|| if series.text_category_gaps {
+                Vec::new()
+            } else { series.xs.iter().map(|text| text.parse::<f64>()
+                .map(Value::Double).unwrap_or_else(|_| Value::String(text.clone()))).collect() });
+            let values = series.x_ref.as_deref().and_then(|reference| self.category_reference_values(reference))
+                .unwrap_or_else(fallback);
+            let text_domain = series.text_category_gaps || values.iter().any(|value| value.string_units().is_some());
+            if xy {
+                if text_domain && chart.series.len() > 1 {
+                    return Ok((1..=count).map(|i| Value::Double(i as f64)).collect());
+                }
+                let mut values = values;
+                if text_domain && values.is_empty() { values.resize(count, Value::String(String::new())); }
+                values.truncate(count);
+                return Ok(values);
+            }
+            if text_domain {
+                let mut labels = if chart.series.len() > 1 {
+                    chart.category_axis_reference.as_deref().and_then(|reference| self.category_reference_values(reference))
+                        .map(|values| values.iter().map(text_of_value).collect())
+                        .unwrap_or_else(|| chart.category_axis_labels.clone())
+                } else { values.iter().map(text_of_value).collect() };
+                labels.resize(count, String::new());
+                labels.truncate(count);
+                return Ok(labels.into_iter().map(Value::String).collect());
+            }
+            if values.len() < count || values.iter().take(count).any(|value| matches!(value, Value::Empty)) {
                 return Err(host_error_described(-2_147_467_259, match self.error_language {
                     ErrorLanguage::Japanese => "'XValues' メソッドは失敗しました: 'Series' オブジェクト",
                     ErrorLanguage::English => "Method 'XValues' of object 'Series' failed",
                 }));
             }
-            Some(values)
-        } else { None };
-        let mut values = imported_values.or_else(|| series.typed_xs.clone()).unwrap_or_else(|| series.xs.iter().map(|x| match x.parse::<f64>() {
+            return Ok(values.into_iter().take(count).collect());
+        }
+        let mut values = series.typed_xs.clone().unwrap_or_else(|| series.xs.iter().map(|x| match x.parse::<f64>() {
             Ok(number) => Value::Double(number),
             Err(_) => Value::String(x.clone()),
         }).collect());

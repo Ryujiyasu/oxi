@@ -168,6 +168,9 @@ pub(super) struct ChartRecord {
     pub plot_modified: bool,
     pub of_pie: Option<oxicells_core::ir::ChartOfPieOptions>,
     pub series: Vec<SeriesRecord>,
+    /// Imported text labels belong to the chart axis, independently of series order.
+    pub category_axis_labels: Vec<String>,
+    pub category_axis_reference: Option<String>,
     pub has_title: bool,
     pub title: String,
     pub has_legend: bool,
@@ -656,6 +659,8 @@ impl<'a> WorkbookHost<'a> {
                             chart_type: chart_type_of(chart),
                             plot_modified: false,
                             of_pie: chart.plot_options.of_pie.clone(),
+                            category_axis_labels: chart.categories.clone(),
+                            category_axis_reference: chart.category_reference.clone(),
                             series: chart
                                 .series
                                 .iter()
@@ -1576,8 +1581,13 @@ impl<'a> WorkbookHost<'a> {
     }
 
     pub(super) fn chart_of(&self, chart: &ChartRecord) -> Chart {
-        let categories = chart.series.first().map(|series| series.xs.clone()).unwrap_or_default();
+        let categories = if chart.series.iter().all(|series| series.categories_imported) {
+            chart.category_axis_labels.clone()
+        } else { chart.series.first().map(|series| series.xs.clone()).unwrap_or_default() };
         Chart {
+            category_reference: if chart.series.iter().all(|series| series.categories_imported) {
+                chart.category_axis_reference.clone()
+            } else { chart.series.first().and_then(|series| series.x_ref.clone()) },
             origin_id: None,
             // A single named series selected at chart creation acquires its title
             // when Excel saves the chart, while the live HasTitle remains false.
