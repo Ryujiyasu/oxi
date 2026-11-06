@@ -8315,18 +8315,43 @@ impl LayoutEngine {
                         // sub-tenth remainder is rounding noise (a 21.0 row IS a
                         // 20.55 row: reports__16785375 p3 ties at 22/23 rows in
                         // Word and the noise alone tipped it to 23)
-                        let lineboxes: Vec<f32> = rows.iter().map(|r| {
-                            let raw = r.2.iter()
+                        let raws: Vec<f32> = rows.iter().map(|r| {
+                            r.2.iter()
                                 .filter(|&&j| elements[j].flow_line_offset == 0.0)
                                 .map(|&j| elements[j].flow_line_height.unwrap_or(elements[j].height))
-                                .fold(0.0f32, f32::max);
-                            ((raw / pitch - 0.1).ceil().max(1.0)) * pitch
+                                .fold(0.0f32, f32::max)
                         }).collect();
-                        let gaps: Vec<f32> = rows.iter().zip(&lineboxes).map(|(r, lb)| {
-                            let g = r.3 + r.4 - lb;
+                        let lineboxes: Vec<f32> = raws.iter()
+                            .map(|raw| ((raw / pitch - 0.1).ceil().max(1.0)) * pitch)
+                            .collect();
+                        // OXI_COLBAL_SPACING_GAP (2026-11-07, default ON, opt-out _DISABLE):
+                        // the gap is the row's paragraph spacing -- what it carries above its
+                        // own line -- so a line shorter than its grid box keeps all of it.
+                        // `_pb_colbal_heading_slice.py` (reference__704212ae p11, an exact
+                        // 20pt heading with afterLines 50 on a 20.55 grid): Word levels
+                        // 20.55 + 10.25, the box-relative gap gave 20.55 + 9.70.
+                        let spacing_gap = !crate::env_flag!("OXI_COLBAL_SPACING_GAP_DISABLE");
+                        let gaps: Vec<f32> = rows.iter().zip(&lineboxes).zip(&raws).map(|((r, lb), raw)| {
+                            let g = if spacing_gap && *raw < *lb { r.3 + r.4 - raw } else { r.3 + r.4 - lb };
                             if g < 0.1 * pitch { 0.0 } else { g }
                         }).collect();
-                        let heights: Vec<f32> = lineboxes.iter().zip(&gaps).map(|(lb, g)| lb + g).collect();
+                        let mut heights: Vec<f32> = lineboxes.iter().zip(&gaps).map(|(lb, g)| lb + g).collect();
+                        // OXI_COLBAL_TOP_BEFORE (2026-11-07, default ON, opt-out _DISABLE): the
+                        // space-before of the paragraph that opens the band is not drawn at
+                        // the column top, but Word still levels it into the left column.
+                        // `_pb_colbal_heading_slice.py`: the heading's beforeLines 50 alone
+                        // (or its afterLines 50 alone) decides Word's 10 / 11 split; without
+                        // either Word splits 11 / 10, as the greedy does.
+                        if !crate::env_flag!("OXI_COLBAL_TOP_BEFORE_DISABLE") && !heights.is_empty() {
+                            let pi0 = rows[0].2.first().and_then(|&ei| elements[ei].paragraph_index);
+                            let opens = pi0.is_some() && !elements.iter().any(|e| e.paragraph_index == pi0
+                                && e.cell_paragraph_index.is_none() && e.y - e.flow_line_offset < top - 0.1);
+                            if let (true, Some(Block::Paragraph(p))) = (opens, pi0.and_then(|pi| blocks.get(pi))) {
+                                let before = p.style.before_lines.map(|bl| bl / 100.0 * pitch)
+                                    .or(p.style.space_before).unwrap_or(0.0).max(0.0);
+                                heights[0] += before;
+                            }
+                        }
                         let befores: Vec<f32> = rows.iter().map(|r| r.2.iter()
                             .map(|&j| elements[j].flow_space_before)
                             .fold(0.0f32, f32::max)).collect();

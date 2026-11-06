@@ -5124,7 +5124,15 @@ impl<'a> PageLayouter<'a> {
                                 || (next_lines <= 1
                                     && !crate::env_flag!("OXI_S1090_DISABLE"))
                                 || (next_para.style.keep_lines
-                                    && !crate::env_flag!("OXI_S1039_DISABLE"));
+                                    && !crate::env_flag!("OXI_S1039_DISABLE"))
+                                // OXI_KN_FIRST_LINE_UNFIT (2026-11-07, default ON, opt-out
+                                // _DISABLE): a follower whose FIRST line does not fit under
+                                // the heading moves wholly whatever its widow setting.
+                                // ja/reference__704212ae p13 «❖ 入院助産» (exact 20, before /
+                                // after 10.25, rem 41.7) over a widowControl=0 paragraph: Word
+                                // opens p14 with the heading; Oxi left it alone at the foot.
+                                || (this_h + one_line_h > remaining
+                                    && !crate::env_flag!("OXI_KN_FIRST_LINE_UNFIT_DISABLE"));
                             // S802 (2026-07-12, opt-out OXI_S802_DISABLE): keepNext CHAIN —
                             // when the follower is ITSELF keepNext (H1→H2), the keep unit
                             // extends transitively to H2's follower (Word keeps the whole
