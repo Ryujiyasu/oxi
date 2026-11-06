@@ -1629,6 +1629,15 @@ pub struct Frame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ChartSeries {
     pub name: String,
+    /// Bubble areas use an independent numeric cache; absence differs from an
+    /// explicitly supplied empty cache or a cache containing missing points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bubble_sizes: Option<Vec<Option<f64>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bubble_sizes_reference: Option<String>,
+    /// Shaded spheres are a series style, independent of a spatial chart view.
+    #[serde(default)]
+    pub shaded_bubbles: bool,
     /// Pie-slice separation, independently retained for each series.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explosion: Option<u32>,
