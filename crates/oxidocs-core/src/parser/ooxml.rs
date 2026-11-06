@@ -12910,6 +12910,15 @@ fn parse_run_properties(
     let mut depth = 0;
     // S1327: inside <w14:textFill> (its <w14:noFill/> makes the run invisible).
     let mut in_text_fill = false;
+    // OXI_TEXT_FILL_COLOR (2026-11-06, default ON, opt-out _DISABLE): the colours a
+    // <w14:textFill> paints with -- (gradient position 0..1, hex) -- which replace
+    // w:color. A gradient is drawn as its mean colour. blind-J
+    // ja/creative__9540b8a7: «メリット☆» (w:color accent3 9BBB59, textFill an accent6
+    // gradient) is orange in Word's PDF and was green in Oxi; «起業家応援プロジェクト»
+    // (a black gradient) came out in the accent3 green as well.
+    let text_fill_on = std::env::var_os("OXI_TEXT_FILL_COLOR_DISABLE").is_none();
+    let mut text_fill_stops: Vec<(f32, String)> = Vec::new();
+    let mut text_fill_pos = 0.0f32;
     let mut rstyle_id: Option<String> = None;
     let mut rpr_change: Option<PropertyChange> = None;
 
@@ -12919,6 +12928,27 @@ fn parse_run_properties(
                 let local = local_name(e.name().as_ref());
                 if local == "textFill" {
                     in_text_fill = true;
+                    text_fill_stops.clear();
+                }
+                if in_text_fill && text_fill_on && local == "gs" {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "pos" {
+                            text_fill_pos = String::from_utf8_lossy(&attr.value).parse::<f32>().unwrap_or(0.0) / 100000.0;
+                        }
+                    }
+                }
+                if in_text_fill && text_fill_on && (local == "srgbClr" || local == "schemeClr") {
+                    let mut base = String::from("000000");
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "val" {
+                            let v = String::from_utf8_lossy(&attr.value).to_string();
+                            base = if local == "srgbClr" { v } else { ctx.theme.resolve(&v).cloned().unwrap_or(base) };
+                        }
+                    }
+                    // the helper reads the modifiers and this element's End
+                    let col = parse_color_modifiers(reader, &base, &local);
+                    text_fill_stops.push((text_fill_pos, col));
+                    continue;
                 }
                 // OXI_TEXT_SHADOW_LINE: <w14:shadow blurRad dist dir> (EMU / 60000ths deg).
                 if local == "shadow" && e.name().as_ref().starts_with(b"w14:") {
@@ -13484,6 +13514,31 @@ fn parse_run_properties(
                 let local = local_name(e.name().as_ref());
                 if local == "textFill" {
                     in_text_fill = false;
+                    if !style.no_fill && !text_fill_stops.is_empty() {
+                        text_fill_stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                        let rgb = |h: &str| {
+                            let h = h.trim_start_matches('#');
+                            let c = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok()).unwrap_or(0) as f32;
+                            (c(0), c(2), c(4))
+                        };
+                        // the mean over 0..1: flat before the first stop and after the
+                        // last, linear between stops
+                        let st: Vec<(f32, (f32, f32, f32))> = text_fill_stops.iter().map(|(p, c)| (p.clamp(0.0, 1.0), rgb(c))).collect();
+                        let mut acc = (0.0f32, 0.0f32, 0.0f32);
+                        let add = |acc: &mut (f32, f32, f32), w: f32, c: (f32, f32, f32)| {
+                            acc.0 += w * c.0; acc.1 += w * c.1; acc.2 += w * c.2;
+                        };
+                        add(&mut acc, st[0].0, st[0].1);
+                        for w in st.windows(2) {
+                            let d = w[1].0 - w[0].0;
+                            add(&mut acc, d * 0.5, w[0].1);
+                            add(&mut acc, d * 0.5, w[1].1);
+                        }
+                        let last = st[st.len() - 1];
+                        add(&mut acc, 1.0 - last.0, last.1);
+                        let q = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+                        style.color = Some(format!("{:02X}{:02X}{:02X}", q(acc.0), q(acc.1), q(acc.2)));
+                    }
                 }
                 if local == "rPr" && depth == 0 {
                     break;

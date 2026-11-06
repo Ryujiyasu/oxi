@@ -7345,8 +7345,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // margin-top 107.05 -- Word draws it at the PAGE's
                             // 107.05, the hardcoded form put it at
                             // 34.85 + 107.05 = 141.9.
+                            let shape_col = (num_columns > 1).then(|| {
+                                let cx = block_col_x.get(block_idx).copied().unwrap_or(start_x);
+                                let ci = col_x_positions.iter().position(|&x| (x - cx).abs() < 0.5)
+                                    .unwrap_or(current_column);
+                                (col_x_positions[ci], col_widths[ci])
+                            });
                             let (sx, sy) = if !crate::env_flag!("OXI_S1460_DISABLE") {
-                                LayoutEngine::vertical_shape_origin(page, shape, para_anchor_y)
+                                LayoutEngine::shape_origin_in_column(page, shape, para_anchor_y, shape_col)
                             } else {
                                 (page.margin.left + pos.x, para_anchor_y + pos.y)
                             };
@@ -7362,13 +7368,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     dash: shape_line_dash(shape),
                                 }
                             });
-                            elements.push(LayoutElement::new(
-                                sx,
-                                sy,
-                                shape.width,
-                                shape.height,
-                                content,
-                            ));
+                            let el = LayoutElement::new(sx, sy, shape.width, shape.height, content);
+                            // OXI_SHAPE_START_PAGE (2026-11-06, default ON, opt-out _DISABLE):
+                            // the shape is placed from the paragraph's START (para_anchor_y),
+                            // so it belongs to the page the paragraph started on, not the one
+                            // a page break inside the paragraph left it on. blind-J
+                            // ja/educational__2aa00bc4: page 1's colour cards sit in the
+                            // paragraph that ends with «<w:br w:type="page"/>»; Word draws
+                            // them on page 1, Oxi on page 2 (over the newsletter).
+                            let start_page = block_start_page_indices.get(block_idx).copied()
+                                .unwrap_or(current_page_idx);
+                            if start_page < current_page_idx
+                                && pages.len() == current_page_idx
+                                && !crate::env_flag!("OXI_SHAPE_START_PAGE_DISABLE")
+                            {
+                                pages[start_page].elements.push(el);
+                            } else {
+                                elements.push(el);
+                            }
                         }
                     }
 
@@ -11654,7 +11671,22 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         if LayoutEngine::is_floating_header_frame(para)
                             && !crate::env_flag!("OXI_FTR_FRAME_PAINT_DISABLE")
                         {
-                            let (elements, _, _) = self.layout_header_frame(para, page, cy.cursor_y);
+                            // OXI_HF_FRAME_NATURAL: a vAnchor=text footer frame hangs from
+                            // the next flow paragraph's text, below that paragraph's before.
+                            let text_anchor = !crate::env_flag!("OXI_HF_FRAME_NATURAL_DISABLE")
+                                && !matches!(para.style.frame_pr.as_ref().and_then(|f| f.v_anchor.as_deref()), Some("page" | "margin"));
+                            let next_before = if text_anchor {
+                                ftr_blocks.iter().skip_while(|b| !std::ptr::eq(*b, block)).skip(1)
+                                    .find_map(|b| match b {
+                                        Block::Paragraph(p) if p.style.frame_pr.is_none() => Some(p.style.space_before.unwrap_or(0.0)),
+                                        Block::Paragraph(_) => None,
+                                        _ => Some(0.0),
+                                    })
+                            } else {
+                                None
+                            };
+                            let (elements, _, _) = self.layout_header_frame_ex(
+                                para, page, cy.cursor_y + next_before.unwrap_or(0.0), next_before.is_some());
                             lp.elements.extend(elements);
                             continue;
                         }

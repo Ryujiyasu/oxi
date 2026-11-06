@@ -830,6 +830,45 @@ fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
     // while the VML (注) legend box (`<v:rect fillcolor="silver">`, the only
     // emitted VML fill rect in the corpus: tokyoshugyo/3a4f/model) is a clean
     // gain. DrawingML rects keep the outline-only PresetShape.
+    // OXI_DML_ROTATED_RECT (2026-11-06, default ON, opt-out _DISABLE): a turned,
+    // text-less DrawingML rect is its four corners turned about the centre
+    // (clockwise, y down), filled and stroked as written. blind-J
+    // ja/educational__2aa00bc4 p1: the seven colour cards (正方形/長方形 21 FF0000 at
+    // 337.8 deg, 32 FFC000 at 33.0, ...) are drawn in Word's PDF; Oxi kept them as
+    // outline-only preset shapes and painted nothing.
+    // OXI_DML_DIAMOND (same date, opt-out _DISABLE): a diamond / flowChartDecision
+    // is the polygon through its edge midpoints, turned or not. blind-J
+    // ja/creative__9540b8a7's two ◆ (flowChartDecision, accent1 fill) beside the
+    // title were missing.
+    let diamond = matches!(shape.shape_type.as_str(), "diamond" | "flowChartDecision")
+        && !crate::env_flag!("OXI_DML_DIAMOND_DISABLE");
+    if !shape.is_vml
+        && (diamond
+            || (shape.shape_type == "rect" && shape.rotation.is_some_and(|r| r.rem_euclid(360.0) > 0.01)))
+        && (shape.fill.is_some() || shape.stroke_color.is_some())
+        && shape.width > 0.0
+        && shape.height > 0.0
+        && !crate::env_flag!("OXI_DML_ROTATED_RECT_DISABLE")
+    {
+        let a = shape.rotation.unwrap_or(0.0).to_radians();
+        let (sin, cos) = a.sin_cos();
+        let (w, h) = (shape.width, shape.height);
+        let corner = |dx: f32, dy: f32| (0.5 + (dx * cos - dy * sin) / w, 0.5 + (dx * sin + dy * cos) / h);
+        let pts = if diamond {
+            [corner(0.0, -h / 2.0), corner(w / 2.0, 0.0), corner(0.0, h / 2.0), corner(-w / 2.0, 0.0)]
+        } else {
+            [corner(-w / 2.0, -h / 2.0), corner(w / 2.0, -h / 2.0), corner(w / 2.0, h / 2.0), corner(-w / 2.0, h / 2.0)]
+        };
+        let mut segs = vec![PathSeg::M(pts[0].0, pts[0].1)];
+        segs.extend(pts[1..].iter().map(|&(x, y)| PathSeg::L(x, y)));
+        segs.push(PathSeg::Z);
+        return Some(LayoutContent::VectorPath {
+            segs,
+            fill: shape.fill.clone(),
+            stroke_color: shape.stroke_color.clone(),
+            stroke_width: shape.stroke_width.unwrap_or(0.0),
+        });
+    }
     if !shape.is_vml {
         return None;
     }
@@ -7852,6 +7891,13 @@ impl LayoutEngine {
     /// path assumes column/paragraph-relative offsets; a vertical page also
     /// meets margin- and page-relative ones).
     fn vertical_shape_origin(page: &Page, shape: &crate::ir::Shape, anchor_y: f32) -> (f32, f32) {
+        Self::shape_origin_in_column(page, shape, anchor_y, None)
+    }
+
+    /// `vertical_shape_origin` with the anchor paragraph's column (left, width)
+    /// for a column-relative aligned shape.
+    fn shape_origin_in_column(page: &Page, shape: &crate::ir::Shape, anchor_y: f32,
+                              column: Option<(f32, f32)>) -> (f32, f32) {
         let Some(pos) = shape.position.as_ref() else {
             return (page.margin.left, anchor_y);
         };
@@ -7861,12 +7907,22 @@ impl LayoutEngine {
             Some("page") => (0.0, page.size.width),
             Some("leftMargin") => (0.0, page.margin.left),
             Some("rightMargin") => (page.size.width - page.margin.right, page.margin.right),
+            Some("column") | None if column.is_some() && pos.h_align.is_some() => column.unwrap(),
             _ => (page.margin.left, content_w),
         };
+        // OXI_SHAPE_ALIGN_EFFEXT (2026-11-06, default ON, opt-out _DISABLE): an aligned
+        // shape aligns its drawn extent -- the box grown by wp:effectExtent, which
+        // for a turned shape is its turned bounding box -- and a column-relative one
+        // aligns in its own column. blind-J ja/educational__2aa00bc4 p1: the red card
+        // (157.7 x 204.8, rot 337.8, margin left, eff l 34.5) has its box at 88.5 in
+        // Word's PDF (turned bbox from 55.6), Oxi at 54; the blue card (column right,
+        // eff r 26.9, two columns) at 400, Oxi at 978 (the page's text width).
+        let effext = !crate::env_flag!("OXI_SHAPE_ALIGN_EFFEXT_DISABLE");
+        let (el, er, et, eb) = if effext { (pos.eff_l, pos.eff_r, pos.eff_t, pos.eff_b) } else { (0.0, 0.0, 0.0, 0.0) };
         let x = match pos.h_align.as_deref() {
-            Some("left") | Some("inside") => hx,
-            Some("center") => hx + (hw - shape.width) / 2.0,
-            Some("right") | Some("outside") => hx + hw - shape.width,
+            Some("left") | Some("inside") => hx + el,
+            Some("center") => hx + (hw - shape.width - el - er) / 2.0 + el,
+            Some("right") | Some("outside") => hx + hw - shape.width - er,
             _ => hx + pos.x,
         };
         let (vy, vh) = match pos.v_relative.as_deref() {
@@ -7877,9 +7933,9 @@ impl LayoutEngine {
             _ => (anchor_y, 0.0),
         };
         let y = match pos.v_align.as_deref() {
-            Some("top") | Some("inside") => vy,
-            Some("center") => vy + (vh - shape.height) / 2.0,
-            Some("bottom") | Some("outside") => vy + vh - shape.height,
+            Some("top") | Some("inside") => vy + et,
+            Some("center") => vy + (vh - shape.height - et - eb) / 2.0 + et,
+            Some("bottom") | Some("outside") => vy + vh - shape.height - eb,
             _ => vy + pos.y,
         };
         (x, y)
@@ -9790,13 +9846,62 @@ cells={} pitch={:.2} text={:?}",
             // clockwise (Word's PDF strokes the rect as one path). ja/administrative__0ba21b0c:
             // the two 1.5pt dashDot frames, Word dash array [6 4.5 1.5 4.5] = [4 3 1 3] x w;
             // Oxi drew them solid. Patterns in units of the width: ECMA-376 20.1.10.48.
+            // OXI_TXBX_ROUND_DASH (2026-11-06, default ON, opt-out _DISABLE): a roundRect
+            // takes the same pattern along its rounded path, from the left side's top
+            // (the preset's path start) clockwise. blind-J ja/educational__2aa00bc4 p2:
+            // the three photo frames (2.25pt FF66FF sysDot): Word's PDF strokes one
+            // 8-segment path with [2.25 2.25] = [1 1] x w; Oxi drew them solid.
+            let round_dash = cr > 0.0 && !crate::env_flag!("OXI_TXBX_ROUND_DASH_DISABLE");
             let dash_units: Option<&[f32]> = match text_box.outline_dash.as_deref() {
-                _ if !has_border || cr > 0.0 || !bands.is_empty()
+                _ if !has_border || (cr > 0.0 && !round_dash) || !bands.is_empty()
                     || crate::env_flag!("OXI_TXBX_DASH_DISABLE") => None,
                 Some(d) => prst_dash_units(d),
                 None => None,
             };
-            if let Some(units) = dash_units {
+            if let (Some(units), true) = (dash_units, cr > 0.0) {
+                elements.push(LayoutElement::new(
+                    abs_x,
+                    abs_y,
+                    text_box.width,
+                    text_box.height,
+                    LayoutContent::BoxRect { fill: fill_hex.clone(), stroke_color: None, stroke_width: 0.0, corner_radius: cr },
+                ));
+                let pat = units.iter().map(|u| format!("{u}")).collect::<Vec<_>>().join(",");
+                let (x0, y0, x1, y1) = (abs_x, abs_y, abs_x + text_box.width, abs_y + text_box.height);
+                let r = cr.min(text_box.width / 2.0).min(text_box.height / 2.0);
+                // the centre line as a closed polyline: each quarter arc in 8 chords
+                let mut pts: Vec<(f32, f32)> = Vec::new();
+                let arc = |pts: &mut Vec<(f32, f32)>, cx: f32, cy: f32, a0: f32| {
+                    for k in 0..=8 {
+                        let a = (a0 + 90.0 * k as f32 / 8.0).to_radians();
+                        pts.push((cx + r * a.cos(), cy + r * a.sin()));
+                    }
+                };
+                arc(&mut pts, x0 + r, y0 + r, 180.0);
+                arc(&mut pts, x1 - r, y0 + r, 270.0);
+                arc(&mut pts, x1 - r, y1 - r, 0.0);
+                arc(&mut pts, x0 + r, y1 - r, 90.0);
+                pts.push(pts[0]);
+                let period: f32 = units.iter().sum();
+                let mut run = 0.0f32;
+                for w in pts.windows(2) {
+                    let ((ax, ay), (bx, by)) = (w[0], w[1]);
+                    let len = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+                    if len < 1e-4 {
+                        continue;
+                    }
+                    elements.push(LayoutElement::new(
+                        ax.min(bx), ay.min(by), (bx - ax).abs(), (by - ay).abs(),
+                        LayoutContent::TableBorder {
+                            x1: ax, y1: ay, x2: bx, y2: by,
+                            color: stroke_hex.clone(),
+                            width: sw,
+                            style: Some(format!("prst:{pat}:{:.4}", run.rem_euclid(period))),
+                        },
+                    ));
+                    run += len / sw.max(0.01);
+                }
+            } else if let Some(units) = dash_units {
                 elements.push(LayoutElement::new(
                     abs_x,
                     abs_y,
@@ -11509,6 +11614,14 @@ cells={} pitch={:.2} text={:?}",
     fn layout_header_frame(&self, para: &Paragraph, page: &Page, anchor: f32)
         -> (Vec<LayoutElement>, f32, bool)
     {
+        self.layout_header_frame_ex(para, page, anchor, false)
+    }
+
+    /// `natural`: see OXI_HF_FRAME_NATURAL (a footer frame hanging from a flow
+    /// paragraph's text).
+    fn layout_header_frame_ex(&self, para: &Paragraph, page: &Page, anchor: f32, natural: bool)
+        -> (Vec<LayoutElement>, f32, bool)
+    {
         let fp = para.style.frame_pr.as_ref().unwrap();
         let (left, span) = if fp.h_anchor.as_deref() == Some("page") {
             (0.0, page.size.width)
@@ -11518,10 +11631,32 @@ cells={} pitch={:.2} text={:?}",
             Some("page") => 0.0, Some("margin") => page.margin.top, _ => anchor,
         };
         let mut cursor = LayoutCursor::new(top);
+        // OXI_HF_FRAME_NATURAL (2026-11-06, default ON, opt-out _DISABLE): a header /
+        // footer frame's paragraph is set from the frame top with no spacing before
+        // or after and off the document grid. `_pb_footer_frame_gen.py` (slice of
+        // blind-J ja/reports__75ebb654: framed «- 1 -», Microsoft JhengHei 12, lines
+        // grid 360, + one empty paragraph): Word's baseline 787.06 for frame before
+        // 0 / 120 and the empty paragraph's before 0 / 120 alike = the empty line's
+        // top 771.98 + y 0.05 + the face's hhea ascent 15.03; Oxi added the frame's
+        // before and centred the line in two grid cells (794.9).
+        let bare;
+        let para = if natural {
+            let mut p = para.clone();
+            p.style.space_before = Some(0.0);
+            p.style.space_after = Some(0.0);
+            p.style.before_lines = None;
+            p.style.after_lines = None;
+            p.style.before_autospacing = false;
+            p.style.after_autospacing = false;
+            bare = p;
+            &bare
+        } else {
+            para
+        };
         IN_HF_FRAME_LAYOUT.with(|c| c.set(true));
         let (mut elements, _, _) = self.layout_paragraph(
             para, 0.0, &mut cursor, available, 1.0e6, top, page,
-            &mut Vec::new(), &mut Vec::new(), page.grid_line_pitch,
+            &mut Vec::new(), &mut Vec::new(), if natural { None } else { page.grid_line_pitch },
             None, false, None, None, false, false, 0.0,
             None, None, None, false, false, None, 0.0,
             &std::collections::HashMap::new(), 1, 0, &[], &[], 0.0,
