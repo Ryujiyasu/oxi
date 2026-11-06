@@ -37,6 +37,7 @@ enum Whose {
 enum Reading {
     Nothing,
     Values,
+    BubbleSizes,
     Categories,
     SeriesName,
 }
@@ -78,6 +79,8 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     let mut in_cache = false;
     let mut at: Option<usize> = None;
     let mut values: Vec<(usize, f64)> = Vec::new();
+    let mut bubble_sizes: Vec<(usize, f64)> = Vec::new();
+    let mut bubble_size_count = 0;
     let mut categories: Vec<(usize, String)> = Vec::new();
     let mut typed_categories: Vec<(usize, ChartCategoryValue)> = Vec::new();
     let mut numeric_categories = false;
@@ -113,6 +116,8 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                         whose.push(Whose::Series);
                         current = ChartSeries::default();
                         values.clear();
+                        bubble_sizes.clear();
+                        bubble_size_count = 0;
                     }
                     "explosion" if whose.last() == Some(&Whose::Series) => {
                         current.explosion = value.as_deref().and_then(|v| v.parse().ok());
@@ -271,6 +276,16 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                     }
                     "legendPos" => legend.position = value.unwrap_or_default(),
                     "val" | "yVal" => reading = Reading::Values,
+                    "bubbleSize" => {
+                        reading = Reading::BubbleSizes;
+                        current.bubble_sizes = Some(Vec::new());
+                    }
+                    "bubble3D" if whose.last() == Some(&Whose::Series) => {
+                        current.shaded_bubbles = !matches!(value.as_deref(), Some("0" | "false"));
+                    }
+                    "ptCount" if reading == Reading::BubbleSizes => {
+                        bubble_size_count = value.as_deref().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+                    }
                     "cat" | "xVal" => reading = Reading::Categories,
                     "tx" => reading = Reading::SeriesName,
                     "numCache" | "strCache" | "strLit" | "numLit" => {
@@ -309,6 +324,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                         match reading {
                             Reading::SeriesName => current.name_reference = Some(text.clone()),
                             Reading::Values => current.values_reference = Some(text.clone()),
+                            Reading::BubbleSizes => current.bubble_sizes_reference = Some(text.clone()),
                             Reading::Categories => current.category_reference = Some(text.clone()),
                             Reading::Nothing => {}
                         }
@@ -325,6 +341,11 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                                         (at, text.trim().parse::<f64>())
                                     {
                                         values.push((index, number));
+                                    }
+                                }
+                                Reading::BubbleSizes => {
+                                    if let (Some(index), Ok(number)) = (at, text.trim().parse::<f64>()) {
+                                        bubble_sizes.push((index, number));
                                     }
                                 }
                                 Reading::Categories => {
@@ -348,7 +369,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                     }
                     "r" => in_run = false,
                     "numCache" | "strCache" | "strLit" | "numLit" => in_cache = false,
-                    "val" | "yVal" | "cat" | "xVal" | "tx" => reading = Reading::Nothing,
+                    "val" | "yVal" | "bubbleSize" | "cat" | "xVal" | "tx" => reading = Reading::Nothing,
                     "ln" => in_line = false,
                     "marker" => {
                         in_marker = false;
@@ -463,6 +484,12 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                             }
                             None => Vec::new(),
                         };
+                        if current.bubble_sizes.is_some() {
+                            let len = bubble_size_count.max(bubble_sizes.iter().map(|(i, _)| i + 1).max().unwrap_or(0));
+                            let mut held = vec![None; len];
+                            for (i, number) in &bubble_sizes { held[*i] = Some(*number); }
+                            current.bubble_sizes = Some(held);
+                        }
                         if chart.categories.is_empty() && !categories.is_empty() {
                             let last =
                                 categories.iter().map(|(at, _)| *at).max().unwrap_or(0);

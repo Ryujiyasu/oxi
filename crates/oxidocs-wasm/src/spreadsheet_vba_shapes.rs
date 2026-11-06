@@ -186,6 +186,9 @@ pub(super) struct SeriesRecord {
     pub name: String,
     pub name_ref: Option<String>,
     pub values_ref: Option<String>,
+    pub bubble_sizes: Option<Vec<Option<f64>>>,
+    pub bubble_sizes_ref: Option<String>,
+    pub shaded_bubbles: bool,
     pub x_ref: Option<String>,
     /// API values of explicitly assigned categories, before display-text conversion.
     pub typed_xs: Option<Vec<Value>>,
@@ -568,6 +571,7 @@ pub(super) fn chart_type_of(chart: &Chart) -> i64 {
         "radar" => if options.filled { 82 } else if markers { 81 } else { -4151 },
         "pie" => if exploded { 69 } else { 5 },
         "doughnut" => if exploded { 80 } else { -4120 },
+        "bubble" => if chart.series.first().is_some_and(|s| s.shaded_bubbles) { 87 } else { 15 },
         _ => 51,
     }
 }
@@ -581,7 +585,8 @@ pub(super) fn chart_kind(chart_type: i64) -> &'static str {
         -4120 | 80 => "doughnut",
         1 | 76 | 77 | 78 | 79 | -4098 => "area",
         -4169 | 72 | 73 | 74 | 75 => "scatter",
-        -4151 | 81 | 82 | -4152 | 15 | 91 => "radar",
+        15 | 87 => "bubble",
+        -4151 | 81 | 82 | -4152 | 91 => "radar",
         _ => "bar",
     }
 }
@@ -638,6 +643,9 @@ impl<'a> WorkbookHost<'a> {
                                     name: series.name.clone(),
                                     name_ref: series.name_reference.clone(),
                                     values_ref: series.values_reference.clone(),
+                                    bubble_sizes: series.bubble_sizes.clone(),
+                                    bubble_sizes_ref: series.bubble_sizes_reference.clone(),
+                                    shaded_bubbles: series.shaded_bubbles,
                                     x_ref: series.category_reference.clone(),
                                     implicit_categories: series.category_reference.is_none() && series.category_values.as_ref()
                                         .map_or(chart.categories.is_empty(), Vec::is_empty),
@@ -1554,6 +1562,9 @@ impl<'a> WorkbookHost<'a> {
                     explosion: chart_plot_options(chart.chart_type).explosion,
                     name_reference: series.name_ref.clone(),
                     values_reference: series.values_ref.clone(),
+                    bubble_sizes: series.bubble_sizes.clone(),
+                    bubble_sizes_reference: series.bubble_sizes_ref.clone(),
+                    shaded_bubbles: series.shaded_bubbles,
                     category_reference: series.x_ref.clone(),
                     category_values: Some(series.typed_xs.as_ref().map(|xs| xs.iter().map(|value| {
                         use oxicells_core::ir::ChartCategoryValue;

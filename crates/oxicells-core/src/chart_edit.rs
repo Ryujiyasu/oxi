@@ -49,6 +49,8 @@ fn series_data_equal(a: &crate::ir::ChartSeries, b: &crate::ir::ChartSeries) -> 
     a.name == b.name && a.values == b.values
         && a.name_reference == b.name_reference && a.values_reference == b.values_reference
         && a.category_reference == b.category_reference && a.category_values == b.category_values
+        && a.bubble_sizes == b.bubble_sizes && a.bubble_sizes_reference == b.bubble_sizes_reference
+        && a.shaded_bubbles == b.shaded_bubbles
 }
 
 pub(crate) fn series_data_changed(a: &Chart, b: &Chart) -> bool {
@@ -58,24 +60,32 @@ pub(crate) fn series_data_changed(a: &Chart, b: &Chart) -> bool {
             .any(|(a, b)| a.category_values.is_none() || b.category_values.is_none()))
 }
 
+fn numeric_series_data(values: &[Option<f64>], reference: Option<&str>) -> String {
+    let cache = if reference.is_some() { "numCache" } else { "numLit" };
+    let mut out = String::new();
+    if let Some(reference) = reference {
+        out.push_str(&format!("<c:numRef><c:f>{}</c:f>", escape(reference.trim_start_matches('='))));
+    }
+    out.push_str(&format!("<c:{cache}><c:formatCode>General</c:formatCode><c:ptCount val=\"{}\"/>", values.len()));
+    for (i, value) in values.iter().enumerate() {
+        if let Some(value) = value { out.push_str(&format!("<c:pt idx=\"{i}\"><c:v>{value}</c:v></c:pt>")); }
+    }
+    out.push_str(&format!("</c:{cache}>"));
+    if reference.is_some() { out.push_str("</c:numRef>"); }
+    out
+}
+
+
+fn bubble_series_data(series: &crate::ir::ChartSeries, ns: &str) -> String {
+    if series.bubble_sizes.is_none() && series.bubble_sizes_reference.is_none() { return String::new(); }
+    format!("<c:bubbleSize xmlns:c=\"{ns}\">{}</c:bubbleSize>",
+        numeric_series_data(series.bubble_sizes.as_deref().unwrap_or_default(), series.bubble_sizes_reference.as_deref()))
+}
+
 /// References and their caches are kept together; literal text is not inferred
 /// to be numeric merely because it can be parsed as a number.
 fn series_data_parts(series: &crate::ir::ChartSeries, shared: &[String], scatter: bool, ns: &str) -> (String, String, String) {
     use crate::ir::ChartCategoryValue;
-    fn numeric(values: &[Option<f64>], reference: Option<&str>) -> String {
-        let cache = if reference.is_some() { "numCache" } else { "numLit" };
-        let mut out = String::new();
-        if let Some(reference) = reference {
-            out.push_str(&format!("<c:numRef><c:f>{}</c:f>", escape(reference.trim_start_matches('='))));
-        }
-        out.push_str(&format!("<c:{cache}><c:formatCode>General</c:formatCode><c:ptCount val=\"{}\"/>", values.len()));
-        for (i, value) in values.iter().enumerate() {
-            if let Some(value) = value { out.push_str(&format!("<c:pt idx=\"{i}\"><c:v>{value}</c:v></c:pt>")); }
-        }
-        out.push_str(&format!("</c:{cache}>"));
-        if reference.is_some() { out.push_str("</c:numRef>"); }
-        out
-    }
     let name = if let Some(reference) = &series.name_reference {
         format!("<c:strRef><c:f>{}</c:f><c:strCache><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>{}</c:v></c:pt></c:strCache></c:strRef>",
             escape(reference.trim_start_matches('=')), escape(&series.name))
@@ -92,7 +102,7 @@ fn series_data_parts(series: &crate::ir::ChartSeries, shared: &[String], scatter
             let values: Vec<_> = categories.iter().map(|v| match v {
                 ChartCategoryValue::Number(n) => Some(*n), _ => None,
             }).collect();
-            numeric(&values, series.category_reference.as_deref())
+            numeric_series_data(&values, series.category_reference.as_deref())
         } else {
             let cache = if series.category_reference.is_some() { "strCache" } else { "strLit" };
             let mut out = String::new();
@@ -116,7 +126,7 @@ fn series_data_parts(series: &crate::ir::ChartSeries, shared: &[String], scatter
         format!("<c:{tag} xmlns:c=\"{ns}\">{body}</c:{tag}>")
     };
     let tag = if scatter { "yVal" } else { "val" };
-    let vals = format!("<c:{tag} xmlns:c=\"{ns}\">{}</c:{tag}>", numeric(&series.values, series.values_reference.as_deref()));
+    let vals = format!("<c:{tag} xmlns:c=\"{ns}\">{}</c:{tag}>", numeric_series_data(&series.values, series.values_reference.as_deref()));
     (name, cats, vals)
 }
 
@@ -216,6 +226,10 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
         }
         out.push_str(&cats);
         out.push_str(&values);
+        if kind == "bubble" {
+            out.push_str(&bubble_series_data(series, C));
+            out.push_str(&format!("<c:bubble3D val=\"{}\"/>", u8::from(series.shaded_bubbles)));
+        }
         if matches!(kind, "line" | "scatter") { out.push_str(&format!("<c:smooth val=\"{}\"/>", u8::from(options.smooth))); }
         out.push_str("</c:ser>"); out
     }
@@ -250,6 +264,7 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
         "area" => (if options.three_dimensional { "area3DChart" } else { "areaChart" }, format!("<c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>"), true),
         "scatter" => ("scatterChart", format!("<c:scatterStyle val=\"{}\"/><c:varyColors val=\"0\"/>",
             if options.smooth { "smoothMarker" } else { "lineMarker" }), true),
+        "bubble" => ("bubbleChart", "<c:varyColors val=\"0\"/>".into(), true),
         "pie" => (if options.three_dimensional { "pie3DChart" } else { "pieChart" }, "<c:varyColors val=\"1\"/>".into(), false),
         "doughnut" => ("doughnutChart", "<c:varyColors val=\"1\"/>".into(), false),
         "radar" => ("radarChart", format!("<c:radarStyle val=\"{}\"/><c:varyColors val=\"0\"/>",
@@ -262,6 +277,7 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
     let finite_frame = |frame: Option<&Frame>| frame.is_none_or(|f| [f.x, f.y, f.w, f.h].iter().all(|v| v.is_finite()));
     if !finite_frame(chart.plot.as_ref()) || !finite_frame(chart.legend.as_ref().and_then(|l| l.frame.as_ref()))
         || chart.series.iter().any(|s| s.values.iter().flatten().any(|v| !v.is_finite())
+            || s.bubble_sizes.iter().flatten().flatten().any(|v| !v.is_finite())
             || s.labels.iter().filter_map(|l| l.offset).any(|(x,y)| !x.is_finite() || !y.is_finite()))
         || [&chart.value_axis, &chart.category_axis].into_iter().flatten()
             .any(|a| [a.min, a.max, a.major_unit].into_iter().flatten().any(|v| !v.is_finite())) {
@@ -275,7 +291,7 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
             if chart.kind == "pie" { 0 } else { 20 }));
     }
     out.push_str(&format!("<c:plotArea>{}<c:{plot}>{settings}", layout(chart.plot.as_ref(), true)));
-    for (index, value) in chart.series.iter().enumerate() { out.push_str(&series(value, index, &chart.categories, chart.kind == "scatter", options, &chart.kind)); }
+    for (index, value) in chart.series.iter().enumerate() { out.push_str(&series(value, index, &chart.categories, matches!(chart.kind.as_str(), "scatter" | "bubble"), options, &chart.kind)); }
     if chart.kind == "line" && !options.three_dimensional {
         let markers = chart.series.is_empty() || options.markers.unwrap_or(true);
         out.push_str(&format!("<c:marker val=\"{}\"/><c:smooth val=\"{}\"/>", u8::from(markers), u8::from(options.smooth)));
@@ -296,7 +312,7 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
     }
     out.push_str(&format!("</c:{plot}>"));
     if axes {
-        out.push_str(&axis(chart.category_axis.as_ref(), if chart.kind == "scatter" { "valAx" } else { "catAx" }, 1, 2, "b"));
+        out.push_str(&axis(chart.category_axis.as_ref(), if matches!(chart.kind.as_str(), "scatter" | "bubble") { "valAx" } else { "catAx" }, 1, 2, "b"));
         out.push_str(&axis(chart.value_axis.as_ref(), "valAx", 2, 1, "l"));
         if depth_axis { out.push_str(&axis(None, "serAx", 3, 2, "b")); }
     }
@@ -465,7 +481,7 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
     let path = ["chartSpace", "chart", "plotArea", plot];
     let (children, end) = children_at(xml, &path)?;
     let existing: Vec<_> = children.iter().filter(|(name, _, _)| name == "ser").collect();
-    let scatter = plot == "scatterChart";
+    let scatter = matches!(plot, "scatterChart" | "bubbleChart");
     let replace = |fragment: &str, tag: &str, replacement: &str, open: &str, close: &str| -> Result<String, XlsxError> {
         let wrapped = format!("{open}{fragment}{close}");
         let (children, end) = children_at(&wrapped, &["chartSpace", "ser"])?;
@@ -475,7 +491,9 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
             if replacement.is_empty() { return Ok(fragment.to_string()); }
             let at = children.iter().find(|(name, _, _)| match tag {
                 "tx" => !matches!(name.as_str(), "idx" | "order"),
-                "cat" | "xVal" => matches!(name.as_str(), "val" | "yVal" | "smooth" | "extLst"),
+                "cat" | "xVal" => matches!(name.as_str(), "val" | "yVal" | "bubbleSize" | "bubble3D" | "smooth" | "extLst"),
+                "val" | "yVal" => matches!(name.as_str(), "bubbleSize" | "bubble3D" | "smooth" | "extLst"),
+                "bubbleSize" => matches!(name.as_str(), "bubble3D" | "extLst"),
                 _ => matches!(name.as_str(), "smooth" | "extLst"),
             }).map_or(end, |(_, start, _)| *start);
             (at, at)
@@ -498,6 +516,15 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
             if name_changed { fragment = replace(&fragment, "tx", &name, &open, &close)?; }
             if cats_changed { fragment = replace(&fragment, if scatter { "xVal" } else { "cat" }, &cats, &open, &close)?; }
             if values_changed { fragment = replace(&fragment, if scatter { "yVal" } else { "val" }, &values, &open, &close)?; }
+            if plot == "bubbleChart" {
+                if previous.is_none_or(|old| old.bubble_sizes != series.bubble_sizes || old.bubble_sizes_reference != series.bubble_sizes_reference) {
+                    fragment = replace(&fragment, "bubbleSize", &bubble_series_data(series, ns), &open, &close)?;
+                }
+                if previous.is_none_or(|old| old.shaded_bubbles != series.shaded_bubbles) {
+                    let shading = format!("<c:bubble3D xmlns:c=\"{ns}\" val=\"{}\"/>", u8::from(series.shaded_bubbles));
+                    fragment = replace(&fragment, "bubble3D", &shading, &open, &close)?;
+                }
+            }
             fragment
         } else { String::new() };
         edits.push((*start, *finish, replacement));
@@ -506,12 +533,12 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
     for (i, series) in after.series.iter().enumerate().skip(existing.len()) {
         // Reuse the new-series serializer for modeled formatting, then insert
         // only the series, retaining the original plot, axes and extensions.
-        let kind = if scatter { "scatter" } else if matches!(before.kind.as_str(), "pie" | "doughnut") { &before.kind } else { "bar" };
+        let kind = if plot == "bubbleChart" { "bubble" } else if scatter { "scatter" } else if matches!(before.kind.as_str(), "pie" | "doughnut") { &before.kind } else { "bar" };
         let generated = new_chart_xml(&Chart {
             kind: kind.into(), categories: after.categories.clone(),
             plot_options: after.plot_options.clone(), series: vec![series.clone()], ..Default::default()
         })?;
-        let tag = if scatter { "scatterChart" } else if kind == "pie" { if after.plot_options.three_dimensional { "pie3DChart" } else { "pieChart" } }
+        let tag = if kind == "bubble" { "bubbleChart" } else if scatter { "scatterChart" } else if kind == "pie" { if after.plot_options.three_dimensional { "pie3DChart" } else { "pieChart" } }
             else if kind == "doughnut" { "doughnutChart" } else if after.plot_options.three_dimensional { "bar3DChart" } else { "barChart" };
         let (ranges, _) = children_at(&generated, &["chartSpace", "chart", "plotArea", tag])?;
         let (_, begin, finish) = ranges.iter().find(|(name, _, _)| name == "ser").unwrap();
@@ -1031,6 +1058,89 @@ mod retained_spatial_properties_tests {
                 .map(|(_, a, b)| &changed[*a..*b]).collect();
             assert_eq!(values.len(), 1, "{tag}");
             assert!(values[0].contains(&format!("val=\"{expected}\"")));
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod bubble_data_tests {
+    use super::*;
+    use crate::ir::ChartSeries;
+
+    fn source() -> String {
+        format!(r#"<c:chartSpace xmlns:c="{C}" xmlns:a="{A}"><c:chart><c:plotArea><c:bubbleChart>
+<c:varyColors val="0"/><c:ser><c:idx val="0"/><c:order val="0"/>
+<c:tx><c:v>Revenue</c:v></c:tx>
+<c:xVal><c:numLit><c:ptCount val="3"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt></c:numLit></c:xVal>
+<c:yVal><c:numLit><c:ptCount val="3"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>20</c:v></c:pt><c:pt idx="2"><c:v>30</c:v></c:pt></c:numLit></c:yVal>
+<c:bubbleSize><c:numRef><c:f>'Sales &amp; Costs'!$C$1:$C$4</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>4</c:v></c:pt></c:numCache></c:numRef></c:bubbleSize>
+<c:bubble3D val="1"/><c:extLst><c:ext uri="keep"><x:keep xmlns:x="urn:extra">unchanged</x:keep></c:ext></c:extLst></c:ser>
+<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Other</c:v></c:tx><c:yVal><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>99</c:v></c:pt></c:numLit></c:yVal></c:ser>
+<c:bubbleScale val="125"/><c:showNegBubbles val="1"/><c:axId val="1"/><c:axId val="2"/></c:bubbleChart></c:plotArea></c:chart></c:chartSpace>"#)
+    }
+
+    #[test]
+    fn parsing_keeps_bubble_sizes_separate_from_values_and_preserves_sparse_length() {
+        for strict in [false, true] {
+            let mut xml = source();
+            if strict { xml = xml.replace(C, "http://purl.oclc.org/ooxml/drawingml/chart")
+                .replace(A, "http://purl.oclc.org/ooxml/drawingml/main"); }
+            let chart = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+            assert_eq!(chart.kind, "bubble");
+            assert_eq!(chart.series[0].values, vec![Some(10.0), Some(20.0), Some(30.0)]);
+            assert_eq!(chart.series[1].values, vec![Some(99.0)]);
+            assert_eq!(chart.series[0].bubble_sizes, Some(vec![Some(2.0), None, Some(4.0), None]));
+            assert_eq!(chart.series[0].bubble_sizes_reference.as_deref(), Some("'Sales & Costs'!$C$1:$C$4"));
+            assert!(chart.series[0].shaded_bubbles);
+            assert!(chart.series[1].bubble_sizes.is_none());
+            assert!(!chart.plot_options.three_dimensional);
+        }
+    }
+
+    #[test]
+    fn serializing_bubble_sizes_uses_two_numeric_axes_without_a_spatial_view() {
+        for shaded in [false, true] {
+            for reference in [None, Some("Sheet1!$C$1:$C$3")] {
+                let series = ChartSeries {
+                    name:"Revenue".into(), values:vec![Some(10.0), Some(20.0), Some(30.0)],
+                    category_values:Some((1..=3).map(|n| crate::ir::ChartCategoryValue::Number(n as f64)).collect()),
+                    bubble_sizes:Some(vec![Some(2.0), None, Some(4.0)]),
+                    bubble_sizes_reference:reference.map(str::to_string), shaded_bubbles:shaded,
+                    ..Default::default()
+                };
+                let chart = Chart { kind:"bubble".into(), series:vec![series], ..Default::default() };
+                let xml = new_chart_xml(&chart).unwrap();
+                assert!(xml.contains("<c:bubbleChart>") && xml.contains("<c:bubbleSize"));
+                assert_eq!(xml.matches("<c:valAx>").count(), 2);
+                assert!(!xml.contains("<c:catAx>") && !xml.contains("<c:view3D>"));
+                let restored = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+                assert!(series_data_equal(&chart.series[0], &restored.series[0]));
+                assert_eq!(restored.series[0].shaded_bubbles, shaded);
+            }
+        }
+    }
+
+    #[test]
+    fn editing_bubble_sizes_keeps_other_series_and_unmodeled_xml() {
+        for strict in [false, true] {
+            let mut xml = source();
+            if strict { xml = xml.replace(C, "http://purl.oclc.org/ooxml/drawingml/chart")
+                .replace(A, "http://purl.oclc.org/ooxml/drawingml/main"); }
+            let before = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+            let mut after = before.clone();
+            after.series[0].bubble_sizes = Some(vec![Some(5.0), Some(6.0), Some(7.0)]);
+            after.series[0].bubble_sizes_reference = None;
+            assert!(series_data_changed(&before, &after));
+            let patched = patch_chart(&xml, &before, &after).unwrap();
+            assert!(patched.contains("<x:keep xmlns:x=\"urn:extra\">unchanged</x:keep>"));
+            assert!(patched.contains("<c:bubbleScale val=\"125\"/>"));
+            let ranges = |text: &str| children_at(text, &["chartSpace", "chart", "plotArea", "bubbleChart"]).unwrap().0
+                .into_iter().filter(|(name, _, _)| name == "ser").map(|(_, a, b)| text[a..b].to_string()).collect::<Vec<_>>();
+            assert_eq!(ranges(&xml)[1], ranges(&patched)[1]);
+            let actual = crate::chart::parse_chart_xml(&patched, &crate::parser::Theme::default()).unwrap();
+            assert!(series_data_equal(&after.series[0], &actual.series[0]));
+            assert_eq!(actual.series[0].values, before.series[0].values);
         }
     }
 }

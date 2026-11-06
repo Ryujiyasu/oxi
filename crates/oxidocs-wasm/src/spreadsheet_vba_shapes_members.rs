@@ -1376,6 +1376,9 @@ impl<'a> WorkbookHost<'a> {
                     },
                     name_ref,
                     values_ref: Some(block_ref(self, first, column, last, column)),
+                    bubble_sizes: None,
+                    bubble_sizes_ref: None,
+                    shaded_bubbles: false,
                     x_ref: categories.then(|| block_ref(self, first, columns[0], last, columns[0])),
                     implicit_categories: !categories,
                     typed_xs: None,
@@ -1406,6 +1409,9 @@ impl<'a> WorkbookHost<'a> {
                     },
                     name_ref,
                     values_ref: Some(block_ref(self, row, first, row, last)),
+                    bubble_sizes: None,
+                    bubble_sizes_ref: None,
+                    shaded_bubbles: false,
                     x_ref: categories.then(|| block_ref(self, rows[0], first, rows[0], last)),
                     implicit_categories: !categories,
                     typed_xs: None,
@@ -1448,7 +1454,32 @@ impl<'a> WorkbookHost<'a> {
         });
         let values = series.values_ref.clone().unwrap_or_else(||
             array(series.values.iter().map(|value| text_of_value(&Value::Double(*value))).collect()));
-        Ok(format!("=SERIES({name},{categories},{values},{number})"))
+        let kind = series.chart_type.unwrap_or(self.chart(id)?.chart_type);
+        if matches!(kind, 15 | 87) {
+            let sizes = self.bubble_size_expression(id, number)?;
+            // Excel exposes this incomplete literal for an absent size cache.
+            let sizes = if sizes.is_empty() { "{" } else { &sizes };
+            Ok(format!("=SERIES({name},{categories},{values},{number},{sizes})"))
+        } else {
+            Ok(format!("=SERIES({name},{categories},{values},{number})"))
+        }
+    }
+
+    fn bubble_size_expression(&self, id: u64, number: usize) -> Result<String, String> {
+        let series = self.series(id, number)?;
+        Ok(series.bubble_sizes_ref.clone().unwrap_or_else(|| {
+            series.bubble_sizes.as_ref().map(|values| format!("{{{}}}", values.iter().map(|v|
+                v.map(|v| text_of_value(&Value::Double(v))).unwrap_or_default()).collect::<Vec<_>>().join(",")))
+                .unwrap_or_default()
+        }))
+    }
+
+    fn series_point_count(&self, id: u64, number: usize) -> Result<usize, String> {
+        let series = self.series(id, number)?;
+        let kind = series.chart_type.unwrap_or(self.chart(id)?.chart_type);
+        Ok(if matches!(kind, 15 | 87) {
+            series.bubble_sizes.as_ref().map_or(series.values.len(), |sizes| series.values.len().min(sizes.len()))
+        } else { series.values.len() })
     }
 
     fn cells_of_range_object(&self, value: &Value) -> Option<CellRange> {
@@ -1483,18 +1514,21 @@ impl<'a> WorkbookHost<'a> {
 
     fn series_categories(&self, id: u64, number: usize) -> Result<Vec<Value>, String> {
         let series = self.series(id, number)?;
+        let kind = series.chart_type.unwrap_or(self.chart(id)?.chart_type);
+        let count = self.series_point_count(id, number)?;
         if series.implicit_categories {
-            let kind = series.chart_type.unwrap_or(self.chart(id)?.chart_type);
-            return Ok((1..=series.values.len()).map(|i| {
+            return Ok((1..=count).map(|i| {
                 if matches!(kind, 5 | 69 | 70 | -4102 | -4120 | 80) { Value::Empty }
-                else if chart_plot_options(kind).horizontal { Value::String(i.to_string()) }
+                else if chart_plot_options(kind).horizontal || matches!(kind, 15 | 87) { Value::String(i.to_string()) }
                 else { Value::Double(i as f64) }
             }).collect());
         }
-        Ok(series.typed_xs.clone().unwrap_or_else(|| series.xs.iter().map(|x| match x.parse::<f64>() {
+        let mut values = series.typed_xs.clone().unwrap_or_else(|| series.xs.iter().map(|x| match x.parse::<f64>() {
             Ok(number) => Value::Double(number),
             Err(_) => Value::String(x.clone()),
-        }).collect()))
+        }).collect());
+        if matches!(kind, 15 | 87) { values.truncate(count); }
+        Ok(values)
     }
 
     fn variant_row(values: Vec<Value>) -> Value {
@@ -2046,7 +2080,8 @@ impl<'a> WorkbookHost<'a> {
                 Ok(match lower.as_str() {
                     "name" => Some(Value::String(series.name)),
                     "formula" => Some(Value::String(self.series_formula(id, number)?)),
-                    "values" => Some(Self::variant_row(series.values.iter().map(|v| Value::Double(*v)).collect())),
+                    "values" => Some(Self::variant_row(series.values.iter().take(self.series_point_count(id, number)?).map(|v| Value::Double(*v)).collect())),
+                    "bubblesizes" => Some(Value::String(self.bubble_size_expression(id, number)?)),
                     "xvalues" => Some(Self::variant_row(self.series_categories(id, number)?)),
                     "points" => Some(self.part(DrawingPart::Points(id, number))),
                     "hasdatalabels" => Some(Value::Boolean(series.has_labels)),
@@ -2107,7 +2142,7 @@ impl<'a> WorkbookHost<'a> {
                 })
             }
             DrawingPart::Points(id, number) => Ok(match lower.as_str() {
-                "count" => Some(Value::Integer(self.series(id, number)?.values.len() as i64)),
+                "count" => Some(Value::Integer(self.series_point_count(id, number)? as i64)),
                 _ => None,
             }),
             DrawingPart::DataLabels(id, number) => {
@@ -3244,6 +3279,12 @@ impl<'a> WorkbookHost<'a> {
                             chart.plot_modified = true;
                             for series in &mut chart.series {
                                 series.chart_type = None;
+                                if matches!(kind, 15 | 87) {
+                                    if series.bubble_sizes.is_none() && !series.values.is_empty() {
+                                        series.bubble_sizes = Some(vec![Some(1.0); series.values.len()]);
+                                    }
+                                    series.shaded_bubbles = kind == 87;
+                                }
                             }
                             if chart.title_auto && chart_is_pie(kind) && chart.series.len() == 1 {
                                 chart.has_title = true;
@@ -3347,6 +3388,18 @@ impl<'a> WorkbookHost<'a> {
                             }).collect());
                             series.x_ref = None;
                         }
+                        true
+                    }
+                    "bubblesizes" => {
+                        let (sizes, reference) = if let Some(range) = self.cells_of_range_object(&value) {
+                            let values = self.range_numbers(range).into_iter().map(Some).collect();
+                            (values, Some(self.address_of(range)))
+                        } else if let Value::Array(listed) = &value {
+                            (listed.values.iter().map(|v| Some(any_number(v).unwrap_or(0.0))).collect(), None)
+                        } else { return Ok(false); };
+                        let series = self.series_mut(id, number)?;
+                        series.bubble_sizes = Some(sizes);
+                        series.bubble_sizes_ref = reference;
                         true
                     }
                     "hasdatalabels" => {
@@ -3950,6 +4003,9 @@ impl<'a> WorkbookHost<'a> {
                         name: format!("系列{number}"),
                         name_ref: None,
                         values_ref: None,
+                        bubble_sizes: None,
+                        bubble_sizes_ref: None,
+                        shaded_bubbles: false,
                         x_ref: None,
                         implicit_categories: true,
                         typed_xs: None,
@@ -3973,6 +4029,9 @@ impl<'a> WorkbookHost<'a> {
                             name: format!("系列{number}"),
                             name_ref: None,
                             values_ref: Some(reference),
+                            bubble_sizes: None,
+                            bubble_sizes_ref: None,
+                            shaded_bubbles: false,
                             x_ref: None,
                             implicit_categories: true,
                             typed_xs: None,
@@ -4002,7 +4061,7 @@ impl<'a> WorkbookHost<'a> {
                 "points" => match args.first() {
                     None | Some(Value::Missing) => Ok(Some(self.part(DrawingPart::Points(id, number)))),
                     Some(wanted) => {
-                        let count = self.series(id, number)?.values.len();
+                        let count = self.series_point_count(id, number)?;
                         let at = any_whole_number(wanted).unwrap_or(0);
                         if at < 1 || at as usize > count {
                             return Err(host_error(1004, "there is no such point"));
@@ -4060,7 +4119,7 @@ impl<'a> WorkbookHost<'a> {
                 _ => Ok(None),
             },
             DrawingPart::Points(id, number) => match lower.as_str() {
-                "item" | "_default" | "count" => Ok(Some(Value::Integer(self.series(id, number)?.values.len() as i64))),
+                "item" | "_default" | "count" => Ok(Some(Value::Integer(self.series_point_count(id, number)? as i64))),
                 _ => Ok(None),
             },
             DrawingPart::ChartTitle(id) => match lower.as_str() {
@@ -4163,7 +4222,7 @@ impl<'a> WorkbookHost<'a> {
         }
     }
 
-    /// A series' `Values`, `XValues` or `Name` given a Range: the range is
+    /// A series' values, categories, bubble sizes or name given a Range: the range is
     /// what is kept, and its cells are read now.
     pub(super) fn drawing_set_range(&mut self, part: DrawingPart, name: &str, range: CellRange) -> Result<Option<bool>, String> {
         let DrawingPart::Series(id, number) = part else {
@@ -4188,6 +4247,12 @@ impl<'a> WorkbookHost<'a> {
                 series.typed_xs = None;
                 series.implicit_categories = false;
                 series.x_ref = Some(reference);
+            }
+            "bubblesizes" => {
+                let sizes = self.range_numbers(range).into_iter().map(Some).collect();
+                let series = self.series_mut(id, number)?;
+                series.bubble_sizes = Some(sizes);
+                series.bubble_sizes_ref = Some(reference);
             }
             "name" => {
                 let text = self.range_texts(range).into_iter().next().unwrap_or_default();
