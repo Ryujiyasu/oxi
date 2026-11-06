@@ -60,6 +60,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
 
     let mut chart = Chart::default();
     let (title, automatic_title) = title_state(xml).unwrap_or_default();
+    chart.title_from_data = title.is_none() && automatic_title;
     chart.title = title;
     let mut series: Vec<ChartSeries> = Vec::new();
     let mut current = ChartSeries::default();
@@ -609,6 +610,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     }
     // Automatic titles and shared category labels use source order, while
     // the SeriesCollection follows each series' explicit order.
+    if chart.title_from_data { chart.title_from_data_cache = chart.title.clone(); }
     let orders = series_positions(xml, "order");
     let mut ordered: Vec<_> = chart.series.into_iter().enumerate().collect();
     ordered.sort_by_key(|(index, _)| orders.get(*index).copied().flatten().unwrap_or(*index));

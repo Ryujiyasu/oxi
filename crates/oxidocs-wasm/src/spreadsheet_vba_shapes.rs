@@ -173,6 +173,8 @@ pub(super) struct ChartRecord {
     pub category_axis_reference: Option<String>,
     pub has_title: bool,
     pub title: String,
+    pub title_from_data: bool,
+    pub title_generation: u64,
     pub has_legend: bool,
     /// xlLegendPositionRight -4152, Bottom -4107, Left -4131, Top -4160.
     pub legend_position: i64,
@@ -259,7 +261,7 @@ pub(super) enum DrawingPart {
     SeriesColor(u64, usize),
     Points(u64, usize),
     DataLabels(u64, usize),
-    ChartTitle(u64),
+    ChartTitle(u64, u64),
     Legend(u64),
     Axes(u64),
     /// xlCategory 1 or xlValue 2.
@@ -322,7 +324,7 @@ impl DrawingPart {
             DrawingPart::Points(..) => "Points",
             DrawingPart::Point(..) => "Point",
             DrawingPart::DataLabels(..) => "DataLabels",
-            DrawingPart::ChartTitle(_) => "ChartTitle",
+            DrawingPart::ChartTitle(..) => "ChartTitle",
             DrawingPart::Legend(_) => "Legend",
             DrawingPart::Axes(_) => "Axes",
             DrawingPart::Axis(..) => "Axis",
@@ -711,6 +713,8 @@ impl<'a> WorkbookHost<'a> {
                                 .collect(),
                             has_title: chart.title.is_some(),
                             title: chart.title.clone().unwrap_or_default(),
+                            title_from_data: chart.title_from_data && chart.title == chart.title_from_data_cache,
+                            title_generation: 0,
                             has_legend: chart.legend.is_some(),
                             title_auto: false,
                             legend_position: match chart.legend.as_ref().map(|legend|legend.position.as_str()) {
@@ -1586,6 +1590,10 @@ impl<'a> WorkbookHost<'a> {
         let categories = if chart.series.iter().all(|series| series.categories_imported) {
             chart.category_axis_labels.clone()
         } else { chart.series.first().map(|series| series.xs.clone()).unwrap_or_default() };
+        let title = if chart.has_title { Some(chart.title.clone()) }
+            else if chart.title_auto && chart.series.len() == 1 && chart.series[0].name_ref.is_some() {
+                Some(chart.series[0].name.clone())
+            } else { None };
         Chart {
             category_reference: if chart.series.iter().all(|series| series.categories_imported) {
                 chart.category_axis_reference.clone()
@@ -1593,10 +1601,9 @@ impl<'a> WorkbookHost<'a> {
             origin_id: None,
             // A single named series selected at chart creation acquires its title
             // when Excel saves the chart, while the live HasTitle remains false.
-            title: if chart.has_title { Some(chart.title.clone()) }
-                else if chart.title_auto && chart.series.len() == 1 && chart.series[0].name_ref.is_some() {
-                    Some(chart.series[0].name.clone())
-                } else { None },
+            title_from_data: chart.title_from_data,
+            title_from_data_cache: if chart.title_from_data { title.clone() } else { None },
+            title,
             kind: chart_kind(chart.chart_type).to_string(),
             plot_options: {
                 let mut options = chart_plot_options(chart.chart_type);

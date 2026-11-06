@@ -546,6 +546,17 @@ impl<'a> WorkbookHost<'a> {
         self.object(HostObject::Drawing(part))
     }
 
+    fn chart_title_record(&self, id: u64, generation: u64) -> Result<&ChartRecord, String> {
+        let chart = self.chart(id)?;
+        if generation != chart.title_generation {
+            return Err(oxivba_core::host_error_from(-2_147_467_261, "S", match self.error_language {
+                ErrorLanguage::Japanese => "\u{3053}\u{306e}\u{30aa}\u{30d6}\u{30b8}\u{30a7}\u{30af}\u{30c8}\u{306f}\u{73fe}\u{5728}\u{6709}\u{52b9}\u{3067}\u{306f}\u{3042}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}",
+                ErrorLanguage::English => "This object is no longer valid.",
+            }));
+        }
+        Ok(chart)
+    }
+
     pub(super) fn chart_sheet_part(&self,sheet:usize)->Result<DrawingPart,String> {
         self.shapes.iter().find(|shape|shape.sheet==sheet && matches!(shape.kind,ShapeKind::Chart(_)))
             .map(|shape|DrawingPart::Chart(shape.id))
@@ -1081,6 +1092,8 @@ impl<'a> WorkbookHost<'a> {
             series: Vec::new(),
             has_title: false,
             title: String::new(),
+            title_from_data: false,
+            title_generation: 0,
             has_legend: true,
             legend_position: -4152,
             axes: [AxisRecord::default(), AxisRecord::default()],
@@ -2520,9 +2533,11 @@ impl<'a> WorkbookHost<'a> {
                     _ => None,
                 })
             }
-            DrawingPart::ChartTitle(id) => {
-                let chart = self.chart(id)?.clone();
-                let shown = if chart.title.is_empty() {
+            DrawingPart::ChartTitle(id, generation) => {
+                let chart = self.chart_title_record(id, generation)?.clone();
+                let pending_removal = chart.title_from_data && chart.has_title && chart.title.is_empty()
+                    && chart.series.len() != 1 && !matches!(chart_kind(chart.chart_type), "pie" | "ofPie");
+                let shown = if pending_removal { String::new() } else if chart.title.is_empty() {
                     match chart.series.as_slice() {
                         [only] if !only.name_auto => only.name.clone(),
                         _ => "グラフ タイトル".to_string(),
@@ -2530,9 +2545,16 @@ impl<'a> WorkbookHost<'a> {
                 } else {
                     chart.title
                 };
+                if pending_removal && matches!(lower.as_str(), "text" | "caption") {
+                    let chart = self.chart_mut(id)?;
+                    chart.has_title = false;
+                    chart.title_generation = chart.title_generation.checked_add(1)
+                        .ok_or_else(|| host_error(7, "Chart title identity space is exhausted"))?;
+                    self.redraw(id)?;
+                }
                 Ok(match lower.as_str() {
                     "text" | "caption" => Some(Value::String(shown)),
-                    "characters" => Some(self.part(DrawingPart::ChartTitle(id))),
+                    "characters" => Some(self.part(DrawingPart::ChartTitle(id, generation))),
                     // Measured: タイトル, centred both ways, horizontal, in the
                     // layout at its automatic place, no shadow.
                     "name" => Some(Value::String("タイトル".to_string())),
@@ -2886,7 +2908,7 @@ impl<'a> WorkbookHost<'a> {
             "hastitle" => Some(Value::Boolean(chart.has_title)),
             // Measured: `ChartTitle.Text` reads the one series' name on a
             // chart whose HasTitle is False.
-            "charttitle" => Some(self.part(DrawingPart::ChartTitle(id))),
+            "charttitle" => Some(self.part(DrawingPart::ChartTitle(id, chart.title_generation))),
             "haslegend" => Some(Value::Boolean(chart.has_legend)),
             "legend" => Some(self.part(DrawingPart::Legend(id))),
             "seriescollection" => Some(self.part(DrawingPart::SeriesCollection(id))),
@@ -3632,10 +3654,17 @@ impl<'a> WorkbookHost<'a> {
                             }
                             // A 3-D bubble type set before any series collapses to
                             // plain bubbles and remains so when data is added.
+                            let previous_kind = chart.chart_type;
+                            let xy = matches!(chart_kind(kind), "scatter" | "bubble");
                             chart.chart_type = if kind == 87 && chart.series.is_empty() { 15 } else { kind };
                             chart.plot_modified = true;
                             chart.of_pie = chart_plot_options(kind).of_pie;
                             for series in &mut chart.series {
+                                if xy {
+                                    series.category_values_filtered = false;
+                                } else if matches!(chart_kind(series.chart_type.unwrap_or(previous_kind)), "scatter" | "bubble") {
+                                    series.category_values_filtered = true;
+                                }
                                 series.chart_type = None;
                                 if matches!(kind, 15 | 87) {
                                     if series.bubble_sizes.is_none() && !series.values.is_empty() {
@@ -3648,12 +3677,23 @@ impl<'a> WorkbookHost<'a> {
                                 chart.has_title = true;
                             }
                             chart.title_auto = false;
+                            if chart.title_from_data && chart.has_title
+                                && chart.series.len() != 1
+                                && !matches!(chart_kind(kind), "pie" | "ofPie") {
+                                chart.title.clear();
+                            }
                             true
                         }
                         "hastitle" => {
                             chart.has_title = style_face_boolean(&value, "Chart.HasTitle")?.unwrap_or(false);
-                            if !chart.has_title {chart.title.clear();}
+                            if !chart.has_title {
+                                chart.title.clear();
+                                chart.title_from_data = false;
+                            }
                             if chart.has_title && chart.title.is_empty() {
+                                if !matches!(chart.series.as_slice(), [only] if !only.name_auto) {
+                                    chart.title_from_data = false;
+                                }
                                 chart.title = match chart.series.as_slice() {
                                     [only] if !only.name_auto => only.name.clone(),
                                     _ => "グラフ タイトル".to_string(),
@@ -3820,10 +3860,12 @@ impl<'a> WorkbookHost<'a> {
                 }
                 Ok(false)
             }
-            DrawingPart::ChartTitle(id) => {
+            DrawingPart::ChartTitle(id, generation) => {
+                self.chart_title_record(id, generation)?;
                 if lower == "text" || lower == "caption" {
                     let chart = self.chart_mut(id)?;
                     chart.title = text_of_value(&value);
+                    chart.title_from_data = false;
                     chart.has_title = !chart.title.is_empty();
                     self.redraw(id)?;
                     return Ok(true);
@@ -4514,10 +4556,13 @@ impl<'a> WorkbookHost<'a> {
                 "count" => Ok(Some(Value::Integer(self.series_point_count(id, number)? as i64))),
                 _ => Ok(None),
             },
-            DrawingPart::ChartTitle(id) => match lower.as_str() {
-                "characters" => Ok(Some(self.part(DrawingPart::ChartTitle(id)))),
-                "select" | "delete" => Ok(Some(Value::Empty)),
-                _ => Ok(None),
+            DrawingPart::ChartTitle(id, generation) => {
+                self.chart_title_record(id, generation)?;
+                match lower.as_str() {
+                    "characters" => Ok(Some(self.part(DrawingPart::ChartTitle(id, generation)))),
+                    "select" | "delete" => Ok(Some(Value::Empty)),
+                    _ => Ok(None),
+                }
             },
             DrawingPart::AxisTitle(id, which) => match lower.as_str() {
                 "characters" => Ok(Some(self.part(DrawingPart::AxisTitle(id, which)))),

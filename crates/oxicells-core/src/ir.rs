@@ -1546,6 +1546,12 @@ pub struct Chart {
     /// An enabled title, including an explicitly empty title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// The displayed title is derived from series data rather than literal text.
+    #[serde(default)]
+    pub title_from_data: bool,
+    /// Last derived text; changing the displayed title is an explicit IR edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_from_data_cache: Option<String>,
     /// "line", "bar", "pie" 窶・the first plot the chart holds.
     pub kind: String,
     #[serde(default, skip_serializing_if = "ChartPlotOptions::is_default")]
