@@ -19664,6 +19664,100 @@ fn statement_name(statement: &Statement) -> &'static str {
 #[cfg(test)]
 mod tests {
 
+
+    #[test]
+    fn fullwidth_identifier_scopes_follow_ascii_aliases() {
+        for index in 0..26 {
+            let upper = char::from_u32(0xff21 + index).unwrap();
+            let lower = char::from_u32(0xff41 + index).unwrap();
+            let ascii = char::from_u32(u32::from(b'a') + index).unwrap();
+            let source = format!(
+                "Public Function Probe() As String\nDim {upper} As Long\n\
+                 {upper} = 9\n{ascii} = 7\n\
+                 Probe = CStr(VarType({lower})) & \":\" & CStr({lower})\nEnd Function\n"
+            );
+            assert_eq!(
+                run(&source, "Probe", vec![]).unwrap(),
+                Value::String("3:7".into()),
+                "{upper}"
+            );
+        }
+
+        for (prefix, body, expected) in [
+            ("Public \u{ff21} As Long\n", "\u{ff21} = 13\nProbe = CStr(\u{ff41})", "13"),
+            ("Public Function \u{ff26}() As Long\n\u{ff26} = 13\nEnd Function\n", "Probe = CStr(\u{ff46}())", "13"),
+            ("Public Enum Kind\n\u{ff21} = 13\nEnd Enum\n", "Probe = CStr(\u{ff41})", "13"),
+            ("Private Type Item\n\u{ff21} As Long\nEnd Type\n", "Dim rec As Item\nrec.\u{ff21} = 13\nProbe = CStr(rec.\u{ff41})", "13"),
+            ("", "GoTo \u{ff41}\nProbe = \"unreached\"\nExit Function\n\u{ff21}:\nProbe = \"label\"", "label"),
+            ("", "Dim \u{ff21}b As Long\n\u{ff21}b = 13\nProbe = CStr(aB)", "13"),
+            ("", "\u{ff24}\u{ff49}\u{ff4d}\u{3000}value As \u{ff2c}\u{ff4f}\u{ff4e}\u{ff47}\nvalue \u{ff1d} 13\nProbe = CStr(value)", "13"),
+            ("", "Dim A\u{ff11} As Long\nA\u{ff11} = 9\na1 = 7\nProbe = CStr(VarType(A\u{ff11})) & \":\" & CStr(A\u{ff11})", "3:7"),
+            ("", "Dim A\u{ff3f}B As Long\nA\u{ff3f}B = 9\na_b = 7\nProbe = CStr(VarType(A\u{ff3f}B)) & \":\" & CStr(A\u{ff3f}B)", "3:7"),
+            ("", "Probe = CStr(\u{ff11}\u{ff0b}\u{ff12})", "3"),
+            ("", "Probe = CStr\u{ff08}13\u{ff09}", "13"),
+            ("", "Probe = Left$(\"abc\"\u{ff0c}\u{ff11})", "a"),
+            ("", "Dim value As Long\u{ff1a}value = 13\u{ff1a}Probe = CStr(value)", "13"),
+            ("", "Dim value\u{ff05}\nvalue = 13\nProbe = CStr(VarType(value))", "2"),
+            ("", "Probe = CStr(Year(#\u{ff12}\u{ff10}\u{ff12}\u{ff16}/\u{ff11}\u{ff11}/\u{ff10}\u{ff17}#))", "2026"),
+            ("", "Probe = CStr(1\u{ff0e}5)", "1.5"),
+            ("", "\u{ff32}\u{ff45}\u{ff4d} ignored \u{ff21}\nProbe = \"comment\"", "comment"),
+            ("", "Probe = \u{ff02}ab\u{ff02}", ""),
+
+        ] {
+            let source = format!("{prefix}Public Function Probe() As String\n{body}\nEnd Function\n");
+            assert_eq!(run(&source, "Probe", vec![]).unwrap(), Value::String(expected.into()), "{body}");
+        }
+    }
+
+    #[test]
+    fn fullwidth_class_identifiers_and_dispatch_names_are_distinct() {
+        for (body, expected) in [
+            ("Dim item As WideBox\nSet item = New WideBox\nitem.\u{ff21} = 13\nProbe = CStr(item.\u{ff41})", "13"),
+            ("Dim item As Object\nSet item = New WideBox\nitem.A = 13\nProbe = CStr(item.a)", "13"),
+            ("Dim item As Object\nSet item = New WideBox\nitem\u{ff0e}A = 13\nProbe = CStr(item.A)", "13"),
+
+            ("Dim item As Object\nSet item = New WideBox\nitem.\u{ff21} = 13\nProbe = CStr(item.\u{ff41})", "13"),
+            ("Dim item As WideBox\nSet item = New WideBox\nProbe = CStr(item.\u{ff47}())", "17"),
+            ("Dim item As Object\nSet item = New WideBox\nProbe = CStr(item.g())", "17"),
+            ("Dim item As Object\nSet item = New WideBox\nitem.\u{ff21} = 13\nProbe = CStr(CallByName(item, \"a\", VbGet))", "13"),
+            ("Dim item As Object\nSet item = New WideBox\nitem.\u{ff21} = 13\nProbe = CStr(CallByName(item, \"\u{ff21}\", VbGet))", "error|438"),
+            ("Dim item As Object\nSet item = New WideBox\nitem.\u{ff21} = 13\nProbe = CStr(CallByName(item, \"\u{ff41}\", VbGet))", "error|438"),
+            ("Dim item As Object\nSet item = New WideBox\nProbe = CStr(CallByName(item, \"g\", VbMethod))", "17"),
+        ] {
+            let source = format!(
+                "Attribute VB_Name = \"Driver\"\nPublic Function Probe() As String\n\
+                 On Error GoTo failed\n{body}\nExit Function\nfailed:\n\
+                 Probe = \"error|\" & CStr(Err.Number)\nEnd Function\n\
+                 VERSION 1.0 CLASS\nAttribute VB_Name = \"WideBox\"\n\
+                 Public \u{ff21} As Long\nPublic Function \u{ff27}() As Long\n\u{ff27} = 17\nEnd Function\n"
+            );
+            let (module, classes) = crate::parse_project(&source).unwrap();
+            let result = Runtime::new(&module).with_classes(&classes).call("Driver.Probe", vec![]).unwrap();
+            assert_eq!(result, Value::String(expected.into()), "{body}");
+        }
+    }
+
+    #[test]
+    fn non_latin_identifier_case_and_width_literals_are_preserved() {
+        for (upper, lower) in [('\u{03a3}', '\u{03c3}'), ('\u{0410}', '\u{0430}')] {
+            let source = format!(
+                "Public Function Probe() As String\nDim {upper} As Long\n{upper} = 9\n\
+                 Probe = CStr(VarType({lower})) & \":\" & TypeName({lower})\nEnd Function\n"
+            );
+            assert_eq!(
+                run(&source, "Probe", vec![]).unwrap(),
+                Value::String("0:Empty".into())
+            );
+        }
+        let source = "Public Function Probe() As String\nDim \u{ff21} As String\n\
+                      \u{ff21} = \"\u{ff21}\u{ff41}\"\n\
+                      Probe = CStr(AscW(Left$(a,1))) & \":\" & CStr(AscW(Right$(a,1)))\nEnd Function\n";
+        assert_eq!(
+            run(source, "Probe", vec![]).unwrap(),
+            Value::String("-223:-191".into())
+        );
+    }
+
     #[test]
     fn dynamic_projects_keep_zero_root_files_objects_and_storage() {
         struct LoaderHost {
