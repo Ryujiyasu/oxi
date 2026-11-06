@@ -508,7 +508,89 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     if chart.kind.is_empty() {
         return None;
     }
+    chart.plot_options = plot_options(xml, &chart.kind);
     Some(chart)
+}
+
+
+/// Plot-wide settings and the first series jointly determine the visible plot.
+/// A canonical scatter plot can say "lineMarker" while hiding its series line.
+fn plot_options(xml: &str, kind: &str) -> crate::ir::ChartPlotOptions {
+    use crate::ir::{ChartPlotOptions, ChartStacking};
+    use quick_xml::{reader::NsReader, name::ResolveResult};
+    let mut reader = NsReader::from_str(xml);
+    let mut parents: Vec<(String, u8)> = Vec::new();
+    let mut options = ChartPlotOptions::default();
+    let mut selected = String::new();
+    let mut active = false;
+    let mut first_series = false;
+    let mut in_series = false;
+    let mut series_markers = None;
+    let mut no_line = false;
+    loop {
+        let Ok((namespace, event)) = reader.read_resolved_event() else { break };
+        let domain = match namespace {
+            ResolveResult::Bound(ns) if matches!(ns.as_ref(), b"http://schemas.openxmlformats.org/drawingml/2006/chart" | b"http://purl.oclc.org/ooxml/drawingml/chart") => 1,
+            ResolveResult::Bound(ns) if matches!(ns.as_ref(), b"http://schemas.openxmlformats.org/drawingml/2006/main" | b"http://purl.oclc.org/ooxml/drawingml/main") => 2,
+            _ => 0,
+        };
+        match event {
+            Event::Start(ref e) | Event::Empty(ref e) => {
+                let name = local_name(e.name().as_ref());
+                let value = get_attr(e, "val");
+                let at_plot = active && parents.len() == 4 && parents.iter().all(|(_, ns)| *ns == 1);
+                if selected.is_empty() && domain == 1 && name.ends_with("Chart") && parents.len() == 3
+                    && parents.iter().map(|(n, _)| n.as_str()).eq(["chartSpace", "chart", "plotArea"])
+                    && parents.iter().all(|(_, ns)| *ns == 1) {
+                    selected = name.clone(); active = true;
+                } else if domain == 1 && at_plot {
+                    match name.as_str() {
+                        "barDir" => options.horizontal = value.as_deref() == Some("bar"),
+                        "grouping" => options.stacking = match value.as_deref() {
+                            Some("stacked") => ChartStacking::Stacked,
+                            Some("percentStacked") => ChartStacking::Percent,
+                            _ => ChartStacking::None,
+                        },
+                        "radarStyle" => {
+                            options.filled = value.as_deref() == Some("filled");
+                            options.markers = Some(value.as_deref() != Some("standard"));
+                        }
+                        "scatterStyle" => {
+                            options.smooth = value.as_deref().is_some_and(|s| s.starts_with("smooth"));
+                            options.markers = Some(!matches!(value.as_deref(), Some("line" | "smooth")));
+                        }
+                        "marker" => options.markers = Some(value.as_deref() != Some("0")),
+                        "smooth" => options.smooth = value.as_deref() == Some("1"),
+                        "ser" if !first_series => { first_series = true; in_series = true; }
+                        _ => {}
+                    }
+                }
+                if active && in_series {
+                    if domain == 1 && name == "symbol" && parents.len() == 6
+                        && parents[4] == ("ser".into(), 1) && parents[5] == ("marker".into(), 1) {
+                        series_markers = Some(value.as_deref() != Some("none"));
+                    }
+                    if domain == 2 && name == "noFill" && parents.len() == 7
+                        && parents[4] == ("ser".into(), 1) && parents[5] == ("spPr".into(), 1)
+                        && parents[6] == ("ln".into(), 2) { no_line = true; }
+                }
+                if matches!(event, Event::Start(_)) { parents.push((name, domain)); }
+            }
+            Event::End(ref e) => {
+                let name = local_name(e.name().as_ref());
+                if domain == 1 && name == "ser" && parents.len() == 5 { in_series = false; }
+                if domain == 1 && name == selected && parents.len() == 4 { active = false; }
+                parents.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    if matches!(kind, "line" | "scatter" | "radar") {
+        options.markers = Some(series_markers.or(options.markers).unwrap_or(true));
+    }
+    if kind == "scatter" { options.connected = Some(!first_series || !no_line); }
+    options
 }
 
 fn number(value: &Option<String>) -> Option<f64> {

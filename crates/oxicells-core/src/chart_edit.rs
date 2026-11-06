@@ -175,11 +175,17 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
                 if inner { "<c:layoutTarget val=\"inner\"/>" } else { "" }, f.x, f.y, f.w, f.h),
         }
     }
-    fn series(series: &ChartSeries, index: usize, categories: &[String], scatter: bool) -> String {
+    fn series(series: &ChartSeries, index: usize, categories: &[String], scatter: bool, options: &crate::ir::ChartPlotOptions, kind: &str) -> String {
         let (name, cats, values) = series_data_parts(series, categories, scatter, C);
         let mut out = format!("<c:ser><c:idx val=\"{index}\"/><c:order val=\"{index}\"/>{name}");
-        if let Some(line) = &series.line { out.push_str(&format!("<c:spPr>{}</c:spPr>", paint(line))); }
+        if scatter && options.connected == Some(false) {
+            out.push_str("<c:spPr><a:ln><a:noFill/></a:ln></c:spPr>");
+        } else if let Some(line) = &series.line { out.push_str(&format!("<c:spPr>{}</c:spPr>", paint(line))); }
         if let Some(value) = &series.marker { out.push_str(&marker(value)); }
+        else if matches!(kind, "line" | "scatter" | "radar") {
+            out.push_str(&format!("<c:marker><c:symbol val=\"{}\"/></c:marker>",
+                if options.markers.unwrap_or(true) { "auto" } else { "none" }));
+        }
         for point in &series.points {
             out.push_str(&format!("<c:dPt><c:idx val=\"{}\"/>", point.index));
             if let Some(value) = &point.marker { out.push_str(&marker(value)); }
@@ -205,6 +211,7 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
         }
         out.push_str(&cats);
         out.push_str(&values);
+        if matches!(kind, "line" | "scatter") { out.push_str(&format!("<c:smooth val=\"{}\"/>", u8::from(options.smooth))); }
         out.push_str("</c:ser>"); out
     }
     fn axis(axis: Option<&ChartAxis>, tag: &str, id: u32, cross: u32, position: &str) -> String {
@@ -225,14 +232,23 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
         }
         out.push_str(&format!("</c:{tag}>")); out
     }
+    use crate::ir::ChartStacking;
+    let options = &chart.plot_options;
+    let grouping = match options.stacking {
+        ChartStacking::Stacked => "stacked", ChartStacking::Percent => "percentStacked",
+        ChartStacking::None => if chart.kind == "bar" { "clustered" } else { "standard" },
+    };
     let (plot, settings, axes) = match chart.kind.as_str() {
-        "bar" => ("barChart", "<c:barDir val=\"col\"/><c:grouping val=\"clustered\"/><c:varyColors val=\"0\"/>", true),
-        "line" => ("lineChart", "<c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>", true),
-        "area" => ("areaChart", "<c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>", true),
-        "scatter" => ("scatterChart", "<c:scatterStyle val=\"marker\"/><c:varyColors val=\"0\"/>", true),
-        "pie" => ("pieChart", "<c:varyColors val=\"1\"/>", false),
-        "doughnut" => ("doughnutChart", "<c:varyColors val=\"1\"/>", false),
-        "radar" => ("radarChart", "<c:radarStyle val=\"standard\"/><c:varyColors val=\"0\"/>", true),
+        "bar" => ("barChart", format!("<c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>",
+            if options.horizontal { "bar" } else { "col" }), true),
+        "line" => ("lineChart", format!("<c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>"), true),
+        "area" => ("areaChart", format!("<c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>"), true),
+        "scatter" => ("scatterChart", format!("<c:scatterStyle val=\"{}\"/><c:varyColors val=\"0\"/>",
+            if options.smooth { "smoothMarker" } else { "lineMarker" }), true),
+        "pie" => ("pieChart", "<c:varyColors val=\"1\"/>".into(), false),
+        "doughnut" => ("doughnutChart", "<c:varyColors val=\"1\"/>".into(), false),
+        "radar" => ("radarChart", format!("<c:radarStyle val=\"{}\"/><c:varyColors val=\"0\"/>",
+            if options.filled { "filled" } else { "marker" }), true),
         kind => return Err(XlsxError::InvalidData(format!("new chart plot kind {kind:?} cannot be serialized"))),
     };
     if !chart.shapes.is_empty() {
@@ -249,7 +265,12 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
     let mut out = format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><c:chartSpace xmlns:c=\"{C}\" xmlns:a=\"{A}\"><c:chart>");
     if let Some(title) = &chart.title { out.push_str(&format!("<c:title>{}<c:overlay val=\"0\"/></c:title>", rich(title))); }
     out.push_str(&format!("<c:autoTitleDeleted val=\"{}\"/><c:plotArea>{}<c:{plot}>{settings}", u8::from(chart.title.is_none()), layout(chart.plot.as_ref(), true)));
-    for (index, value) in chart.series.iter().enumerate() { out.push_str(&series(value, index, &chart.categories, chart.kind == "scatter")); }
+    for (index, value) in chart.series.iter().enumerate() { out.push_str(&series(value, index, &chart.categories, chart.kind == "scatter", options, &chart.kind)); }
+    if chart.kind == "line" {
+        let markers = chart.series.is_empty() || options.markers.unwrap_or(true);
+        out.push_str(&format!("<c:marker val=\"{}\"/><c:smooth val=\"{}\"/>", u8::from(markers), u8::from(options.smooth)));
+    }
+    if chart.kind == "bar" && options.stacking != ChartStacking::None { out.push_str("<c:overlap val=\"100\"/>"); }
     if chart.kind == "doughnut" { out.push_str("<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/>"); }
     if axes { out.push_str("<c:axId val=\"1\"/><c:axId val=\"2\"/>"); }
     out.push_str(&format!("</c:{plot}>"));
@@ -461,6 +482,121 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
     Ok(out)
 }
 
+
+pub(crate) fn plot_options_changed(before: &Chart, after: &Chart) -> bool {
+    before.kind != after.kind || before.plot_options != after.plot_options
+}
+
+fn patch_plot_options(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing_ns: &str) -> Result<String, XlsxError> {
+    let area = ["chartSpace", "chart", "plotArea"];
+    let (old_children, _) = children_at(xml, &area)?;
+    let old_plots: Vec<_> = old_children.iter().filter(|(name, _, _)| name.ends_with("Chart")).collect();
+    if old_plots.len() != 1 {
+        return Err(XlsxError::InvalidData("plot editing requires an unambiguous source plot".into()));
+    }
+    let (old_tag, old_start, old_end) = old_plots[0];
+    let old_path = ["chartSpace", "chart", "plotArea", old_tag.as_str()];
+    let (old_settings, _) = children_at(xml, &old_path)?;
+    let mut modeled = after.clone();
+    modeled.shapes.clear(); // Annotations belong to the retained source chart.
+    let generated = new_chart_xml(&modeled)?
+        .replace(&format!("xmlns:c=\"{C}\""), &format!("xmlns:c=\"{ns}\""))
+        .replace(&format!("xmlns:a=\"{A}\""), &format!("xmlns:a=\"{drawing_ns}\""));
+    let (new_children, _) = children_at(&generated, &area)?;
+    let (new_tag, new_start, new_end) = new_children.iter().find(|(name, _, _)| name.ends_with("Chart"))
+        .ok_or_else(|| XlsxError::InvalidData("new plot is missing".into()))?;
+    let mut plot = generated[*new_start..*new_end].to_string();
+    let new_path = ["chartSpace", "chart", "plotArea", new_tag.as_str()];
+    let (new_settings, _) = children_at(&generated, &new_path)?;
+    let old_series: Vec<_> = old_settings.iter().filter(|(name, _, _)| name == "ser").collect();
+    let new_series: Vec<_> = new_settings.iter().filter(|(name, _, _)| name == "ser").collect();
+    let (old_series_fields, _) = children_at(xml, &["chartSpace", "chart", "plotArea", old_tag.as_str(), "ser"])
+        .unwrap_or_default();
+    for (i, (_, begin, end)) in new_series.iter().enumerate().rev() {
+        if let Some((_, old_begin, old_end)) = old_series.get(i) {
+            let additions: String = old_series_fields.iter().filter(|(name, a, b)|
+                name == "extLst" && a >= old_begin && b <= old_end).map(|(_, a, b)| &xml[*a..*b]).collect();
+            if !additions.is_empty() {
+                let at = end - new_start - "</c:ser>".len();
+                plot.insert_str(at, &additions);
+            }
+        }
+        let _ = begin;
+    }
+    let same_kind = before.kind == after.kind;
+    let child_position = |fragment: &str, successors: &[&str]| -> Result<usize, XlsxError> {
+        let prefix = format!("<c:chartSpace xmlns:c=\"{ns}\" xmlns:a=\"{drawing_ns}\"><c:chart><c:plotArea>");
+        let wrapped = format!("{prefix}{fragment}</c:plotArea></c:chart></c:chartSpace>");
+        let (fields, end) = children_at(&wrapped, &["chartSpace", "chart", "plotArea", new_tag])?;
+        Ok(fields.iter().filter(|(name, _, _)| successors.contains(&name.as_str()))
+            .map(|(_, a, _)| *a).min().unwrap_or(end) - prefix.len())
+    };
+    for (name, begin, end) in &old_settings {
+        let retain = name == "extLst" || name == "dLbls" || (same_kind
+            && !matches!(name.as_str(), "ser" | "axId" | "barDir" | "grouping" | "scatterStyle" | "radarStyle" | "marker" | "smooth" | "overlap" | "varyColors"));
+        if !retain { continue; }
+        // These source properties precede the plot's axes; extension lists are last.
+        let successors: &[&str] = match name.as_str() {
+            "dLbls" => &["dropLines", "hiLowLines", "upDownBars", "gapWidth", "overlap", "serLines", "marker", "smooth", "firstSliceAng", "holeSize", "axId", "extLst"],
+            "gapWidth" => &["overlap", "serLines", "axId", "extLst"],
+            "dropLines" => &["hiLowLines", "upDownBars", "marker", "smooth", "axId", "extLst"],
+            "hiLowLines" => &["upDownBars", "marker", "smooth", "axId", "extLst"],
+            "upDownBars" => &["marker", "smooth", "axId", "extLst"],
+            "extLst" => &[],
+            _ => &["axId", "extLst"],
+        };
+        let at = child_position(&plot, successors)?;
+        plot.insert_str(at, &xml[*begin..*end]);
+    }
+    let axis_id = |fragment: &str| -> Result<String, XlsxError> {
+        let mut reader = Reader::from_str(fragment);
+        match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Start(e) | Event::Empty(e) => get_attr(&e, "val")
+                .ok_or_else(|| XlsxError::InvalidData("axis identity is missing".into())),
+            _ => Err(XlsxError::InvalidData("axis identity is missing".into())),
+        }
+    };
+    let old_ids: Vec<_> = old_settings.iter().filter(|(name, _, _)| name == "axId")
+        .map(|(_, a, b)| axis_id(&xml[*a..*b])).collect::<Result<_, _>>()?;
+    let new_ids = new_settings.iter().filter(|(name, _, _)| name == "axId").count();
+    let keep_axes = same_kind && old_ids.len() == new_ids;
+    if keep_axes {
+        for i in 0..new_ids { plot = plot.replace(&format!("<c:axId val=\"{}\"/>", i + 1), &format!("<c:axId val=\"oxi-axis-{i}\"/>")); }
+        for (i, id) in old_ids.iter().enumerate() { plot = plot.replace(&format!("val=\"oxi-axis-{i}\""), &format!("val=\"{id}\"")); }
+    }
+    plot = plot.replacen(&format!("<c:{new_tag}>"), &format!("<c:{new_tag} xmlns:c=\"{ns}\" xmlns:a=\"{drawing_ns}\">"), 1);
+    let mut replacement = plot;
+    if !keep_axes {
+        for (tag, a, b) in &new_children {
+            if matches!(tag.as_str(), "catAx" | "valAx" | "dateAx" | "serAx") {
+                replacement.push_str(&generated[*a..*b].replacen(&format!("<c:{tag}>"),
+                    &format!("<c:{tag} xmlns:c=\"{ns}\" xmlns:a=\"{drawing_ns}\">"), 1));
+            }
+        }
+    }
+    let mut edits = vec![(*old_start, *old_end, replacement)];
+    if !keep_axes {
+        for (tag, a, b) in &old_children {
+            if matches!(tag.as_str(), "catAx" | "valAx" | "dateAx" | "serAx") { edits.push((*a, *b, String::new())); }
+        }
+    }
+    edits.sort_by_key(|(a, b, _)| (*a, *b));
+    let mut output = xml.to_string();
+    for (a, b, replacement) in edits.into_iter().rev() { output.replace_range(a..b, &replacement); }
+    if keep_axes && before.plot_options.horizontal != after.plot_options.horizontal && after.kind == "bar" {
+        for tag in ["catAx", "dateAx", "valAx"] {
+            if let Ok((fields, _)) = children_at(&output, &["chartSpace", "chart", "plotArea", tag]) {
+                if let Some((_, a, b)) = fields.iter().find(|(name, _, _)| name == "axPos") {
+                    let position = if tag == "valAx" { if after.plot_options.horizontal { "b" } else { "l" } }
+                        else if after.plot_options.horizontal { "l" } else { "b" };
+                    output.replace_range(*a..*b, &format!("<c:axPos xmlns:c=\"{ns}\" val=\"{position}\"/>"));
+                }
+            }
+        }
+    }
+    Ok(output)
+}
+
 pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<String, XlsxError> {
     let mut reader = quick_xml::reader::NsReader::from_str(xml);
     let strict = loop {
@@ -486,6 +622,7 @@ pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<St
         A
     };
     let mut output = xml.to_string();
+    if plot_options_changed(before, after) { output = patch_plot_options(&output, before, after, chart_ns, drawing_ns)?; }
     if before.title != after.title {
         let title=after.title.as_ref().map(|text|format!(
             "<c:title xmlns:c=\"{chart_ns}\" xmlns:a=\"{drawing_ns}\"><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t xml:space=\"preserve\">{}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val=\"0\"/></c:title>",escape(text))).unwrap_or_default();
@@ -625,6 +762,68 @@ mod series_data_tests {
             assert_eq!(ranges(&xml)[1], ranges(&patched)[1]);
             let actual = crate::chart::parse_chart_xml(&patched, &crate::parser::Theme::default()).unwrap();
             assert!(series_data_equal(&actual.series[0], &after.series[0]));
+        }
+    }
+}
+
+#[cfg(test)]
+mod plot_options_tests {
+    use super::*;
+    use crate::ir::{ChartAxis, ChartPlotOptions, ChartSeries, ChartStacking};
+
+    #[test]
+    fn native_marker_line_and_grouping_choices_survive_serialization() {
+        for (kind, options) in [
+            ("bar", ChartPlotOptions { horizontal: true, stacking: ChartStacking::Percent, ..Default::default() }),
+            ("line", ChartPlotOptions { stacking: ChartStacking::Stacked, markers: Some(false), ..Default::default() }),
+            ("line", ChartPlotOptions { markers: Some(true), ..Default::default() }),
+            ("scatter", ChartPlotOptions { markers: Some(true), connected: Some(false), ..Default::default() }),
+            ("scatter", ChartPlotOptions { markers: Some(false), connected: Some(true), smooth: true, ..Default::default() }),
+            ("radar", ChartPlotOptions { markers: Some(false), ..Default::default() }),
+            ("radar", ChartPlotOptions { markers: Some(false), filled: true, ..Default::default() }),
+        ] {
+            let chart = Chart { kind: kind.into(), plot_options: options.clone(),
+                series: vec![ChartSeries { name: "Revenue".into(), values: vec![Some(1.0)], ..Default::default() }],
+                ..Default::default() };
+            let xml = new_chart_xml(&chart).unwrap();
+            let restored = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+            assert_eq!(restored.plot_options, options, "{kind}");
+            if kind == "line" && options.markers == Some(false) { assert!(xml.contains("<c:symbol val=\"none\"/>")); }
+            if kind == "scatter" && options.connected == Some(false) { assert!(xml.contains("<a:ln><a:noFill/></a:ln>")); }
+        }
+    }
+
+    #[test]
+    fn changing_plot_settings_keeps_source_extensions_axes_and_label_order() {
+        for strict in [false, true] {
+            let chart = Chart { kind: "bar".into(), series: vec![ChartSeries {
+                name: "Revenue".into(), values: vec![Some(1.0)], ..Default::default()
+            }], value_axis: Some(ChartAxis { number_format: Some("$0.00".into()), ..Default::default() }), ..Default::default() };
+            let mut xml = new_chart_xml(&chart).unwrap();
+            let labels = "<c:dLbls><c:showVal val=\"1\"/></c:dLbls>";
+            let extension = "<c:extLst><c:ext uri=\"kept\"><x:keep xmlns:x=\"urn:retained\">retained</x:keep></c:ext></c:extLst>";
+            xml = xml.replacen("</c:barChart>", &format!("{labels}<c:gapWidth val=\"83\"/>{extension}</c:barChart>"), 1)
+                .replacen("</c:ser>", &format!("{extension}</c:ser>"), 1)
+                .replacen("</c:valAx>", &format!("{extension}</c:valAx>"), 1);
+            if strict { xml = xml.replace(C, "http://purl.oclc.org/ooxml/drawingml/chart").replace(A, "http://purl.oclc.org/ooxml/drawingml/main"); }
+            let before = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+            for kind in ["bar", "line", "scatter", "doughnut"] {
+                let mut after = before.clone();after.kind = kind.into();
+                after.plot_options = ChartPlotOptions { horizontal: kind == "bar", stacking: if kind == "bar" { ChartStacking::Stacked } else { ChartStacking::None },
+                    markers: if matches!(kind, "line" | "scatter") { Some(false) } else { None },
+                    connected: if kind == "scatter" { Some(false) } else { None }, ..Default::default() };
+                let patched = patch_chart(&xml, &before, &after).unwrap();
+                let tag = match kind { "bar" => "barChart", "line" => "lineChart", "scatter" => "scatterChart", _ => "doughnutChart" };
+                let (fields, _) = children_at(&patched, &["chartSpace", "chart", "plotArea", tag]).unwrap();
+                let names: Vec<_> = fields.iter().map(|(n, _, _)| n.as_str()).collect();
+                assert!(names.iter().position(|n| *n == "dLbls").unwrap() > names.iter().position(|n| *n == "ser").unwrap());
+                if let Some(hole) = names.iter().position(|n| *n == "holeSize") {
+                    assert!(names.iter().position(|n| *n == "dLbls").unwrap() < hole);
+                }
+                assert!(patched.contains(extension));
+                assert!(patched.contains("<x:keep xmlns:x=\"urn:retained\">retained</x:keep>"));
+                if kind == "bar" { assert!(patched.contains("<c:gapWidth val=\"83\"/>")); assert!(patched.contains("$0.00")); }
+            }
         }
     }
 }

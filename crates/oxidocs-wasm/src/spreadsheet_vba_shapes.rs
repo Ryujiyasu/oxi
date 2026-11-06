@@ -165,6 +165,7 @@ pub(super) struct ShapeRecord {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ChartRecord {
     pub chart_type: i64,
+    pub plot_modified: bool,
     pub series: Vec<SeriesRecord>,
     pub has_title: bool,
     pub title: String,
@@ -510,6 +511,44 @@ fn arrow_size_name(size: i64) -> String {
     .to_string()
 }
 
+pub(super) fn chart_plot_options(kind: i64) -> oxicells_core::ir::ChartPlotOptions {
+    use oxicells_core::ir::{ChartPlotOptions, ChartStacking};
+    let mut options = ChartPlotOptions::default();
+    options.horizontal = matches!(kind, 57..=62);
+    options.stacking = match kind {
+        52 | 55 | 58 | 61 | 63 | 66 | 76 | 78 => ChartStacking::Stacked,
+        53 | 56 | 59 | 62 | 64 | 67 | 77 | 79 => ChartStacking::Percent,
+        _ => ChartStacking::None,
+    };
+    options.markers = match kind {
+        4 | 63 | 64 | 73 | 75 | -4151 | 82 => Some(false),
+        65..=67 | 72 | 74 | -4169 | 81 => Some(true),
+        _ => None,
+    };
+    if matches!(kind, -4169 | 72..=75) { options.connected = Some(kind != -4169); }
+    options.smooth = matches!(kind, 72 | 73);
+    options.filled = kind == 82;
+    options
+}
+
+pub(super) fn chart_type_of(chart: &Chart) -> i64 {
+    use oxicells_core::ir::ChartStacking;
+    let options = &chart.plot_options;
+    let level = match options.stacking { ChartStacking::None => 0, ChartStacking::Stacked => 1, ChartStacking::Percent => 2 };
+    let markers = options.markers.unwrap_or(true);
+    match chart.kind.as_str() {
+        "bar" => if options.horizontal { 57 + level } else { 51 + level },
+        "line" => if markers { 65 + level } else { match level { 0 => 4, 1 => 63, _ => 64 } },
+        "area" => match level { 0 => 1, 1 => 76, _ => 77 },
+        "scatter" => if options.smooth { if markers { 72 } else { 73 } }
+            else if options.connected.unwrap_or(true) { if markers { 74 } else { 75 } } else { -4169 },
+        "radar" => if options.filled { 82 } else if markers { 81 } else { -4151 },
+        "pie" => 5,
+        "doughnut" => -4120,
+        _ => 51,
+    }
+}
+
 /// "bar", "line", "pie", "area", "scatter", "doughnut" -- the chart part's
 /// own word for an `xlChartType` -- and whether the bars stand up.
 pub(super) fn chart_kind(chart_type: i64) -> &'static str {
@@ -519,7 +558,7 @@ pub(super) fn chart_kind(chart_type: i64) -> &'static str {
         -4120 | 80 => "doughnut",
         1 | 76 | 77 | 78 | -4098 => "area",
         -4169 | 72 | 73 | 74 | 75 => "scatter",
-        -4152 | 15 | 91 | 92 | 93 => "radar",
+        -4151 | 81 | 82 | -4152 | 15 | 91 | 92 | 93 => "radar",
         _ => "bar",
     }
 }
@@ -567,14 +606,8 @@ impl<'a> WorkbookHost<'a> {
                     DrawingKind::Picture { .. } => (ShapeKind::Picture, "Picture"),
                     DrawingKind::Chart(chart) => (
                         ShapeKind::Chart(Box::new(ChartRecord {
-                            chart_type: match chart.kind.as_str() {
-                                "line" => 4,
-                                "pie" => 5,
-                                "doughnut" => -4120,
-                                "area" => 1,
-                                "scatter" => -4169,
-                                _ => 51,
-                            },
+                            chart_type: chart_type_of(chart),
+                            plot_modified: false,
                             series: chart
                                 .series
                                 .iter()
@@ -1227,8 +1260,33 @@ impl<'a> WorkbookHost<'a> {
                 None => DrawingKind::Other,
             },
             ShapeKind::Chart(chart) => {
+                let plot_modified=chart.plot_modified;
                 let mut chart=self.chart_of(chart);
-                if let Some(Drawing {kind:DrawingKind::Chart(original),..})=&record.original {chart.origin_id=original.origin_id;}
+                if let Some(Drawing {kind:DrawingKind::Chart(original),..})=&record.original {
+                    chart.origin_id=original.origin_id;
+                    if !plot_modified { chart.kind=original.kind.clone();chart.plot_options=original.plot_options.clone(); }
+                    chart.plot=original.plot.clone();
+                    chart.fill=original.fill.clone();
+                    chart.plot_fill=original.plot_fill.clone();
+                    chart.shapes=original.shapes.clone();
+                    for (series, previous) in chart.series.iter_mut().zip(&original.series) {
+                        if series.line.is_none() { series.line=previous.line.clone(); }
+                        if chart.kind==original.kind && chart.plot_options.markers==original.plot_options.markers {
+                            series.marker=previous.marker.clone();
+                        }
+                        series.points=previous.points.clone();
+                        series.labels=previous.labels.clone();
+                        series.label_size=previous.label_size;
+                        series.label_face=previous.label_face.clone();
+                        series.label_pos=previous.label_pos.clone();
+                    }
+                    for (axis, prior) in [(&mut chart.value_axis,&original.value_axis),(&mut chart.category_axis,&original.category_axis)] {
+                        if let (Some(current),Some(prior))=(axis.as_mut(),prior.as_ref()) {
+                            let min=current.min;let max=current.max;let position=current.position.clone();
+                            *current=prior.clone();current.min=min;current.max=max;current.position=position;
+                        }
+                    }
+                }
                 DrawingKind::Chart(chart)
             },
             ShapeKind::Auto(_) | ShapeKind::TextBox | ShapeKind::Line => {
@@ -1457,6 +1515,7 @@ impl<'a> WorkbookHost<'a> {
             origin_id: None,
             title: chart.has_title.then(||chart.title.clone()),
             kind: chart_kind(chart.chart_type).to_string(),
+            plot_options: chart_plot_options(chart.chart_type),
             plot: None,
             series: chart
                 .series
@@ -1509,7 +1568,7 @@ impl<'a> WorkbookHost<'a> {
                 .collect(),
             categories,
             value_axis: Some(ChartAxis {
-                position: "l".to_string(),
+                position: if chart_plot_options(chart.chart_type).horizontal { "b" } else { "l" }.to_string(),
                 min: chart.axes[1].min,
                 max: chart.axes[1].max,
                 major_unit: None,
@@ -1524,7 +1583,7 @@ impl<'a> WorkbookHost<'a> {
                 cross_between: Some("between".to_string()),
             }),
             category_axis: Some(ChartAxis {
-                position: "b".to_string(),
+                position: if chart_plot_options(chart.chart_type).horizontal { "l" } else { "b" }.to_string(),
                 min: None,
                 max: None,
                 major_unit: None,

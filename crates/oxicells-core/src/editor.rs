@@ -300,8 +300,8 @@ impl XlsxEditor {
         for chart in edited.sheets.iter().flat_map(|sheet|&sheet.drawings).filter_map(|drawing|match &drawing.kind {crate::ir::DrawingKind::Chart(chart)=>Some(chart),_=>None}) {
             if let Some(origin)=chart.origin_id {
                 let before=originals.get(&origin).ok_or_else(||XlsxError::InvalidData("chart source identity is not in this workbook".into()))?;
-                if before.title!=chart.title || crate::chart_edit::legend_position(before)!=crate::chart_edit::legend_position(chart) || crate::chart_edit::series_data_changed(before,chart) {
-                    if self.chart_edits.get(&origin).is_some_and(|(_,prior)|prior.title!=chart.title || crate::chart_edit::legend_position(prior)!=crate::chart_edit::legend_position(chart) || crate::chart_edit::series_data_changed(prior,chart)) {
+                if before.title!=chart.title || crate::chart_edit::legend_position(before)!=crate::chart_edit::legend_position(chart) || crate::chart_edit::series_data_changed(before,chart) || crate::chart_edit::plot_options_changed(before,chart) {
+                    if self.chart_edits.get(&origin).is_some_and(|(_,prior)|prior.title!=chart.title || crate::chart_edit::legend_position(prior)!=crate::chart_edit::legend_position(chart) || crate::chart_edit::series_data_changed(prior,chart) || crate::chart_edit::plot_options_changed(prior,chart)) {
                         return Err(XlsxError::InvalidData("conflicting edits for a shared chart source".into()));
                     }
                     self.chart_edits.insert(origin,((*before).clone(),chart.clone()));

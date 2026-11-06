@@ -1548,6 +1548,8 @@ pub struct Chart {
     pub title: Option<String>,
     /// "line", "bar", "pie" 窶・the first plot the chart holds.
     pub kind: String,
+    #[serde(default, skip_serializing_if = "ChartPlotOptions::is_default")]
+    pub plot_options: ChartPlotOptions,
     /// The rectangle the axes enclose, as fractions of the chart's own box,
     /// when the chart pins one. Left out, Excel places the plot itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1572,6 +1574,31 @@ pub struct Chart {
     pub fill: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_fill: Option<String>,
+}
+
+/// Portable plot choices, without application-specific chart type numbers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ChartPlotOptions {
+    pub horizontal: bool,
+    pub stacking: ChartStacking,
+    pub markers: Option<bool>,
+    pub connected: Option<bool>,
+    pub smooth: bool,
+    pub filled: bool,
+}
+
+impl ChartPlotOptions {
+    pub fn is_default(&self) -> bool { self == &Self::default() }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartStacking {
+    #[default]
+    None,
+    Stacked,
+    Percent,
 }
 
 /// A box stated as fractions of its parent's width and height.
