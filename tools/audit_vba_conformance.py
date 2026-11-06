@@ -396,6 +396,7 @@ def capture(manifest_path, pkg, root):
     guards = {str(path): sha(path.read_bytes()) for path in guarded}
     start = time.monotonic()
     report = {"schema": 1, "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "measurement_tool_sha256": sha(Path(__file__).read_bytes()),
               "manifest": plan, "whole_goal_complete": False, "cases": [],
               "source_guards": guards, "feature_evidence": [],
               "limitations": ["Node WASM only; browser is a separate gate",
@@ -405,12 +406,21 @@ def capture(manifest_path, pkg, root):
 
     def snapshot(workbook):
         sheet = workbook.Worksheets(1)
-        return {"cells": {address: {"value2": sheet.Range(address).Value2,
-                                   "formula2": sheet.Range(address).Formula2,
-                                   "has_formula": sheet.Range(address).HasFormula}
-                          for address in plan["sample_cells"]},
-                "sheet_names": [workbook.Worksheets(i).Name
-                                for i in range(1, workbook.Worksheets.Count + 1)]}
+        state = {"cells": {address: {"value2": sheet.Range(address).Value2,
+                                    "formula2": sheet.Range(address).Formula2,
+                                    "has_formula": sheet.Range(address).HasFormula}
+                           for address in plan["sample_cells"]},
+                 "sheet_names": [workbook.Worksheets(i).Name
+                                 for i in range(1, workbook.Worksheets.Count + 1)]}
+        if plan.get("state_report_procedure"):
+            # A reviewed, read-only VBA getter can cover saved names/styles and
+            # other bounded state that is not represented by the sampled cells.
+            value = app.Run("'" + workbook.Name.replace("'", "''") + "'!"
+                            + plan["state_report_procedure"])
+            if not isinstance(value, str):
+                raise TypeError("The state report must return a String")
+            state["vba_state_report"] = value
+        return state
 
     try:
         app = win32com.client.DispatchEx("Excel.Application")
@@ -442,20 +452,31 @@ def capture(manifest_path, pkg, root):
         for index, case in enumerate(captured["cases"]):
             native_path, oxi_path = scratch
             original = root / plan["fixtures"][case["fixture"]]["path"]
+            stage = "native_open"
             try:
                 book = app.Workbooks.Open(str(original), UpdateLinks=0, ReadOnly=True)
+                stage = "native_run"
                 app.Calculation = plan["options"]["applicationState"]["calculation"]
                 case["native_result"] = app.Run("'" + book.Name.replace("'", "''") + "'!" + case["procedure"], *case["args"])
+                case["value_equal"] = (isinstance(case["native_result"], str)
+                    and not case.get("error") and case.get("result") == {"type": "string", "value": case["native_result"]})
+                stage = "native_snapshot"
                 case["native_state"] = snapshot(book)
                 case["native_application"] = {"calculation": app.Calculation,
                                               "enableEvents": app.EnableEvents, "displayAlerts": app.DisplayAlerts}
+                case["application_equal"] = all(case.get("application_state", {}).get(k) == v
+                                                for k, v in case["native_application"].items())
+                stage = "native_save"
                 book.SaveCopyAs(str(native_path))
                 book.Close(False)
+                stage = "native_reopen"
                 book = app.Workbooks.Open(str(native_path), UpdateLinks=0, ReadOnly=True)
                 case["native_reopened"] = snapshot(book)
                 book.Close(False)
                 book = None
+                case["native_roundtrip_equal"] = case["native_state"] == case["native_reopened"]
                 if "saved_base64" in case:
+                    stage = "oxi_readback"
                     body = base64.b64decode(case.pop("saved_base64"))
                     assert sha(body) == case["saved_sha256"]
                     oxi_path.write_bytes(body)
@@ -463,14 +484,22 @@ def capture(manifest_path, pkg, root):
                     case["oxi_excel_reopened"] = snapshot(book)
                     book.Close(False)
                     book = None
-                case["value_equal"] = (isinstance(case["native_result"], str)
-                    and not case.get("error") and case.get("result") == {"type": "string", "value": case["native_result"]})
-                case["native_roundtrip_equal"] = case["native_state"] == case["native_reopened"]
                 case["excel_reopen_equal"] = case["native_reopened"] == case.get("oxi_excel_reopened")
-                case["application_equal"] = all(case.get("application_state", {}).get(k) == v
-                                                for k, v in case["native_application"].items())
             except Exception as error:
-                case["native_capture_error"] = type(error).__name__ + ": " + str(error)
+                case["capture_error_stage"] = stage
+                detail = type(error).__name__ + ": " + str(error)
+                if stage == "oxi_readback":
+                    case["oxi_excel_capture_error"] = detail
+                    case["excel_reopen_equal"] = False
+                    if oxi_path.exists():
+                        import zlib
+                        failed = oxi_path.read_bytes()
+                        report.setdefault("failed_saved_packets", {})[sha(failed)] = {
+                            "bytes": len(failed),
+                            "zlib_base64": base64.b64encode(zlib.compress(failed, 9)).decode(),
+                        }
+                else:
+                    case["native_capture_error"] = detail
             finally:
                 if book is not None:
                     book.Close(False)
@@ -495,7 +524,8 @@ def capture(manifest_path, pkg, root):
             handle.Close()
         report["guards_unchanged"] = all(sha(Path(path).read_bytes()) == digest for path, digest in guards.items())
         report["summary"] = {"planned": len(plan["cases"]), "completed": len(report["cases"]),
-                             "capture_errors": sum(bool(c.get("native_capture_error") or c.get("harness_error")) for c in report["cases"])}
+                             "capture_errors": sum(bool(c.get("native_capture_error") or c.get("harness_error")
+                                                           or c.get("oxi_excel_capture_error")) for c in report["cases"])}
         for label, field in (("return", "value_equal"), ("native_save", "native_roundtrip_equal"),
                              ("oxi_save", "oxi_roundtrip_equal"), ("excel_reopen", "excel_reopen_equal"),
                              ("application", "application_equal")):

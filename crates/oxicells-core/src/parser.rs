@@ -1222,7 +1222,8 @@ fn parse_dxfs(xml: &str, theme: &Theme) -> Vec<crate::ir::DiffStyle> {
                     "fgColor" if in_fill && style.bg_color.is_none() => {
                         style.bg_color = parse_color_attr(e, theme);
                     }
-                    "numFmt" => style.number_format = get_attr(e, "formatCode"),
+                    "numFmt" => style.number_format = get_attr(e, "formatCode")
+                        .map(|code| oxicells_calc::numfmt::number_format_from_storage(&code, false)),
                     _ => {}
                 }
             }
@@ -1430,7 +1431,8 @@ fn reconcile_imported_styles_xml(xml: &str, normalize_normal_font: bool) -> Resu
     let number_format = |xf: &ImportedStyleElement| {
         let id = xf.id("numFmtId") as u32;
         root.child("numFmts").and_then(|section| section.children.iter().find(|format| format.id("numFmtId") == id as usize))
-            .and_then(|format| format.attributes.get("formatCode").cloned())
+            .and_then(|format| format.attributes.get("formatCode"))
+            .map(|code| oxicells_calc::numfmt::number_format_from_storage(code, false))
             .or_else(|| builtin_number_format(id).map(str::to_string))
             .unwrap_or_else(|| format!("#{id}"))
     };
@@ -1728,7 +1730,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             (get_attr(&e, "numFmtId"), get_attr(&e, "formatCode"))
                         {
                             if let Ok(id) = id_str.parse::<u32>() {
-                                ss.num_fmts.insert(id, code);
+                                ss.num_fmts.insert(id, oxicells_calc::numfmt::number_format_from_storage(&code, false));
                             }
                         }
                     }
