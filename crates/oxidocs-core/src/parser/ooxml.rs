@@ -1330,7 +1330,13 @@ impl OoxmlParser {
                     .and_then(|s| s.paragraph.default_run_style.as_ref())
                     .and_then(|rs| rs.font_size)
             })
-            .unwrap_or(10.5);
+            // OXI_GRID_DEFAULT_SZ (2026-11-06, default ON, opt-out _DISABLE): a
+            // package that names no size in its rPrDefault or its Normal style
+            // runs at the 10pt application default (S636 in layout), and Word
+            // sizes the character grid from that 10pt too: `_pb_grid_default_sz_gen.py`
+            // fits 47 10pt kanji on a 470.5pt linesAndChars line with no sz
+            // anywhere and 46 once either part says 10.5 or 12.
+            .unwrap_or(if crate::env_flag!("OXI_GRID_DEFAULT_SZ_DISABLE") { 10.5 } else { 10.0 });
         for page in &mut pages {
             // Resolve each section from the same document-default size used by
             // the page-level grid, including a character grid introduced later.
