@@ -1818,10 +1818,21 @@ unsafe fn render_text(
         None => (font_family, weight, false),
     };
     let gdi_owned: String;
+    // OXI_GDI_FAMILY_FAUX_BOLD (2026-11-06, default ON, opt-out _DISABLE): a GDI
+    // family that is one weight of a larger DirectWrite family (Eras Demi ITC = Eras
+    // ITC Demi) is its own family to Word, so bold is that face emboldened, at its
+    // own advances -- not the family's Bold member. blind-J en/policies__00cb6db7's
+    // bold «Letter-join 16» headings (altName Eras Demi ITC): Word's PDF draws
+    // ErasITC-Demi at the Demi advances (Exceptional = 66.8); Oxi drew Eras Bold
+    // ITC, 7% wider, over the layout's Demi positions and the words ran together.
+    let mut gdi_faux = false;
     let (font_family, weight, gdi_stretch, gdi_style) = match gdi_family.clone() {
         Some((fam, w, st, sy)) => {
             gdi_owned = fam;
-            (&gdi_owned[..], if bold { DWRITE_FONT_WEIGHT_BOLD } else { w }, Some(st), Some(sy))
+            let keep = bold && w.0 < DWRITE_FONT_WEIGHT_BOLD.0
+                && std::env::var_os("OXI_GDI_FAMILY_FAUX_BOLD_DISABLE").is_none();
+            gdi_faux = keep;
+            (&gdi_owned[..], if bold && !keep { DWRITE_FONT_WEIGHT_BOLD } else { w }, Some(st), Some(sy))
         }
         None => (font_family, weight, None, None),
     };
@@ -1858,7 +1869,7 @@ unsafe fn render_text(
         && dwrite_bold_is_simulated(dwrite_factory, font_family, italic);
     let weight = if sim_bold { DWRITE_FONT_WEIGHT_NORMAL } else { weight };
     let faux_bold: bool = (bold && is_ms_legacy && std::env::var("OXI_S493F_DISABLE").is_err())
-        || light_faux_bold || sim_bold;
+        || light_faux_bold || sim_bold || gdi_faux;
     // dx=0.4pt overprint => bold-line ink ratio 1.41 ≈ Word's measured 1.396 (calibrated
     // on the MS Gothic/Mincho repro: REG vs BOLD lines, Word bold/reg=1.396).
     let faux_dx: f32 = std::env::var("OXI_FAUXBOLD_DX").ok()

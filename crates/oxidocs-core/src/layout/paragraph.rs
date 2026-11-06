@@ -809,6 +809,25 @@ impl<'a> ParagraphLayouter<'a> {
             };
             let list_indent = s1349_list_indent.or(para.style.list_indent).unwrap_or(18.0);
             let mut marker_x = start_x + indent_left - list_indent;
+            // OXI_LIST_HANG_AT_LEFT (2026-11-06, default ON, opt-out _DISABLE): a hanging
+            // list label that fits its hanging tabs the text to the paragraph's own
+            // left, wherever the label falls -- also into the left margin, where
+            // S853 kept the level's left. `_pb_list_direct_left_gen.py` (slice of
+            // blind-J en/policies__00cb6db7, bullet level left 720 hanging 360, num
+            // tab 720): direct left -225 / -225+h360 / -225+h431 / 153 / 153+h431 /
+            // 300 put the text at -11.28 / -11.28 / -11.28 / 7.7 / 7.7 / 15.02 and the
+            // bullet a hanging to its left; only firstLine 0 (no hanging) goes to 36.
+            // (the level must carry the hanging: en/administrative__0046f255's level is
+            // ind left 1094 only and the paragraph adds left 0 hanging 360 -- Word sets
+            // «1.» at the margin and the text 18 in, the existing path)
+            if list_consumes_hanging
+                && para.style.list_indent.is_some()
+                && s778_stop_extra > 0.0
+                && marker_width <= list_indent + 0.01
+                && !crate::env_flag!("OXI_LIST_HANG_AT_LEFT_DISABLE")
+            {
+                s778_stop_extra = 0.0;
+            }
             // S893 (2026-07-17, default ON, opt-out OXI_S893_DISABLE): the
             // list suffix tab can never go BACKWARD. When the MARKER is wider
             // than the hanging indent (marker end overshoots the ind_left
@@ -7708,7 +7727,18 @@ impl<'a> ParagraphLayouter<'a> {
             };
 
             // Mixed picture/text lines share the baseline required by both boxes.
-            let body_picture_baseline = if !is_header_footer && !self.doc_body_has_real_cjk
+            // OXI_HF_PICTURE_BASELINE (2026-11-06, default ON, opt-out _DISABLE): a header /
+            // footer line shares the same picture/text baseline. blind-J en/policies__
+            // 00d0246e's header «[logo 151 x 43.5] <tab><tab> ROLE PROFILE» (Header style,
+            // line 240 auto): Word's text baseline 79.0 = the logo's bottom 78.8; Oxi set
+            // the text at the line top (49).
+            // (a header / footer line only when it holds text beside the picture: a
+            // picture-only footer line keeps tests/fixtures/footer_images' measured places)
+            let body_picture_baseline = if (!is_header_footer
+                    || (!crate::env_flag!("OXI_HF_PICTURE_BASELINE_DISABLE")
+                        && line.fragments.iter().any(|f| f.style.inline_object_image.is_none()
+                            && !f.text.trim().is_empty())))
+                && !self.doc_body_has_real_cjk
                 && (grid_pitch.is_none() || !para.style.snap_to_grid)
                 && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
                 && line.fragments.iter().any(|f| f.style.inline_object_image.is_some())
