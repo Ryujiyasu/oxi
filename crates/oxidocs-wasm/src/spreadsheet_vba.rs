@@ -59136,6 +59136,153 @@ End Function
 
 
     #[test]
+    fn removed_automatic_chart_title_references_stay_invalid_after_restoration() {
+        let controls: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/vba/chart_import_contracts.json")).unwrap();
+        let fixture = include_bytes!("../../../tests/fixtures/vba/chart_boundary_operations.xlsm");
+        // Native Excel: three imported origins, Text/Caption first reads, then
+        // a held-object Name read before and after a replacement title exists.
+        let source = r#"Attribute VB_Name = "TitleLifetime"
+Private held As Object
+Public Function Seed() As String
+    Dim target As Object
+    Set target = ThisWorkbook.Charts(1)
+    target.ChartType = 4
+    Set held = target.ChartTitle
+    Seed = CStr(target.HasTitle)
+End Function
+Public Function Probe(ByVal route As Long) As String
+    Dim target As Object
+    On Error GoTo failed
+    Set target = ThisWorkbook.Charts(1)
+    Select Case route
+    Case 0: Probe = held.Text
+    Case 1: Probe = held.Caption
+    Case 2: Probe = held.Name
+    Case 3
+        target.HasTitle = True
+        Probe = target.ChartTitle.Text
+    Case 4
+        target.ChartTitle.Text = "Restored"
+        Probe = target.ChartTitle.Text
+    Case 5: Probe = CStr(target.HasTitle)
+    End Select
+    Exit Function
+failed:
+    Probe = "error(" & CStr(Err.Number) & ":" & Err.Source & ":" & Err.Description & ")"
+End Function
+"#;
+        let invalid = concat!("error(-2147467261:S:",
+            "\u{3053}\u{306e}\u{30aa}\u{30d6}\u{30b8}\u{30a7}\u{30af}\u{30c8}\u{306f}",
+            "\u{73fe}\u{5728}\u{6709}\u{52b9}\u{3067}\u{306f}\u{3042}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002})");
+        let default_title = "\u{30b0}\u{30e9}\u{30d5} \u{30bf}\u{30a4}\u{30c8}\u{30eb}";
+        for kind in [5, 68, 71] {
+            let id = format!("auto_title:{kind}:line:type:4");
+            let case = controls["type_transition_cases"].as_array().unwrap().iter()
+                .find(|case| case["id"] == id).unwrap();
+            for first_read in [0, 1] {
+                let mut input = zip::ZipArchive::new(std::io::Cursor::new(fixture)).unwrap();
+                let mut output = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+                for i in 0..input.len() {
+                    let entry = input.by_index(i).unwrap();
+                    if entry.name() == "xl/charts/chart1.xml" {
+                        output.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+                        std::io::Write::write_all(&mut output, case["xml"].as_str().unwrap().as_bytes()).unwrap();
+                    } else { output.raw_copy_file(entry).unwrap(); }
+                }
+                let bytes = output.finish().unwrap().into_inner();
+                let mut book = oxicells_core::parse_xlsx_preserving_values(&bytes).unwrap();
+                let mut session = None;
+                let steps = [
+                    ("TitleLifetime.Seed", None, "True"),
+                    ("TitleLifetime.Probe", Some(first_read), ""),
+                    ("TitleLifetime.Probe", Some(5), "False"),
+                    ("TitleLifetime.Probe", Some(2), invalid),
+                    ("TitleLifetime.Probe", Some(3), default_title),
+                    ("TitleLifetime.Probe", Some(4), "Restored"),
+                    ("TitleLifetime.Probe", Some(2), invalid),
+                ];
+                for (step, (name, route, expected)) in steps.into_iter().enumerate() {
+                    let mut context = failure_context();
+                    context.document_modules = Some(crate::vba_project::read_document_modules(&bytes).unwrap());
+                    context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+                    let outcome = execute_workbook_action_in_session(book, source, Some(name),
+                        route.into_iter().map(Value::Integer).collect(), 0, context, &mut session).unwrap();
+                    assert!(outcome.error.is_none(), "{id} {first_read} step={step}: {:?}",
+                        outcome.error.as_ref().map(|error| &error.message));
+                    assert_eq!(serde_json::to_value(&outcome.result).unwrap(),
+                        serde_json::json!({"type":"string","value":expected}),
+                        "{id} {first_read} step={step}");
+                    book = outcome.workbook;
+                }
+            }
+        }
+    }
+    #[test]
+    fn chart_type_transitions_match_native_invocation_live_and_cold_state() {
+        let controls: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/vba/chart_import_contracts.json")).unwrap();
+        let fixture = include_bytes!("../../../tests/fixtures/vba/chart_boundary_operations.xlsm");
+        let source = crate::vba_project::read_project_source_with_code_page(fixture, Some(932)).unwrap().unwrap();
+        let mut differences = Vec::new();
+        let mut samples = Vec::new();
+        let mut check = |id: &str, phase: &str, outcome: &RunOutcome, expected: &str| {
+            let actual = serde_json::to_value(&outcome.result).unwrap();
+            if outcome.error.is_some() || actual != serde_json::json!({"type":"string","value":expected}) {
+                differences.push(format!("{id} {phase}"));
+                if samples.len() < 4 {
+                    samples.push(format!("{id} {phase}: {actual}; expected={expected}; error={:?}",
+                        outcome.error.as_ref().map(|error| &error.message)));
+                }
+            }
+        };
+        for case in controls["type_transition_cases"].as_array().unwrap() {
+            let id = case["id"].as_str().unwrap();
+            let mut input = zip::ZipArchive::new(std::io::Cursor::new(fixture)).unwrap();
+            let mut output = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            for i in 0..input.len() {
+                let entry = input.by_index(i).unwrap();
+                if entry.name() == "xl/charts/chart1.xml" {
+                    output.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+                    std::io::Write::write_all(&mut output, case["xml"].as_str().unwrap().as_bytes()).unwrap();
+                } else { output.raw_copy_file(entry).unwrap(); }
+            }
+            let bytes = output.finish().unwrap().into_inner();
+            let context = |package: &[u8]| {
+                let mut context = failure_context();
+                context.document_modules = Some(crate::vba_project::read_document_modules(package).unwrap());
+                context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+                context
+            };
+            let book = oxicells_core::parse_xlsx_preserving_values(&bytes).unwrap();
+            let mut session = None;
+            let initial = execute_workbook_action_in_session(book, &source,
+                Some("BoundaryInspection.BoundaryState"), vec![], 0, context(&bytes), &mut session).unwrap();
+            check(id, "initial", &initial, case["native_initial"].as_str().unwrap());
+            let invoked = execute_workbook_action_in_session(initial.workbook, &source,
+                Some("DriverModule.ChartTypeProbe"),
+                vec![Value::Integer(case["target_kind"].as_i64().unwrap()), Value::Integer(0), Value::Boolean(false)],
+                0, context(&bytes), &mut session).unwrap();
+            check(id, "invocation", &invoked, case["native_result"].as_str().unwrap());
+            let live = execute_workbook_action_in_session(invoked.workbook, &source,
+                Some("BoundaryInspection.BoundaryState"), vec![], 0, context(&bytes), &mut session).unwrap();
+            check(id, "live", &live, case["native_live"].as_str().unwrap());
+            let mut editor = oxicells_core::editor::XlsxEditor::new(&bytes).unwrap();
+            editor.apply_workbook(&live.workbook).unwrap();
+            let saved = editor.save().unwrap();
+            let saved_source = crate::vba_project::read_project_source_with_code_page(&saved, Some(932)).unwrap().unwrap();
+            assert_eq!(saved_source, source, "{id}: VBA source changed during save");
+            let mut cold_session = None;
+            let cold = execute_workbook_action_in_session(
+                oxicells_core::parse_xlsx_preserving_values(&saved).unwrap(), &saved_source,
+                Some("BoundaryInspection.BoundaryState"), vec![], 0, context(&saved), &mut cold_session).unwrap();
+            check(id, "cold", &cold, case["native_cold"].as_str().unwrap());
+        }
+        assert!(differences.is_empty(), "{} mismatches: {:?}; samples: {:?}",
+            differences.len(), differences, samples);
+    }
+
+    #[test]
     fn cold_category_full_states_match_actual_excel_including_missing_values() {
         let controls: serde_json::Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/vba/chart_import_contracts.json")).unwrap();

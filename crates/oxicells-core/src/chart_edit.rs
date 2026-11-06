@@ -295,8 +295,16 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
         return Err(XlsxError::InvalidData("new chart contains a non-finite value".into()));
     }
     let mut out = format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><c:chartSpace xmlns:c=\"{C}\" xmlns:a=\"{A}\"><c:chart>");
-    if let Some(title) = &chart.title { out.push_str(&format!("<c:title>{}<c:overlay val=\"0\"/></c:title>", rich(title))); }
-    out.push_str(&format!("<c:autoTitleDeleted val=\"{}\"/>", u8::from(chart.title.is_none())));
+    let mut automatic_title = chart.title_from_data && chart.title == chart.title_from_data_cache;
+    if let Some(title) = chart.title.as_ref().filter(|title| !title.is_empty()) {
+        // A new part has only its modeled series order. Keep the displayed text
+        // when that order cannot reproduce the cached data-derived title.
+        automatic_title &= chart.series.first().is_some_and(|series| &series.name == title);
+    }
+    if !automatic_title {
+        if let Some(title) = &chart.title { out.push_str(&format!("<c:title>{}<c:overlay val=\"0\"/></c:title>", rich(title))); }
+    }
+    out.push_str(&format!("<c:autoTitleDeleted val=\"{}\"/>", u8::from(chart.title.is_none() && !automatic_title)));
     if options.three_dimensional {
         out.push_str(&format!("<c:view3D><c:rotX val=\"15\"/><c:rotY val=\"{}\"/><c:rAngAx val=\"0\"/></c:view3D>",
             if chart.kind == "pie" { 0 } else { 20 }));
@@ -705,17 +713,25 @@ fn patch_plot_options(xml: &str, before: &Chart, after: &Chart, ns: &str, drawin
     let new_path = ["chartSpace", "chart", "plotArea", new_tag.as_str()];
     let (new_settings, _) = children_at(&generated, &new_path)?;
     let old_series = ordered_source_series(xml, &old_settings);
+    let source_ids = crate::chart::series_positions(xml, "idx");
+    let source_orders = crate::chart::series_positions(xml, "order");
+    let source_series: Vec<_> = old_settings.iter().filter(|(name, _, _)| name == "ser").collect();
     let new_series: Vec<_> = new_settings.iter().filter(|(name, _, _)| name == "ser").collect();
     let (new_series_fields, _) = children_at(&generated, &["chartSpace", "chart", "plotArea", new_tag, "ser"])
         .unwrap_or_default();
+    let appended_position = |positions: &[Option<usize>], appended: usize| {
+        let next = positions.iter().enumerate().map(|(index, value)| value.unwrap_or(index)).max()
+            .map_or(Some(0), |value| value.checked_add(1));
+        next.and_then(|value| value.checked_add(appended))
+            .ok_or_else(|| XlsxError::InvalidData("series identifiers cannot be extended".into()))
+    };
     for (i, (_, begin, end)) in new_series.iter().enumerate().rev() {
-        if let Some((_, old_begin, old_end)) = old_series.get(i) {
+        let mut rewritten = generated[*begin..*end].to_string();
+        let (source_id, source_order) = if let Some((_, old_begin, old_end)) = old_series.get(i) {
             let (open, close) = series_fragment_envelope(xml, *old_begin, ns)?;
             let fragment = &xml[*old_begin..*old_end];
             let (fields, _) = children_at(&format!("{open}{fragment}{close}"), &["chartSpace", "ser"])?;
-            let mut additions: String = fields.iter().filter(|(name, _, _)| name == "extLst")
-                .map(|(_, a, b)| &fragment[a - open.len()..b - open.len()]).collect();
-            if !additions.is_empty() {
+            if fields.iter().any(|(name, _, _)| name == "extLst") {
                 let series = &after.series[i];
                 let scatter = matches!(after.kind.as_str(), "scatter" | "bubble");
                 let (_, categories, _) = series_data_parts(series, &after.categories, scatter, ns);
@@ -723,17 +739,44 @@ fn patch_plot_options(xml: &str, before: &Chart, after: &Chart, ns: &str, drawin
                 let revised = patch_filtered_category_title(fragment, categories, &open, &close, ns)?;
                 let wrapped = format!("{open}{revised}{close}");
                 let (fields, _) = children_at(&wrapped, &["chartSpace", "ser"])?;
-                additions = fields.iter().filter(|(name, _, _)| name == "extLst")
+                let additions: String = fields.iter().filter(|(name, _, _)| name == "extLst")
                     .map(|(_, a, b)| &wrapped[*a..*b]).collect();
                 if let Some((_, a, b)) = new_series_fields.iter().find(|(name, a, b)|
                     name == "extLst" && a >= begin && b <= end) {
-                    plot.replace_range(a - new_start..b - new_start, &additions);
+                    rewritten.replace_range(a - begin..b - begin, &additions);
                 } else {
-                    let at = end - new_start - "</c:ser>".len();
-                    plot.insert_str(at, &additions);
+                    let at = rewritten.len() - "</c:ser>".len();
+                    rewritten.insert_str(at, &additions);
                 }
             }
-        }
+            let source_index = source_series.iter().position(|(_, start, _)| start == old_begin)
+                .ok_or_else(|| XlsxError::InvalidData("source series identity is missing".into()))?;
+            (source_ids.get(source_index).copied().flatten().unwrap_or(source_index),
+                source_orders.get(source_index).copied().flatten().unwrap_or(source_index))
+        } else {
+            (appended_position(&source_ids, i - old_series.len())?,
+                appended_position(&source_orders, i - old_series.len())?)
+        };
+        rewritten = rewritten.replacen(&format!("<c:idx val=\"{i}\"/>"),
+            &format!("<c:idx val=\"{source_id}\"/>"), 1)
+            .replacen(&format!("<c:order val=\"{i}\"/>"),
+                &format!("<c:order val=\"{source_order}\"/>"), 1);
+        plot.replace_range(begin - new_start..end - new_start, &rewritten);
+    }
+    // Collection order and XML source order serve different purposes: shared
+    // labels and automatic titles retain their original source-first series.
+    let prefix = format!("<c:chartSpace xmlns:c=\"{ns}\" xmlns:a=\"{drawing_ns}\"><c:chart><c:plotArea>");
+    let wrapped = format!("{prefix}{plot}</c:plotArea></c:chart></c:chartSpace>");
+    let (fields, _) = children_at(&wrapped, &["chartSpace", "chart", "plotArea", new_tag])?;
+    let series: Vec<_> = fields.iter().filter(|(name, _, _)| name == "ser").collect();
+    let mut source_order: Vec<_> = (0..series.len()).collect();
+    source_order.sort_by_key(|index| (old_series.get(*index).map_or(usize::MAX, |(_, start, _)| *start), *index));
+    let fragments: Vec<_> = source_order.iter().map(|index| {
+        let (_, begin, end) = series[*index];
+        wrapped[*begin..*end].to_string()
+    }).collect();
+    for ((_, begin, end), fragment) in series.iter().zip(&fragments).rev() {
+        plot.replace_range(begin - prefix.len()..end - prefix.len(), fragment);
     }
     let same_kind = before.kind == after.kind;
     let child_position = |fragment: &str, successors: &[&str]| -> Result<usize, XlsxError> {
@@ -856,10 +899,12 @@ pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<St
     };
     let mut output = xml.to_string();
     if plot_options_changed(before, after) { output = patch_plot_options(&output, before, after, chart_ns, drawing_ns)?; }
-    if before.title != after.title {
-        let title=after.title.as_ref().map(|text|format!(
+    if before.title != after.title || before.title_from_data != after.title_from_data {
+        let automatic_title = after.title_from_data && after.title == after.title_from_data_cache;
+        let explicit_title = if automatic_title { None } else { after.title.as_ref() };
+        let title=explicit_title.map(|text|format!(
             "<c:title xmlns:c=\"{chart_ns}\" xmlns:a=\"{drawing_ns}\"><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t xml:space=\"preserve\">{}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val=\"0\"/></c:title>",escape(text))).unwrap_or_default();
-        if let Some(text) = &after.title {
+        if let Some(text) = explicit_title {
             let tx=format!("<c:tx xmlns:c=\"{chart_ns}\" xmlns:a=\"{drawing_ns}\"><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t xml:space=\"preserve\">{}</a:t></a:r></a:p></c:rich></c:tx>",escape(text));
             if let Ok((children, _)) = children_at(&output, &["chartSpace", "chart", "title"]) {
                 if let Some((_, start, end)) = children.iter().find(|(name, _, _)| name == "tx") {
@@ -879,7 +924,7 @@ pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<St
             "autoTitleDeleted",
             &format!(
                 "<c:autoTitleDeleted xmlns:c=\"{chart_ns}\" val=\"{}\"/>",
-                if after.title.is_some() { 0 } else { 1 }
+                if after.title.is_some() || automatic_title { 0 } else { 1 }
             ),
         )?;
     }
@@ -916,6 +961,90 @@ pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<St
 mod filtered_category_source_tests {
     use super::*;
     use crate::{chart::parse_chart_xml, ir::ChartCategoryValue, parser::Theme};
+
+    #[test]
+    fn automatic_title_cache_does_not_override_explicit_ir_edits() {
+        let controls: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/vba/chart_import_contracts.json")).unwrap();
+        let case = controls["type_transition_cases"].as_array().unwrap().iter()
+            .find(|case| case["id"] == "auto_title:5:line:type:4").unwrap();
+        let xml = case["xml"].as_str().unwrap();
+        let before = parse_chart_xml(xml, &Theme::default()).unwrap();
+        assert!(before.title_from_data);
+        assert_eq!(before.title, before.title_from_data_cache);
+        for title in [Some("Custom & <total>".to_string()), None, Some(String::new())] {
+            let mut edited = before.clone();
+            edited.title = title.clone();
+            for saved in [patch_chart(xml, &before, &edited).unwrap(), new_chart_xml(&edited).unwrap()] {
+                assert_eq!(parse_chart_xml(&saved, &Theme::default()).unwrap().title, title);
+            }
+        }
+        let untouched = new_chart_xml(&before).unwrap();
+        assert_eq!(parse_chart_xml(&untouched, &Theme::default()).unwrap().title, before.title);
+    }
+    #[test]
+    fn plot_changes_preserve_source_series_positions_and_identifiers() {
+        let controls: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/vba/chart_import_contracts.json")).unwrap();
+        let mut checked = 0;
+        for case in controls["type_transition_cases"].as_array().unwrap().iter()
+            .filter(|case| case["id"].as_str().unwrap().starts_with("ordered:")) {
+            for sparse in [false, true] {
+                for strict in [false, true] {
+                    let mut xml = case["xml"].as_str().unwrap().to_string();
+                    if sparse {
+                        xml = xml.replace("<c:idx val=\"0\"/>", "<c:idx val=\"40\"/>")
+                            .replace("<c:idx val=\"1\"/>", "<c:idx val=\"7\"/>")
+                            .replace("<c:order val=\"1\"/>", "<c:order val=\"20\"/>")
+                            .replace("<c:order val=\"0\"/>", "<c:order val=\"10\"/>");
+                    }
+                    if strict {
+                        xml = xml.replace(C, "http://purl.oclc.org/ooxml/drawingml/chart")
+                            .replace(A, "http://purl.oclc.org/ooxml/drawingml/main");
+                    }
+                    let before = parse_chart_xml(&xml, &Theme::default()).unwrap();
+                    assert_eq!(before.series[0].name, "Cost");
+                    let mut after = before.clone();
+                    after.kind = if case["target_kind"] == 4 { "line" } else { "bar" }.into();
+                    after.plot_options = crate::ir::ChartPlotOptions {
+                        markers: (after.kind == "line").then_some(false), ..Default::default()
+                    };
+                    after.series[0].values[0] = Some(91.0);
+                    let patched = patch_chart(&xml, &before, &after).unwrap();
+                    for field in ["idx", "order"] {
+                        assert_eq!(crate::chart::series_positions(&patched, field),
+                            crate::chart::series_positions(&xml, field), "{} {field}", case["id"]);
+                    }
+                    let parsed = parse_chart_xml(&patched, &Theme::default()).unwrap();
+                    assert_eq!(parsed.series[0].name, "Cost");
+                    assert_eq!(parsed.series[0].values[0], Some(91.0));
+                    assert_eq!(parsed.series[1].name, "Revenue");
+                    assert_eq!(parsed.series[1].values, before.series[1].values);
+                    assert_eq!(parsed.categories, before.categories);
+                    let mut appended = after.clone();
+                    let mut later = after.series[0].clone();
+                    later.name = "Later".into();
+                    appended.series.push(later);
+                    let extended = patch_chart(&xml, &before, &appended).unwrap();
+                    for field in ["idx", "order"] {
+                        let mut expected = crate::chart::series_positions(&xml, field);
+                        expected.push(Some(expected.iter().flatten().max().unwrap() + 1));
+                        assert_eq!(crate::chart::series_positions(&extended, field), expected);
+                        let max = crate::chart::series_positions(&xml, field).into_iter().flatten().max().unwrap();
+                        let exhausted = xml.replace(&format!("<c:{field} val=\"{max}\"/>"),
+                            &format!("<c:{field} val=\"{}\"/>", usize::MAX));
+                        let exhausted_before = parse_chart_xml(&exhausted, &Theme::default()).unwrap();
+                        assert!(patch_chart(&exhausted, &exhausted_before, &appended).is_err());
+                    }
+                    let extended = parse_chart_xml(&extended, &Theme::default()).unwrap();
+                    assert_eq!(extended.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+                        ["Cost", "Revenue", "Later"]);
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 40);
+    }
 
     #[test]
     fn mixed_plot_series_keep_each_plots_numeric_sources() {
