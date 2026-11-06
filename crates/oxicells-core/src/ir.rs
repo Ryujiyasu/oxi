@@ -1592,6 +1592,8 @@ pub struct ChartPlotOptions {
     pub bar_shape: ChartBarShape,
     /// Default separation, as a percentage, for newly added pie slices.
     pub explosion: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub of_pie: Option<ChartOfPieOptions>,
 }
 
 impl ChartPlotOptions {
@@ -1615,6 +1617,38 @@ pub enum ChartBarShape {
     Cylinder,
     Cone,
     Pyramid,
+}
+
+/// Choices for the secondary plot of a split pie, independent of host APIs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ChartOfPieOptions {
+    pub secondary: ChartSecondaryPlot,
+    pub split_mode: ChartPieSplitMode,
+    /// Absence retains the distinction between automatic and explicit splits.
+    pub split_position: Option<f64>,
+    /// Zero-based indices into the original cache, not virtual aggregate points.
+    pub custom_points: Vec<u32>,
+    pub secondary_size: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartSecondaryPlot {
+    #[default]
+    Pie,
+    Bar,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartPieSplitMode {
+    #[default]
+    Automatic,
+    Position,
+    Value,
+    Percent,
+    Custom,
 }
 
 /// A box stated as fractions of its parent's width and height.

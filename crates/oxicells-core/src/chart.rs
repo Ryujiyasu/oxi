@@ -575,8 +575,27 @@ fn plot_options(xml: &str, kind: &str) -> crate::ir::ChartPlotOptions {
                     && parents.iter().all(|(_, ns)| *ns == 1) {
                     selected = name.clone(); active = true;
                     options.three_dimensional = name.ends_with("3DChart");
+                    if name == "ofPieChart" { options.of_pie = Some(Default::default()); }
                 } else if domain == 1 && at_plot {
                     match name.as_str() {
+                        "ofPieType" => if let Some(pie) = &mut options.of_pie {
+                            pie.secondary = if value.as_deref() == Some("bar") { crate::ir::ChartSecondaryPlot::Bar }
+                                else { crate::ir::ChartSecondaryPlot::Pie };
+                        },
+                        "splitType" => if let Some(pie) = &mut options.of_pie {
+                            use crate::ir::ChartPieSplitMode;
+                            pie.split_mode = match value.as_deref() {
+                                Some("pos") => ChartPieSplitMode::Position,
+                                Some("val") => ChartPieSplitMode::Value,
+                                Some("percent") => ChartPieSplitMode::Percent,
+                                Some("cust") => ChartPieSplitMode::Custom,
+                                _ => ChartPieSplitMode::Automatic,
+                            };
+                        },
+                        "splitPos" => if let Some(pie) = &mut options.of_pie { pie.split_position = number(&value); },
+                        "secondPieSize" => if let Some(pie) = &mut options.of_pie {
+                            pie.secondary_size = value.as_deref().and_then(|v| v.parse().ok());
+                        },
                         "barDir" => options.horizontal = value.as_deref() == Some("bar"),
                         "grouping" => {
                             options.stacking = match value.as_deref() {
@@ -604,6 +623,13 @@ fn plot_options(xml: &str, kind: &str) -> crate::ir::ChartPlotOptions {
                         "smooth" => options.smooth = value.as_deref() == Some("1"),
                         "ser" if !first_series => { first_series = true; in_series = true; }
                         _ => {}
+                    }
+                }
+                if active && domain == 1 && name == "secondPiePt" && parents.len() == 5
+                    && parents.last().is_some_and(|(name, ns)| name == "custSplit" && *ns == 1)
+                    && parents.iter().all(|(_, ns)| *ns == 1) {
+                    if let (Some(pie), Some(index)) = (&mut options.of_pie, value.as_deref().and_then(|v| v.parse().ok())) {
+                        pie.custom_points.push(index);
                     }
                 }
                 if active && in_series {

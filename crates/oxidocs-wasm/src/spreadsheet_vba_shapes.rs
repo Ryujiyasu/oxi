@@ -166,6 +166,7 @@ pub(super) struct ShapeRecord {
 pub(super) struct ChartRecord {
     pub chart_type: i64,
     pub plot_modified: bool,
+    pub of_pie: Option<oxicells_core::ir::ChartOfPieOptions>,
     pub series: Vec<SeriesRecord>,
     pub has_title: bool,
     pub title: String,
@@ -239,6 +240,8 @@ pub(super) enum DrawingPart {
     ChartObjects(usize),
     ChartObject(u64),
     Chart(u64),
+    ChartGroups(u64),
+    ChartGroup(u64),
     SeriesCollection(u64),
     /// A series by its one-based number.
     Series(u64, usize),
@@ -302,6 +305,8 @@ impl DrawingPart {
             DrawingPart::ChartObjects(_) => "ChartObjects",
             DrawingPart::ChartObject(_) => "ChartObject",
             DrawingPart::Chart(_) => "Chart",
+            DrawingPart::ChartGroups(_) => "ChartGroups",
+            DrawingPart::ChartGroup(_) => "ChartGroup",
             DrawingPart::SeriesCollection(_) => "SeriesCollection",
             DrawingPart::Series(..) => "Series",
             DrawingPart::SeriesFormat(..) => "ChartFormat",
@@ -538,6 +543,13 @@ pub(super) fn chart_plot_options(kind: i64) -> oxicells_core::ir::ChartPlotOptio
     if matches!(kind, -4169 | 72..=75) { options.connected = Some(kind != -4169); }
     options.smooth = matches!(kind, 72 | 73);
     options.filled = kind == 82;
+    if matches!(kind, 68 | 71) {
+        options.of_pie = Some(oxicells_core::ir::ChartOfPieOptions {
+            secondary: if kind == 71 { oxicells_core::ir::ChartSecondaryPlot::Bar }
+                else { oxicells_core::ir::ChartSecondaryPlot::Pie },
+            ..Default::default()
+        });
+    }
     options
 }
 
@@ -572,6 +584,7 @@ pub(super) fn chart_type_of(chart: &Chart) -> i64 {
         "pie" => if exploded { 69 } else { 5 },
         "doughnut" => if exploded { 80 } else { -4120 },
         "bubble" => if chart.series.first().is_some_and(|s| s.shaded_bubbles) { 87 } else { 15 },
+        "ofPie" => if options.of_pie.as_ref().is_some_and(|p| p.secondary == oxicells_core::ir::ChartSecondaryPlot::Bar) { 71 } else { 68 },
         _ => 51,
     }
 }
@@ -580,8 +593,9 @@ pub(super) fn chart_type_of(chart: &Chart) -> i64 {
 /// own word for an `xlChartType` -- and whether the bars stand up.
 pub(super) fn chart_kind(chart_type: i64) -> &'static str {
     match chart_type {
-        4 | 63 | 64 | 65 | 66 | 67 | 68 | -4101 => "line",
-        5 | 69 | 70 | 71 | -4102 => "pie",
+        4 | 63 | 64 | 65 | 66 | 67 | -4101 => "line",
+        5 | 69 | 70 | -4102 => "pie",
+        68 | 71 => "ofPie",
         -4120 | 80 => "doughnut",
         1 | 76 | 77 | 78 | 79 | -4098 => "area",
         -4169 | 72 | 73 | 74 | 75 => "scatter",
@@ -636,6 +650,7 @@ impl<'a> WorkbookHost<'a> {
                         ShapeKind::Chart(Box::new(ChartRecord {
                             chart_type: chart_type_of(chart),
                             plot_modified: false,
+                            of_pie: chart.plot_options.of_pie.clone(),
                             series: chart
                                 .series
                                 .iter()
@@ -1552,7 +1567,11 @@ impl<'a> WorkbookHost<'a> {
             origin_id: None,
             title: chart.has_title.then(||chart.title.clone()),
             kind: chart_kind(chart.chart_type).to_string(),
-            plot_options: chart_plot_options(chart.chart_type),
+            plot_options: {
+                let mut options = chart_plot_options(chart.chart_type);
+                options.of_pie = chart.of_pie.clone();
+                options
+            },
             plot: None,
             series: chart
                 .series
