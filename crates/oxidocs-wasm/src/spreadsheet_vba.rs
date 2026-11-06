@@ -58499,6 +58499,57 @@ End Function
             "=SERIES(\"Revenue\",{\"1\",\"2\",\"3\"},{1.25,2.5,3.75},1)|8204|1|3|8:1|8:2|8:3".into()));
     }
 
+
+    #[test]
+    fn chart_empty_type_defaults_and_failed_assignments_match_native_vba() {
+        let module = parse_module(r#"Public Function Ask(ByVal kind As Long, ByVal addData As Boolean) As String
+            Dim chart As Object, item As Object
+            On Error GoTo Failed
+            Set chart = ActiveSheet.ChartObjects.Add(20, 30, 240, 160).Chart
+            chart.ChartType = kind
+            If addData Then
+                Set item = chart.SeriesCollection.NewSeries
+                item.Values = Array(1.25, 2.5, 3.75)
+            End If
+            Ask = "ok|" & CStr(chart.ChartType)
+            Exit Function
+        Failed:
+            Ask = "error|" & CStr(Err.Number) & "|" & CStr(chart.ChartType)
+        End Function"#).unwrap();
+        let aliases = [(4, 65), (63, 66), (64, 67), (73, 72), (75, 74),
+                       (-4169, 74), (-4151, 81), (87, 15)];
+        for (kind, empty_type) in aliases {
+            for add_data in [false, true] {
+                let mut book = workbook();
+                book.sheets[0].rows.clear();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                let actual = execute_with_host(&module, "Ask",
+                    vec![Value::Integer(kind), Value::Boolean(add_data)], &mut host).unwrap();
+                let expected = if add_data && kind != 87 { kind } else { empty_type };
+                assert_eq!(actual, Value::String(format!("ok|{expected}")),
+                           "type={kind}, data={add_data}");
+            }
+        }
+        for (kind, number) in [
+            (0, -2_147_467_259), (2, -2_147_467_259), (3, -2_147_467_259),
+            (6, -2_147_467_259), (14, -2_147_467_259), (16, -2_147_467_259),
+            (50, -2_147_467_259), (-4152, -2_147_467_259), (-4099, -2_147_467_259),
+            (-1, -2_147_467_259), (141, -2_147_467_259),
+            (i32::MAX as i64, -2_147_467_259), (i32::MIN as i64, -2_147_467_259),
+            (83, -1_328_086_638), (84, -1_328_086_638), (85, -1_328_086_638),
+            (86, -1_328_086_638), (-4103, -1_328_086_638), (88, -1_328_086_642),
+            (89, -1_328_086_640), (90, -1_328_086_641), (91, -1_328_086_639),
+            (113, 5), (117, 5), (124, 5), (140, 5),
+        ] {
+            let mut book = workbook();
+            book.sheets[0].rows.clear();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            let actual = execute_with_host(&module, "Ask",
+                vec![Value::Integer(kind), Value::Boolean(false)], &mut host).unwrap();
+            assert_eq!(actual, Value::String(format!("error|{number}|51")), "type={kind}");
+        }
+    }
+
     #[test]
     fn a_dated_cell_hands_over_a_date_and_a_dollar_cell_a_currency() {
         let mut workbook = workbook();
