@@ -168,6 +168,7 @@ pub(super) struct ChartRecord {
     pub plot_modified: bool,
     pub of_pie: Option<oxicells_core::ir::ChartOfPieOptions>,
     pub series: Vec<SeriesRecord>,
+    pub source_series_order: Vec<usize>,
     /// Imported text labels belong to the chart axis, independently of series order.
     pub category_axis_labels: Vec<String>,
     pub category_axis_reference: Option<String>,
@@ -184,6 +185,15 @@ pub(super) struct ChartRecord {
     /// chart made a pie by its FIRST ChartType shows a title; one whose
     /// type was set to columns first, then a pie, does not.
     pub title_auto: bool,
+}
+
+impl ChartRecord {
+    pub(super) fn data_title(&self) -> Option<&str> {
+        if self.series.len() != 1 && !matches!(chart_kind(self.chart_type), "pie" | "ofPie") { return None; }
+        let first = self.source_series_order.iter().find_map(|index| self.series.get(*index))
+            .or_else(|| self.series.first())?;
+        (!first.name_auto).then_some(first.name.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -664,6 +674,7 @@ impl<'a> WorkbookHost<'a> {
                             of_pie: chart.plot_options.of_pie.clone(),
                             category_axis_labels: chart.categories.clone(),
                             category_axis_reference: chart.category_reference.clone(),
+                            source_series_order: chart.source_series_indices(),
                             series: chart
                                 .series
                                 .iter()
@@ -1590,7 +1601,10 @@ impl<'a> WorkbookHost<'a> {
         let categories = if chart.series.iter().all(|series| series.categories_imported) {
             chart.category_axis_labels.clone()
         } else { chart.series.first().map(|series| series.xs.clone()).unwrap_or_default() };
-        let title = if chart.has_title { Some(chart.title.clone()) }
+        let title = if chart.has_title {
+                Some(if chart.title_from_data { chart.data_title().unwrap_or(&chart.title).to_string() }
+                    else { chart.title.clone() })
+            }
             else if chart.title_auto && chart.series.len() == 1 && chart.series[0].name_ref.is_some() {
                 Some(chart.series[0].name.clone())
             } else { None };
@@ -1603,6 +1617,9 @@ impl<'a> WorkbookHost<'a> {
             // when Excel saves the chart, while the live HasTitle remains false.
             title_from_data: chart.title_from_data,
             title_from_data_cache: if chart.title_from_data { title.clone() } else { None },
+            source_series_order: if chart.source_series_order.iter().copied().eq(0..chart.series.len()) {
+                Vec::new()
+            } else { chart.source_series_order.clone() },
             title,
             kind: chart_kind(chart.chart_type).to_string(),
             plot_options: {

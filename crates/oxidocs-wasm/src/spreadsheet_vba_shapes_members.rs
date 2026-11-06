@@ -557,6 +557,18 @@ impl<'a> WorkbookHost<'a> {
         Ok(chart)
     }
 
+    fn remove_chart_title(&mut self, id: u64) -> Result<(), String> {
+        let chart = self.chart_mut(id)?;
+        if chart.has_title {
+            chart.title_generation = chart.title_generation.checked_add(1)
+                .ok_or_else(|| host_error(7, "Chart title identity space is exhausted"))?;
+        }
+        chart.has_title = false;
+        chart.title.clear();
+        chart.title_from_data = false;
+        self.redraw(id)
+    }
+
     pub(super) fn chart_sheet_part(&self,sheet:usize)->Result<DrawingPart,String> {
         self.shapes.iter().find(|shape|shape.sheet==sheet && matches!(shape.kind,ShapeKind::Chart(_)))
             .map(|shape|DrawingPart::Chart(shape.id))
@@ -1090,6 +1102,7 @@ impl<'a> WorkbookHost<'a> {
             category_axis_labels: Vec::new(),
             category_axis_reference: None,
             series: Vec::new(),
+            source_series_order: Vec::new(),
             has_title: false,
             title: String::new(),
             title_from_data: false,
@@ -1453,6 +1466,7 @@ impl<'a> WorkbookHost<'a> {
             }
         }
         let chart = self.chart_mut(id)?;
+        chart.source_series_order = (0..series.len()).collect();
         chart.series = series;
         self.redraw(id)
     }
@@ -2537,7 +2551,10 @@ impl<'a> WorkbookHost<'a> {
                 let chart = self.chart_title_record(id, generation)?.clone();
                 let pending_removal = chart.title_from_data && chart.has_title && chart.title.is_empty()
                     && chart.series.len() != 1 && !matches!(chart_kind(chart.chart_type), "pie" | "ofPie");
-                let shown = if pending_removal { String::new() } else if chart.title.is_empty() {
+                let derived = chart.title_from_data.then(|| chart.data_title()).flatten();
+                let shown = if pending_removal { String::new() }
+                else if let Some(title) = derived { title.to_string() }
+                else if chart.title.is_empty() {
                     match chart.series.as_slice() {
                         [only] if !only.name_auto => only.name.clone(),
                         _ => "グラフ タイトル".to_string(),
@@ -3685,19 +3702,20 @@ impl<'a> WorkbookHost<'a> {
                             true
                         }
                         "hastitle" => {
+                            let was_enabled = chart.has_title;
                             chart.has_title = style_face_boolean(&value, "Chart.HasTitle")?.unwrap_or(false);
                             if !chart.has_title {
+                                if was_enabled {
+                                    chart.title_generation = chart.title_generation.checked_add(1)
+                                        .ok_or_else(|| host_error(7, "Chart title identity space is exhausted"))?;
+                                }
                                 chart.title.clear();
                                 chart.title_from_data = false;
                             }
                             if chart.has_title && chart.title.is_empty() {
-                                if !matches!(chart.series.as_slice(), [only] if !only.name_auto) {
-                                    chart.title_from_data = false;
-                                }
-                                chart.title = match chart.series.as_slice() {
-                                    [only] if !only.name_auto => only.name.clone(),
-                                    _ => "グラフ タイトル".to_string(),
-                                };
+                                let title = chart.data_title().map(str::to_string);
+                                chart.title_from_data = title.is_some();
+                                chart.title = title.unwrap_or_else(|| "\u{30b0}\u{30e9}\u{30d5} \u{30bf}\u{30a4}\u{30c8}\u{30eb}".into());
                             }
                             true
                         }
@@ -3863,8 +3881,10 @@ impl<'a> WorkbookHost<'a> {
             DrawingPart::ChartTitle(id, generation) => {
                 self.chart_title_record(id, generation)?;
                 if lower == "text" || lower == "caption" {
+                    let title = text_of_value(&value);
+                    if title.is_empty() { self.remove_chart_title(id)?; return Ok(true); }
                     let chart = self.chart_mut(id)?;
-                    chart.title = text_of_value(&value);
+                    chart.title = title;
                     chart.title_from_data = false;
                     chart.has_title = !chart.title.is_empty();
                     self.redraw(id)?;
@@ -4424,6 +4444,7 @@ impl<'a> WorkbookHost<'a> {
                     // when its already populated chart is first made a pie.
                     chart.title_auto = false;
                     let number = chart.series.len() + 1;
+                    chart.source_series_order.push(number - 1);
                     chart.series.push(SeriesRecord {
                         name: format!("系列{number}"),
                         name_auto: true,
@@ -4454,6 +4475,7 @@ impl<'a> WorkbookHost<'a> {
                         let reference = self.address_of(range);
                         let chart = self.chart_mut(id)?;
                         let number = chart.series.len() + 1;
+                        chart.source_series_order.push(number - 1);
                         chart.series.push(SeriesRecord {
                             name: format!("系列{number}"),
                             name_auto: true,
@@ -4487,6 +4509,10 @@ impl<'a> WorkbookHost<'a> {
                     let chart = self.chart_mut(id)?;
                     if number >= 1 && number <= chart.series.len() {
                         chart.series.remove(number - 1);
+                        chart.source_series_order.retain(|index| *index != number - 1);
+                        for index in &mut chart.source_series_order {
+                            if *index > number - 1 { *index -= 1; }
+                        }
                     }
                     self.redraw(id)?;
                     Ok(Some(Value::Empty))
@@ -4560,7 +4586,8 @@ impl<'a> WorkbookHost<'a> {
                 self.chart_title_record(id, generation)?;
                 match lower.as_str() {
                     "characters" => Ok(Some(self.part(DrawingPart::ChartTitle(id, generation)))),
-                    "select" | "delete" => Ok(Some(Value::Empty)),
+                    "delete" => { self.remove_chart_title(id)?; Ok(Some(Value::Empty)) },
+                    "select" => Ok(Some(Value::Empty)),
                     _ => Ok(None),
                 }
             },

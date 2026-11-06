@@ -295,12 +295,8 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
         return Err(XlsxError::InvalidData("new chart contains a non-finite value".into()));
     }
     let mut out = format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><c:chartSpace xmlns:c=\"{C}\" xmlns:a=\"{A}\"><c:chart>");
-    let mut automatic_title = chart.title_from_data && chart.title == chart.title_from_data_cache;
-    if let Some(title) = chart.title.as_ref().filter(|title| !title.is_empty()) {
-        // A new part has only its modeled series order. Keep the displayed text
-        // when that order cannot reproduce the cached data-derived title.
-        automatic_title &= chart.series.first().is_some_and(|series| &series.name == title);
-    }
+    let automatic_title = chart.title_from_data && chart.title == chart.title_from_data_cache;
+    let source_order = chart.source_series_indices();
     if !automatic_title {
         if let Some(title) = &chart.title { out.push_str(&format!("<c:title>{}<c:overlay val=\"0\"/></c:title>", rich(title))); }
     }
@@ -310,7 +306,7 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
             if chart.kind == "pie" { 0 } else { 20 }));
     }
     out.push_str(&format!("<c:plotArea>{}<c:{plot}>{settings}", layout(chart.plot.as_ref(), true)));
-    for (index, value) in chart.series.iter().enumerate() { out.push_str(&series(value, index, &chart.categories, matches!(chart.kind.as_str(), "scatter" | "bubble"), options, &chart.kind)); }
+    for index in source_order { out.push_str(&series(&chart.series[index], index, &chart.categories, matches!(chart.kind.as_str(), "scatter" | "bubble"), options, &chart.kind)); }
     if chart.kind == "line" && !options.three_dimensional {
         let markers = chart.series.is_empty() || options.markers.unwrap_or(true);
         out.push_str(&format!("<c:marker val=\"{}\"/><c:smooth val=\"{}\"/>", u8::from(markers), u8::from(options.smooth)));
@@ -703,6 +699,7 @@ fn patch_plot_options(xml: &str, before: &Chart, after: &Chart, ns: &str, drawin
     let (old_settings, _) = children_at(xml, &old_path)?;
     let mut modeled = after.clone();
     modeled.shapes.clear(); // Annotations belong to the retained source chart.
+    modeled.source_series_order.clear(); // This patcher matches generated logical series before restoring source positions.
     let generated = new_chart_xml(&modeled)?
         .replace(&format!("xmlns:c=\"{C}\""), &format!("xmlns:c=\"{ns}\""))
         .replace(&format!("xmlns:a=\"{A}\""), &format!("xmlns:a=\"{drawing_ns}\""));
@@ -980,7 +977,21 @@ mod filtered_category_source_tests {
             }
         }
         let untouched = new_chart_xml(&before).unwrap();
-        assert_eq!(parse_chart_xml(&untouched, &Theme::default()).unwrap().title, before.title);
+        let copied = parse_chart_xml(&untouched, &Theme::default()).unwrap();
+        assert_eq!(copied.title, before.title);
+        assert!(copied.title_from_data);
+        assert_eq!(copied.source_series_order, before.source_series_order);
+        let mut renamed = before.clone();
+        renamed.series[before.source_series_indices()[0]].name = "RenamedRevenue".into();
+        for saved in [patch_chart(xml, &before, &renamed).unwrap(), new_chart_xml(&renamed).unwrap()] {
+            let changed = parse_chart_xml(&saved, &Theme::default()).unwrap();
+            assert_eq!(changed.title.as_deref(), Some("RenamedRevenue"));
+            assert!(changed.title_from_data);
+        }
+        renamed.source_series_order = vec![1, 1, usize::MAX];
+        let mut appended = renamed.series[0].clone(); appended.name = "Later".into();
+        renamed.series.push(appended);
+        assert_eq!(renamed.source_series_indices(), vec![1, 0, 2]);
     }
     #[test]
     fn plot_changes_preserve_source_series_positions_and_identifiers() {

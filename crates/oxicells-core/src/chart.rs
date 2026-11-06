@@ -614,6 +614,9 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     let orders = series_positions(xml, "order");
     let mut ordered: Vec<_> = chart.series.into_iter().enumerate().collect();
     ordered.sort_by_key(|(index, _)| orders.get(*index).copied().flatten().unwrap_or(*index));
+    let mut source_order = vec![0; ordered.len()];
+    for (logical, (source, _)) in ordered.iter().enumerate() { source_order[*source] = logical; }
+    if source_order.iter().copied().ne(0..source_order.len()) { chart.source_series_order = source_order; }
     chart.series = ordered.into_iter().map(|(_, series)| series).collect();
     // An empty chart is still an object: VBA can name it, set its properties
     // and add series later. Keep it even when there is nothing to plot yet.
