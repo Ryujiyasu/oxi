@@ -8216,6 +8216,8 @@ fn parse_drawing(
         n_paths: u32,
         has_curve: bool,
         ln_w: Option<f32>,
+        /// OXI_WPG_DASH: a:ln dash pattern in multiples of the line width.
+        dash: Vec<f32>,
         ln_color: Option<String>,
         ln_nofill: bool,
         fill: Option<String>,
@@ -8353,6 +8355,7 @@ fn parse_drawing(
                             n_paths: 0,
                             has_curve: false,
                             ln_w: None,
+                            dash: Vec::new(),
                             ln_color: None,
                             ln_nofill: false,
                             fill: None,
@@ -8635,8 +8638,25 @@ fn parse_drawing(
                                         for attr in se.attributes().flatten() {
                                             if local_name(attr.key.as_ref()) == "val" {
                                                 let v = String::from_utf8_lossy(&attr.value).to_string();
+                                                if let Some(wsp) = s839_wsp.as_mut() {
+                                                    wsp.dash = crate::layout::prst_dash_units(&v).map(|u| u.to_vec()).unwrap_or_default();
+                                                }
                                                 stroke_dash = (v != "solid").then_some(v);
                                             }
+                                        }
+                                    } else if sl == "ds" {
+                                        // a:custDash a:ds d / sp: per-mille percent of the width
+                                        let mut ds = (0.0f32, 0.0f32);
+                                        for attr in se.attributes().flatten() {
+                                            let v = String::from_utf8_lossy(&attr.value).parse::<f32>().unwrap_or(0.0) / 100000.0;
+                                            match local_name(attr.key.as_ref()).as_str() {
+                                                "d" => ds.0 = v,
+                                                "sp" => ds.1 = v,
+                                                _ => {}
+                                            }
+                                        }
+                                        if let Some(wsp) = s839_wsp.as_mut() {
+                                            wsp.dash.extend([ds.0, ds.1]);
                                         }
                                     } else if sl == "noFill" {
                                         s839_ln_nofill = true;
@@ -9921,7 +9941,12 @@ fn parse_drawing(
                                         let (pw, ph) = w.path_wh.unwrap_or(w.ext);
                                         let tx = (pw * 0.02).max(1.0);
                                         let ty = (ph * 0.02).max(1.0);
-                                        !w.pts.is_empty()
+                                        // OXI_WPG_DIAGONAL_NOT_RECT (2026-11-07, default ON,
+                                        // opt-out _DISABLE): two corner points are a diagonal,
+                                        // not a box. ja/reports__7b458f1a's «不十分なぬりつぶし»
+                                        // mark (moveTo 0,h lnTo w,0, 1pt): Word strokes the
+                                        // slash; Oxi filled the 5 x 16pt rect black.
+                                        (w.pts.len() >= 3 || std::env::var_os("OXI_WPG_DIAGONAL_NOT_RECT_DISABLE").is_some())
                                             && w.pts.len() <= 6
                                             && w.pts.iter().all(|&(px, py)| {
                                                 (px.abs() < tx || (px - pw).abs() < tx)
@@ -10170,6 +10195,7 @@ fn parse_drawing(
                                 {
                                     (vx + (vw - vh) / 2.0, vy + (vh - vw) / 2.0, vh, vw)
                                 } else { (vx, vy, vw, vh) };
+                                let (dash_has_fill, dash_has_stroke) = (fill.is_some(), stroke.is_some());
                                 s839_vector_shapes.push(crate::ir::VectorShape {
                                     x: vx,
                                     y: vy,
@@ -10179,7 +10205,22 @@ fn parse_drawing(
                                     stroke,
                                     stroke_width: w.ln_w.unwrap_or(0.75).max(0.25),
                                     is_line: is_line && !s1120_curve,
-                                    path: s1120_path,
+                                    // OXI_WPG_DASH (2026-11-07, default ON, opt-out _DISABLE):
+                                    // an unfilled dashed outline is drawn as its dashes.
+                                    // ja/reports__7b458f1a's answer ovals (custDash d 50000
+                                    // sp 100000, 0.5pt): Word's PDF strokes [0.25 0.5]; Oxi
+                                    // drew them solid black.
+                                    path: if !w.dash.is_empty()
+                                        && !dash_has_fill
+                                        && dash_has_stroke
+                                        && std::env::var_os("OXI_WPG_DASH_DISABLE").is_none()
+                                    {
+                                        let lw = w.ln_w.unwrap_or(0.75).max(0.25);
+                                        let pattern: Vec<f32> = w.dash.iter().map(|u| u * lw).collect();
+                                        dash_path(&s1120_path, vw, vh, &pattern)
+                                    } else {
+                                        s1120_path
+                                    },
                                     image: None,
                                 });
                             }
@@ -10214,6 +10255,7 @@ fn parse_drawing(
                                     page_break_after: false,
                                     placeholder_outline: None,
                                     advance_extra_w: 0.0,
+                                    placeholder_host: None,
                                     wrap_polygon: Vec::new(),
                                     effect_extent_t: 0.0,
                                     effect_extent_b: 0.0,
@@ -10377,6 +10419,7 @@ fn parse_drawing(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            placeholder_host: None,
             wrap_polygon: wrapping_points.clone(),
             effect_extent_t: if std::env::var("OXI_BODY_IMAGE_TOP_EXTENT_DISABLE").is_err() { effect_extent_t } else { 0.0 },
             effect_extent_b: if std::env::var("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE").is_err() { effect_extent_b } else { 0.0 },
@@ -10796,6 +10839,7 @@ fn parse_drawing(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            placeholder_host: None,
             wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b: 0.0,
@@ -10842,6 +10886,7 @@ fn parse_drawing(
                 }
             }),
             advance_extra_w: effect_extent_lr,
+            placeholder_host: None,
             wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b,
@@ -11762,6 +11807,7 @@ fn parse_vml_pict(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            placeholder_host: None,
             wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b: 0.0,
@@ -11879,6 +11925,7 @@ fn parse_vml_pict(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            placeholder_host: None,
             wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b: 0.0,
@@ -12207,6 +12254,7 @@ fn parse_vml_pict(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            placeholder_host: None,
             wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b: 0.0,
@@ -12595,6 +12643,7 @@ fn parse_ole_object(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            placeholder_host: None,
             wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b: 0.0,
@@ -14927,6 +14976,12 @@ fn parse_table_cell(
             page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
+            placeholder_host: Some((
+                pr.paragraph.style.indent_left.unwrap_or(0.0)
+                    + pr.paragraph.style.indent_first_line.unwrap_or(0.0),
+                pr.paragraph.style.indent_right.unwrap_or(0.0),
+                pr.paragraph.alignment.clone(),
+            )),
             wrap_polygon: Vec::new(),
             effect_extent_t: 0.0,
             effect_extent_b: 0.0,
@@ -18801,4 +18856,82 @@ fn math_operator_control_color_uses_package_context_without_coloring_leaves() {
             assert_eq!(style.run_style.as_ref().unwrap().color.as_deref(), Some("0000FF"));
         }
     }
+}
+
+/// A path normalised over a w x h box, cut into the dashes of `pattern`
+/// (on / off lengths in points, starting at the path start).
+fn dash_path(segs: &[crate::ir::PathSeg], w: f32, h: f32, pattern: &[f32]) -> Vec<crate::ir::PathSeg> {
+    use crate::ir::PathSeg;
+    if segs.is_empty() || w <= 0.0 || h <= 0.0 || pattern.len() < 2 || pattern.iter().sum::<f32>() <= 0.01 {
+        return segs.to_vec();
+    }
+    // flatten to polylines in points
+    let mut polys: Vec<Vec<(f32, f32)>> = Vec::new();
+    let mut start = (0.0, 0.0);
+    let mut cur = (0.0, 0.0);
+    for s in segs {
+        match *s {
+            PathSeg::M(x, y) => {
+                cur = (x * w, y * h);
+                start = cur;
+                polys.push(vec![cur]);
+            }
+            PathSeg::L(x, y) => {
+                cur = (x * w, y * h);
+                if polys.is_empty() { polys.push(vec![start]); }
+                polys.last_mut().unwrap().push(cur);
+            }
+            PathSeg::C(x1, y1, x2, y2, x3, y3) => {
+                let (p0, p1, p2, p3) = (cur, (x1 * w, y1 * h), (x2 * w, y2 * h), (x3 * w, y3 * h));
+                if polys.is_empty() { polys.push(vec![p0]); }
+                for i in 1..=16 {
+                    let t = i as f32 / 16.0;
+                    let u = 1.0 - t;
+                    let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                    polys.last_mut().unwrap().push((
+                        a * p0.0 + b * p1.0 + c * p2.0 + d * p3.0,
+                        a * p0.1 + b * p1.1 + c * p2.1 + d * p3.1,
+                    ));
+                }
+                cur = p3;
+            }
+            PathSeg::Z => {
+                if let Some(p) = polys.last_mut() { p.push(start); }
+                cur = start;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for poly in polys {
+        let (mut k, mut left, mut on) = (0usize, pattern[0], true);
+        let mut drawing = false;
+        for pair in poly.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let len = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+            let mut t0 = 0.0f32;
+            while len > 0.0 && t0 < len {
+                let step = left.min(len - t0);
+                let t1 = t0 + step;
+                let p = |t: f32| (a.0 + (b.0 - a.0) * t / len, a.1 + (b.1 - a.1) * t / len);
+                if on {
+                    if !drawing {
+                        let q = p(t0);
+                        out.push(PathSeg::M(q.0 / w, q.1 / h));
+                        drawing = true;
+                    }
+                    let q = p(t1);
+                    out.push(PathSeg::L(q.0 / w, q.1 / h));
+                }
+                left -= step;
+                t0 = t1;
+                if left <= 1e-6 {
+                    k = (k + 1) % pattern.len();
+                    left = pattern[k];
+                    on = k % 2 == 0;
+                    drawing = false;
+                }
+            }
+        }
+    }
+    out
 }

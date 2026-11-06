@@ -4893,6 +4893,9 @@ impl<'a> TableFitLayouter<'a> {
                                     // parser routed the maths without this.
                                     let mut cell_inline_math: Vec<&crate::ir::MathBlock> =
                                         Vec::new();
+                                    // OXI_CELL_INLINE_GROUP: the same carrier for an inline
+                                    // vector group (U+F8FB sentinel), see the run loop.
+                                    let mut cell_inline_groups: Vec<&crate::ir::TextBox> = Vec::new();
                                     let mut line_x: f32 = 0.0;
                                     // Session 118 jc=both refactor — gated by OXI_JCBOTH_REFACTOR env var.
                                     // When enabled, calls compute_compression from jc_both_compress module
@@ -5145,6 +5148,80 @@ impl<'a> TableFitLayouter<'a> {
                                         // body's advance (side 1.15fs - 2.28, + 1pt each side), drawn
                                         // as the stroked square at emit. en/forms__006c06b0's
                                         // «Copy of Project Plan attached» / «I declare…» boxes.
+                                        // OXI_CELL_INLINE_GROUP (2026-11-07, default ON, opt-out
+                                        // _DISABLE): an inline vector group (wpg, no text) in a cell
+                                        // is a U+F8FB atomic fragment of its extent, drawn at emit
+                                        // with its bottom on the text baseline as in the body (S837).
+                                        // Its TextBox is the k-th inline-signature box the parser
+                                        // moved to the cell for this paragraph. blind-J
+                                        // ja/reports__7b458f1a: the legend «○: 空白マーク ●: …» in
+                                        // a 1-cell box (Word PDF oval 79.57..84.32, bottom 154.91 on
+                                        // the 154.94 baseline) and «…マーク○をぬりつぶして» were
+                                        // missing, the center tabs set without their marks.
+                                        let inline_group_run = |r: &crate::ir::Run| {
+                                            r.style.inline_object_extent.is_some()
+                                                && r.style.inline_object_image.is_none()
+                                                && r.style.inline_math.is_none()
+                                                && r.style.form_checkbox.is_none()
+                                                && r.style.hr_rule.is_none()
+                                                && r.text.chars().all(|c| c == '\u{FFFC}')
+                                        };
+                                        if inline_group_run(run)
+                                            && !crate::env_flag!("OXI_CELL_INLINE_GROUP_DISABLE")
+                                        {
+                                            let nth = para.runs[..run_idx].iter().filter(|r| inline_group_run(r)).count();
+                                            let group = cell
+                                                .cell_text_boxes
+                                                .iter()
+                                                .filter(|tb| {
+                                                    tb.anchor_block_index == block_pos
+                                                        && LayoutEngine::inline_group_signature(tb)
+                                                })
+                                                .nth(nth);
+                                            if let (Some(tb), Some((ow, _))) = (group, run.style.inline_object_extent) {
+                                                let ew = cell_float_wrap.as_ref().map_or_else(|| if is_first_line {
+                                                    first_line_wrap_w
+                                                } else {
+                                                    wrap_w
+                                                }, |wrap| wrap.frame(lines.len(), wrap_w, first_line_wrap_w, p_indent_left, p_first_line_indent).width);
+                                                if line_x + ow > ew && !current_line.is_empty() {
+                                                    lines.push(std::mem::take(&mut current_line));
+                                                    line_x = 0.0;
+                                                    current_line_chars.clear();
+                                                    is_first_line = false;
+                                                }
+                                                let index = cell_inline_groups.len();
+                                                cell_inline_groups.push(tb);
+                                                // the line's text keeps its own composed baseline
+                                                let mut group_style = cell_run_style.clone();
+                                                group_style.inline_object_extent = None;
+                                                current_line.push((
+                                                    format!("\u{F8FB}{index}"),
+                                                    // the object's own run size does not size the
+                                                    // line (7b458f1a «マーク○を»: an sz 22 drawing
+                                                    // run among 10pt text; Word's line pitch is
+                                                    // the 10pt one plus the object's reach)
+                                                    current_line.last().map(|f| f.1).unwrap_or(font_size),
+                                                    ow,
+                                                    bold,
+                                                    run.style.italic,
+                                                    false,
+                                                    None,
+                                                    false,
+                                                    font_family.clone(),
+                                                    None,
+                                                    None,
+                                                    0.0,
+                                                    100.0,
+                                                    std::mem::take(&mut s993_lrpb_pending),
+                                                    run.style.font_family_east_asia.clone(),
+                                                    run.ruby.is_some(),
+                                                    group_style,
+                                                ));
+                                                line_x += ow;
+                                                continue;
+                                            }
+                                        }
                                         if run.style.form_checkbox.is_some() {
                                             if crate::env_flag!("OXI_CELL_FORMCHECKBOX_DISABLE") {
                                                 continue;
@@ -9486,6 +9563,25 @@ impl<'a> TableFitLayouter<'a> {
                                         // retain their existing composed geometry.
                                         let cell_text_y_off = cell_text_y_off + cell_sh_dy;
                                         lh += cell_sh_grow;
+                                        // OXI_CELL_INLINE_GROUP: a group standing on the baseline
+                                        // that reaches above the line's top pushes the text down
+                                        // and the line grows by the same amount.
+                                        let cell_group_top = line
+                                            .iter()
+                                            .filter_map(|f| f.0.strip_prefix('\u{F8FB}').and_then(|s| s.parse::<usize>().ok()))
+                                            .filter_map(|i| cell_inline_groups.get(i).map(|tb| tb.height))
+                                            .fold(0.0_f32, f32::max);
+                                        let cell_text_y_off = if cell_group_top > 0.0 {
+                                            let asc = line
+                                                .iter()
+                                                .find(|f| !f.0.starts_with('\u{F8FB}') && !f.0.trim().is_empty())
+                                                .map_or(0.0, |f| self.metrics_for_text(&f.0, &f.16, &para.style).win_ascent * f.1);
+                                            let d = (cell_group_top - (cell_text_y_off + asc)).max(0.0);
+                                            lh += d;
+                                            cell_text_y_off + d
+                                        } else {
+                                            cell_text_y_off
+                                        };
                                         // OXI_CELL_ATLEAST_SHARED_BASE (2026-11-03, default ON, opt-out
                                         // _DISABLE): an atLeast line does not snap to the grid, so its runs
                                         // share one baseline under a typed grid too. ja/administrative__
@@ -9753,6 +9849,33 @@ impl<'a> TableFitLayouter<'a> {
                                                         continue;
                                                     }
                                                 }
+                                            }
+                                            // OXI_CELL_INLINE_GROUP: the group's primitives at the
+                                            // fragment, its bottom on the line's text baseline.
+                                            if let Some(tb) = text
+                                                .strip_prefix('\u{F8FB}')
+                                                .and_then(|s| s.parse::<usize>().ok())
+                                                .and_then(|i| cell_inline_groups.get(i).copied())
+                                            {
+                                                let base_x = cell_x + pad_l + line_indent + align_offset + rx;
+                                                let asc = line
+                                                    .iter()
+                                                    .find(|f| !f.0.starts_with('\u{F8FB}') && !f.0.trim().is_empty())
+                                                    .map_or_else(
+                                                        || self.registry.default_metrics().win_ascent * *fs,
+                                                        |f| self.metrics_for_text(&f.0, &f.16, &para.style).win_ascent * f.1,
+                                                    );
+                                                let baseline = content_h + cell_text_y_off + asc;
+                                                let mut group = LayoutEngine::vector_group_elements(tb, base_x, baseline - tb.height);
+                                                for e in group.iter_mut() {
+                                                    e.paragraph_index = block_idx;
+                                                    e.cell_paragraph_index = Some(cell_para_counter);
+                                                    e.cell_row_index = Some(row_idx);
+                                                    e.cell_col_index = Some(cell_idx);
+                                                }
+                                                cell_elements.append(&mut group);
+                                                rx += adj_w;
+                                                continue;
                                             }
                                             // OXI_CELL_FORMCHECKBOX: the square, bottom at the text
                                             // baseline + 0.218fs - 1.16 as in the body.
@@ -10525,6 +10648,39 @@ impl<'a> TableFitLayouter<'a> {
                                         element.flow_line_height = Some(if LayoutEngine::s1053_cell_float_no_reserve(img) {
                                             0.0
                                         } else { img_h_eff + image_sa });
+                                    }
+                                }
+                                // OXI_CELL_GROUP_PLACEHOLDER (2026-11-07, default ON, opt-out
+                                // _DISABLE): a visual-only cell paragraph (S838) draws its
+                                // inline groups on the placeholder line, set by the host's
+                                // indents and alignment. ja/reports__7b458f1a's answer-grid
+                                // ovals (ind left 520tw, Word PDF x 385.0 = cell 358.9 + 26.0)
+                                // reserved their line and drew nothing.
+                                if let Some((ind_l, ind_r, align)) = img.placeholder_host.as_ref()
+                                    .filter(|_| img.data.is_empty() && !crate::env_flag!("OXI_CELL_GROUP_PLACEHOLDER_DISABLE"))
+                                {
+                                    let groups: Vec<&crate::ir::TextBox> = cell
+                                        .cell_text_boxes
+                                        .iter()
+                                        .filter(|tb| tb.anchor_block_index == block_pos && LayoutEngine::inline_group_signature(tb))
+                                        .collect();
+                                    let total: f32 = groups.iter().map(|tb| tb.width).sum();
+                                    let room = (cell_w - pad_l - pad_r - ind_l - ind_r).max(0.0);
+                                    let mut gx = cell_x + pad_l + ind_l + match align {
+                                        Alignment::Center => ((room - total) / 2.0).max(0.0),
+                                        Alignment::Right => (room - total).max(0.0),
+                                        _ => 0.0,
+                                    };
+                                    let bottom = content_h + effect_top + img.height;
+                                    for tb in groups {
+                                        let mut group = LayoutEngine::vector_group_elements(tb, gx, bottom - tb.height);
+                                        for e in group.iter_mut() {
+                                            e.paragraph_index = block_idx;
+                                            e.cell_row_index = Some(row_idx);
+                                            e.cell_col_index = Some(cell_idx);
+                                        }
+                                        cell_elements.append(&mut group);
+                                        gx += tb.width;
                                     }
                                 }
                                 // S1053: a page-relative float still DRAWS (the element is

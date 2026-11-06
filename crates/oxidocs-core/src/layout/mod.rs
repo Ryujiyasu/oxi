@@ -789,7 +789,7 @@ fn autospace_cell_segments(
 }
 
 /// ECMA-376 20.1.10.48 preset dash patterns in multiples of the line width.
-fn prst_dash_units(name: &str) -> Option<&'static [f32]> {
+pub(crate) fn prst_dash_units(name: &str) -> Option<&'static [f32]> {
     match name {
         "dash" => Some(&[4.0, 3.0]),
         "dashDot" => Some(&[4.0, 3.0, 1.0, 3.0]),
@@ -22752,6 +22752,60 @@ cells={} pitch={:.2} text={:?}",
     /// wherever `trHeight` already exceeded the object. The Square (max) and
     /// TopAndBottom (sum) arms keep the S331b fold: only Square is now wrong by
     /// the sum-vs-max difference, on 7 corpus anchors.
+    /// An inline visual vector group (the S535 synthetic-inline signature with
+    /// S839 primitives and no text): drawn on its host line, not at its box.
+    fn inline_group_signature(tb: &crate::ir::TextBox) -> bool {
+        !tb.vector_shapes.is_empty()
+            && tb.blocks.is_empty()
+            && matches!(tb.wrap_type, Some(crate::ir::WrapType::None))
+            && tb.position.as_ref().map_or(false, |p| {
+                p.x == 0.0
+                    && p.y == 0.0
+                    && p.h_relative.as_deref() == Some("column")
+                    && p.v_relative.as_deref() == Some("paragraph")
+            })
+    }
+    /// The drawable primitives of a vector group whose box top-left is (x, y).
+    fn vector_group_elements(tb: &crate::ir::TextBox, x: f32, y: f32) -> Vec<LayoutElement> {
+        tb.vector_shapes
+            .iter()
+            .map(|vs| {
+                let (vx, vy) = (x + vs.x, y + vs.y);
+                if let Some(ref data) = vs.image {
+                    LayoutElement::new(vx, vy, vs.w, vs.h, LayoutContent::Image {
+                        data: data.as_ref().clone(),
+                        content_type: None,
+                        crop: None,
+                        rotation: 0.0,
+                    })
+                } else if vs.is_line {
+                    LayoutElement::new(vx, vy, vs.w.max(0.1), vs.h.max(vs.stroke_width), LayoutContent::TableBorder {
+                        x1: vx,
+                        y1: vy,
+                        x2: vx + vs.w,
+                        y2: vy + vs.h,
+                        color: vs.stroke.clone(),
+                        width: vs.stroke_width,
+                        style: None,
+                    })
+                } else if !vs.path.is_empty() {
+                    LayoutElement::new(vx, vy, vs.w, vs.h, LayoutContent::VectorPath {
+                        segs: vs.path.clone(),
+                        fill: vs.fill.clone(),
+                        stroke_color: vs.stroke.clone(),
+                        stroke_width: vs.stroke_width,
+                    })
+                } else {
+                    LayoutElement::new(vx, vy, vs.w, vs.h, LayoutContent::BoxRect {
+                        fill: vs.fill.clone(),
+                        stroke_color: vs.stroke.clone(),
+                        stroke_width: vs.stroke_width,
+                        corner_radius: 0.0,
+                    })
+                }
+            })
+            .collect()
+    }
     fn s1053_cell_float_no_reserve(img: &crate::ir::Image) -> bool {
         let page_rel = !crate::env_flag!("OXI_S1053_DISABLE")
             && img

@@ -1159,6 +1159,11 @@ pub struct Image {
     /// stays `width` wide. Zero for everything else.
     #[serde(default)]
     pub advance_extra_w: f32,
+    /// OXI_CELL_GROUP_PLACEHOLDER: the S838 placeholder of a visual-only cell
+    /// paragraph keeps its host's (indent_left + first_line, indent_right,
+    /// alignment), so the paragraph's inline group is drawn where it sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder_host: Option<(f32, f32, Alignment)>,
     /// S1238: wp:effectExtent b — the flowed box's bottom sits at
     /// line_bottom − this (kyotei row1: 30.8 − 1.5 = Word's 29.5 ± 0.2).
     #[serde(default)]
