@@ -267,6 +267,11 @@ pub struct DocxModel {
     /// part by index into `headers_footers` (`r:id="#3"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<Props>,
+    /// Where the body's own sectPr sits when it is not the last thing in
+    /// the body (a few generators write content after it): its index among
+    /// the blocks. None means last, as the schema requires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_at: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers_footers: Vec<HeaderFooter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -451,11 +456,28 @@ impl DocxModel {
                 "w:background" => model.background = Some(c.clone()),
                 "w:body" => {
                     let mut blocks: Vec<&Element> = c.elements().collect();
-                    if blocks.last().map(|e| e.name == "w:sectPr") == Some(true) {
-                        let s = blocks.pop().unwrap();
+                    let sects: Vec<usize> = blocks.iter().enumerate().filter(|(_, e)| e.name == "w:sectPr").map(|(i, _)| i).collect();
+                    if sects.len() > 1 {
+                        return Err(Error::Unsupported(Unsupported { path: "w:body/w:sectPr(several)".into() }));
+                    }
+                    if let Some(&at) = sects.first() {
+                        let s = blocks.remove(at);
                         let mut props = Props::read("w:body", s)?;
                         link_sections(&mut props, pkg, &res.rels, &mut model, &mut hf_index)?;
                         model.section = Some(props);
+                        if at != blocks.len() {
+                            // Count the blocks before it as the model will hold them.
+                            let mut before = Vec::new();
+                            for b in &blocks[..at] {
+                                let one = content::read_blocks(
+                                    &Element { name: "w:body".into(), attrs: vec![], children: vec![Node::Element((*b).clone())] },
+                                    "w:body",
+                                    &mut res,
+                                )?;
+                                before.extend(one);
+                            }
+                            model.section_at = Some(before.len());
+                        }
                     }
                     let mut body = Vec::new();
                     for b in blocks {
@@ -476,6 +498,10 @@ impl DocxModel {
         }
         for rel in pkg.rels(&main) {
             if rel.external || is_content_rel(&rel.rel_type) {
+                continue;
+            }
+            // A link to a part the package does not hold says nothing.
+            if !pkg.files.contains_key(&rel.target) {
                 continue;
             }
             let Some(kind) = doc_part_kind(&rel.rel_type) else {
@@ -967,7 +993,8 @@ impl DocxModel {
         if let Some(s) = &self.section {
             let mut se = s.element().clone();
             link_hf(&mut se, &mut sink);
-            body.push(Node::Element(se));
+            let at = self.section_at.unwrap_or(body.len()).min(body.len());
+            body.insert(at, Node::Element(se));
         }
         for (name, rel) in &note_parts {
             sink.link(rel, name);

@@ -216,6 +216,10 @@ pub struct Row {
     pub cells: Vec<CellItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attrs: Vec<(String, String)>,
+    /// The file wrote the row properties after the cells (some generators
+    /// do); kept that way.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub props_after_cells: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -635,6 +639,7 @@ fn read_row_item(e: &Element, path: &str, res: &mut dyn Resolver, out: &mut Vec<
                 match c.name.as_str() {
                     "w:tblPrEx" => row.props_ex = Some(Props::read("w:tr", c)?),
                     "w:trPr" => {
+                        row.props_after_cells = !row.cells.is_empty();
                         let mut props = Props::read("w:tr", c)?;
                         if let Some(old) = row.props.take() {
                             for x in old.children() {
@@ -917,13 +922,15 @@ fn write_row_item(r: &RowItem, sink: &mut dyn PartSink) -> Element {
             if let Some(p) = &row.props_ex {
                 e.children.push(Node::Element(p.element().clone()));
             }
-            if let Some(p) = &row.props {
-                if !p.is_empty() {
-                    e.children.push(Node::Element(p.element().clone()));
-                }
+            let props = row.props.as_ref().filter(|p| !p.is_empty()).map(|p| Node::Element(p.element().clone()));
+            if !row.props_after_cells {
+                e.children.extend(props.clone());
             }
             for c in &row.cells {
                 e.children.push(Node::Element(write_cell_item(c, sink)));
+            }
+            if row.props_after_cells {
+                e.children.extend(props);
             }
             e
         }

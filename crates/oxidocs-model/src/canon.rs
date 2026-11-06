@@ -307,8 +307,9 @@ pub fn compare(a: &Package, b: &Package) -> Vec<Diff> {
         }
     }
     for rel_type in &kinds {
-        let pa = a.rels(&ma).into_iter().find(|r| &r.rel_type == rel_type).map(|r| r.target);
-        let pb = b.rels(&mb).into_iter().find(|r| &r.rel_type == rel_type).map(|r| r.target);
+        // A link to a part the package does not hold says nothing.
+        let pa = a.rels(&ma).into_iter().find(|r| &r.rel_type == rel_type && a.files.contains_key(&r.target)).map(|r| r.target);
+        let pb = b.rels(&mb).into_iter().find(|r| &r.rel_type == rel_type && b.files.contains_key(&r.target)).map(|r| r.target);
         let kind = rel_type.rsplit('/').next().unwrap().to_string();
         match (pa, pb) {
             (None, None) => {}
