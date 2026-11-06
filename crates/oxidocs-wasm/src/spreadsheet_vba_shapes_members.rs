@@ -1377,6 +1377,7 @@ impl<'a> WorkbookHost<'a> {
                     values_ref: Some(block_ref(self, first, column, last, column)),
                     x_ref: categories.then(|| block_ref(self, first, columns[0], last, columns[0])),
                     typed_xs: None,
+                    sparse_values: None,
                     values: data_rows.iter().map(|r| number_at(self, *r, column)).collect(),
                     xs: data_rows
                         .iter()
@@ -1405,6 +1406,7 @@ impl<'a> WorkbookHost<'a> {
                     values_ref: Some(block_ref(self, row, first, row, last)),
                     x_ref: categories.then(|| block_ref(self, rows[0], first, rows[0], last)),
                     typed_xs: None,
+                    sparse_values: None,
                     values: data_columns.iter().map(|c| number_at(self, row, *c)).collect(),
                     xs: data_columns
                         .iter()
@@ -3295,6 +3297,7 @@ impl<'a> WorkbookHost<'a> {
                             let reference = self.address_of(range);
                             let series = self.series_mut(id, number)?;
                             series.values = numbers;
+                            series.sparse_values = None;
                             series.values_ref = Some(reference);
                             if series.xs.len() != series.values.len() {
                                 series.xs = (1..=series.values.len()).map(|n| n.to_string()).collect();
@@ -3302,6 +3305,7 @@ impl<'a> WorkbookHost<'a> {
                         } else if let Value::Array(listed) = &value {
                             let series = self.series_mut(id, number)?;
                             series.values = listed.values.iter().map(|v| any_number(v).unwrap_or(0.0)).collect();
+                            series.sparse_values = None;
                             series.values_ref = None;
                         }
                         true
@@ -3930,6 +3934,7 @@ impl<'a> WorkbookHost<'a> {
                         values_ref: None,
                         x_ref: None,
                         typed_xs: None,
+                        sparse_values: None,
                         values: Vec::new(),
                         xs: Vec::new(),
                         color: None,
@@ -3951,6 +3956,7 @@ impl<'a> WorkbookHost<'a> {
                             values_ref: Some(reference),
                             x_ref: None,
                             typed_xs: None,
+                            sparse_values: None,
                             xs: (1..=numbers.len()).map(|n| n.to_string()).collect(),
                             values: numbers,
                             color: None,
@@ -4148,6 +4154,7 @@ impl<'a> WorkbookHost<'a> {
             "values" => {
                 let numbers = self.range_numbers(range);
                 let series = self.series_mut(id, number)?;
+                if series.values != numbers { series.sparse_values = None; }
                 series.values = numbers;
                 series.values_ref = Some(reference);
                 if series.xs.len() != series.values.len() {
@@ -4199,7 +4206,7 @@ fn chart_is_pie(kind: i64) -> bool {
 }
 
 /// Text for what a macro hands a text property that is not text.
-fn text_of_value(value: &Value) -> String {
+pub(super) fn text_of_value(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         Value::Empty | Value::Null | Value::Missing | Value::Nothing => String::new(),

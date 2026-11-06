@@ -44,6 +44,82 @@ pub(crate) fn legend_position(chart: &Chart) -> Option<&str> {
     chart.legend.as_ref().map(|legend| legend.position.as_str())
 }
 
+
+fn series_data_equal(a: &crate::ir::ChartSeries, b: &crate::ir::ChartSeries) -> bool {
+    a.name == b.name && a.values == b.values
+        && a.name_reference == b.name_reference && a.values_reference == b.values_reference
+        && a.category_reference == b.category_reference && a.category_values == b.category_values
+}
+
+pub(crate) fn series_data_changed(a: &Chart, b: &Chart) -> bool {
+    a.series.len() != b.series.len()
+        || a.series.iter().zip(&b.series).any(|(a, b)| !series_data_equal(a, b))
+        || (a.categories != b.categories && a.series.iter().zip(&b.series)
+            .any(|(a, b)| a.category_values.is_none() || b.category_values.is_none()))
+}
+
+/// References and their caches are kept together; literal text is not inferred
+/// to be numeric merely because it can be parsed as a number.
+fn series_data_parts(series: &crate::ir::ChartSeries, shared: &[String], scatter: bool, ns: &str) -> (String, String, String) {
+    use crate::ir::ChartCategoryValue;
+    fn numeric(values: &[Option<f64>], reference: Option<&str>) -> String {
+        let cache = if reference.is_some() { "numCache" } else { "numLit" };
+        let mut out = String::new();
+        if let Some(reference) = reference {
+            out.push_str(&format!("<c:numRef><c:f>{}</c:f>", escape(reference.trim_start_matches('='))));
+        }
+        out.push_str(&format!("<c:{cache}><c:formatCode>General</c:formatCode><c:ptCount val=\"{}\"/>", values.len()));
+        for (i, value) in values.iter().enumerate() {
+            if let Some(value) = value { out.push_str(&format!("<c:pt idx=\"{i}\"><c:v>{value}</c:v></c:pt>")); }
+        }
+        out.push_str(&format!("</c:{cache}>"));
+        if reference.is_some() { out.push_str("</c:numRef>"); }
+        out
+    }
+    let name = if let Some(reference) = &series.name_reference {
+        format!("<c:strRef><c:f>{}</c:f><c:strCache><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>{}</c:v></c:pt></c:strCache></c:strRef>",
+            escape(reference.trim_start_matches('=')), escape(&series.name))
+    } else { format!("<c:v>{}</c:v>", escape(&series.name)) };
+    let name = format!("<c:tx xmlns:c=\"{ns}\">{name}</c:tx>");
+    let legacy: Vec<_> = if scatter {
+        (0..series.values.len()).map(|i| ChartCategoryValue::Number(
+            shared.get(i).and_then(|v| v.parse::<f64>().ok()).unwrap_or((i + 1) as f64))).collect()
+    } else { shared.iter().map(|v| ChartCategoryValue::Text(v.clone())).collect() };
+    let categories = series.category_values.as_deref().unwrap_or(&legacy);
+    let cats = if categories.is_empty() && series.category_reference.is_none() { String::new() } else {
+        let is_numeric = categories.iter().all(|v| matches!(v, ChartCategoryValue::Number(_) | ChartCategoryValue::Blank));
+        let body = if is_numeric {
+            let values: Vec<_> = categories.iter().map(|v| match v {
+                ChartCategoryValue::Number(n) => Some(*n), _ => None,
+            }).collect();
+            numeric(&values, series.category_reference.as_deref())
+        } else {
+            let cache = if series.category_reference.is_some() { "strCache" } else { "strLit" };
+            let mut out = String::new();
+            if let Some(reference) = &series.category_reference {
+                out.push_str(&format!("<c:strRef><c:f>{}</c:f>", escape(reference.trim_start_matches('='))));
+            }
+            out.push_str(&format!("<c:{cache}><c:ptCount val=\"{}\"/>", categories.len()));
+            for (i, value) in categories.iter().enumerate() {
+                let text = match value {
+                    ChartCategoryValue::Text(s) => s.clone(),
+                    ChartCategoryValue::Number(n) => n.to_string(),
+                    ChartCategoryValue::Blank => continue,
+                };
+                out.push_str(&format!("<c:pt idx=\"{i}\"><c:v>{}</c:v></c:pt>", escape(&text)));
+            }
+            out.push_str(&format!("</c:{cache}>"));
+            if series.category_reference.is_some() { out.push_str("</c:strRef>"); }
+            out
+        };
+        let tag = if scatter { "xVal" } else { "cat" };
+        format!("<c:{tag} xmlns:c=\"{ns}\">{body}</c:{tag}>")
+    };
+    let tag = if scatter { "yVal" } else { "val" };
+    let vals = format!("<c:{tag} xmlns:c=\"{ns}\">{}</c:{tag}>", numeric(&series.values, series.values_reference.as_deref()));
+    (name, cats, vals)
+}
+
 /// Writes a newly created chart from portable chart data. Existing chart parts
 /// continue through the differential patcher so their unmodelled XML survives.
 pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
@@ -99,15 +175,9 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
                 if inner { "<c:layoutTarget val=\"inner\"/>" } else { "" }, f.x, f.y, f.w, f.h),
         }
     }
-    fn numeric(values: &[Option<f64>]) -> String {
-        let mut out = format!("<c:numLit><c:formatCode>General</c:formatCode><c:ptCount val=\"{}\"/>", values.len());
-        for (i, value) in values.iter().enumerate() {
-            if let Some(value) = value { out.push_str(&format!("<c:pt idx=\"{i}\"><c:v>{value}</c:v></c:pt>")); }
-        }
-        out.push_str("</c:numLit>"); out
-    }
     fn series(series: &ChartSeries, index: usize, categories: &[String], scatter: bool) -> String {
-        let mut out = format!("<c:ser><c:idx val=\"{index}\"/><c:order val=\"{index}\"/><c:tx><c:v>{}</c:v></c:tx>", escape(&series.name));
+        let (name, cats, values) = series_data_parts(series, categories, scatter, C);
+        let mut out = format!("<c:ser><c:idx val=\"{index}\"/><c:order val=\"{index}\"/>{name}");
         if let Some(line) = &series.line { out.push_str(&format!("<c:spPr>{}</c:spPr>", paint(line))); }
         if let Some(value) = &series.marker { out.push_str(&marker(value)); }
         for point in &series.points {
@@ -133,14 +203,8 @@ pub(crate) fn new_chart_xml(chart: &Chart) -> Result<String, XlsxError> {
             if let Some(position) = &series.label_pos { out.push_str(&format!("<c:dLblPos val=\"{}\"/>", escape(position))); }
             out.push_str("<c:showVal val=\"0\"/></c:dLbls>");
         }
-        if scatter {
-            let xs: Vec<_> = (0..series.values.len()).map(|i| Some(categories.get(i).and_then(|v| v.parse::<f64>().ok()).unwrap_or((i+1) as f64))).collect();
-            out.push_str(&format!("<c:xVal>{}</c:xVal><c:yVal>{}</c:yVal>", numeric(&xs), numeric(&series.values)));
-        } else {
-            out.push_str(&format!("<c:cat><c:strLit><c:ptCount val=\"{}\"/>", categories.len()));
-            for (i, value) in categories.iter().enumerate() { out.push_str(&format!("<c:pt idx=\"{i}\"><c:v>{}</c:v></c:pt>", escape(value))); }
-            out.push_str(&format!("</c:strLit></c:cat><c:val>{}</c:val>", numeric(&series.values)));
-        }
+        out.push_str(&cats);
+        out.push_str(&values);
         out.push_str("</c:ser>"); out
     }
     fn axis(axis: Option<&ChartAxis>, tag: &str, id: u32, cross: u32, position: &str) -> String {
@@ -303,6 +367,100 @@ fn replace_child(xml: &str, name: &str, replacement: &str) -> Result<String, Xls
     ))
 }
 
+
+fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing_ns: &str) -> Result<String, XlsxError> {
+    // Keep the source namespace bindings while inspecting individual series.
+    let mut reader = Reader::from_str(xml);
+    let (open, close) = loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Start(element) if local_name(element.name().as_ref()) == "chartSpace" => {
+                let finish = reader.buffer_position() as usize;
+                let close = format!("</{}>", String::from_utf8_lossy(element.name().as_ref()));
+                break (xml[start..finish].to_string(), close);
+            }
+            Event::Eof => return Err(XlsxError::InvalidData("chart root is missing".into())),
+            _ => {}
+        }
+    };
+    let (plots, _) = children_at(xml, &["chartSpace", "chart", "plotArea"])?;
+    let plots: Vec<_> = plots.iter().filter(|(name, _, _)| name.ends_with("Chart")).collect();
+    if plots.len() != 1 {
+        return Err(XlsxError::InvalidData("series editing requires an unambiguous source plot".into()));
+    }
+    let plot = plots[0].0.as_str();
+    let path = ["chartSpace", "chart", "plotArea", plot];
+    let (children, end) = children_at(xml, &path)?;
+    let existing: Vec<_> = children.iter().filter(|(name, _, _)| name == "ser").collect();
+    let scatter = plot == "scatterChart";
+    let replace = |fragment: &str, tag: &str, replacement: &str| -> Result<String, XlsxError> {
+        let wrapped = format!("{open}{fragment}{close}");
+        let (children, end) = children_at(&wrapped, &["chartSpace", "ser"])?;
+        let (start, finish) = if let Some((_, start, finish)) = children.iter().find(|(name, _, _)| name == tag) {
+            (*start, *finish)
+        } else {
+            if replacement.is_empty() { return Ok(fragment.to_string()); }
+            let at = children.iter().find(|(name, _, _)| match tag {
+                "tx" => !matches!(name.as_str(), "idx" | "order"),
+                "cat" | "xVal" => matches!(name.as_str(), "val" | "yVal" | "smooth" | "extLst"),
+                _ => matches!(name.as_str(), "smooth" | "extLst"),
+            }).map_or(end, |(_, start, _)| *start);
+            (at, at)
+        };
+        let revised = format!("{}{}{}", &wrapped[..start], replacement, &wrapped[finish..]);
+        Ok(revised[open.len()..revised.len() - close.len()].to_string())
+    };
+    let mut edits = Vec::new();
+    for (i, (_, start, finish)) in existing.iter().enumerate() {
+        let replacement = if let Some(series) = after.series.get(i) {
+            let (name, cats, values) = series_data_parts(series, &after.categories, scatter, ns);
+            let previous = before.series.get(i);
+            let name_changed = previous.is_none_or(|old| old.name != series.name || old.name_reference != series.name_reference);
+            let cats_changed = previous.is_none_or(|old|
+                old.category_reference != series.category_reference || old.category_values != series.category_values
+                || ((old.category_values.is_none() || series.category_values.is_none()) && before.categories != after.categories));
+            let values_changed = previous.is_none_or(|old| old.values != series.values || old.values_reference != series.values_reference);
+            let mut fragment = xml[*start..*finish].to_string();
+            if name_changed { fragment = replace(&fragment, "tx", &name)?; }
+            if cats_changed { fragment = replace(&fragment, if scatter { "xVal" } else { "cat" }, &cats)?; }
+            if values_changed { fragment = replace(&fragment, if scatter { "yVal" } else { "val" }, &values)?; }
+            fragment
+        } else { String::new() };
+        edits.push((*start, *finish, replacement));
+    }
+    let mut appended = String::new();
+    for (i, series) in after.series.iter().enumerate().skip(existing.len()) {
+        // Reuse the new-series serializer for modeled formatting, then insert
+        // only the series, retaining the original plot, axes and extensions.
+        let kind = if scatter { "scatter" } else { "bar" };
+        let generated = new_chart_xml(&Chart {
+            kind: kind.into(), categories: after.categories.clone(),
+            series: vec![series.clone()], ..Default::default()
+        })?;
+        let tag = if scatter { "scatterChart" } else { "barChart" };
+        let (ranges, _) = children_at(&generated, &["chartSpace", "chart", "plotArea", tag])?;
+        let (_, begin, finish) = ranges.iter().find(|(name, _, _)| name == "ser").unwrap();
+        let fragment = generated[*begin..*finish]
+            .replacen("<c:ser>", &format!("<c:ser xmlns:c=\"{ns}\" xmlns:a=\"{drawing_ns}\">"), 1)
+            .replace(&format!("xmlns:c=\"{C}\""), &format!("xmlns:c=\"{ns}\""))
+            .replacen("<c:idx val=\"0\"/>", &format!("<c:idx val=\"{i}\"/>"), 1)
+            .replacen("<c:order val=\"0\"/>", &format!("<c:order val=\"{i}\"/>"), 1);
+        appended.push_str(&fragment);
+    }
+    if !appended.is_empty() {
+        let at = existing.last().map(|(_, _, end)| *end).unwrap_or_else(||
+            children.iter().find(|(name, _, _)| matches!(name.as_str(), "dLbls" | "dropLines" | "hiLowLines" | "upDownBars" | "marker" | "smooth" | "axId" | "extLst"))
+                .map_or(end, |(_, start, _)| *start));
+        edits.push((at, at, appended));
+    }
+    edits.sort_by_key(|(start, finish, _)| (*start, *finish));
+    let mut out = xml.to_string();
+    for (start, finish, replacement) in edits.into_iter().rev() {
+        out.replace_range(start..finish, &replacement);
+    }
+    Ok(out)
+}
+
 pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<String, XlsxError> {
     let mut reader = quick_xml::reader::NsReader::from_str(xml);
     let strict = loop {
@@ -378,6 +536,9 @@ pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<St
             output = replace_child(&output, "legend", "")?;
         }
     }
+    if series_data_changed(before, after) {
+        output = patch_series_data(&output, before, after, chart_ns, drawing_ns)?;
+    }
     Ok(output)
 }
 
@@ -403,6 +564,67 @@ mod new_chart_roundtrip_tests {
             assert_eq!(actual.series[0].name, expected.series[0].name, "{kind}");
             assert_eq!(actual.series[0].values, expected.series[0].values, "{kind}");
             assert_eq!(actual.categories, expected.categories, "{kind}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod series_data_tests {
+    use super::*;
+    use crate::ir::{ChartCategoryValue as Category, ChartSeries};
+
+    #[test]
+    fn series_references_and_category_types_roundtrip_independently() {
+        for kind in ["bar", "scatter"] {
+            let first = ChartSeries {
+                name: "A & B".into(), name_reference: Some("'Sales & Costs'!$B$1".into()),
+                values_reference: Some("'Sales & Costs'!$B$2:$B$4".into()),
+                category_reference: Some("'Sales & Costs'!$A$2:$A$4".into()),
+                category_values: Some(vec![Category::Text("1".into()), Category::Text(" 2 ".into()), Category::Text("3".into())]),
+                values: vec![Some(1.25), None, Some(3.75)], ..Default::default()
+            };
+            let second = ChartSeries {
+                name: "Numeric".into(),
+                category_values: Some(vec![Category::Number(10.0), Category::Number(20.0)]),
+                values: vec![Some(4.0), Some(5.0)], ..Default::default()
+            };
+            let expected = Chart { kind: kind.into(), series: vec![first, second],
+                categories: vec!["legacy fallback must not replace per-series data".into()], ..Default::default() };
+            let xml = new_chart_xml(&expected).unwrap();
+            let actual = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+            for (a, b) in actual.series.iter().zip(&expected.series) {
+                assert!(series_data_equal(a, b), "{kind}: {a:?} != {b:?}");
+            }
+            assert_eq!(actual.series.len(), 2);
+            assert!(xml.contains("<c:strRef><c:f>&apos;Sales &amp; Costs&apos;!$A$2:$A$4</c:f>")
+                || xml.contains("<c:strRef><c:f>'Sales &amp; Costs'!$A$2:$A$4</c:f>"));
+        }
+    }
+
+    #[test]
+    fn editing_data_preserves_source_formatting_extensions_and_other_series() {
+        for strict in [false, true] {
+            let initial = Chart { kind: "bar".into(), series: vec![
+                ChartSeries { name: "First".into(), values: vec![Some(1.0)], ..Default::default() },
+                ChartSeries { name: "Second".into(), values: vec![Some(2.0)], ..Default::default() },
+            ], ..Default::default() };
+            let mut xml = new_chart_xml(&initial).unwrap();
+            let extension = "<c:extLst><c:ext uri=\"retained\"><x:keep xmlns:x=\"urn:retained\">unchanged</x:keep></c:ext></c:extLst>";
+            let foreign = "<x:val xmlns:x=\"urn:foreign\">foreign value</x:val>";
+            xml = xml.replacen("</c:ser>", &format!("{foreign}{extension}</c:ser>"), 1);
+            if strict { xml = xml.replace(C, "http://purl.oclc.org/ooxml/drawingml/chart")
+                .replace(A, "http://purl.oclc.org/ooxml/drawingml/main"); }
+            let before = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+            let mut after = before.clone();
+            after.series[0].values = vec![Some(7.0)];
+            after.series[0].values_reference = Some("Sheet1!$B$2".into());
+            let patched = patch_chart(&xml, &before, &after).unwrap();
+            assert!(patched.contains(extension) && patched.contains(foreign));
+            let ranges = |text: &str| children_at(text, &["chartSpace", "chart", "plotArea", "barChart"]).unwrap().0
+                .into_iter().filter(|(name, _, _)| name == "ser").map(|(_, a, b)| text[a..b].to_string()).collect::<Vec<_>>();
+            assert_eq!(ranges(&xml)[1], ranges(&patched)[1]);
+            let actual = crate::chart::parse_chart_xml(&patched, &crate::parser::Theme::default()).unwrap();
+            assert!(series_data_equal(&actual.series[0], &after.series[0]));
         }
     }
 }

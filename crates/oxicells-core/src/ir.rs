@@ -1586,6 +1586,17 @@ pub struct Frame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ChartSeries {
     pub name: String,
+    /// Optional cell references travel with the cached data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values_reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_reference: Option<String>,
+    /// Per-series categories retain text, numeric and missing values. An empty
+    /// vector means categories were omitted; None supports older IR producers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_values: Option<Vec<ChartCategoryValue>>,
     /// One per category. A gap in the data is a `None`, and the line either
     /// breaks across it or steps over it, as the chart says.
     pub values: Vec<Option<f64>>,
@@ -1606,6 +1617,15 @@ pub struct ChartSeries {
     pub label_face: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_pos: Option<String>,
+}
+
+/// Cached category values are independent of a host application's variants.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChartCategoryValue {
+    Number(f64),
+    Text(String),
+    Blank,
 }
 
 /// One point of a series, where it is drawn unlike its neighbours.

@@ -13,7 +13,7 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 
 use crate::ir::{
-    Chart, ChartAxis, ChartPoint, ChartSeries, DataLabel, Frame, Legend, Marker, ShapeLine,
+    Chart, ChartAxis, ChartCategoryValue, ChartPoint, ChartSeries, DataLabel, Frame, Legend, Marker, ShapeLine,
 };
 use crate::parser::{scheme_colour, shaded, Theme};
 
@@ -79,6 +79,9 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     let mut at: Option<usize> = None;
     let mut values: Vec<(usize, f64)> = Vec::new();
     let mut categories: Vec<(usize, String)> = Vec::new();
+    let mut typed_categories: Vec<(usize, ChartCategoryValue)> = Vec::new();
+    let mut numeric_categories = false;
+    let mut in_formula = false;
     let mut text = String::new();
     let mut in_value = false;
     let mut in_run = false;
@@ -266,7 +269,16 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                     "val" | "yVal" => reading = Reading::Values,
                     "cat" | "xVal" => reading = Reading::Categories,
                     "tx" => reading = Reading::SeriesName,
-                    "numCache" | "strCache" | "strLit" | "numLit" => in_cache = true,
+                    "numCache" | "strCache" | "strLit" | "numLit" => {
+                        in_cache = true;
+                        if reading == Reading::Categories {
+                            numeric_categories = matches!(name.as_str(), "numCache" | "numLit");
+                        }
+                    }
+                    "f" if whose.contains(&Whose::Series) => {
+                        in_formula = true;
+                        text.clear();
+                    }
                     "pt" => at = get_attr(e, "idx").and_then(|i| i.parse().ok()),
                     "v" => {
                         in_value = true;
@@ -281,13 +293,23 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                 }
             }
             Ok(Event::Text(e)) => {
-                if in_value {
+                if in_value || in_formula {
                     text.push_str(&e.unescape().unwrap_or_default());
                 }
             }
             Ok(Event::End(ref e)) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    "f" if in_formula => {
+                        in_formula = false;
+                        match reading {
+                            Reading::SeriesName => current.name_reference = Some(text.clone()),
+                            Reading::Values => current.values_reference = Some(text.clone()),
+                            Reading::Categories => current.category_reference = Some(text.clone()),
+                            Reading::Nothing => {}
+                        }
+                        text.clear();
+                    }
                     "v" | "t" => {
                         in_value = false;
                         if in_run {
@@ -303,7 +325,12 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                                 }
                                 Reading::Categories => {
                                     if let Some(index) = at {
-                                        categories.push((index, text.trim().to_string()));
+                                        categories.push((index, text.clone()));
+                                        let value = if numeric_categories {
+                                            text.trim().parse::<f64>().ok().map(ChartCategoryValue::Number)
+                                                .unwrap_or(ChartCategoryValue::Blank)
+                                        } else { ChartCategoryValue::Text(text.clone()) };
+                                        typed_categories.push((index, value));
                                     }
                                 }
                                 Reading::SeriesName => current.name = text.trim().to_string(),
@@ -441,6 +468,10 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                             }
                             chart.categories = held;
                         }
+                        let mut typed = vec![ChartCategoryValue::Blank;
+                            typed_categories.iter().map(|(i, _)| i + 1).max().unwrap_or(0)];
+                        for (i, value) in typed_categories.drain(..) { typed[i] = value; }
+                        current.category_values = Some(typed);
                         categories.clear();
                         series.push(current.clone());
                     }
