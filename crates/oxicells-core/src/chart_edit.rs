@@ -389,21 +389,49 @@ fn replace_child(xml: &str, name: &str, replacement: &str) -> Result<String, Xls
 }
 
 
-fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing_ns: &str) -> Result<String, XlsxError> {
-    // Keep the source namespace bindings while inspecting individual series.
+
+fn series_fragment_envelope(xml: &str, at: usize, ns: &str) -> Result<(String, String), XlsxError> {
+    use std::collections::BTreeMap;
     let mut reader = Reader::from_str(xml);
-    let (open, close) = loop {
-        let start = reader.buffer_position() as usize;
-        match reader.read_event().map_err(XlsxError::Xml)? {
-            Event::Start(element) if local_name(element.name().as_ref()) == "chartSpace" => {
-                let finish = reader.buffer_position() as usize;
-                let close = format!("</{}>", String::from_utf8_lossy(element.name().as_ref()));
-                break (xml[start..finish].to_string(), close);
+    let mut bindings: BTreeMap<String, String> = BTreeMap::new();
+    let mut scopes = Vec::new();
+    loop {
+        let position = reader.buffer_position() as usize;
+        let event = reader.read_event().map_err(XlsxError::Xml)?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let previous = bindings.clone();
+                for attribute in element.attributes().flatten() {
+                    let name = String::from_utf8_lossy(attribute.key.as_ref());
+                    let prefix = if name == "xmlns" { Some("") } else { name.strip_prefix("xmlns:") };
+                    if let Some(prefix) = prefix {
+                        let value = attribute.unescape_value().map(|s| s.into_owned())
+                            .unwrap_or_else(|_| String::from_utf8_lossy(&attribute.value).into_owned());
+                        bindings.insert(prefix.to_string(), value);
+                    }
+                }
+                if position == at {
+                    let mut prefix = "oxiChartPatch".to_string();
+                    while bindings.contains_key(&prefix) { prefix.push('x'); }
+                    let mut open = format!("<{prefix}:chartSpace xmlns:{prefix}=\"{ns}\"");
+                    for (name, value) in bindings {
+                        if name.is_empty() { open.push_str(&format!(" xmlns=\"{}\"", escape(&value))); }
+                        else { open.push_str(&format!(" xmlns:{name}=\"{}\"", escape(&value))); }
+                    }
+                    open.push('>');
+                    return Ok((open, format!("</{prefix}:chartSpace>")));
+                }
+                if matches!(event, Event::Start(_)) { scopes.push(previous); } else { bindings = previous; }
             }
-            Event::Eof => return Err(XlsxError::InvalidData("chart root is missing".into())),
+            Event::End(_) => { bindings = scopes.pop().unwrap_or_default(); }
+            Event::Eof => return Err(XlsxError::InvalidData("series namespace context is missing".into())),
             _ => {}
         }
-    };
+    }
+}
+
+fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing_ns: &str) -> Result<String, XlsxError> {
+    // Keep the source namespace bindings while inspecting individual series.
     let (plots, _) = children_at(xml, &["chartSpace", "chart", "plotArea"])?;
     let plots: Vec<_> = plots.iter().filter(|(name, _, _)| name.ends_with("Chart")).collect();
     if plots.len() != 1 {
@@ -414,7 +442,7 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
     let (children, end) = children_at(xml, &path)?;
     let existing: Vec<_> = children.iter().filter(|(name, _, _)| name == "ser").collect();
     let scatter = plot == "scatterChart";
-    let replace = |fragment: &str, tag: &str, replacement: &str| -> Result<String, XlsxError> {
+    let replace = |fragment: &str, tag: &str, replacement: &str, open: &str, close: &str| -> Result<String, XlsxError> {
         let wrapped = format!("{open}{fragment}{close}");
         let (children, end) = children_at(&wrapped, &["chartSpace", "ser"])?;
         let (start, finish) = if let Some((_, start, finish)) = children.iter().find(|(name, _, _)| name == tag) {
@@ -433,6 +461,7 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
     };
     let mut edits = Vec::new();
     for (i, (_, start, finish)) in existing.iter().enumerate() {
+        let (open, close) = series_fragment_envelope(xml, *start, ns)?;
         let replacement = if let Some(series) = after.series.get(i) {
             let (name, cats, values) = series_data_parts(series, &after.categories, scatter, ns);
             let previous = before.series.get(i);
@@ -442,9 +471,9 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
                 || ((old.category_values.is_none() || series.category_values.is_none()) && before.categories != after.categories));
             let values_changed = previous.is_none_or(|old| old.values != series.values || old.values_reference != series.values_reference);
             let mut fragment = xml[*start..*finish].to_string();
-            if name_changed { fragment = replace(&fragment, "tx", &name)?; }
-            if cats_changed { fragment = replace(&fragment, if scatter { "xVal" } else { "cat" }, &cats)?; }
-            if values_changed { fragment = replace(&fragment, if scatter { "yVal" } else { "val" }, &values)?; }
+            if name_changed { fragment = replace(&fragment, "tx", &name, &open, &close)?; }
+            if cats_changed { fragment = replace(&fragment, if scatter { "xVal" } else { "cat" }, &cats, &open, &close)?; }
+            if values_changed { fragment = replace(&fragment, if scatter { "yVal" } else { "val" }, &values, &open, &close)?; }
             fragment
         } else { String::new() };
         edits.push((*start, *finish, replacement));
@@ -673,7 +702,7 @@ pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<St
             output = replace_child(&output, "legend", "")?;
         }
     }
-    if series_data_changed(before, after) {
+    if series_data_changed(before, after) && !plot_options_changed(before, after) {
         output = patch_series_data(&output, before, after, chart_ns, drawing_ns)?;
     }
     Ok(output)
@@ -824,6 +853,32 @@ mod plot_options_tests {
                 assert!(patched.contains("<x:keep xmlns:x=\"urn:retained\">retained</x:keep>"));
                 if kind == "bar" { assert!(patched.contains("<c:gapWidth val=\"83\"/>")); assert!(patched.contains("$0.00")); }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod scoped_namespace_tests {
+    use super::*;
+    #[test]
+    fn data_and_plot_edits_inherit_namespace_bindings_from_plot_ancestors() {
+        let chart = Chart { kind: "bar".into(), series: vec![crate::ir::ChartSeries {
+            name: "Revenue".into(), values: vec![Some(1.0)], ..Default::default()
+        }], ..Default::default() };
+        let mut xml = new_chart_xml(&chart).unwrap().replace("<c:", "<q:").replace("</c:", "</q:");
+        xml = xml.replacen(&format!("xmlns:c=\"{C}\""), &format!("xmlns:q=\"{C}\" xmlns:c=\"urn:root-prefix\""), 1)
+            .replacen("<q:plotArea>", &format!("<q:plotArea xmlns:c=\"{C}\">"), 1);
+        let a = xml.find("<q:ser>").unwrap();let b = xml.find("</q:ser>").unwrap() + "</q:ser>".len();
+        let series = xml[a..b].replace("<q:", "<c:").replace("</q:", "</c:");
+        xml.replace_range(a..b, &series);
+        let before = crate::chart::parse_chart_xml(&xml, &crate::parser::Theme::default()).unwrap();
+        for change_kind in [false, true] {
+            let mut after = before.clone();after.series[0].values = vec![Some(7.0)];
+            if change_kind { after.kind = "line".into();after.plot_options.markers=Some(false); }
+            let patched = patch_chart(&xml, &before, &after).unwrap();
+            let parsed = crate::chart::parse_chart_xml(&patched, &crate::parser::Theme::default()).unwrap();
+            assert_eq!(parsed.kind, after.kind);
+            assert!(series_data_equal(&parsed.series[0], &after.series[0]));
         }
     }
 }
