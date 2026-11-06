@@ -101,10 +101,11 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                 let value = get_attr(e, "val");
                 match name.as_str() {
                     "lineChart" | "barChart" | "pieChart" | "areaChart" | "scatterChart"
+                    | "line3DChart" | "bar3DChart" | "pie3DChart" | "area3DChart"
                     | "doughnutChart" | "radarChart" | "bubbleChart" | "ofPieChart"
                     | "surfaceChart" | "stockChart" => {
                         if chart.kind.is_empty() {
-                            chart.kind = name.trim_end_matches("Chart").to_string();
+                            chart.kind = name.trim_end_matches("Chart").trim_end_matches("3D").to_string();
                         }
                     }
                     "plotArea" => whose.push(Whose::Plot),
@@ -112,6 +113,9 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                         whose.push(Whose::Series);
                         current = ChartSeries::default();
                         values.clear();
+                    }
+                    "explosion" if whose.last() == Some(&Whose::Series) => {
+                        current.explosion = value.as_deref().and_then(|v| v.parse().ok());
                     }
                     "dPt" => {
                         whose.push(Whose::Point);
@@ -516,7 +520,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
 /// Plot-wide settings and the first series jointly determine the visible plot.
 /// A canonical scatter plot can say "lineMarker" while hiding its series line.
 fn plot_options(xml: &str, kind: &str) -> crate::ir::ChartPlotOptions {
-    use crate::ir::{ChartPlotOptions, ChartStacking};
+    use crate::ir::{ChartBarShape, ChartPlotOptions, ChartStacking};
     use quick_xml::{reader::NsReader, name::ResolveResult};
     let mut reader = NsReader::from_str(xml);
     let mut parents: Vec<(String, u8)> = Vec::new();
@@ -543,13 +547,23 @@ fn plot_options(xml: &str, kind: &str) -> crate::ir::ChartPlotOptions {
                     && parents.iter().map(|(n, _)| n.as_str()).eq(["chartSpace", "chart", "plotArea"])
                     && parents.iter().all(|(_, ns)| *ns == 1) {
                     selected = name.clone(); active = true;
+                    options.three_dimensional = name.ends_with("3DChart");
                 } else if domain == 1 && at_plot {
                     match name.as_str() {
                         "barDir" => options.horizontal = value.as_deref() == Some("bar"),
-                        "grouping" => options.stacking = match value.as_deref() {
-                            Some("stacked") => ChartStacking::Stacked,
-                            Some("percentStacked") => ChartStacking::Percent,
-                            _ => ChartStacking::None,
+                        "grouping" => {
+                            options.stacking = match value.as_deref() {
+                                Some("stacked") => ChartStacking::Stacked,
+                                Some("percentStacked") => ChartStacking::Percent,
+                                _ => ChartStacking::None,
+                            };
+                            options.depth_series = selected == "bar3DChart" && value.as_deref() == Some("standard");
+                        },
+                        "shape" => options.bar_shape = match value.as_deref() {
+                            Some("cylinder") => ChartBarShape::Cylinder,
+                            Some("cone") => ChartBarShape::Cone,
+                            Some("pyramid") => ChartBarShape::Pyramid,
+                            _ => ChartBarShape::Box,
                         },
                         "radarStyle" => {
                             options.filled = value.as_deref() == Some("filled");
@@ -566,6 +580,9 @@ fn plot_options(xml: &str, kind: &str) -> crate::ir::ChartPlotOptions {
                     }
                 }
                 if active && in_series {
+                    if domain == 1 && name == "explosion" && parents.len() == 5 {
+                        options.explosion = value.as_deref().and_then(|v| v.parse().ok());
+                    }
                     if domain == 1 && name == "symbol" && parents.len() == 6
                         && parents[4] == ("ser".into(), 1) && parents[5] == ("marker".into(), 1) {
                         series_markers = Some(value.as_deref() != Some("none"));
@@ -586,7 +603,7 @@ fn plot_options(xml: &str, kind: &str) -> crate::ir::ChartPlotOptions {
             _ => {}
         }
     }
-    if matches!(kind, "line" | "scatter" | "radar") {
+    if matches!(kind, "line" | "scatter" | "radar") && !(kind == "line" && options.three_dimensional) {
         options.markers = Some(series_markers.or(options.markers).unwrap_or(true));
     }
     if kind == "scatter" { options.connected = Some(!first_series || !no_line); }

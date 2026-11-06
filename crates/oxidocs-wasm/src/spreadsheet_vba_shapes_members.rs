@@ -1377,6 +1377,7 @@ impl<'a> WorkbookHost<'a> {
                     name_ref,
                     values_ref: Some(block_ref(self, first, column, last, column)),
                     x_ref: categories.then(|| block_ref(self, first, columns[0], last, columns[0])),
+                    implicit_categories: !categories,
                     typed_xs: None,
                     sparse_values: None,
                     values: data_rows.iter().map(|r| number_at(self, *r, column)).collect(),
@@ -1406,6 +1407,7 @@ impl<'a> WorkbookHost<'a> {
                     name_ref,
                     values_ref: Some(block_ref(self, row, first, row, last)),
                     x_ref: categories.then(|| block_ref(self, rows[0], first, rows[0], last)),
+                    implicit_categories: !categories,
                     typed_xs: None,
                     sparse_values: None,
                     values: data_columns.iter().map(|c| number_at(self, row, *c)).collect(),
@@ -1477,6 +1479,22 @@ impl<'a> WorkbookHost<'a> {
                     .unwrap_or_default()
             })
             .collect()
+    }
+
+    fn series_categories(&self, id: u64, number: usize) -> Result<Vec<Value>, String> {
+        let series = self.series(id, number)?;
+        if series.implicit_categories {
+            let kind = series.chart_type.unwrap_or(self.chart(id)?.chart_type);
+            return Ok((1..=series.values.len()).map(|i| {
+                if matches!(kind, 5 | 69 | 70 | -4102 | -4120 | 80) { Value::Empty }
+                else if chart_plot_options(kind).horizontal { Value::String(i.to_string()) }
+                else { Value::Double(i as f64) }
+            }).collect());
+        }
+        Ok(series.typed_xs.clone().unwrap_or_else(|| series.xs.iter().map(|x| match x.parse::<f64>() {
+            Ok(number) => Value::Double(number),
+            Err(_) => Value::String(x.clone()),
+        }).collect()))
     }
 
     fn variant_row(values: Vec<Value>) -> Value {
@@ -2029,12 +2047,7 @@ impl<'a> WorkbookHost<'a> {
                     "name" => Some(Value::String(series.name)),
                     "formula" => Some(Value::String(self.series_formula(id, number)?)),
                     "values" => Some(Self::variant_row(series.values.iter().map(|v| Value::Double(*v)).collect())),
-                    "xvalues" => Some(Self::variant_row(
-                        series.typed_xs.clone().unwrap_or_else(|| series.xs.iter().map(|x| match x.parse::<f64>() {
-                            Ok(number) => Value::Double(number),
-                            Err(_) => Value::String(x.clone()),
-                        }).collect()),
-                    )),
+                    "xvalues" => Some(Self::variant_row(self.series_categories(id, number)?)),
                     "points" => Some(self.part(DrawingPart::Points(id, number))),
                     "hasdatalabels" => Some(Value::Boolean(series.has_labels)),
                     "datalabels" => Some(self.part(DrawingPart::DataLabels(id, number))),
@@ -3319,10 +3332,12 @@ impl<'a> WorkbookHost<'a> {
                             let series = self.series_mut(id, number)?;
                             series.xs = texts;
                             series.typed_xs = None;
+                            series.implicit_categories = false;
                             series.x_ref = Some(reference);
                         } else if let Value::Array(listed) = &value {
                             let series = self.series_mut(id, number)?;
                             series.xs = listed.values.iter().map(text_of_value).collect();
+                            series.implicit_categories = false;
                             series.typed_xs = Some(listed.values.iter().map(|value| {
                                 if value.string_units().is_some() { value.clone() }
                                 else {
@@ -3936,6 +3951,7 @@ impl<'a> WorkbookHost<'a> {
                         name_ref: None,
                         values_ref: None,
                         x_ref: None,
+                        implicit_categories: true,
                         typed_xs: None,
                         sparse_values: None,
                         values: Vec::new(),
@@ -3958,6 +3974,7 @@ impl<'a> WorkbookHost<'a> {
                             name_ref: None,
                             values_ref: Some(reference),
                             x_ref: None,
+                            implicit_categories: true,
                             typed_xs: None,
                             sparse_values: None,
                             xs: (1..=numbers.len()).map(|n| n.to_string()).collect(),
@@ -4168,6 +4185,8 @@ impl<'a> WorkbookHost<'a> {
                 let texts = self.range_texts(range);
                 let series = self.series_mut(id, number)?;
                 series.xs = texts;
+                series.typed_xs = None;
+                series.implicit_categories = false;
                 series.x_ref = Some(reference);
             }
             "name" => {

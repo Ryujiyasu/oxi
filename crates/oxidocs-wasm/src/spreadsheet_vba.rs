@@ -58629,8 +58629,12 @@ End Function
             End If
         End Function"#).unwrap();
         let bytes = include_bytes!("../../../tests/fixtures/vba/uniform_chart_operations.xlsm");
-        let empty = [51, 52, 53, 57, 58, 59, 4, 63, 64, 5, -4120, 1, 76, -4169, 73, 74, 75, -4151, 81];
-        let populated = [51, 52, 53, 57, 58, 59, 4, 63, 64, 65, 66, 67, 5, -4120, 1, 76, 77, -4169, 72, 73, 74, 75, -4151, 81, 82];
+        let empty = [51, 52, 53, 57, 58, 59, 4, 63, 64, 5, -4120, 1, 76, -4169, 73, 74, 75, -4151, 81,
+            54, 55, 56, 60, 61, 62, -4100, -4101, -4102, -4098, 78, 79,
+            92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 69, 70, 80];
+        let populated = [51, 52, 53, 57, 58, 59, 4, 63, 64, 65, 66, 67, 5, -4120, 1, 76, 77, -4169, 72, 73, 74, 75, -4151, 81, 82,
+            54, 55, 56, 60, 61, 62, -4100, -4101, -4102, -4098, 78, 79,
+            92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 69, 70, 80];
         for existing in [false, true] {
             for (data, kinds) in [(false, empty.as_slice()), (true, populated.as_slice())] {
                 for &kind in kinds {
@@ -58647,10 +58651,72 @@ End Function
                     let mut host = WorkbookHost::new(&mut reopened, ledger).unwrap();
                     let actual = execute_with_host(&module, "ReadKind", vec![Value::Boolean(existing)], &mut host).unwrap();
                     let expected = if data { kind } else { match kind {
-                        4 => 65, 63 => 66, 64 => 67, 73 => 72, 75 | -4169 => 74, -4151 => 81, _ => kind,
+                        4 => 65, 63 => 66, 64 => 67, 73 => 72, 75 | -4169 => 74, -4151 => 81,
+                        69 => 5, 70 => -4102, 80 => -4120, _ => kind,
                     }};
                     assert_eq!(any_whole_number(&actual), Some(expected), "kind={kind}, data={data}, existing={existing}");
                 }
+            }
+        }
+    }
+
+
+    #[test]
+    fn implicit_chart_categories_keep_native_types_across_save() {
+        let module = parse_module(r#"Public Sub Configure(ByVal kind As Long, ByVal existing As Boolean)
+            Dim chart As Object
+            If existing Then
+                Set chart = ThisWorkbook.Charts(1)
+            Else
+                Set chart = ActiveSheet.ChartObjects.Add(20, 30, 240, 160).Chart
+            End If
+            chart.ChartType = kind
+            ActiveSheet.Range("A1").Value2 = "Category"
+            ActiveSheet.Range("B1").Value2 = "Revenue"
+            ActiveSheet.Range("A2").Value2 = 1
+            ActiveSheet.Range("A3").Value2 = 2
+            ActiveSheet.Range("A4").Value2 = 3
+            ActiveSheet.Range("B2").Value2 = 1.25
+            ActiveSheet.Range("B3").Value2 = 2.5
+            ActiveSheet.Range("B4").Value2 = 3.75
+            chart.SetSourceData ActiveSheet.Range("A1:B4")
+        End Sub
+        Public Function ReadCategories(ByVal existing As Boolean) As String
+            Dim chart As Object, categories As Variant, i As Long, result As String
+            If existing Then
+                Set chart = ThisWorkbook.Charts(1)
+            Else
+                Set chart = ActiveSheet.ChartObjects(1).Chart
+            End If
+            categories = chart.SeriesCollection(1).XValues
+            For i = LBound(categories) To UBound(categories)
+                result = result & CStr(VarType(categories(i))) & ":" & CStr(categories(i)) & ";"
+            Next
+            ReadCategories = result
+        End Function"#).unwrap();
+        let bytes = include_bytes!("../../../tests/fixtures/vba/uniform_chart_operations.xlsm");
+        for kind in [51, 57, 58, 59, 54, 55, 56, 60, 61, 62, -4100, -4101, -4102, -4098, 78, 79,
+            92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 5, 69, 70, -4120, 80] {
+            let expected = if matches!(kind, 57..=62 | 95..=97 | 102..=104 | 109..=111) {
+                "8:1;8:2;8:3;"
+            } else if matches!(kind, 5 | 69 | 70 | -4102 | -4120 | 80) {
+                "0:;0:;0:;"
+            } else { "5:1;5:2;5:3;" };
+            for existing in [false, true] {
+                let mut book = oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+                let ledger = book.sheets.iter().position(|sheet| sheet.kind == oxicells_core::ir::SheetKind::Worksheet).unwrap();
+                let mut host = WorkbookHost::new(&mut book, ledger).unwrap();
+                execute_with_host(&module, "Configure", vec![Value::Integer(kind), Value::Boolean(existing)], &mut host).unwrap();
+                let actual = execute_with_host(&module, "ReadCategories", vec![Value::Boolean(existing)], &mut host).unwrap();
+                assert_eq!(actual, Value::String(expected.into()), "kind={kind}, existing={existing}, runtime");
+                drop(host);
+                let mut editor = oxicells_core::editor::XlsxEditor::new(bytes).unwrap();
+                editor.apply_workbook(&book).unwrap();
+                let saved = editor.save().unwrap();
+                let mut reopened = oxicells_core::parse_xlsx_preserving_values(&saved).unwrap();
+                let mut host = WorkbookHost::new(&mut reopened, ledger).unwrap();
+                let actual = execute_with_host(&module, "ReadCategories", vec![Value::Boolean(existing)], &mut host).unwrap();
+                assert_eq!(actual, Value::String(expected.into()), "kind={kind}, existing={existing}, reloaded");
             }
         }
     }
