@@ -287,7 +287,12 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                         bubble_size_count = value.as_deref().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
                     }
                     "cat" | "xVal" => reading = Reading::Categories,
-                    "tx" => reading = Reading::SeriesName,
+                    "tx" => {
+                        reading = Reading::SeriesName;
+                        if whose.last() == Some(&Whose::Series) {
+                            current.explicit_empty_name = true;
+                        }
+                    },
                     "numCache" | "strCache" | "strLit" | "numLit" => {
                         in_cache = true;
                         if reading == Reading::Categories {
@@ -358,18 +363,24 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                                         typed_categories.push((index, value));
                                     }
                                 }
-                                Reading::SeriesName => current.name = text.trim().to_string(),
+                                Reading::SeriesName => current.name = text.clone(),
                                 Reading::Nothing => {}
                             }
                         } else if reading == Reading::SeriesName && current.name.is_empty() {
                             // `<c:tx><c:v>` names the series outright.
-                            current.name = text.trim().to_string();
+                            current.name = text.clone();
                         }
                         text.clear();
                     }
                     "r" => in_run = false,
                     "numCache" | "strCache" | "strLit" | "numLit" => in_cache = false,
-                    "val" | "yVal" | "bubbleSize" | "cat" | "xVal" | "tx" => reading = Reading::Nothing,
+                    "tx" => {
+                        if whose.last() == Some(&Whose::Series) {
+                            current.explicit_empty_name = current.name.is_empty() && current.name_reference.is_none();
+                        }
+                        reading = Reading::Nothing;
+                    },
+                    "val" | "yVal" | "bubbleSize" | "cat" | "xVal" => reading = Reading::Nothing,
                     "ln" => in_line = false,
                     "marker" => {
                         in_marker = false;

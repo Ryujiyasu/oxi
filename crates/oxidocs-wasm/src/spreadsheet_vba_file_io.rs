@@ -1833,7 +1833,7 @@ impl WorkbookHost<'_> {
         oxivba_core::host_error_from(1004, "Microsoft Excel", description)
     }
 
-    fn copy_access_failure(&self, path: &str) -> String {
+    pub(super) fn copy_access_failure(&self, path: &str) -> String {
         let description = match self.error_language {
             ErrorLanguage::Japanese => format!("ファイル '{path}' にアクセスできません。次のいずれかの理由が考えられます。\n\n• ファイル名またはパスが存在しません。\n• ファイルが他のプログラムによって使用されています。\n• 保存しようとしているブックと同じ名前のブックが現在開かれています。"),
             ErrorLanguage::English => format!("Cannot access '{path}'. Possible reasons include a missing file or path, a file in use by another program, or an open workbook with the same name."),

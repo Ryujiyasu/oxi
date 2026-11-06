@@ -185,6 +185,8 @@ pub(super) struct ChartRecord {
 pub(super) struct SeriesRecord {
     /// The name as shown, and the reference it came from when it did.
     pub name: String,
+    /// Automatic display labels are not literal name expressions.
+    pub name_auto: bool,
     pub name_ref: Option<String>,
     pub values_ref: Option<String>,
     pub bubble_sizes: Option<Vec<Option<f64>>>,
@@ -195,6 +197,8 @@ pub(super) struct SeriesRecord {
     pub typed_xs: Option<Vec<Value>>,
     /// An omitted category expression uses the chart family's default labels.
     pub implicit_categories: bool,
+    /// Imported categories have completed the file-open normalization step.
+    pub categories_imported: bool,
     pub values: Vec<f64>,
     /// Original sparse cache, retained until values are explicitly assigned.
     pub sparse_values: Option<Vec<Option<f64>>>,
@@ -654,8 +658,13 @@ impl<'a> WorkbookHost<'a> {
                             series: chart
                                 .series
                                 .iter()
-                                .map(|series| SeriesRecord {
-                                    name: series.name.clone(),
+                                .enumerate()
+                                .map(|(index, series)| SeriesRecord {
+                                    name: if series.name.is_empty() && !series.explicit_empty_name && series.name_reference.is_none() {
+                                        format!("系列{}", index + 1)
+                                    } else { series.name.clone() },
+                                    name_auto: series.name.is_empty() && !series.explicit_empty_name && series.name_reference.is_none(),
+                                    categories_imported: true,
                                     name_ref: series.name_reference.clone(),
                                     values_ref: series.values_reference.clone(),
                                     bubble_sizes: series.bubble_sizes.clone(),
@@ -1565,7 +1574,12 @@ impl<'a> WorkbookHost<'a> {
         let categories = chart.series.first().map(|series| series.xs.clone()).unwrap_or_default();
         Chart {
             origin_id: None,
-            title: chart.has_title.then(||chart.title.clone()),
+            // A single named series selected at chart creation acquires its title
+            // when Excel saves the chart, while the live HasTitle remains false.
+            title: if chart.has_title { Some(chart.title.clone()) }
+                else if chart.title_auto && chart.series.len() == 1 && chart.series[0].name_ref.is_some() {
+                    Some(chart.series[0].name.clone())
+                } else { None },
             kind: chart_kind(chart.chart_type).to_string(),
             plot_options: {
                 let mut options = chart_plot_options(chart.chart_type);
@@ -1577,7 +1591,8 @@ impl<'a> WorkbookHost<'a> {
                 .series
                 .iter()
                 .map(|series| ChartSeries {
-                    name: series.name.clone(),
+                    name: if series.name_auto { String::new() } else { series.name.clone() },
+                    explicit_empty_name: !series.name_auto && series.name.is_empty() && series.name_ref.is_none(),
                     explosion: chart_plot_options(chart.chart_type).explosion,
                     name_reference: series.name_ref.clone(),
                     values_reference: series.values_ref.clone(),
