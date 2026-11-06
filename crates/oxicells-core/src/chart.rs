@@ -60,7 +60,8 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     let mut buf = Vec::new();
 
     let mut chart = Chart::default();
-    chart.title=main_title(xml);
+    let (title, automatic_title) = title_state(xml).unwrap_or_default();
+    chart.title = title;
     let mut series: Vec<ChartSeries> = Vec::new();
     let mut current = ChartSeries::default();
     let mut point = ChartPoint::default();
@@ -84,6 +85,8 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     let mut categories: Vec<(usize, String)> = Vec::new();
     let mut typed_categories: Vec<(usize, ChartCategoryValue)> = Vec::new();
     let mut numeric_categories = false;
+    let mut category_count = 0;
+    let mut category_cache_seen = false;
     let mut in_formula = false;
     let mut text = String::new();
     let mut in_value = false;
@@ -118,6 +121,9 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                         values.clear();
                         bubble_sizes.clear();
                         bubble_size_count = 0;
+                        category_count = 0;
+                        category_cache_seen = false;
+                        numeric_categories = false;
                     }
                     "explosion" if whose.last() == Some(&Whose::Series) => {
                         current.explosion = value.as_deref().and_then(|v| v.parse().ok());
@@ -286,6 +292,9 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                     "ptCount" if reading == Reading::BubbleSizes => {
                         bubble_size_count = value.as_deref().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
                     }
+                    "ptCount" if reading == Reading::Categories => {
+                        category_count = value.as_deref().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+                    }
                     "cat" | "xVal" => reading = Reading::Categories,
                     "tx" => {
                         reading = Reading::SeriesName;
@@ -297,6 +306,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                         in_cache = true;
                         if reading == Reading::Categories {
                             numeric_categories = matches!(name.as_str(), "numCache" | "numLit");
+                            category_cache_seen = true;
                         }
                     }
                     "f" if whose.contains(&Whose::Series) => {
@@ -511,8 +521,10 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                             chart.categories = held;
                         }
                         let mut typed = vec![ChartCategoryValue::Blank;
-                            typed_categories.iter().map(|(i, _)| i + 1).max().unwrap_or(0)];
+                            category_count.max(typed_categories.iter().map(|(i, _)| i + 1).max().unwrap_or(0))];
                         for (i, value) in typed_categories.drain(..) { typed[i] = value; }
+                        current.text_category_gaps = category_cache_seen && !numeric_categories
+                            && typed.iter().all(|value| matches!(value, ChartCategoryValue::Blank));
                         current.category_values = Some(typed);
                         categories.clear();
                         series.push(current.clone());
@@ -545,6 +557,15 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     }
 
     chart.series = series;
+    // An explicitly enabled automatic title is materialized on file open.
+    // Pie and of-pie plots use the first series even when more are stored.
+    if chart.title.is_none() && automatic_title
+        && (chart.series.len() == 1 || matches!(chart.kind.as_str(), "pie" | "ofPie"))
+    {
+        chart.title = chart.series.first()
+            .filter(|series| !series.name.is_empty() || series.explicit_empty_name || series.name_reference.is_some())
+            .map(|series| series.name.clone());
+    }
     // An empty chart is still an object: VBA can name it, set its properties
     // and add series later. Keep it even when there is nothing to plot yet.
     if chart.kind.is_empty() {
@@ -679,12 +700,13 @@ fn number(value: &Option<String>) -> Option<f64> {
 }
 
 /// Only the chart's own title, not a series, axis or extension's text.
-fn main_title(xml:&str)->Option<String> {
+fn title_state(xml:&str)->Option<(Option<String>,bool)> {
     use quick_xml::{reader::NsReader,name::ResolveResult};
     let mut reader=NsReader::from_str(xml);
     let mut parents:Vec<(String,bool,bool)>=Vec::new();
     let mut title=None;
     let mut depth=None;
+    let mut automatic=false;
     loop {
         let (namespace,event)=reader.read_resolved_event().ok()?;
         let chart=matches!(&namespace,ResolveResult::Bound(ns) if matches!(ns.as_ref(),b"http://schemas.openxmlformats.org/drawingml/2006/chart"|b"http://purl.oclc.org/ooxml/drawingml/chart"));
@@ -692,6 +714,9 @@ fn main_title(xml:&str)->Option<String> {
         match event {
             Event::Start(ref element)|Event::Empty(ref element)=> {
                 let name=local_name(element.name().as_ref());
+                if chart && name=="autoTitleDeleted" && parents.len()==2 && parents[0].0=="chartSpace" && parents[0].1 && parents[1].0=="chart" && parents[1].1 {
+                    automatic=matches!(get_attr(element,"val").as_deref(),Some("0"|"false"));
+                }
                 if chart && name=="title" && parents.len()==2 && parents[0].0=="chartSpace" && parents[0].1 && parents[1].0=="chart" && parents[1].1 {
                     title=Some(String::new());
                     if matches!(event,Event::Start(_)) {depth=Some(parents.len()+1);}
@@ -710,12 +735,29 @@ fn main_title(xml:&str)->Option<String> {
             _=>{}
         }
     }
-    title
+    Some((title,automatic))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cold_file_titles_match_actual_excel_across_chart_families() {
+        let controls: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/vba/chart_import_contracts.json")).unwrap();
+        let mut differences = Vec::new();
+        for case in controls["title_cases"].as_array().unwrap() {
+            let chart = parse_chart_xml(case["xml"].as_str().unwrap(), &Theme::default()).unwrap();
+            let expected = case["native_title"].as_str().unwrap().strip_prefix("True:").map(str::to_string);
+            if chart.title != expected {
+                differences.push(format!("{}: {:?} != {:?}", case["id"], chart.title, expected));
+            }
+        }
+        assert!(differences.is_empty(), "{} differences: {:?}", differences.len(), differences);
+    }
+
+
 
     const LINE: &str = r##"<?xml version="1.0"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"

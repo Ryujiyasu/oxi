@@ -1689,6 +1689,9 @@ pub struct ChartSeries {
     /// vector means categories were omitted; None supports older IR producers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category_values: Option<Vec<ChartCategoryValue>>,
+    /// An all-missing text cache cannot reveal its domain from its values.
+    #[serde(default)]
+    pub text_category_gaps: bool,
     /// One per category. A gap in the data is a `None`, and the line either
     /// breaks across it or steps over it, as the chart says.
     pub values: Vec<Option<f64>>,

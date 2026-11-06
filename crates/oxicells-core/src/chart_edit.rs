@@ -49,6 +49,7 @@ fn series_data_equal(a: &crate::ir::ChartSeries, b: &crate::ir::ChartSeries) -> 
     a.name == b.name && a.explicit_empty_name == b.explicit_empty_name && a.values == b.values
         && a.name_reference == b.name_reference && a.values_reference == b.values_reference
         && a.category_reference == b.category_reference && a.category_values == b.category_values
+        && a.text_category_gaps == b.text_category_gaps
         && a.bubble_sizes == b.bubble_sizes && a.bubble_sizes_reference == b.bubble_sizes_reference
         && a.shaded_bubbles == b.shaded_bubbles
 }
@@ -99,7 +100,7 @@ fn series_data_parts(series: &crate::ir::ChartSeries, shared: &[String], scatter
     } else { shared.iter().map(|v| ChartCategoryValue::Text(v.clone())).collect() };
     let categories = series.category_values.as_deref().unwrap_or(&legacy);
     let cats = if categories.is_empty() && series.category_reference.is_none() { String::new() } else {
-        let is_numeric = categories.iter().all(|v| matches!(v, ChartCategoryValue::Number(_) | ChartCategoryValue::Blank));
+        let is_numeric = !series.text_category_gaps && categories.iter().all(|v| matches!(v, ChartCategoryValue::Number(_) | ChartCategoryValue::Blank));
         let body = if is_numeric {
             let values: Vec<_> = categories.iter().map(|v| match v {
                 ChartCategoryValue::Number(n) => Some(*n), _ => None,
@@ -531,6 +532,7 @@ fn patch_series_data(xml: &str, before: &Chart, after: &Chart, ns: &str, drawing
             let name_changed = previous.is_none_or(|old| old.name != series.name || old.explicit_empty_name != series.explicit_empty_name || old.name_reference != series.name_reference);
             let cats_changed = previous.is_none_or(|old|
                 old.category_reference != series.category_reference || old.category_values != series.category_values
+                || old.text_category_gaps != series.text_category_gaps
                 || ((old.category_values.is_none() || series.category_values.is_none()) && before.categories != after.categories));
             let values_changed = previous.is_none_or(|old| old.values != series.values || old.values_reference != series.values_reference);
             let mut fragment = xml[*start..*finish].to_string();

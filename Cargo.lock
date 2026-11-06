@@ -479,6 +479,7 @@ dependencies = [
  "oxidocs-common",
  "quick-xml",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "zip",
 ]

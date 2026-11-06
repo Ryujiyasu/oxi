@@ -1384,6 +1384,7 @@ impl<'a> WorkbookHost<'a> {
                     x_ref: categories.then(|| block_ref(self, first, columns[0], last, columns[0])),
                     implicit_categories: !categories,
                     categories_imported: false,
+                    text_category_gaps: false,
                     typed_xs: None,
                     sparse_values: None,
                     values: data_rows.iter().map(|r| number_at(self, *r, column)).collect(),
@@ -1419,6 +1420,7 @@ impl<'a> WorkbookHost<'a> {
                     x_ref: categories.then(|| block_ref(self, rows[0], first, rows[0], last)),
                     implicit_categories: !categories,
                     categories_imported: false,
+                    text_category_gaps: false,
                     typed_xs: None,
                     sparse_values: None,
                     values: data_columns.iter().map(|c| number_at(self, row, *c)).collect(),
@@ -1454,7 +1456,9 @@ impl<'a> WorkbookHost<'a> {
         let categories = series.x_ref.clone().unwrap_or_else(|| {
             series.typed_xs.as_ref().map(|items| array(items.iter().map(|value| {
                 let text = text_of_value(value);
-                if value.string_units().is_some() { quote(&text) } else { text }
+                if value.string_units().is_some() { quote(&text) }
+                else if matches!(value, Value::Empty) { "#N/A".into() }
+                else { text }
             }).collect())).unwrap_or_default()
         });
         let values = series.values_ref.clone().unwrap_or_else(||
@@ -3694,12 +3698,14 @@ impl<'a> WorkbookHost<'a> {
                             series.typed_xs = None;
                             series.implicit_categories = false;
                             series.categories_imported = false;
+                            series.text_category_gaps = false;
                             series.x_ref = Some(reference);
                         } else if let Value::Array(listed) = &value {
                             let series = self.series_mut(id, number)?;
                             series.xs = listed.values.iter().map(text_of_value).collect();
                             series.implicit_categories = false;
                             series.categories_imported = false;
+                            series.text_category_gaps = false;
                             series.typed_xs = Some(listed.values.iter().map(|value| {
                                 if value.string_units().is_some() { value.clone() }
                                 else {
@@ -4344,6 +4350,7 @@ impl<'a> WorkbookHost<'a> {
                         x_ref: None,
                         implicit_categories: true,
                         categories_imported: false,
+                        text_category_gaps: false,
                         typed_xs: None,
                         sparse_values: None,
                         values: Vec::new(),
@@ -4372,6 +4379,7 @@ impl<'a> WorkbookHost<'a> {
                             x_ref: None,
                             implicit_categories: true,
                             categories_imported: false,
+                            text_category_gaps: false,
                             typed_xs: None,
                             sparse_values: None,
                             xs: (1..=numbers.len()).map(|n| n.to_string()).collect(),
@@ -4586,6 +4594,7 @@ impl<'a> WorkbookHost<'a> {
                 series.typed_xs = None;
                 series.implicit_categories = false;
                 series.categories_imported = false;
+                series.text_category_gaps = false;
                 series.x_ref = Some(reference);
             }
             "bubblesizes" => {
