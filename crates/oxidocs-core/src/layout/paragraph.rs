@@ -6898,6 +6898,19 @@ impl<'a> ParagraphLayouter<'a> {
                         && self.compress_punctuation && self.compat_mode >= 15
                         && (!page.doc_grid_lines_and_chars
                             || !crate::env_flag!("OXI_S476_DISABLE")));
+                // OXI_YAKU_LEGACY_EVEN (2026-11-06, default ON, opt-out _DISABLE): a
+                // compat<=14 compressPunctuation line shares its overflow EVENLY over
+                // every 約物 too, each down to half its cell (、 included; ・ split over
+                // its two blank sides), instead of Phase 1's flat half-em on everything
+                // but openers. Word PDF reference__704212ae (compat 14, 100+ lines):
+                // 「、2.87 、2.87 、2.87 ・1.42+1.43」, 「（3.94 、3.94 ・1.91」,
+                // 「、5.86 （5.86」 at the cap; reports__7a8268ce and
+                // educational__2a8abbb2 alike.
+                let legacy_even = !s472_render
+                    && self.compress_punctuation
+                    && self.compat_mode < 15
+                    && !crate::env_flag!("OXI_YAKU_LEGACY_EVEN_DISABLE");
+                let s472_render = s472_render || legacy_even;
                 // charGrid: subtract grid extra from slack. Grid extra widens chars
                 // for positioning but is NOT distributable justify space.
                 let grid_extra_on_line = if let Some(pitch) = effective_char_pitch {
@@ -6959,12 +6972,17 @@ impl<'a> ParagraphLayouter<'a> {
                 if s472_render {
                     let nfr = line.fragments.len();
                     let mut comps: Vec<(usize, f32, f32)> = Vec::new(); // (fi, fs, cap)
+                    let s_open_even = !crate::env_flag!("OXI_YAKU_OPEN_EVEN_DISABLE");
+                    let mut open_fi: Vec<usize> = Vec::new();
+                    let mut dot_fi: Vec<usize> = Vec::new();
                     let mut nat_total = 0.0f32;
                     for fi in 0..nfr {
                         let f = &line.fragments[fi];
                         let fs = f.style.font_size.unwrap_or(para_font_size);
                         let c0 = f.text.chars().next().unwrap_or(' ');
                         let single = f.text.chars().count() == 1;
+                        // legacy_even: every class down to half its (grid) cell.
+                        let half = (fs + effective_char_pitch.map(|p| (p - fs).max(0.0)).unwrap_or(0.0)) / 2.0;
                         // cap per char type: 、,，→fs/3 (8.0); 。．& closing brackets→fs/2
                         // (6.0). Opening brackets never compress. width>fs*0.6 excludes
                         // already-pair-compressed (6.0) fragments.
@@ -6979,10 +6997,25 @@ impl<'a> ParagraphLayouter<'a> {
                             0.0
                         } else {
                             match c0 {
+                                '、' | '，' if legacy_even => half,
                                 '、' | '，' => fs / 3.0,
+                                '。' | '．' | '」' | '』' | '】' | '〕' | '》' | '〉' | '｝' | '］' | '）'
+                                    if legacy_even => half,
                                 '。' | '．' => fs / 2.0,
                                 '」' | '』' | '】' | '〕' | '》' | '〉' | '｝' | '］' | '）' => {
                                     fs / 2.0
+                                }
+                                // ・ takes a full share, half from each blank side
+                                // (「パ10.80 ・10.79」: パ and ・ both 0.95 short).
+                                '・' if legacy_even => {
+                                    if fi > 0 && {
+                                        let p = line.fragments[fi - 1].text.chars().last().unwrap_or(' ');
+                                        !p.is_whitespace() && !kinsoku::is_cjk_compressible(p)
+                                            && !matches!(p, '・' | '、' | '。' | '，' | '．')
+                                    } {
+                                        dot_fi.push(fi);
+                                    }
+                                    half
                                 }
                                 // S578 (2026-06-15): ・ (nakaguro) compresses on demand at
                                 // RENDER too. The BREAK already budgets ・ (s475_max_compress
@@ -6995,17 +7028,42 @@ impl<'a> ParagraphLayouter<'a> {
                                 // = b837 +0.53, d77a +0.94, ikujikaigo +0.77 — uniformly
                                 // UNDER-compressed). Opt-out OXI_S578_DISABLE.
                                 '・' if !crate::env_flag!("OXI_S578_DISABLE") => fs / 2.0,
+                                // OXI_YAKU_OPEN_EVEN (2026-11-06, default ON, opt-out
+                                // _DISABLE): an opening bracket after a plain character
+                                // takes the same share of the line's overflow as the
+                                // other 約物, out of its blank LEFT half (Word PDF:
+                                // legal__10f9c779 p2 「、1.1 （1.1 ）1.1」, reference__704212ae
+                                // 「前（第１子、第２子）」 （3.9 、3.9, educational
+                                // lines alike). A line-start opener or one after another
+                                // 約物 (pair-compressed already) stays out.
+                                '（' | '「' | '『' | '【' | '〔' | '《' | '〈' | '｛' | '［'
+                                    if s_open_even && fi > 0 && {
+                                        let p = line.fragments[fi - 1].text.chars().last().unwrap_or(' ');
+                                        !p.is_whitespace() && !kinsoku::is_cjk_compressible(p)
+                                            && !matches!(p, '・' | '、' | '。' | '，' | '．')
+                                    } =>
+                                {
+                                    open_fi.push(fi);
+                                    if legacy_even { half } else { fs / 2.0 }
+                                }
                                 _ => 0.0,
                             }
                         };
+                        // legacy_even: the fragments already carry the grid cell
+                        // (a 10.5pt kanji on an 11.78 pitch is 11.78 wide), so a
+                        // 約物's natural width is its whole cell.
+                        let fs = if legacy_even { half * 2.0 } else { fs };
                         if cap > 0.0 && f.width > fs * 0.6 {
                             comps.push((fi, fs, cap));
                             nat_total += fs;
                         } else {
+                            open_fi.retain(|&o| o != fi);
+                            dot_fi.retain(|&o| o != fi);
                             nat_total += f.width;
                         }
                     }
-                    let nat_slack = render_width - extra_indent - nat_total - grid_extra_on_line;
+                    let nat_slack = render_width - extra_indent - nat_total
+                        - if legacy_even { 0.0 } else { grid_extra_on_line };
                     let mut comp_amt = vec![0.0f32; nfr];
                     if nat_slack < 0.0 && !comps.is_empty() {
                         let mut needed = -nat_slack;
@@ -7036,8 +7094,19 @@ impl<'a> ParagraphLayouter<'a> {
                     }
                     // Set adjustments so each standalone 、。 renders at (natural − comp).
                     for (fi, fs, _) in &comps {
-                        frag_width_adjustments[*fi] =
-                            (fs - comp_amt[*fi]) - line.fragments[*fi].width;
+                        if open_fi.contains(fi) {
+                            // The opener keeps its advance; its blank left half
+                            // comes out of the character before it.
+                            frag_width_adjustments[*fi] = fs - line.fragments[*fi].width;
+                            frag_width_adjustments[*fi - 1] -= comp_amt[*fi];
+                        } else if dot_fi.contains(fi) {
+                            frag_width_adjustments[*fi] =
+                                (fs - comp_amt[*fi] / 2.0) - line.fragments[*fi].width;
+                            frag_width_adjustments[*fi - 1] -= comp_amt[*fi] / 2.0;
+                        } else {
+                            frag_width_adjustments[*fi] =
+                                (fs - comp_amt[*fi]) - line.fragments[*fi].width;
+                        }
                     }
                 }
 
