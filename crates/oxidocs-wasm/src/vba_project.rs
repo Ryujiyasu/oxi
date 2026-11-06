@@ -9,8 +9,8 @@ use wasm_bindgen::prelude::*;
 
 const VBA_RELATIONSHIP: &str = "http://schemas.microsoft.com/office/2006/relationships/vbaProject";
 
-/// Document code names and native types come from workbook/worksheet properties,
-/// never from a sheet's display name or the exported class attributes.
+/// Read declared document classes and their attachment to workbook/sheet objects.
+/// Display names never identify VBA document components.
 #[wasm_bindgen]
 pub fn spreadsheet_vba_document_modules(package: &[u8]) -> Result<JsValue, JsError> {
     let documents = read_document_modules(package).map_err(|error| JsError::new(&error))?;
@@ -27,12 +27,12 @@ pub(crate) fn read_document_modules(
         .map_err(|error| error.to_string())?;
     let entries = document_properties(&workbook)?;
     let mut documents = Vec::new();
-    // The source stored in vbaProject.bin retains VB_Base even though VBE's
-    // exported .cls source omits it. WorkbookPr can retain the old code name
-    // after its document component is renamed; prefer the project identity.
+    // PROJECT identifies document classes and their stored VB_Base identifies
+    // their native type. Package code names independently identify the actual
+    // host objects: a class with a different name has no default instance.
+    // An attached object's package type overrides a stale stored VB_Base.
     // Only PROJECT's Document records qualify, never ordinary source classes.
     let mut project_documents = Vec::new();
-    let mut declared_names = None;
     if let Some(project) = open_workbook_project(package)? {
         let module_names = identities(&project, None)?;
         let bytes = project
@@ -69,32 +69,28 @@ pub(crate) fn read_document_modules(
                 project_documents.push(VbaDocumentModule {
                     name: identity.name.clone(),
                     base_type: base.into(),
+                    unbound: true,
                     ..VbaDocumentModule::default()
                 });
             }
         }
-        declared_names = Some(names);
     }
     for (element, name) in &entries {
         if element == "workbookPr" && !name.is_empty() {
-            for document in project_documents
-                .iter_mut()
-                .filter(|document| document.base_type == "Excel.Workbook")
+            if let Some(document) = project_documents.iter_mut().find(|document|
+                document.name.eq_ignore_ascii_case(name))
             {
+                document.base_type = "Excel.Workbook".into();
                 document.code_name = Some(name.clone());
-            }
-            if !project_documents
-                .iter()
-                .any(|document| document.base_type == "Excel.Workbook")
-                && declared_names
-                    .as_ref()
-                    .is_none_or(|names| names.contains(&name.to_ascii_lowercase()))
-            {
+                document.unbound = false;
+            } else {
                 documents.push(VbaDocumentModule {
                     name: name.clone(),
                     base_type: "Excel.Workbook".into(),
                     code_name: Some(name.clone()),
                     sheet_index: None,
+                    host_only: true,
+                    ..VbaDocumentModule::default()
                 });
             }
         }
@@ -135,17 +131,18 @@ pub(crate) fn read_document_modules(
                     .iter_mut()
                     .find(|document| document.name.eq_ignore_ascii_case(&name))
                 {
+                    document.base_type = base.into();
                     document.sheet_index = Some(sheet_index);
                     document.code_name = Some(name);
-                } else if declared_names
-                    .as_ref()
-                    .is_none_or(|names| names.contains(&name.to_ascii_lowercase()))
-                {
+                    document.unbound = false;
+                } else {
                     documents.push(VbaDocumentModule {
                         code_name: Some(name.clone()),
                         name,
                         base_type: base.into(),
                         sheet_index: Some(sheet_index),
+                        host_only: true,
+                        ..VbaDocumentModule::default()
                     });
                 }
             }

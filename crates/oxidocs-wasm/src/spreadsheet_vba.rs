@@ -4042,6 +4042,13 @@ impl<'a> WorkbookHost<'a> {
         self.document_code_names.clear();
         self.workbook_code_name = None;
         for document in documents {
+            if document.unbound { continue; }
+            if let Some(code_name) = document.code_name.as_ref() {
+                if let Some(sheet) = document.sheet_index { self.document_code_names.insert(sheet, code_name.clone()); }
+                else { self.workbook_code_name = Some(code_name.clone()); }
+            }
+            // XML code names describe objects; they do not declare VBA globals.
+            if document.host_only { continue; }
             let key = document.name.to_ascii_lowercase();
             let value = if let Some(sheet) = document.sheet_index {
                 self.object(HostObject::Worksheet(sheet))
@@ -4050,10 +4057,6 @@ impl<'a> WorkbookHost<'a> {
             };
             let Value::Object(object) = value else { return Err("invalid VBA document object".into()); };
             self.document_objects.insert(key.clone(), object);
-            if let Some(code_name) = document.code_name.as_ref() {
-                if document.sheet_index.is_none() { self.workbook_code_name = Some(code_name.clone()); }
-                if let Some(sheet) = document.sheet_index { self.document_code_names.insert(sheet, code_name.clone()); }
-            }
         }
         Ok(())
     }
@@ -43126,7 +43129,7 @@ fn loaded_application_runtime<'code>(
             .map_err(|error| application_runtime_error(error.to_string()))?;
         let project_name = definition.project_name.clone();
         let mut references = builtin_compilation_references().clone();
-        references.document_modules = definition.documents.iter()
+        references.document_modules = definition.documents.iter().filter(|document| !document.host_only)
             .map(|document| (document.name.clone(), document.base_type.clone())).collect();
         let host = books.hosts.get_mut(&owner)
             .ok_or_else(|| application_runtime_error("The opened workbook is no longer registered"))?;
@@ -43364,7 +43367,16 @@ pub(crate) struct VbaDocumentModule {
     pub sheet_index:Option<usize>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     pub code_name:Option<String>,
+    // Imported document classes can exist without an attached native object.
+    // Explicit host bindings retain their historical default of being attached.
+    #[serde(default,skip_serializing_if="document_flag_is_false")]
+    pub unbound:bool,
+    // Native object metadata without a PROJECT document declaration.
+    #[serde(default,skip_serializing_if="document_flag_is_false")]
+    pub host_only:bool,
 }
+
+fn document_flag_is_false(flag:&bool)->bool { !*flag }
 
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -43439,7 +43451,7 @@ pub fn compile_spreadsheet_vba(source:&str,options:JsValue) -> Result<JsValue,Js
     references.types.extend(options.reference_types.into_iter().map(|kind|(kind.name,kind.numeric)));
     references.symbols.extend(options.reference_symbols.into_iter().map(|symbol|(symbol.name,symbol.value)));
     references.namespaces.extend(options.reference_namespaces);
-    references.document_modules.extend(options.document_modules.into_iter().map(|document|(document.name,document.base_type)));
+    references.document_modules.extend(options.document_modules.into_iter().filter(|document| !document.host_only).map(|document|(document.name,document.base_type)));
     serde_wasm_bindgen::to_value(&compilation_outcome(source,environment.language,&references)).map_err(|error|JsError::new(&error.to_string()))
 }
 
@@ -43675,7 +43687,7 @@ fn spreadsheet_vba_procedures(source: &str) -> Result<Vec<ProcedureSummary>, Str
 fn spreadsheet_vba_project_procedures(source: &str, documents: &[VbaDocumentModule]) -> Result<Vec<ProcedureSummary>, String> {
     let mut summaries = Vec::new();
     for source_module in oxivba_core::source_modules(source) {
-        let document = source_module.class && source_module.named.as_ref().is_some_and(|name| documents.iter().any(|document| document.name.eq_ignore_ascii_case(name)));
+        let document = source_module.class && source_module.named.as_ref().is_some_and(|name| documents.iter().any(|document| !document.host_only && document.name.eq_ignore_ascii_case(name)));
         // A predeclared or exposed user class still needs an instance; it is
         // not an Application.Run module. Only host-bound documents qualify.
         if source_module.class && !document { continue; }
@@ -44057,6 +44069,14 @@ fn execute_workbook_invocation(
         if document.name.is_empty() || !document_names.insert(document.name.to_ascii_lowercase()) {
             return Err("invalid VBA document module name".into());
         }
+        if document.unbound {
+            if !matches!(document.base_type.to_ascii_lowercase().as_str(),
+                "excel.workbook"|"workbook"|"excel.worksheet"|"worksheet"|"excel.chart"|"chart")
+                || document.sheet_index.is_some() || document.code_name.is_some() || document.host_only {
+                return Err("invalid unbound VBA document metadata".into());
+            }
+            continue;
+        }
         let target=match document.base_type.to_ascii_lowercase().as_str() {
             "excel.workbook"|"workbook" if document.sheet_index.is_none()=>None,
             "excel.worksheet"|"worksheet"|"excel.chart"|"chart"=> {
@@ -44092,7 +44112,7 @@ fn execute_workbook_invocation(
     let document_identity=|documents:&[VbaDocumentModule]| {
         documents.iter().map(|document|(
             document.name.to_ascii_lowercase(),
-            (document.base_type.rsplit('.').next().unwrap_or_default().to_ascii_lowercase(),document.code_name.clone())
+            (document.base_type.rsplit('.').next().unwrap_or_default().to_ascii_lowercase(),document.code_name.clone(),document.unbound,document.host_only)
         )).collect::<std::collections::BTreeMap<_,_>>()
     };
     let documents_changed=session.as_ref().is_none_or(|previous|document_identity(&previous.documents)!=document_identity(&documents));
@@ -44203,7 +44223,7 @@ fn execute_workbook_invocation(
             REFERENCES.get_or_init(|| std::sync::Arc::new(builtin_compilation_references().clone())).clone()
         } else {
             let mut references=builtin_compilation_references().clone();
-            references.document_modules=documents.iter().map(|document|(document.name.clone(),document.base_type.clone())).collect();
+            references.document_modules=documents.iter().filter(|document| !document.host_only).map(|document|(document.name.clone(),document.base_type.clone())).collect();
             std::sync::Arc::new(references)
         };
         static CONSTANTS: std::sync::OnceLock<std::sync::Arc<BTreeMap<String, i64>>> = std::sync::OnceLock::new();
@@ -49386,6 +49406,227 @@ End Sub
         assert!(released.reference_state.tokens.is_empty());
     }
 
+
+    #[test]
+    fn variant_is_operands_match_native_validation_and_evaluation_order() {
+        let source = r##"
+Attribute VB_Name = "DocumentIdentityProbe"
+Private hits As Long
+Public Function Probe(ByVal route As Long) As String
+On Error GoTo failed
+hits = 0
+Dim bad As Variant, left As Variant, right As Variant
+Select Case route Mod 10
+Case 0: bad = Empty
+Case 1: bad = Null
+Case 2: bad = 7
+Case 3: bad = "s"
+Case 4: bad = CVErr(2042)
+Case 5: bad = Array(1)
+Case 6: bad = CDec(1)
+Case 7: bad = CDate(1)
+Case 8: bad = True
+Case 9: Set bad = Nothing
+End Select
+If route < 10 Then
+If IsObject(bad) Then
+Set left = bad
+Else
+left = bad
+End If
+Set right = ThisWorkbook
+Else
+Set left = ThisWorkbook
+If IsObject(bad) Then
+Set right = bad
+Else
+right = bad
+End If
+End If
+Select Case route
+Case 20: Probe = CStr(EmptyValue() Is RightObject())
+Case 21: Probe = CStr(EmptyValue() Is FailedObject())
+Case 22: Set left = Nothing
+Set right = Nothing
+Probe = CStr(left Is right)
+Case 23: Set left = ThisWorkbook
+Set right = ThisWorkbook
+Probe = CStr(left Is right)
+Case Else: Probe = CStr(left Is right)
+End Select
+Probe = Probe & "|" & CStr(hits)
+Exit Function
+failed:
+Probe = "error|" & CStr(Err.Number) & "|" & CStr(hits)
+End Function
+Private Function EmptyValue() As Variant
+hits = hits + 1
+EmptyValue = Empty
+End Function
+Private Function RightObject() As Object
+hits = hits + 1
+Set RightObject = ThisWorkbook
+End Function
+Private Function FailedObject() As Object
+hits = hits + 1
+Err.Raise 5
+End Function
+"##;
+        let expected = ["error|424|0", "error|424|0", "error|424|0", "error|424|0", "error|424|0", "error|424|0", "error|424|0", "error|424|0", "error|424|0", "False|0", "error|424|0", "error|424|0", "error|424|0", "error|424|0", "error|424|0", "error|424|0", "error|424|0", "error|424|0", "error|424|0", "False|0", "error|424|1", "error|424|1", "True|0", "True|0"];
+        let mut session = None;
+        let mut book = workbook();
+        for (route, expected) in expected.iter().enumerate() {
+            let outcome = execute_workbook_action_in_session(book, source,
+                Some("DocumentIdentityProbe.Probe"), vec![Value::Integer(route as i64)], 0,
+                failure_context(), &mut session).unwrap();
+            assert!(outcome.error.is_none(), "route={route}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap(),
+                serde_json::json!({"type":"string","value":expected}), "route={route}");
+            book = outcome.workbook;
+        }
+    }
+
+    #[test]
+    fn file_document_attachment_defaults_match_native_excel() {
+        let fixture = include_bytes!("../../../tests/fixtures/vba/chart_boundary_operations.xlsm");
+        let original_source = crate::vba_project::read_project_source_with_code_page(fixture, Some(932)).unwrap().unwrap();
+        let cannot_create = concat!("error(429:VBAProject:ActiveX ",
+            "\u{30b3}\u{30f3}\u{30dd}\u{30fc}\u{30cd}\u{30f3}\u{30c8}\u{306f}",
+            "\u{30aa}\u{30d6}\u{30b8}\u{30a7}\u{30af}\u{30c8}\u{3092}",
+            "\u{4f5c}\u{6210}\u{3067}\u{304d}\u{307e}\u{305b}\u{3093}\u{3002})");
+        let object_required = concat!("error(424:VBAProject:",
+            "\u{30aa}\u{30d6}\u{30b8}\u{30a7}\u{30af}\u{30c8}\u{304c}",
+            "\u{5fc5}\u{8981}\u{3067}\u{3059}\u{3002})");
+        let mut differences = Vec::new();
+        // Native Excel: three document bases, matched and unmatched package
+        // code names, fifteen calls per input across three measured probe sets.
+        // Active objects remain usable while an unmatched default instance
+        // reports 429, including after SaveCopyAs and a cold reopen.
+        for (base, class, part, old_code_name, detached_code_name, active) in [
+            ("Workbook", "ArchiveHost", "xl/workbook.xml", "ThisWorkbook", "ThisWorkbook", "ThisWorkbook"),
+            ("Worksheet", "Ledger", "xl/worksheets/sheet1.xml", "Ledger", "DetachedLedger", "ThisWorkbook.Worksheets(1)"),
+            ("Chart", "PlotHost", "xl/chartsheets/sheet1.xml", "PlotHost", "DetachedPlot", "ThisWorkbook.Charts(1)"),
+        ] {
+            for attached in [false, true] {
+              for stored_base in ["Workbook", "Worksheet", "Chart"] {
+                if !attached && stored_base != base { continue; }
+                let code_name = if attached { class } else { detached_code_name };
+                let mut input = zip::ZipArchive::new(std::io::Cursor::new(fixture)).unwrap();
+                let mut output = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+                for index in 0..input.len() {
+                    let mut entry = input.by_index(index).unwrap();
+                    if entry.name() == part {
+                        let mut xml = String::new();
+                        std::io::Read::read_to_string(&mut entry, &mut xml).unwrap();
+                        let before = format!("codeName=\"{old_code_name}\"");
+                        assert_eq!(xml.matches(&before).count(), 1);
+                        let changed = xml.replace(&before, &format!("codeName=\"{code_name}\""));
+                        output.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+                        std::io::Write::write_all(&mut output, changed.as_bytes()).unwrap();
+                    } else { output.raw_copy_file(entry).unwrap(); }
+                }
+                let bytes = output.finish().unwrap().into_inner();
+                let lower_class = class.to_ascii_lowercase();
+                let package_global = if attached { class } else { detached_code_name };
+                let shadow_result = format!("{base}:True");
+                let driver = format!(r#"Attribute VB_Name = "DocumentIdentityProbe"
+Public Function Probe(ByVal route As Long) As String
+On Error GoTo failed
+Select Case route
+Case 0: Probe = TypeName({class})
+Case 1: Probe = CStr({class} Is {active})
+Case 2: Probe = {class}.CodeName
+Case 3: Probe = CStr({class} Is Nothing)
+Case 4: Probe = {active}.CodeName
+Case 5: Probe = TypeName({active})
+Case 6: Probe = TypeName(VBAProject.{class})
+Case 7: Probe = TypeName({lower_class})
+Case 8: Dim obj As Object
+Set obj = {class}
+Probe = TypeName(obj)
+Case 9: Probe = AttachmentShadow()
+Case 10: Probe = AttachmentRetryDefault()
+Case 11: Probe = AttachmentObjectType({class})
+Case 12: With {class}
+Probe = .CodeName
+End With
+Case 13: Probe = TypeName({package_global})
+Case 14: Probe = CStr({package_global} Is {active})
+End Select
+Exit Function
+failed:
+Probe = "error(" & CStr(Err.Number) & ":" & Err.Source & ":" & Err.Description & ")"
+End Function
+Private Function AttachmentShadow() As String
+Dim {class} As Object
+Set {class} = {active}
+AttachmentShadow = TypeName({class}) & ":" & CStr({class} Is {active})
+End Function
+Private Function AttachmentRetryDefault() As String
+On Error Resume Next
+Dim obj As Object
+Set obj = {class}
+Dim first As Long
+first = Err.Number
+Err.Clear
+Set obj = {class}
+AttachmentRetryDefault = CStr(first) & ":" & CStr(Err.Number)
+End Function
+Private Function AttachmentObjectType(ByVal obj As Object) As String
+AttachmentObjectType = TypeName(obj)
+End Function
+"#);
+                let guid = |kind| match kind { "Workbook" => "00020819", "Worksheet" => "00020820", "Chart" => "00020821", _ => unreachable!() };
+                let header = |kind| format!("Attribute VB_Name = \"{class}\"\nAttribute VB_Base = \"0{{{}-0000-0000-C000-000000000046}}\"", guid(kind));
+                let original_source = original_source.replace("\r\n", "\n");
+                assert_eq!(original_source.matches(&header(base)).count(), 1);
+                let typed_source = original_source.replace(&header(base), &header(stored_base));
+                let source = format!("{typed_source}\n{driver}");
+                let mut bytes = crate::vba_project::write_project_source(&bytes, &source, Some(932)).unwrap();
+                let mut source = crate::vba_project::read_project_source_with_code_page(&bytes, Some(932)).unwrap().unwrap();
+                let mut book = Some(oxicells_core::parse_xlsx_preserving_values(&bytes).unwrap());
+                let mut session = None;
+                for phase in ["live", "saved-retained", "saved-cold"] {
+                  if phase != "live" {
+                    let mut editor = oxicells_core::XlsxEditor::new(&bytes).unwrap();
+                    editor.apply_workbook(book.as_ref().unwrap()).unwrap();
+                    bytes = editor.save().unwrap();
+                    source = crate::vba_project::read_project_source_with_code_page(&bytes, Some(932)).unwrap().unwrap();
+                    book = Some(oxicells_core::parse_xlsx_preserving_values(&bytes).unwrap());
+                    if phase == "saved-cold" { session = None; }
+                  }
+                  let documents = crate::vba_project::read_document_modules(&bytes).unwrap();
+                  for route in 0..if stored_base == base { 15 } else { 6 } {
+                    let expected = if route == 13 { if !attached && base != "Workbook" { "Empty" } else { base } }
+                        else if route == 14 { if !attached && base != "Workbook" { object_required } else { "True" } }
+                        else if route == 9 { shadow_result.as_str() }
+                        else if route == 10 { if attached { "0:0" } else { "429:429" } }
+                        else if !attached && matches!(route, 0..=3 | 6..=8 | 11..=12) { cannot_create }
+                        else { match route { 0 | 5..=8 | 11 => base, 1 => "True", 2 | 4 | 12 => code_name, 3 => "False", _ => unreachable!() } };
+                    let mut context = failure_context();
+                    context.document_modules = Some(documents.clone());
+                    context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+                    let outcome = execute_workbook_action_in_session(book.take().unwrap(), &source,
+                        Some("DocumentIdentityProbe.Probe"), vec![Value::Integer(route)], 0, context, &mut session);
+                    let outcome = match outcome {
+                        Ok(outcome) => outcome,
+                        Err(error) => { differences.push(format!("{base} attached={attached} stored_base={stored_base} phase={phase} route={route}: startup {error}")); break; }
+                    };
+                    let actual = serde_json::to_value(&outcome.result).unwrap();
+                    if outcome.error.is_some() || actual != serde_json::json!({"type":"string","value":expected}) {
+                        differences.push(format!("{base} attached={attached} stored_base={stored_base} phase={phase} route={route}: {actual}; expected={expected}; error={:?}",
+                            outcome.error.as_ref().map(|e| &e.message)));
+                    }
+                    book = Some(outcome.workbook);
+                  }
+                  if book.is_none() { break; }
+                }
+              }
+            }
+        }
+        assert!(differences.is_empty(), "{} differences: {:?}", differences.len(), differences);
+    }
+
     #[test]
     fn document_runtime_matches_excel_with_host_objects() {
         let fixtures=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/vba");
@@ -49642,19 +49883,34 @@ End Sub
             let source = crate::vba_project::read_project_source_with_code_page(&bytes, Some(case["source_code_page"].as_u64().unwrap() as u16)).unwrap().unwrap();
             let documents = crate::vba_project::read_document_modules(&bytes).unwrap();
             let mut actual: Vec<serde_json::Value> = documents.iter().map(|doc| serde_json::to_value(doc).unwrap()).collect();
-            let mut expected = case["document_modules"].as_array().unwrap().clone();
+            // The fixture records live VBE renaming. A fresh Native Excel open
+            // of unicode_workbook.xlsm instead raises 429: its XML code name
+            // remains ThisWorkbook and its Japanese document class is detached.
+            // Keep that original live measurement intact and assert the separately
+            // remeasured file-import result here.
+            let detached_workbook = case["name"] == "unicode_workbook";
+            let mut expected = if detached_workbook {
+                serde_json::json!([
+                    {"name":"ThisWorkbook","baseType":"Excel.Workbook","codeName":"ThisWorkbook","hostOnly":true},
+                    {"name":"Sheet1","baseType":"Excel.Worksheet","sheetIndex":0,"codeName":"Sheet1"},
+                    {"name":"\u{65e5}\u{672c}\u{8a9e}\u{53f0}\u{5e33}","baseType":"Excel.Workbook","unbound":true}
+                ]).as_array().unwrap().clone()
+            } else { case["document_modules"].as_array().unwrap().clone() };
             actual.sort_by_key(|doc| doc["name"].as_str().unwrap().to_string());
             expected.sort_by_key(|doc| doc["name"].as_str().unwrap().to_string());
             assert_eq!(actual, expected, "{}", case["name"]);
+            let procedure = case["procedure"].as_str().unwrap();
+            let source = format!("{source}\nAttribute VB_Name = \"NativeColdImportProbe\"\nPublic Function Probe() As String\nOn Error GoTo failed\nProbe = {procedure}()\nExit Function\nfailed:\nProbe = \"error|\" & CStr(Err.Number)\nEnd Function\n");
+            let expected_result = if detached_workbook { "error|429" } else { case["expected"].as_str().unwrap() };
             let mut session = None;
             let mut book = oxicells_core::parse_xlsx(&bytes).unwrap();
             for _ in 0..3 {
                 let mut context = failure_context();
                 context.file_name = Some(case["host_context"]["book_name"].as_str().unwrap().to_string());
                 context.document_modules = Some(documents.clone());
-                let outcome = execute_workbook_action_in_session(book, &source, Some(case["procedure"].as_str().unwrap()), vec![], case["host_context"]["active_sheet"].as_u64().unwrap() as usize, context, &mut session).unwrap();
+                let outcome = execute_workbook_action_in_session(book, &source, Some("NativeColdImportProbe.Probe"), vec![], case["host_context"]["active_sheet"].as_u64().unwrap() as usize, context, &mut session).unwrap();
                 assert!(outcome.error.is_none(), "{}: {:?}", case["name"], outcome.error.as_ref().map(|e| &e.message));
-                assert_eq!(serde_json::to_value(&outcome.result).unwrap(), serde_json::json!({"type":"string","value":case["expected"]}), "{}", case["name"]);
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap(), serde_json::json!({"type":"string","value":expected_result}), "{}", case["name"]);
                 book = outcome.workbook;
             }
         }
