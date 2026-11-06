@@ -66,7 +66,7 @@ fn sample() -> DocxModel {
             Block::Table(Table {
                 props: tbl,
                 grid: Some(Element::new("w:tblGrid").with_child(Element::new("w:gridCol").with_attr("w:w", "4000"))),
-                rows: vec![RowItem::Row(Row { props_ex: None, props: Some(trpr), cells: vec![cell("A")], attrs: vec![] })],
+                rows: vec![RowItem::Row(Row { props_ex: None, props: Some(trpr), cells: vec![cell("A")], attrs: vec![], props_after_cells: false })],
             }),
             Block::Paragraph(Paragraph {
                 props: None,
