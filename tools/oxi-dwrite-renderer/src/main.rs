@@ -790,8 +790,30 @@ unsafe fn render_image(
             let y0 = (ph as f32 * t / 100.0).round().max(0.0) as u32;
             let cw = (pw as f32 * (100.0 - l - r) / 100.0).round().max(1.0) as u32;
             let ch = (ph as f32 * (100.0 - t - b) / 100.0).round().max(1.0) as u32;
-            if x0.saturating_add(cw) <= pw && y0.saturating_add(ch) <= ph {
+            if x0.saturating_add(cw) <= pw && y0.saturating_add(ch) <= ph
+                && t >= 0.0 && r >= 0.0 && b >= 0.0 && l >= 0.0
+            {
                 img.crop_imm(x0, y0, cw, ch)
+            } else if std::env::var_os("OXI_CROP_NEGATIVE_DISABLE").is_none() {
+                // OXI_CROP_NEGATIVE (2026-11-06, default ON, opt-out _DISABLE): a
+                // negative srcRect inset reaches past that edge -- the extra is empty
+                // (transparent) and the rest still crops. blind-J en/policies__
+                // 00d4d26d's footer skyline (srcRect t 57.611 r -0.496): Word's PDF
+                // draws the lower 42% of the picture across the 520 x 57 box; the
+                // whole-image fallback squeezed the full picture into it on every page.
+                let (fw, fh) = (pw as f32, ph as f32);
+                let (sx, sy) = (fw * l / 100.0, fh * t / 100.0);
+                let (sw, sh) = (fw * (100.0 - l - r) / 100.0, fh * (100.0 - t - b) / 100.0);
+                let (ix0, iy0) = (sx.max(0.0), sy.max(0.0));
+                let (ix1, iy1) = ((sx + sw).min(fw), (sy + sh).min(fh));
+                if sw >= 1.0 && sh >= 1.0 && ix1 - ix0 >= 1.0 && iy1 - iy0 >= 1.0 {
+                    let mut canvas = image::RgbaImage::new(sw.round() as u32, sh.round() as u32);
+                    let part = img.crop_imm(ix0.round() as u32, iy0.round() as u32,
+                        (ix1 - ix0).round() as u32, (iy1 - iy0).round() as u32).to_rgba8();
+                    image::imageops::overlay(&mut canvas, &part,
+                        (ix0 - sx).round() as i64, (iy0 - sy).round() as i64);
+                    image::DynamicImage::ImageRgba8(canvas)
+                } else { img }
             } else { img }
         }
         _ => img,

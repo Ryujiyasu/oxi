@@ -8661,6 +8661,38 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                     .fold(0.0_f32, f32::max)
                             })
                         };
+                        // OXI_TBL_CELL_BOTTOM_RULE (2026-11-06, default ON, opt-out _DISABLE): a
+                        // tblBorders table whose last-row CELLS override the bottom with a
+                        // heavier rule leaves the difference below the table too.
+                        // `_pb_tbl_cellbottom_gen.py` (slice of blind-J ja/reports__7a8268ce,
+                        // tblBorders sz4, lines grid 360): last row -> «（注）» baseline 16.92
+                        // with the cell bottoms sz4 or removed, 18.00 at sz12, 19.44 at sz24
+                        // (= + width - 0.5); Oxi 16.97 in every arm, and page 5's three
+                        // questionnaire tables drifted 1pt each.
+                        // (typed grids only: off a typed grid the row already carries the
+                        // cell edge -- tests/fixtures/table_outer_edges, no-type grid 360,
+                        // edges_top0_bottom12 AFTER +1.08 over bottom4 in Word and in Oxi.)
+                        let bw = if table.style.border
+                            && page.grid_line_pitch.is_some()
+                            && !page.doc_grid_no_type
+                            && !crate::env_flag!("OXI_TBL_CELL_BOTTOM_RULE_DISABLE")
+                        {
+                            let width = |d: &crate::ir::BorderDef| {
+                                if d.style == "none" || d.style == "nil" { 0.0 }
+                                else if d.style == "double" { d.width * 3.0 } else { d.width }
+                            };
+                            let tbl_w = table.style.bottom_border.as_ref()
+                                .map_or(table.style.border_width.unwrap_or(0.5), |d| width(d));
+                            let cell_w = table.rows.last().map_or(0.0, |r| {
+                                r.cells.iter()
+                                    .filter_map(|c| c.borders.as_ref().and_then(|b| b.bottom.as_ref()))
+                                    .map(|d| width(d))
+                                    .fold(0.0_f32, f32::max)
+                            });
+                            bw + (cell_w - tbl_w).max(0.0)
+                        } else {
+                            bw
+                        };
                         if bw > 0.0 {
                             cursor.advance(bw);
                         }
@@ -9708,6 +9740,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         img_adv - (img_adv - img_line).max(0.0) * 0.5
                     } else {
                         img_adv
+                    };
+                    // OXI_IMAGE_LEAD_FIT (2026-11-06, default ON, opt-out _DISABLE): off a
+                    // grid, the auto multiple's leading S1179 lays under the picture does not
+                    // have to fit on the page -- the picture is drawn from the line top and
+                    // only its extent is judged. blind-J en/policies__00d4d26d p30: the
+                    // 585.35pt housing flowchart (line 259) at 127.15 ends 712.50, the footer
+                    // starts 713.4; with the 1.07 leading the line ended 713.57 and Oxi moved
+                    // the chart, then every pathway chart after it, one page (44 vs 43).
+                    let img_fit = if page.grid_line_pitch.is_none()
+                        && !crate::env_flag!("OXI_IMAGE_LEAD_FIT_DISABLE")
+                    {
+                        let ink = img.height + if !self.doc_body_has_real_cjk
+                            && !crate::env_flag!("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE") {
+                            img.effect_extent_b.max(0.0) + img.effect_extent_t.max(0.0)
+                        } else { 0.0 };
+                        img_fit.min(ink)
+                    } else {
+                        img_fit
                     };
                     // OXI_IMG_KEEPNEXT (2026-10-18, default ON, opt-out _DISABLE): an
                     // inline image whose host paragraph is keepNext shares its page with

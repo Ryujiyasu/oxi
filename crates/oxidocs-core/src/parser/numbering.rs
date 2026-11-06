@@ -306,6 +306,26 @@ impl NumberingDefinitions {
             }
         }
 
+        // OXI_NUM_SEED_PARENT (2026-11-06, default ON, opt-out _DISABLE): a parent
+        // level this marker prints before it was ever used shows its start AND
+        // counts as used, so the parent's own next item is start + 1. blind-J
+        // en/policies__00d4d26d: «1.1. Protocol on a Page» (numId 2 ilvl 1, the
+        // «1. Executive Summary» before it typed by hand) then «Modern Slavery
+        // Overview» (ilvl 0): Word prints 2. / 2.1. / 3. Strategy / 3.2. Pursue;
+        // Oxi started ilvl 0 at 1 and every heading after was one short.
+        if std::env::var_os("OXI_NUM_SEED_PARENT_DISABLE").is_none() {
+            for lvl_i in 0..ilvl {
+                let k = (ck.clone(), lvl_i);
+                if counters.contains_key(&k) || !level.lvl_text.contains(&format!("%{}", lvl_i + 1)) {
+                    continue;
+                }
+                if let Some(other_level) = self.effective_level(num_id, abstract_num, lvl_i) {
+                    let v = self.other_level_count(num_id, lvl_i, other_level, counters);
+                    counters.insert(k, v);
+                }
+            }
+        }
+
         let formatted_num = format_number(current, &level.num_fmt);
 
         let marker = if level.num_fmt == "none" {
