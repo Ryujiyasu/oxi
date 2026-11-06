@@ -6881,7 +6881,24 @@ impl<'a> ParagraphLayouter<'a> {
                 && !is_soft_break_line
                 && ((para.alignment == Alignment::Justify && !is_last_line)
                     || para.alignment == Alignment::Distribute);
-            if should_justify && line.fragments.len() > 1 {
+            // OXI_YAKU_LASTLINE_FIT (2026-11-06, default ON, opt-out _DISABLE): the
+            // last line of a justified compressPunctuation paragraph that the break
+            // filled by compressing 約物 is compressed at render too (no expansion:
+            // Phase 2 only spreads positive slack). Word PDF reference__704212ae p22
+            // 「③企業等の理解を求め、職場の開拓をすること。」 、7.68 ending in its
+            // cell, reports__7a8268ce p1 「…いたします。御多用の折、…致します。」
+            // ）8.52 。8.64 、8.64; Oxi left them natural and ran 2-4pt past the edge.
+            let last_fit = !should_justify
+                && !in_textbox
+                && !is_soft_break_line
+                && self.compress_punctuation
+                && para.alignment == Alignment::Justify
+                && render_width - extra_indent - line_text_width < -0.01
+                // A trailing blank hangs past the edge instead (creative__9175d552
+                // 「場所：…１－１７）　　　　」 stays natural in Word).
+                && line.fragments.last().and_then(|f| f.text.chars().last()).is_some_and(|c| !c.is_whitespace())
+                && !crate::env_flag!("OXI_YAKU_LASTLINE_FIT_DISABLE");
+            if (should_justify || last_fit) && line.fragments.len() > 1 {
                 // S472 (break-agnostic render): when on, the yakumono compression for
                 // RENDER is computed here purely from natural widths vs available
                 // (Word's demand model), independent of whatever the break decided —
@@ -7053,6 +7070,53 @@ impl<'a> ParagraphLayouter<'a> {
                         // (a 10.5pt kanji on an 11.78 pitch is 11.78 wide), so a
                         // 約物's natural width is its whole cell.
                         let fs = if legacy_even { half * 2.0 } else { fs };
+                        // OXI_YAKU_LEGACY_LEND (2026-11-06, default ON, opt-out
+                        // _DISABLE): the line's LAST 約物 takes no share. On a
+                        // character grid it keeps its whole cell — it starts on the
+                        // last cell (reference__704212ae 「…放置する、」 、 at 531.9
+                        // in the 531.9..543.7 end cell, inner 、 at 8.88;
+                        // educational__2a8abbb2 「投稿資格、」 alike). Without one its
+                        // blank half hangs past the margin (golden ohnoitaku_21
+                        // 「…場合には、」 、 at 504.96 = edge − 5.5, inner 、 at 6.36).
+                        if legacy_even
+                            && cap > 0.0
+                            && fi + 1 == nfr
+                            && !open_fi.contains(&fi)
+                            // A line-end ・ stays in the even share: Word sets it
+                            // right of both (golden ohnoharass_19 「妊娠・出産・」,
+                            // reports__7a8268ce 「…ミノーゲン・」).
+                            && c0 != '・'
+                            && !crate::env_flag!("OXI_YAKU_LEGACY_LEND_DISABLE")
+                        {
+                            frag_width_adjustments[fi] = fs - f.width;
+                            // On a paragraph's last line a closing 、。 hangs: only
+                            // the overflow up to where it STARTS is compressed
+                            // (704212ae p22 「…求め、…すること。」 、−4.1 puts 。 on
+                            // the 286.3 edge; correspondence__19cd9210 「…いたします。」
+                            // 。 at 536.25 inside its 541.4 edge stays natural).
+                            nat_total += if last_fit && matches!(c0, '、' | '。' | '，' | '．') {
+                                0.0
+                            } else if effective_char_pitch.is_none() {
+                                fs - cap
+                            } else {
+                                fs
+                            };
+                            continue;
+                        }
+                        // compat 15 without a character grid hangs the closing
+                        // 、。 of a last line the same way (golden tsuuchisho_002669443
+                        // p4 「…考えられること。」: 4.3pt over, 。 at 505.4 inside its
+                        // 510.1 edge, nothing compressed). On a grid it compresses
+                        // (administrative__1f33602b 「…特別賞に選出。」 、6.84 ・10.20).
+                        if last_fit
+                            && !legacy_even
+                            && fi + 1 == nfr
+                            && effective_char_pitch.is_none()
+                            && matches!(c0, '、' | '。' | '，' | '．')
+                        {
+                            frag_width_adjustments[fi] = fs - f.width;
+                            continue;
+                        }
                         if cap > 0.0 && f.width > fs * 0.6 {
                             comps.push((fi, fs, cap));
                             nat_total += fs;
