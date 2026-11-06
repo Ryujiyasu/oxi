@@ -1692,6 +1692,9 @@ pub struct ChartSeries {
     /// vector means categories were omitted; None supports older IR producers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category_values: Option<Vec<ChartCategoryValue>>,
+    /// Stored category expressions excluded from the plotted category axis.
+    #[serde(default)]
+    pub category_values_filtered: bool,
     /// Missing text categories and an explicitly empty category source cannot
     /// reveal their text semantics from their values alone.
     #[serde(default)]
