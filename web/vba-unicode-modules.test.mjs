@@ -12,7 +12,26 @@ const pkg = path.resolve(process.argv[2] || path.join(root, 'crates/oxidocs-wasm
 const bindingUrl = 'data:text/javascript;base64,' + Buffer.from(await readFile(path.join(pkg, 'oxidocs_wasm.js'))).toString('base64');
 const wasm = await import(bindingUrl);
 await wasm.default({ module_or_path: await readFile(path.join(pkg, 'oxidocs_wasm_bg.wasm')) });
-const cases = JSON.parse(await readFile(path.join(fixtures, 'unicode_modules.json'), 'utf8'));
+const liveCases = JSON.parse(await readFile(path.join(fixtures, 'unicode_modules.json'), 'utf8'));
+// These fixtures retain measurements made immediately after live VBE renaming.
+// A separate fresh Excel open of unicode_workbook raises 429 because its XML
+// code name remains ThisWorkbook. Preserve the live fixture and assert both
+// contexts. Only the cold failure uses a proxy to transport Err.Number.
+const cases = liveCases.map(item => item.name === 'unicode_workbook' ? {
+  ...item, expected: 'error|429', original_procedure: item.procedure,
+  procedure: 'NativeColdImportProbe.Probe',
+  document_modules: [
+    { name: 'ThisWorkbook', baseType: 'Excel.Workbook', codeName: 'ThisWorkbook', hostOnly: true },
+    { name: 'Sheet1', baseType: 'Excel.Worksheet', sheetIndex: 0, codeName: 'Sheet1' },
+    { name: '\u65e5\u672c\u8a9e\u53f0\u5e33', baseType: 'Excel.Workbook', unbound: true },
+  ],
+} : item);
+const importedSource = (bytes, item) => {
+  const source = wasm.spreadsheet_vba_source(bytes, item.source_code_page);
+  if (!item.original_procedure) return source;
+  return source + '\nAttribute VB_Name = "NativeColdImportProbe"\nPublic Function Probe() As String\nOn Error GoTo failed\nProbe = '
+    + item.original_procedure + '()\nExit Function\nfailed:\nProbe = "error|" & CStr(Err.Number)\nEnd Function\n';
+};
 const sorted = values => [...values].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 const check = (result, item) => {
   assert.equal(result.error, undefined, item.name);
@@ -20,7 +39,7 @@ const check = (result, item) => {
 };
 for (const item of cases) {
   const bytes = new Uint8Array(await readFile(path.join(fixtures, item.package_fixture)));
-  const source = wasm.spreadsheet_vba_source(bytes, item.source_code_page);
+  const source = importedSource(bytes, item);
   assert.ok(source, item.name);
   const session = new wasm.SpreadsheetVbaSession();
   try {
@@ -35,10 +54,17 @@ for (const item of cases) {
     check(wasm.run_spreadsheet_vba_with_outcome(book, source, item.procedure, [], item.host_context.active_sheet, item.host_context.book_name, options), item);
     const fresh = new wasm.SpreadsheetVbaSession();
     try {
-      check(fresh.run(wasm.parse_spreadsheet(bytes), wasm.spreadsheet_vba_source(bytes, item.source_code_page), item.procedure,
+      check(fresh.run(wasm.parse_spreadsheet(bytes), importedSource(bytes, item), item.procedure,
         [], item.host_context.active_sheet, item.host_context.book_name, { errorLanguage: 'ja-JP', documentModules: fresh.document_modules(bytes) }), item);
     } finally { fresh.free(); }
   } finally { session.free(); }
+}
+for (const item of liveCases.filter(item => item.name === 'unicode_workbook')) {
+  const bytes = new Uint8Array(await readFile(path.join(fixtures, item.package_fixture)));
+  check(wasm.run_spreadsheet_vba_with_outcome(wasm.parse_spreadsheet(bytes),
+    wasm.spreadsheet_vba_source(bytes, item.source_code_page), item.procedure, [],
+    item.host_context.active_sheet, item.host_context.book_name,
+    { errorLanguage: 'ja-JP', documentModules: item.document_modules }), item);
 }
 const shim = `import init, { SpreadsheetVbaSession, spreadsheet_vba_project_name, spreadsheet_vba_source } from ${JSON.stringify(bindingUrl)};
 import { readFile } from 'node:fs/promises';
@@ -65,7 +91,7 @@ try {
   for (const item of cases) {
     runner.closeVbaProject();
     const bytes = new Uint8Array(await readFile(path.join(fixtures, item.package_fixture)));
-    const source = wasm.spreadsheet_vba_source(bytes, item.source_code_page);
+    const source = importedSource(bytes, item);
     let book = wasm.parse_spreadsheet(bytes);
     for (let call = 0; call < 3; call++) {
       const result = await runner.runVbaInWorker(book, source, item.procedure, [], item.host_context.active_sheet,
@@ -76,7 +102,15 @@ try {
       { projectSourceCodePage: item.source_code_page }, bytes);
     assert.equal(saved.error, undefined, item.name);
   }
+  for (const item of liveCases.filter(item => item.name === 'unicode_workbook')) {
+    runner.closeVbaProject();
+    const bytes = new Uint8Array(await readFile(path.join(fixtures, item.package_fixture)));
+    check(await runner.runVbaInWorker(wasm.parse_spreadsheet(bytes),
+      wasm.spreadsheet_vba_source(bytes, item.source_code_page), item.procedure, [],
+      item.host_context.active_sheet, item.host_context.book_name,
+      { errorLanguage: 'ja-JP', documentModules: item.document_modules }, bytes), item);
+  }
 } finally { runner.closeVbaProject(); globalThis.Worker = previous; }
 console.log(JSON.stringify({ unicode_module_cases: cases.length, excel_observations: cases.length * 3,
   runtime_outputs: cases.length * 3, worker_outputs: cases.length * 3, free_outputs: cases.length,
-  fresh_outputs: cases.length, metadata_cases: cases.length, passed: true }));
+  fresh_outputs: cases.length, metadata_cases: cases.length, live_rename_controls: 2, passed: true }));

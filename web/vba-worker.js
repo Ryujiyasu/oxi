@@ -46,9 +46,8 @@ self.addEventListener('message', async event => {
             || !Number.isSafeInteger(callKind))) throw new Error('Invalid VBA member invocation.');
         if (action === 'release' && (!Array.isArray(references)
             || !references.every(reference => typeof reference === 'string'))) throw new Error('Invalid VBA object references.');
-        if (runtimeOptions.documentModules == null && inputPackage) {
-            runtimeOptions.documentModules = session.document_modules(inputPackage);
-        }
+        // The runtime imports package bindings for a new or persisted project.
+        // After macro-free SaveAs it retains the still-loaded project's bindings.
         const calculationSource = action === 'save' && !source.trim() && inputPackage
             ? spreadsheet_vba_source(inputPackage, projectSourceCodePage) || '' : source;
         if (inputPackage) {

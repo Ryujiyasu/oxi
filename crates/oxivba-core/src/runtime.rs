@@ -6928,7 +6928,26 @@ impl<'a> Runtime<'a> {
             }
         }
         let Some(slot) = self.lookup_slot(frame, name) else {
-            return Ok(self.document_globals.get(&name_key).cloned().map(Value::Object));
+            if let Some(object) = self.document_globals.get(&name_key) {
+                return Ok(Some(Value::Object(object.clone())));
+            }
+            if self.document_references.as_ref().is_some_and(|references|
+                references.document_modules.iter().any(|(document, _)| document.eq_ignore_ascii_case(name)))
+            {
+                // A declared document class is not itself a native object.
+                // Excel retries its unavailable default instance on every read.
+                return Err(RuntimeError {
+                    kind: RuntimeErrorKind::UserDefined,
+                    message: format!("ActiveX component cannot create object: {name}"),
+                    line: Some(line),
+                    vba_number: Some(429),
+                    vba_source: None,
+                    vba_help_file: None,
+                    vba_help_context: None,
+                    vba_default_description: true,
+                });
+            }
+            return Ok(None);
         };
         if matches!(&*slot.borrow(), Value::Nothing) {
             let type_name = if frame.values.contains_key(&name_key) {
@@ -8232,7 +8251,15 @@ impl<'a> Runtime<'a> {
             Expr::Binary { op, lhs, rhs, span } => {
                 let typed = (self.statically_typed(lhs, frame), self.statically_typed(rhs, frame));
                 let lhs = self.eval_expr(lhs, frame)?;
+                // Native VBA requires the left object before it evaluates the
+                // right expression. An invalid Variant raises 424 immediately.
+                if *op == BinaryOp::Is && !matches!(lhs, Value::Object(_) | Value::Nothing) {
+                    return Err(language_error(424, "Object required", span.line));
+                }
                 let rhs = self.eval_expr(rhs, frame)?;
+                if *op == BinaryOp::Is && !matches!(rhs, Value::Object(_) | Value::Nothing) {
+                    return Err(language_error(424, "Object required", span.line));
+                }
                 // `Is` asks about identity, so it keeps the objects themselves.
                 let (lhs, rhs) = if *op == BinaryOp::Is {
                     (lhs, rhs)

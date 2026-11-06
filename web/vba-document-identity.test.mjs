@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -20,6 +21,22 @@ const bookFor = item => ({ sheets: item.host_context.sheets.map((sheet, index) =
   default_col_width: 0, default_row_height: 15, merge_cells: [],
 })) });
 const failures = [];
+// Persisted-file measurements in Excel: ArchiveHost fails with 429 after
+// Ledger/Journal increment and Ledger moves. Read-only getters make those
+// partial effects observable without changing the original probe bodies.
+const coldSourceFor = source => {
+  source = source.replace(/\r\n/g, '\n');
+  for (const name of ['Ledger', 'Journal']) {
+    const pattern = new RegExp('(Attribute VB_Name = "' + name + '"[\\s\\S]*?)(?=\\nVERSION 1\\.0 CLASS|\\nAttribute VB_Name =|$)');
+    assert.ok(pattern.test(source), 'Missing document module: ' + name);
+    source = source.replace(pattern, (_, body) => body + '\nPublic Function ColdCount() As Long\nColdCount = count\nEnd Function\n');
+  }
+  return source + '\nAttribute VB_Name = "NativeColdIdentity"\nOption Explicit\nPublic Function Probe() As String\nOn Error Resume Next\nDim answer As String\nanswer = DriverModule.Probe()\nDim code As Long\ncode = Err.Number\nErr.Clear\nProbe = CStr(code) & "|" & CStr(Ledger.ColdCount()) & ":" & CStr(Journal.ColdCount()) & ":" & CStr(Ledger.Index) & ":" & CStr(Journal.Index) & ":" & CStr(Ledger Is Worksheets(Ledger.Index))\nEnd Function\n';
+};
+const nativeColdSourceHashes = {
+  move_save_refresh: 'd6d44163774ce3375d36fa7c51d05ad589b2cc5141ebd9b82a0d62a7c9e532c4',
+  cross_document_move_save_refresh: 'eec45e583e59ef8cc5671f36874268e8fe1bdf40d5a4661761f796cb943017b3',
+};
 const check = (result, step, name) => {
   if (result.error || result.result?.type !== 'string' || result.result.value !== step.value)
     failures.push({ name, expected: step.value, result: result.result, error: result.error });
@@ -102,15 +119,24 @@ try {
   }
   for (const item of positives.filter(item => item.package_fixture).flatMap(item => [item, { ...item, reparse: true }])) {
     runner.closeVbaProject();
-    const bytes = new Uint8Array(await readFile(path.join(fixtures, item.package_fixture)));
-    const source = wasm.spreadsheet_vba_source(bytes);
+    const original = new Uint8Array(await readFile(path.join(fixtures, item.package_fixture)));
+    const bytes = wasm.save_spreadsheet_vba_source(original,
+      coldSourceFor(wasm.spreadsheet_vba_source(original, 932)), 932);
+    const source = wasm.spreadsheet_vba_source(bytes, 932);
+    assert.equal(createHash('sha256').update(source).digest('hex'), nativeColdSourceHashes[item.name],
+      'Persist exactly the source measured in Excel: ' + item.name);
     const descriptors = wasm.spreadsheet_vba_document_modules(bytes);
     assert.ok(descriptors.some(document => document.name === item.documents[0].name));
     assert.equal(descriptors.find(document => document.name === item.documents[0].name).codeName,
       item.metadata_before.find(document => document.name === item.documents[0].name).codeName);
-    for (const descriptor of descriptors) {
-      assert.equal(descriptor.sheetIndex, item.metadata_before.find(document => document.name === descriptor.name).sheetIndex, item.name);
-    }
+    // The explicit contexts above model live VBE renaming. In the persisted
+    // fixtures ArchiveHost does not match workbookPr's ThisWorkbook code name:
+    // its default instance is unbound, while the native workbook still exists.
+    const fileDocuments = item.metadata_before.map(document => document.name === 'ArchiveHost'
+      ? { name: 'ArchiveHost', baseType: 'Excel.Workbook', unbound: true } : document);
+    fileDocuments.push({ name: 'ThisWorkbook', baseType: 'Excel.Workbook', codeName: 'ThisWorkbook', hostOnly: true });
+    const byName = documents => [...documents].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    assert.deepEqual(byName(descriptors), byName(fileDocuments), item.name);
     const session = new wasm.SpreadsheetVbaSession();
     try { assert.deepEqual(session.document_modules(bytes), descriptors); }
     finally { session.free(); }
@@ -124,13 +150,21 @@ try {
         const referenceBytes = new Uint8Array(await readFile(path.join(fixtures, item.package_refreshed)));
         assert.deepEqual(wasm.spreadsheet_vba_document_modules(currentBytes), wasm.spreadsheet_vba_document_modules(referenceBytes), item.name);
       }
-      const result = await runner.runVbaInWorker(book, source, item.procedure, [], active,
+      const result = await runner.runVbaInWorker(book, source, 'NativeColdIdentity.Probe', [], active,
         item.host_context.book_name, { errorLanguage: 'ja-JP' }, currentBytes);
-      check(result, step, 'package:' + item.name);
+      check(result, { value: `429|${index + 1}:${index + 1}:2:1:True`, sheet_names_after: step.sheet_names_after },
+        'package:' + item.name + ':' + index + ':reparse=' + !!item.reparse);
       book = result.workbook; active = result.active_sheet;
     }
+    runner.closeVbaProject();
+    const cold = await runner.runVbaInWorker(wasm.parse_spreadsheet(currentBytes),
+      wasm.spreadsheet_vba_source(currentBytes, 932), 'NativeColdIdentity.Probe', [], active,
+      item.host_context.book_name, { errorLanguage: 'ja-JP' }, currentBytes);
+    check(cold, { value: '429|1:1:2:1:True', sheet_names_after: ['Sheet2', 'Sheet1'] },
+      'cold-reopen:' + item.name + ':reparse=' + !!item.reparse);
   }
 } finally { runner.closeVbaProject(); globalThis.Worker = priorWorker; }
 console.log(JSON.stringify({ document_sequences: cases.length, runtime_outputs: positives.reduce((count, item) => count + item.steps.length, 0),
-  free_session_worker: true, representation_variants: 2, package_save_refresh_sequences: 4, mismatches: failures, passed: failures.length === 0 }));
+  free_session_worker: true, representation_variants: 2, package_save_refresh_sequences: 4,
+  cold_error_and_partial_effect_checks: 16, mismatches: failures, passed: failures.length === 0 }));
 assert.deepEqual(failures, []);
