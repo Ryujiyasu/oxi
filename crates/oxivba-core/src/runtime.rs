@@ -292,8 +292,10 @@ pub trait Host {
         None
     }
 
-    /// An indexed default member cannot supply a scalar without its indices.
-    /// Type queries may still inspect the object without reading that member.
+    /// An object whose default member cannot supply a scalar: an indexed
+    /// default member wants its indices (450), and an object with no default
+    /// member at all answers 438 even when it has a Value property. Asked
+    /// before Value is read. Type queries may still inspect the object.
     fn default_member_error(&self, _receiver: &ObjectRef) -> Option<i64> {
         None
     }
@@ -9938,6 +9940,11 @@ impl<'a> Runtime<'a> {
         if self.disconnected_source_object(object) {
             return Err(self.disconnected_source_error(line, false));
         }
+        // An object whose host says it has no scalar default member keeps
+        // its place here too, Value property or not.
+        if self.host.as_deref().and_then(|host| host.default_member_error(object)).is_some() {
+            return Ok(value.clone());
+        }
         Ok(self
             .host_get(object, "Value", line)?
             .unwrap_or_else(|| value.clone()))
@@ -9982,10 +9989,13 @@ impl<'a> Runtime<'a> {
                         }
                     }
                 }
-                self.host_get(&receiver, "Value", line)?.ok_or_else(|| {
+                // Asked before Value: measured, a Range's Borders and
+                // Validation have a Value property, yet `v = .Borders` is 450
+                // and `v = .Validation` 438.
                 if let Some(number) = self.host.as_deref().and_then(|host| host.default_member_error(&receiver)) {
-                    return language_error(number, "the default member requires arguments", line);
+                    return Err(language_error(number, "the object has no scalar default member", line));
                 }
+                self.host_get(&receiver, "Value", line)?.ok_or_else(|| {
                 no_such_member(
                     format!("{} has no default scalar Value property", receiver.kind),
                     Some(line),
