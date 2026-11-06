@@ -209,7 +209,7 @@ pub fn compile_project_with_references(
     for (name, scope) in &ordered {
         for item in &scope.items {
             if let ModuleItem::Procedure(procedure) = item {
-                check_with_environment(scope, &globals, &classes, procedure, Some(context), context.project_name)
+                check_with_environment(scope, &globals, &classes, procedure, Some(context), None, context.project_name)
                     .map_err(|error| ProjectCompileError {
                         module: name.clone(),
                         error,
@@ -380,7 +380,7 @@ pub(crate) fn check_with_globals(
     procedure: &Procedure,
     project_name: &str,
 ) -> Result<(), CompileError> {
-    check_with_environment(module, globals, classes, procedure, None, project_name)
+    check_with_environment(module, globals, classes, procedure, None, None, project_name)
 }
 
 /// Compile on demand with host document surfaces, retaining the ordinary Run
@@ -423,6 +423,7 @@ pub(crate) fn check_with_document_globals(
             current_year: references.current_year.unwrap_or(current_year),
             library: &references.library,
         }),
+        Some(references),
         project_name,
     )
 }
@@ -433,11 +434,13 @@ fn check_with_environment<'a>(
     classes: &'a BTreeMap<String, &'a Module>,
     procedure: &'a Procedure,
     references: Option<ReferenceContext<'a>>,
+    call_references: Option<&'a CompileReferences>,
     project_name: &'a str,
 ) -> Result<(), CompileError> {
     let mut checker =
         Checker::for_context_with_references(module, globals, classes, Some(procedure), references);
     checker.project_name = project_name;
+    checker.call_references = call_references;
     checker.module_storage_syntax()?;
     if checker.known_types.is_some() && intrinsic_operator(&key(&procedure.name)) {
         return Err(checker.failure(CompileErrorKind::SyntaxError, procedure.span));
@@ -593,6 +596,7 @@ struct Checker<'a> {
     known_types: Option<&'a BTreeMap<String, bool>>,
     known_symbols: Option<&'a BTreeMap<String, Option<i64>>>,
     known_namespaces: Option<&'a BTreeSet<String>>,
+    call_references: Option<&'a CompileReferences>,
     reference_library: Option<&'a CompileReferenceLibrary>,
     document_modules: Option<&'a BTreeMap<String, String>>,
     compilation_year: Option<i64>,
@@ -645,6 +649,7 @@ impl<'a> Checker<'a> {
             known_types: references.filter(|r| r.strict).map(|r| r.types),
             known_symbols: references.filter(|r| r.strict).map(|r| r.symbols),
             known_namespaces: references.filter(|r| r.strict).map(|r| r.namespaces),
+            call_references: None,
             reference_library: references.map(|r| r.library),
             document_modules: references.map(|r| r.documents),
             compilation_year: references.map(|r| r.current_year),
@@ -2835,7 +2840,8 @@ impl<'a> Checker<'a> {
                         Some(CompileErrorKind::ProcedureNotDefined)
                     } else if self.explicit && self.hidden_variables.contains(&symbol) {
                         Some(CompileErrorKind::VariableNotDefined)
-                    } else if self.known_types.is_some()
+                    } else if (self.known_types.is_some()
+                        || (is_call_target && self.call_references.is_some()))
                         && (self.explicit || is_call_target)
                         && crate::runtime::builtin_constant(name).is_none()
                         && !crate::runtime::is_builtin_function(name)
@@ -2866,6 +2872,16 @@ impl<'a> Checker<'a> {
                         && !self
                             .known_namespaces
                             .is_some_and(|names| names.contains(&symbol))
+                        && !self.call_references.is_some_and(|references| {
+                            references.symbols.iter()
+                                .any(|(name, _)| name.eq_ignore_ascii_case(&symbol))
+                                || references.types.iter()
+                                    .any(|(name, _)| name.eq_ignore_ascii_case(&symbol))
+                                || references.namespaces.iter()
+                                    .any(|name| name.eq_ignore_ascii_case(&symbol))
+                                || references.library.function(&symbol).is_some()
+                                || references.library.global(&symbol).is_some()
+                        })
                         && !self
                             .document_modules
                             .is_some_and(|documents| documents.contains_key(&symbol))
@@ -3012,6 +3028,19 @@ impl<'a> Checker<'a> {
                                 }
                             }
                             Ok(None) => {}
+                        }
+                    }
+                }
+            }
+            // Run compiles only the selected procedure. Resolve its call names
+            // against the host's complete globals without enabling the separate
+            // whole-project declaration and call-signature checks.
+            if self.known_types.is_none() && self.call_references.is_some() {
+                if let Expr::Index { target, .. } = part {
+                    if bare_name(target).is_some() {
+                        if let Err(error) = self.resolve_expression_name(target, true) {
+                            failure = Some(error);
+                            return;
                         }
                     }
                 }
@@ -3335,6 +3364,9 @@ impl<'a> Checker<'a> {
                 // valid standalone VBA call statement.
                 if matches!(receiver, Expr::New { .. }) {
                     return Err(self.failure(CompileErrorKind::SyntaxError, target.span()));
+                }
+                if bare_name(target).is_some() {
+                    self.resolve_expression_name(target, true)?;
                 }
                 self.check_expression(target, !explicit_call)?;
             }

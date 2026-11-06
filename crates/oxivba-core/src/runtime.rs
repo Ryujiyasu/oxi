@@ -19666,6 +19666,76 @@ mod tests {
 
 
     #[test]
+    fn host_references_reject_undefined_calls_before_error_handlers() {
+        let references = std::sync::Arc::new(crate::CompileReferences::default());
+        for body in [
+            "AbsentProcedure42",
+            "\u{ff07}comment",
+            "Probe = CStr(AbsentProcedure42())",
+            "Call AbsentProcedure42",
+            "Call AbsentProcedure42()",
+            "If False Then\nAbsentProcedure42\nEnd If",
+        ] {
+            let source = format!(
+                "Public Function Probe() As String\nOn Error GoTo failed\n\
+                 {body}\nProbe = \"unexpected\"\nExit Function\nfailed:\n\
+                 Probe = \"caught|\" & CStr(Err.Number)\nEnd Function\n"
+            );
+            let module = parse_module(&source).unwrap();
+            let error = Runtime::new(&module)
+                .with_document_objects(vec![], references.clone()).unwrap()
+                .call("Probe", vec![]).unwrap_err();
+            assert_eq!(error.kind, RuntimeErrorKind::Compile, "{body}: {error:?}");
+            assert!(error.message.contains("Sub or Function not defined"), "{body}: {error:?}");
+        }
+        for (prefix, body, expected) in [
+            ("", "Probe = CStr(VarType(AbsentVariable42))", "0"),
+            ("Private Sub Present42()\nEnd Sub\n", "Present42\nProbe = \"ok\"", "ok"),
+            ("Private Sub Uncalled()\nAbsentProcedure42\nEnd Sub\n", "Probe = \"ok\"", "ok"),
+        ] {
+            let source = format!(
+                "{prefix}Public Function Probe() As String\n{body}\nEnd Function\n"
+            );
+            let module = parse_module(&source).unwrap();
+            let value = Runtime::new(&module)
+                .with_document_objects(vec![], references.clone()).unwrap()
+                .call("Probe", vec![]).unwrap();
+            assert_eq!(value, Value::String(expected.into()), "{body}");
+        }
+    }
+
+    #[test]
+    fn host_call_names_use_references_without_restricting_custom_hosts() {
+        struct CustomHost;
+        impl Host for CustomHost {
+            fn call(&mut self, _: Option<&ObjectRef>, name: &str, _: &[Value])
+                -> Result<Option<Value>, String> {
+                Ok(name.eq_ignore_ascii_case("CustomVerb").then_some(Value::Integer(13)))
+            }
+            fn get(&mut self, _: &ObjectRef, _: &str) -> Result<Option<Value>, String> {
+                Ok(None)
+            }
+            fn set(&mut self, _: &ObjectRef, _: &str, _: Value) -> Result<bool, String> {
+                Ok(false)
+            }
+        }
+        let source = "Public Function Probe() As String\nProbe = CStr(CustomVerb())\nEnd Function\n";
+        let module = parse_module(source).unwrap();
+        let mut host = CustomHost;
+        let value = Runtime::new(&module).with_host(&mut host).call("Probe", vec![]).unwrap();
+        assert_eq!(value, Value::String("13".into()));
+        let references = std::sync::Arc::new(crate::CompileReferences {
+            symbols: vec![("CustomVerb".into(), None)],
+            ..Default::default()
+        });
+        let mut host = CustomHost;
+        let value = Runtime::new(&module).with_host(&mut host)
+            .with_document_objects(vec![], references).unwrap()
+            .call("Probe", vec![]).unwrap();
+        assert_eq!(value, Value::String("13".into()));
+    }
+
+    #[test]
     fn fullwidth_identifier_scopes_follow_ascii_aliases() {
         for index in 0..26 {
             let upper = char::from_u32(0xff21 + index).unwrap();
