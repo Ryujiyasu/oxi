@@ -6768,7 +6768,9 @@ fn patch_styles_xml(
                 None => {
                     number_formats.push_str(&format!(
                         "<numFmt numFmtId=\"{next_number_format}\" formatCode=\"{}\"/>",
-                        escape(format)
+                        escape(&oxicells_calc::numfmt::number_format_to_storage(format, false)
+                            .or_else(|| oxicells_calc::numfmt::number_format_to_storage(format, true))
+                            .unwrap_or_else(|| format.to_string()))
                     ));
                     let id = next_number_format;
                     next_number_format += 1;
@@ -9823,7 +9825,7 @@ fn builtin_number_format_id(format: &str) -> Option<u32> {
         "0.00" => Some(2),
         "#,##0" => Some(3),
         "#,##0.00" => Some(4),
-        "$#,##0.00_);($#,##0.00)" => Some(7),
+        "$#,##0.00_);($#,##0.00)" | "\"$\"#,##0.00_);(\"$\"#,##0.00)" => Some(7),
         "0%" => Some(9),
         "0.00%" => Some(10),
         "0.00E+00" => Some(11),

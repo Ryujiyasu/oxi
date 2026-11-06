@@ -9,6 +9,170 @@
 
 use crate::datetime::{date_from_serial, weekday_sunday_one};
 
+const FORMAT_COLORS: [(&str, &str); 8] = [
+    ("Black", "\u{9ed2}"), ("Blue", "\u{9752}"), ("Cyan", "\u{6c34}"),
+    ("Green", "\u{7dd1}"), ("Magenta", "\u{7d2b}"), ("Red", "\u{8d64}"),
+    ("White", "\u{767d}"), ("Yellow", "\u{9ec4}"),
+];
+
+/// Converts a localized VBA format to the portable format stored in OOXML.
+/// Quoted literals, escapes, fill characters and locale brackets retain their
+/// meaning; a localized color directive is not a literal string.
+pub fn number_format_to_storage(format: &str, japanese: bool) -> Option<String> {
+    translate_number_format(format, japanese, true)
+}
+
+/// Returns the format text exposed by the host's NumberFormat properties.
+pub fn number_format_from_storage(format: &str, japanese: bool) -> String {
+    translate_number_format(format, japanese, false).unwrap_or_else(|| format.to_string())
+}
+
+
+/// Converts portable IR format text to the host's localized property text.
+pub fn number_format_for_vba(format: &str, japanese: bool) -> String {
+    number_format_to_storage(format, false)
+        .or_else(|| number_format_to_storage(format, true))
+        .map(|stored| number_format_from_storage(&stored, japanese))
+        .unwrap_or_else(|| format.to_string())
+}
+
+/// Keeps localized property spelling out of the language-neutral IR.
+pub fn number_format_from_vba(format: &str, japanese: bool) -> Option<String> {
+    number_format_to_storage(format, japanese)
+        .map(|stored| number_format_from_storage(&stored, false))
+}
+
+fn translate_number_format(format: &str, japanese: bool, storing: bool) -> Option<String> {
+    let mut chars = format.chars();
+    let mut out = String::with_capacity(format.len());
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => {
+                let mut literal = String::new();
+                let mut closed = false;
+                for next in chars.by_ref() {
+                    if next == '"' { closed = true; break; }
+                    literal.push(next);
+                }
+                if !storing && closed && literal == "$" {
+                    out.push('$');
+                } else {
+                    out.push('"');
+                    out.push_str(&literal);
+                    if closed { out.push('"'); }
+                }
+            }
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    // These characters are escaped in Excel's stored code but
+                    // read without that escape. An explicit \$ stays explicit.
+                    if storing || !matches!(next, ' ' | '-' | '(' | ')' | '\u{a5}' | '\u{20ac}') {
+                        out.push('\\');
+                    }
+                    out.push(next);
+                } else {
+                    out.push('\\');
+                }
+            }
+            '_' | '*' => {
+                out.push(ch);
+                if let Some(next) = chars.next() { out.push(next); }
+            }
+            '[' => {
+                let mut token = String::new();
+                let mut closed = false;
+                for next in chars.by_ref() {
+                    if next == ']' { closed = true; break; }
+                    token.push(next);
+                }
+                if !closed {
+                    out.push('[');
+                    out.push_str(&token);
+                    continue;
+                }
+                let english = FORMAT_COLORS.iter().find(|(name, _)| name.eq_ignore_ascii_case(&token));
+                let local = FORMAT_COLORS.iter().find(|(_, name)| *name == token)
+                    .or_else(|| (token == "\u{6c34}\u{8272}").then_some(&FORMAT_COLORS[2]));
+                let english_index = token.get(..5).filter(|prefix| prefix.eq_ignore_ascii_case("Color"))
+                    .and_then(|_| token.get(5..))
+                    .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()));
+                let local_index = token.strip_prefix('\u{8272}')
+                    .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()));
+                let translated = if storing {
+                    if japanese {
+                        if english.is_some() || english_index.is_some() { return None; }
+                        if let Some((name, _)) = local { name.to_string() }
+                        else if let Some(index) = local_index { format!("Color{index}") }
+                        else { token }
+                    } else {
+                        if local.is_some() || local_index.is_some() { return None; }
+                        if let Some((name, _)) = english { name.to_string() }
+                        else if let Some(index) = english_index { format!("Color{index}") }
+                        else { token }
+                    }
+                } else if japanese {
+                    if let Some((_, name)) = english { name.to_string() }
+                    else if let Some(index) = english_index { format!("\u{8272}{index}") }
+                    else { token }
+                } else if let Some((name, _)) = english { name.to_string() }
+                else { token };
+                out.push('[');
+                out.push_str(&translated);
+                out.push(']');
+            }
+            '$' if storing => out.push_str("\"$\""),
+            '$' => out.push_str("\\$"),
+            '\u{a5}' | '\u{20ac}' if storing => { out.push('\\'); out.push(ch); }
+            _ => out.push(ch),
+        }
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod number_format_storage_tests {
+    use super::{number_format_from_storage as read, number_format_to_storage as write};
+
+    #[test]
+    fn dollar_formats_keep_native_property_text_after_save() {
+        assert_eq!(write("$0.0000", true).as_deref(), Some("\"$\"0.0000"));
+        assert_eq!(read("\"$\"0.0000", true), "$0.0000");
+        assert_eq!(read("$0.0000", true), "\\$0.0000");
+        assert_eq!(write("\\$0.0000", true).as_deref(), Some("\\$0.0000"));
+        assert_eq!(read("\\$0.0000", true), "\\$0.0000");
+        assert_eq!(super::number_format_for_vba("$0.0000", true), "$0.0000");
+        assert_eq!(super::number_format_from_vba("\"$\"0.0000", true).as_deref(), Some("$0.0000"));
+    }
+
+    #[test]
+    fn localized_color_names_use_portable_codes_and_canonical_host_names() {
+        for (english, local) in super::FORMAT_COLORS {
+            assert_eq!(write(&format!("[{local}]0.00"), true), Some(format!("[{english}]0.00")));
+            assert_eq!(read(&format!("[{english}]0.00"), true), format!("[{local}]0.00"));
+            assert_eq!(write(&format!("[{english}]0.00"), true), None);
+        }
+        assert_eq!(write("[\u{6c34}\u{8272}]0.00", true).as_deref(), Some("[Cyan]0.00"));
+        assert_eq!(read("[Cyan]0.00", true), "[\u{6c34}]0.00");
+        assert_eq!(write("[\u{8272}10]0.00", true).as_deref(), Some("[Color10]0.00"));
+        assert_eq!(read("[Color10]0.00", true), "[\u{8272}10]0.00");
+        assert_eq!(write("[Color10]0.00", true), None);
+        assert_eq!(write("[red]0.00", false).as_deref(), Some("[Red]0.00"));
+    }
+
+    #[test]
+    fn literals_fill_and_locale_brackets_are_not_rewritten_as_colors() {
+        for format in ["\"USD$\"0.00", "[$$-409]0.0000", "\"[Red]\"0", "0*$", "0_$"] {
+            assert_eq!(write(format, true).as_deref(), Some(format));
+            assert_eq!(read(format, true), format);
+        }
+        assert_eq!(write("\u{20ac}0.0000", true).as_deref(), Some("\\\u{20ac}0.0000"));
+        assert_eq!(read("\\\u{20ac}0.0000", true), "\u{20ac}0.0000");
+        assert_eq!(read("0.00\\ \"USD\"", true), "0.00 \"USD\"");
+        assert_eq!(read("\"$\"#,##0.00_);\\(\"$\"#,##0.00\\)", true), "$#,##0.00_);($#,##0.00)");
+    }
+}
+
+
 /// Renders `value` under `format`, the way a worksheet shows it.
 ///
 /// A format may hold up to four sections, separated by semicolons: what to show

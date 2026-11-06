@@ -28616,6 +28616,22 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn property_assignment_error(&self, receiver: Option<&ObjectRef>, name: &str, value: &Value) -> Option<i64> {
+        // Runtime uses this String-value path for CallByName assignments.
+        // Automation exposes the generic error metadata rather than the
+        // Range-specific Source and Description of ordinary dotted writes.
+        if (name.eq_ignore_ascii_case("numberformat") || name.eq_ignore_ascii_case("numberformatlocal"))
+            && receiver.is_some_and(|receiver| self.range(receiver).is_some())
+        {
+            if let Value::String(pattern) = value {
+                let japanese = name.eq_ignore_ascii_case("numberformatlocal")
+                    && self.error_language == ErrorLanguage::Japanese;
+                if !number_format_readable(pattern)
+                    || oxicells_calc::numfmt::number_format_from_vba(pattern, japanese).is_none()
+                {
+                    return Some(1004);
+                }
+            }
+        }
         if !matches!(value, Value::Nothing) { return None; }
         let range_error = if name.eq_ignore_ascii_case("value2") {
             Some(1004)
@@ -32946,15 +32962,13 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("numberformat") || name.eq_ignore_ascii_case("numberformatlocal")
         {
+            let japanese = name.eq_ignore_ascii_case("numberformatlocal")
+                && self.error_language == ErrorLanguage::Japanese;
             return self
-                .uniform_style(range, |style| style.number_format.clone())
-                .map(|value| {
-                    Some(match value {
-                        Some(Some(value)) => Value::String(value),
-                        Some(None) => Value::String("General".to_string()),
-                        None => Value::Null,
-                    })
-                });
+                .uniform_style(range, |style| oxicells_calc::numfmt::number_format_for_vba(
+                    style.number_format.as_deref().unwrap_or("General"), japanese,
+                ))
+                .map(|value| Some(value.map(Value::String).unwrap_or(Value::Null)));
         }
         if name.eq_ignore_ascii_case("horizontalalignment") {
             return self
@@ -35022,6 +35036,15 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("numberformat") || name.eq_ignore_ascii_case("numberformatlocal")
         {
+            let language = self.error_language;
+            let property = if name.eq_ignore_ascii_case("numberformatlocal") { "NumberFormatLocal" } else { "NumberFormat" };
+            let invalid = || {
+                let description = match language {
+                    ErrorLanguage::Japanese => format!("Range \u{30af}\u{30e9}\u{30b9}\u{306e} {property} \u{30d7}\u{30ed}\u{30d1}\u{30c6}\u{30a3}\u{3092}\u{8a2d}\u{5b9a}\u{3067}\u{304d}\u{307e}\u{305b}\u{3093}\u{3002}"),
+                    ErrorLanguage::English => format!("Unable to set the {property} property of the Range class"),
+                };
+                oxivba_core::host_error_from(1004, "Microsoft Excel", description)
+            };
             let value = match value {
                 Value::Empty => None,
                 Value::String(value) if value.eq_ignore_ascii_case("general") => None,
@@ -35030,9 +35053,12 @@ impl Host for WorkbookHost<'_> {
                     // sections ("0.0.0;;;;") and a bracket left open ("[Red")
                     // are both 1004.
                     if !number_format_readable(&value) {
-                        return Err(host_error(1004, "Unable to set the NumberFormat property of the Range class"));
+                        return Err(invalid());
                     }
-                    Some(value)
+                    Some(oxicells_calc::numfmt::number_format_from_vba(
+                        &value, name.eq_ignore_ascii_case("numberformatlocal")
+                            && self.error_language == ErrorLanguage::Japanese,
+                    ).ok_or_else(invalid)?)
                 }
                 _ => return Err("Range.NumberFormat must be a string".to_string()),
             };
@@ -58401,6 +58427,52 @@ End Function
     /// This is what makes `IsDate(Range("A1").Value)` answerable at all. The
     /// runtime cannot tell a date from the number 37684.5 -- only the cell can,
     /// and only through the format it shows it in.
+
+
+    #[test]
+    fn number_formats_separate_localized_vba_text_from_portable_storage() {
+        let module = parse_module(
+            "Public Function Ask(ByVal pattern As String, ByVal useLocal As Boolean) As String
+             On Error Resume Next
+             If useLocal Then
+               Range(\"A1\").NumberFormatLocal = pattern
+             Else
+               Range(\"A1\").NumberFormat = pattern
+             End If
+             If Err.Number <> 0 Then
+               Ask = \"error|\" & CStr(Err.Number)
+               Exit Function
+             End If
+             Ask = Range(\"A1\").NumberFormat & \"|\" & Range(\"A1\").NumberFormatLocal
+             End Function\n",
+        ).unwrap();
+        let cases = [
+            ("$0.0000", false, "$0.0000|$0.0000", Some("$0.0000")),
+            ("\"$\"0.0000", false, "$0.0000|$0.0000", Some("$0.0000")),
+            ("\\$0.0000", false, "\\$0.0000|\\$0.0000", Some("\\$0.0000")),
+            ("0.00;[Red]-0.00", false, "0.00;[Red]-0.00|0.00;[\u{8d64}]-0.00", Some("0.00;[Red]-0.00")),
+            ("0.00;[\u{8d64}]-0.00", false, "error|1004", None),
+            ("0.00;[\u{8d64}]-0.00", true, "0.00;[Red]-0.00|0.00;[\u{8d64}]-0.00", Some("0.00;[Red]-0.00")),
+            ("[\u{6c34}\u{8272}]0.00", true, "[Cyan]0.00|[\u{6c34}]0.00", Some("[Cyan]0.00")),
+            ("[\u{8272}10]0.00", true, "[Color10]0.00|[\u{8272}10]0.00", Some("[Color10]0.00")),
+            ("0.00;[Red]-0.00", true, "error|1004", None),
+        ];
+        for (pattern, use_local, expected, storage) in cases {
+            let mut book = workbook();
+            let answer = {
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                host.error_language = ErrorLanguage::Japanese;
+                execute_with_host(&module, "Ask",
+                    vec![Value::String(pattern.into()), Value::Boolean(use_local)], &mut host).unwrap()
+            };
+            assert_eq!(answer, Value::String(expected.into()), "{pattern}, local={use_local}");
+            if let Some(storage) = storage {
+                assert_eq!(book.sheets[0].rows[0].cells[0].style.number_format.as_deref(),
+                           Some(storage), "{pattern}");
+            }
+        }
+    }
+
     #[test]
     fn a_dated_cell_hands_over_a_date_and_a_dollar_cell_a_currency() {
         let mut workbook = workbook();
