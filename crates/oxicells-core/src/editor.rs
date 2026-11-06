@@ -309,9 +309,13 @@ impl XlsxEditor {
             }
         }
         for (edited_index, edited_sheet) in edited.sheets.iter().enumerate() {
-            let original_index = edited_sheet.origin_id
-                .and_then(|id| self.workbook.sheets.iter().position(|sheet| sheet.origin_id == Some(id)))
-                .unwrap_or(edited_index);
+            let original_index = match edited_sheet.origin_id {
+                Some(id) => match self.workbook.sheets.iter().position(|sheet| sheet.origin_id == Some(id)) {
+                    Some(index) => index, None => continue,
+                },
+                None if self.workbook.sheets.iter().any(|sheet| sheet.origin_id.is_some()) => continue,
+                None => edited_index,
+            };
             let Some(original_sheet) = self.workbook.sheets.get(original_index) else { continue };
             let order = |drawings: &[crate::ir::Drawing]| drawings.iter().filter_map(|drawing| drawing.name.clone()).collect::<Vec<_>>();
             let before_order = order(&original_sheet.drawings);
@@ -884,11 +888,50 @@ impl XlsxEditor {
         let mut source=OoxmlArchive::new(&self.original_data)?;
         let chart_parts=crate::chart_edit::chart_part_names(&mut source)?;
         let drawing_parts = resolve_drawing_parts(&mut source, &sheet_paths)?;
+        let mut planned_parts: Vec<(String, Option<usize>)> = Vec::new();
+        if let Some(plan) = self.sheet_plan.as_ref() {
+            let mut next_part = sheet_paths.len() + 1;
+            for planned in plan {
+                match planned {
+                    PlannedSheet::Held { origin, .. } => {
+                        let path = sheet_paths.get(*origin).cloned().ok_or_else(|| {
+                            XlsxError::InvalidData(
+                                "a kept sheet is not in the original workbook".to_string(),
+                            )
+                        })?;
+                        planned_parts.push((path, Some(*origin)));
+                    }
+                    PlannedSheet::Added(sheet) => {
+                        let folder = if sheet.kind == crate::ir::SheetKind::Chart { "chartsheets" } else { "worksheets" };
+                        // Take a part name nothing is using.
+                        let mut path = format!("xl/{folder}/sheet{next_part}.xml");
+                        while source.file_names().contains(&path) || planned_parts.iter().any(|(held, _)| held == &path) {
+                            next_part += 1;
+                            path = format!("xl/{folder}/sheet{next_part}.xml");
+                        }
+                        next_part += 1;
+                        planned_parts.push((path, None));
+                    }
+                }
+            }
+        }
+        let mut drawing_sheet_paths = sheet_paths.clone();
+        let mut planned_drawing_additions = self.drawing_additions.clone();
+        if let Some(plan) = &self.sheet_plan {
+            for (planned, (path, origin)) in plan.iter().zip(&planned_parts) {
+                if origin.is_some() { continue; }
+                let PlannedSheet::Added(sheet) = planned else { continue; };
+                if sheet.drawings.is_empty() { continue; }
+                let index = drawing_sheet_paths.len();
+                drawing_sheet_paths.push(path.clone());
+                planned_drawing_additions.insert(index, sheet.drawings.clone());
+            }
+        }
         let drawing_package = drawing_addition_package(
             &mut source,
-            &sheet_paths,
+            &drawing_sheet_paths,
             &drawing_parts,
-            &self.drawing_additions,
+            &planned_drawing_additions,
             &self.drawing_group_additions,
             &self.drawing_line_edits,
             &self.drawing_fill_edits,
@@ -1163,32 +1206,6 @@ impl XlsxEditor {
                 hyperlink_relationship_xml.insert(rels_path, rels);
             }
             hyperlink_ids.insert(sheet, ids);
-        }
-        let mut planned_parts: Vec<(String, Option<usize>)> = Vec::new();
-        if let Some(plan) = self.sheet_plan.as_ref() {
-            let mut next_part = sheet_paths_by_index.len() + 1;
-            for planned in plan {
-                match planned {
-                    PlannedSheet::Held { origin, .. } => {
-                        let path = sheet_paths_by_index.get(*origin).cloned().ok_or_else(|| {
-                            XlsxError::InvalidData(
-                                "a kept sheet is not in the original workbook".to_string(),
-                            )
-                        })?;
-                        planned_parts.push((path, Some(*origin)));
-                    }
-                    PlannedSheet::Added(_) => {
-                        // Take a part name nothing is using.
-                        let mut path = format!("xl/worksheets/sheet{next_part}.xml");
-                        while sheet_paths_by_index.contains(&path) {
-                            next_part += 1;
-                            path = format!("xl/worksheets/sheet{next_part}.xml");
-                        }
-                        next_part += 1;
-                        planned_parts.push((path, None));
-                    }
-                }
-            }
         }
         let dropped: Vec<String> = match self.sheet_plan.as_ref() {
             None => Vec::new(),
@@ -1702,6 +1719,10 @@ impl XlsxEditor {
                         added_column_band_styles.get(&index).unwrap_or(&empty_band_styles),
                         &multiple,
                     )?;
+                    if let Some(rid) = drawing_package.worksheet_drawing.get(path) {
+                        sheet_xml = set_drawing(std::str::from_utf8(&sheet_xml)
+                            .map_err(|error| XlsxError::InvalidData(error.to_string()))?, rid)?.into_bytes();
+                    }
                     if !sheet.conditional_rules.is_empty() {
                         let ids = added_conditional_style_slots.iter().filter_map(|(&(sheet_index, priority), &slot)| (sheet_index == index).then_some((priority, conditional_style_indices[slot]))).collect();
                         sheet_xml = append_conditional_rules_xml(std::str::from_utf8(&sheet_xml).map_err(|error| XlsxError::InvalidData(error.to_string()))?, &sheet.conditional_rules, &ids)?.into_bytes();
@@ -10094,7 +10115,8 @@ fn patch_workbook_rels(xml: &str, targets: &[String]) -> Result<String, XlsxErro
 
     let mut added = String::new();
     for (position, target) in targets.iter().enumerate() {
-        let relationship_type=original_types.get(target).map(String::as_str).unwrap_or(WORKSHEET);
+        let relationship_type=original_types.get(target).map(String::as_str).unwrap_or_else(||
+            if target.starts_with("chartsheets/") { "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" } else { WORKSHEET });
         added.push_str(&format!(
             "<Relationship Id=\"rIdSheet{}\" Type=\"{}\" Target=\"{}\"/>",
             position + 1,
@@ -10139,7 +10161,8 @@ fn patch_content_types(xml: &str, parts: &[String]) -> Result<String, XlsxError>
 
     let mut added = String::new();
     for part in parts {
-        let content_type=original_types.get(part).map(String::as_str).unwrap_or(WORKSHEET);
+        let content_type=original_types.get(part).map(String::as_str).unwrap_or_else(||
+            if part.starts_with("xl/chartsheets/") { "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml" } else { WORKSHEET });
         added.push_str(&format!(
             "<Override PartName=\"/{}\" ContentType=\"{}\"/>",
             escape(part),escape(content_type)
@@ -10260,6 +10283,16 @@ fn write_new_sheet(
     column_styles: &BTreeMap<u32, u32>,
     multiple: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<u8>, XlsxError> {
+    if sheet.kind == crate::ir::SheetKind::Chart {
+        let mut xml = String::from("<chartsheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">");
+        if let Some(hex) = &sheet.tab_color {
+            xml.push_str(&format!("<sheetPr><tabColor rgb=\"FF{}\"/></sheetPr>", escape(hex)));
+        }
+        xml.push_str("<sheetViews><sheetView workbookViewId=\"0\"/></sheetViews>");
+        if sheet.protected { xml.push_str("<sheetProtection content=\"1\" objects=\"1\"/>"); }
+        xml.push_str("</chartsheet>");
+        return Ok(xml.into_bytes());
+    }
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     let mut root = BytesStart::new("worksheet");
     root.push_attribute((
@@ -11646,6 +11679,49 @@ mod tests {
         let imported=crate::ir::CellFormatReference::for_style(0);
         assert_eq!(cell.style.format_reference.as_deref(),Some(&imported));
         assert!(!cell.style.bold);
+    }
+
+
+    #[test]
+    fn added_chart_sheets_keep_their_kind_drawings_and_original_tabs() {
+        let bytes = include_bytes!("../../../tests/fixtures/vba/uniform_chart_operations.xlsm");
+        let mut book = crate::parse_xlsx_preserving_values(bytes).unwrap();
+        let before = book.clone();
+        let mut added = book.sheets.iter().find(|s| s.kind == crate::ir::SheetKind::Chart).unwrap().clone();
+        added.origin_id = None;
+        added.name = "Added chart".into();
+        for drawing in &mut added.drawings {
+            if let crate::ir::DrawingKind::Chart(chart) = &mut drawing.kind {
+                chart.origin_id = None;
+                chart.kind = "ofPie".into();
+                chart.plot_options.of_pie = Some(Default::default());
+                chart.series = vec![crate::ir::ChartSeries { values: vec![Some(1.25), Some(2.5), Some(3.75)], ..Default::default() }];
+            }
+        }
+        book.sheets.insert(0, added);
+        let mut editor = XlsxEditor::new(bytes).unwrap();
+        editor.apply_workbook(&book).unwrap();
+        let saved = editor.save().unwrap();
+        let restored = crate::parse_xlsx_preserving_values(&saved).unwrap();
+        assert_eq!(restored.sheets.len(), before.sheets.len() + 1);
+        assert_eq!(restored.sheets[0].kind, crate::ir::SheetKind::Chart);
+        assert_eq!(restored.sheets[0].name, "Added chart");
+        let chart = restored.sheets[0].drawings.iter().find_map(|d| match &d.kind {
+            crate::ir::DrawingKind::Chart(c) => Some(c), _ => None,
+        }).unwrap();
+        assert_eq!(chart.kind, "ofPie");
+        assert_eq!(chart.series[0].values, vec![Some(1.25), Some(2.5), Some(3.75)]);
+        for (prior, after) in before.sheets.iter().zip(&restored.sheets[1..]) {
+            assert_eq!(prior.name, after.name);
+            assert_eq!(prior.kind, after.kind);
+            assert_eq!(prior.drawings, after.drawings);
+        }
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+        let paths: Vec<_> = (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().to_string()).collect();
+        assert_eq!(paths.len(), paths.iter().collect::<std::collections::HashSet<_>>().len());
+        if std::env::var_os("OXI_VBA_CAPTURE_NEW_PACKAGES").is_some() {
+            println!("OXI_VBA_NEW_PACKAGE {{\"name\":\"added_ofpie_chart_sheet\",\"bytes\":{:?}}}", saved);
+        }
     }
 
     #[test]

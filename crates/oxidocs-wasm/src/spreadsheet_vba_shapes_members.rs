@@ -1075,6 +1075,7 @@ impl<'a> WorkbookHost<'a> {
         let chart = ChartRecord {
             chart_type,
             plot_modified: true,
+            of_pie: chart_plot_options(chart_type).of_pie,
             series: Vec::new(),
             has_title: false,
             title: String::new(),
@@ -1533,12 +1534,159 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+
+
+    pub(super) fn add_chart_sheet(&mut self, args: &[Value]) -> Result<Value, String> {
+        if args.len() > 4 { return Err(host_error(450, "Charts.Add takes Before, After, Count and Type")); }
+        if let Some(kind) = args.get(3).filter(|v| !matches!(v, Value::Missing)) {
+            if any_whole_number(kind) != Some(-4109) { return Err(host_error(1004, "Charts.Add needs a chart sheet type")); }
+        }
+        let count = match args.get(2).filter(|v| !matches!(v, Value::Missing)) {
+            Some(v) => any_whole_number(v).filter(|n| *n >= 1).ok_or_else(|| host_error(1004, "invalid chart sheet count"))?,
+            None => 1,
+        };
+        let mut placement: Vec<_> = args.iter().take(2).cloned().collect();
+        let mut result = Value::Empty;
+        for _ in 0..count {
+            self.add_worksheet(&placement)?;
+            let sheet = self.active_sheet;
+            let prefix = if self.error_language == ErrorLanguage::Japanese { "\u{30b0}\u{30e9}\u{30d5}" } else { "Chart" };
+            let mut number = 1;
+            let name = loop {
+                let name = format!("{prefix}{number}");
+                if !self.workbook.sheets.iter().any(|s| s.name.eq_ignore_ascii_case(&name)) { break name; }
+                number += 1;
+            };
+            self.workbook.sheets[sheet].kind = oxicells_core::ir::SheetKind::Chart;
+            self.workbook.sheets[sheet].name = name;
+            let id = self.add_chart(sheet, 0.0, 0.0, 720.0, 540.0, 51)?;
+            result = self.part(DrawingPart::Chart(id));
+            placement = vec![result.clone()];
+        }
+        Ok(result)
+    }
+
+    fn set_ofpie_secondary_point(&mut self, id: u64, number: usize, at: usize, value: &Value) -> Result<bool, String> {
+        use oxicells_core::ir::ChartPieSplitMode;
+        let mut options = self.ofpie_options(id)?.clone();
+        let mut selected = self.ofpie_secondary_points(id, number)?;
+        if at == 0 || at > selected.len() + 1 { return Err(host_error(1004, "there is no such point")); }
+        let choice = style_face_boolean(value, "Point.SecondaryPlot")?.unwrap_or(false);
+        // The synthetic aggregate accepts the assignment but stays in the
+        // primary plot. Even an unchanged assignment selects custom mode.
+        if let Some(point) = selected.get_mut(at - 1) { *point = choice; }
+        options.custom_points = selected.iter().enumerate().filter_map(|(i, yes)| yes.then_some(i as u32)).collect();
+        options.split_mode = ChartPieSplitMode::Custom;
+        options.split_position = None;
+        let chart = self.chart_mut(id)?;
+        chart.of_pie = Some(options);
+        chart.plot_modified = true;
+        self.redraw(id)?;
+        Ok(true)
+    }
+
+    fn ofpie_options(&self, id: u64) -> Result<&oxicells_core::ir::ChartOfPieOptions, String> {
+        self.chart(id)?.of_pie.as_ref().ok_or_else(|| host_error(1004, "the chart group has no secondary plot"))
+    }
+
+    fn ofpie_split_value(&self, id: u64) -> Result<f64, String> {
+        use oxicells_core::ir::ChartPieSplitMode;
+        let options = self.ofpie_options(id)?;
+        let n = self.chart(id)?.series.first().map_or(0, |s| s.values.len());
+        Ok(options.split_position.unwrap_or_else(|| match options.split_mode {
+            ChartPieSplitMode::Value => 1.0,
+            ChartPieSplitMode::Percent => 10.0,
+            _ => n.div_ceil(3).max(1) as f64,
+        }))
+    }
+
+    fn ofpie_secondary_points(&self, id: u64, number: usize) -> Result<Vec<bool>, String> {
+        use oxicells_core::ir::ChartPieSplitMode;
+        let options = self.ofpie_options(id)?;
+        let series = self.series(id, number)?;
+        let n = series.values.len();
+        let split = self.ofpie_split_value(id)?;
+        let threshold = if options.split_mode == ChartPieSplitMode::Percent {
+            series.values.iter().map(|v| v.abs()).sum::<f64>() * split / 100.0
+        } else { split };
+        Ok(series.values.iter().enumerate().map(|(i, v)| match options.split_mode {
+            ChartPieSplitMode::Automatic | ChartPieSplitMode::Position => {
+                i >= n.saturating_sub(split.max(0.0) as usize)
+            },
+            ChartPieSplitMode::Value | ChartPieSplitMode::Percent => *v < threshold,
+            ChartPieSplitMode::Custom => options.custom_points.contains(&(i as u32)),
+        }).collect())
+    }
+
+    fn series_api_values(&self, id: u64, number: usize) -> Result<Vec<Value>, String> {
+        let series = self.series(id, number)?;
+        let mut values: Vec<_> = series.values.iter().take(self.series_point_count(id, number)?)
+            .map(|v| Value::Double(*v)).collect();
+        if matches!(series.chart_type.unwrap_or(self.chart(id)?.chart_type), 68 | 71) && !series.values.is_empty() {
+            let selected = self.ofpie_secondary_points(id, number)?;
+            values.push(Value::Double(series.values.iter().zip(selected).filter(|(_, selected)| *selected)
+                .map(|(v, _)| v.abs()).fold(0.0, |sum, v| sum + v)));
+        }
+        Ok(values)
+    }
+
+    fn set_ofpie_split(&mut self, id: u64, name: &str, value: &Value) -> Result<bool, String> {
+        use oxicells_core::ir::ChartPieSplitMode;
+        let prior = self.ofpie_options(id)?.clone();
+        let number = transparency_number(value)?;
+        let mut next = prior.clone();
+        match name {
+            "splittype" => {
+                let mode = match number.round_ties_even() as i64 {
+                    1 => ChartPieSplitMode::Position, 2 => ChartPieSplitMode::Value,
+                    3 => ChartPieSplitMode::Percent, 4 => ChartPieSplitMode::Custom,
+                    _ => return Err(host_error(1004, "invalid split type")),
+                };
+                if mode == ChartPieSplitMode::Custom && prior.split_mode != mode {
+                    next.custom_points = if self.chart(id)?.series.is_empty() { Vec::new() } else {
+                        self.ofpie_secondary_points(id, 1)?.iter().enumerate()
+                            .filter_map(|(i, yes)| yes.then_some(i as u32)).collect()
+                    };
+                    next.split_position = None;
+                } else if mode != prior.split_mode {
+                    next.split_position = Some(match mode {
+                        ChartPieSplitMode::Value => 1.0, ChartPieSplitMode::Percent => 10.0,
+                        _ => self.ofpie_split_value(id)?,
+                    });
+                }
+                next.split_mode = mode;
+            },
+            "splitvalue" => {
+                if prior.split_mode == ChartPieSplitMode::Custom { return Ok(true); }
+                if !number.is_finite() || number < 0.0 {
+                    return Err(host_error_described(-2_147_467_259, match self.error_language {
+                        ErrorLanguage::Japanese => "'SplitValue' \u{30e1}\u{30bd}\u{30c3}\u{30c9}\u{306f}\u{5931}\u{6557}\u{3057}\u{307e}\u{3057}\u{305f}: 'ChartGroup' \u{30aa}\u{30d6}\u{30b8}\u{30a7}\u{30af}\u{30c8}",
+                        ErrorLanguage::English => "Method 'SplitValue' of object 'ChartGroup' failed",
+                    }));
+                }
+                if next.split_mode == ChartPieSplitMode::Automatic { next.split_mode = ChartPieSplitMode::Position; }
+                next.split_position = Some(match next.split_mode {
+                    ChartPieSplitMode::Position => number.trunc(),
+                    ChartPieSplitMode::Percent => number.min(100.0),
+                    _ => number,
+                });
+            },
+            _ => return Ok(false),
+        }
+        let chart = self.chart_mut(id)?;
+        chart.of_pie = Some(next);
+        chart.plot_modified = true;
+        self.redraw(id)?;
+        Ok(true)
+    }
+
     fn series_point_count(&self, id: u64, number: usize) -> Result<usize, String> {
         let series = self.series(id, number)?;
         let kind = series.chart_type.unwrap_or(self.chart(id)?.chart_type);
         Ok(if matches!(kind, 15 | 87) {
             series.bubble_sizes.as_ref().map_or(series.values.len(), |sizes| series.values.len().min(sizes.len()))
-        } else { series.values.len() })
+        } else if matches!(kind, 68 | 71) && !series.values.is_empty() { series.values.len() + 1 }
+        else { series.values.len() })
     }
 
     fn cells_of_range_object(&self, value: &Value) -> Option<CellRange> {
@@ -1577,7 +1725,7 @@ impl<'a> WorkbookHost<'a> {
         let count = self.series_point_count(id, number)?;
         if series.implicit_categories {
             return Ok((1..=count).map(|i| {
-                if matches!(kind, 5 | 69 | 70 | -4102 | -4120 | 80) { Value::Empty }
+                if matches!(kind, 5 | 68 | 69 | 70 | 71 | -4102 | -4120 | 80) { Value::Empty }
                 else if chart_plot_options(kind).horizontal || matches!(kind, 15 | 87) { Value::String(i.to_string()) }
                 else { Value::Double(i as f64) }
             }).collect());
@@ -1587,6 +1735,10 @@ impl<'a> WorkbookHost<'a> {
             Err(_) => Value::String(x.clone()),
         }).collect());
         if matches!(kind, 15 | 87) { values.truncate(count); }
+        if matches!(kind, 68 | 71) {
+            values = values.into_iter().map(|v| Value::String(text_of_value(&v))).collect();
+            if !series.values.is_empty() { values.push(Value::String(String::new())); }
+        }
         Ok(values)
     }
 
@@ -2129,6 +2281,26 @@ impl<'a> WorkbookHost<'a> {
                 })
             }
             DrawingPart::Chart(id) => self.chart_get(id, &lower),
+            DrawingPart::ChartGroups(id) => Ok(match lower.as_str() {
+                "count" => Some(Value::Integer(1)),
+                "parent" => Some(self.part(DrawingPart::Chart(id))),
+                _ => None,
+            }),
+            DrawingPart::ChartGroup(id) => Ok(match lower.as_str() {
+                "splittype" => {
+                    use oxicells_core::ir::ChartPieSplitMode;
+                    Some(Value::Integer(match self.chart(id)?.of_pie.as_ref().map_or(oxicells_core::ir::ChartPieSplitMode::Automatic, |o| o.split_mode) {
+                        ChartPieSplitMode::Automatic | ChartPieSplitMode::Position => 1,
+                        ChartPieSplitMode::Value => 2, ChartPieSplitMode::Percent => 3, ChartPieSplitMode::Custom => 4,
+                    }))
+                },
+                "splitvalue" => if self.chart(id)?.of_pie.as_ref().is_some_and(|o| o.split_mode == oxicells_core::ir::ChartPieSplitMode::Custom) {
+                    Some(Value::Empty)
+                } else { Some(Value::Double(if self.chart(id)?.of_pie.is_some() { self.ofpie_split_value(id)? } else { self.chart(id)?.series.first().map_or(0, |s| s.values.len()).div_ceil(3).max(1) as f64 })) },
+                "secondplotsize" => Some(Value::Integer(self.chart(id)?.of_pie.as_ref().and_then(|o| o.secondary_size).unwrap_or(75) as i64)),
+                "parent" => Some(self.part(DrawingPart::Chart(id))),
+                _ => None,
+            }),
             DrawingPart::SeriesCollection(id) => Ok(match lower.as_str() {
                 "count" => Some(Value::Integer(self.chart(id)?.series.len() as i64)),
                 "parent" => Some(self.part(DrawingPart::Chart(id))),
@@ -2139,7 +2311,7 @@ impl<'a> WorkbookHost<'a> {
                 Ok(match lower.as_str() {
                     "name" => Some(Value::String(series.name)),
                     "formula" => Some(Value::String(self.series_formula(id, number)?)),
-                    "values" => Some(Self::variant_row(series.values.iter().take(self.series_point_count(id, number)?).map(|v| Value::Double(*v)).collect())),
+                    "values" => Some(Self::variant_row(self.series_api_values(id, number)?)),
                     "bubblesizes" => Some(Value::String(self.bubble_size_expression(id, number)?)),
                     "xvalues" => Some(Self::variant_row(self.series_categories(id, number)?)),
                     "points" => Some(self.part(DrawingPart::Points(id, number))),
@@ -2196,7 +2368,10 @@ impl<'a> WorkbookHost<'a> {
                     "markerstyle" => Some(Value::Integer(-4142)),
                     "picturetype" => Some(Value::Integer(1)),
                     "parent" => Some(self.part(DrawingPart::Series(id, number))),
-                    "secondaryplot" => return Err(host_error(1004, "the point is in no pie of pie")),
+                    "secondaryplot" => {
+                        let selected = self.ofpie_secondary_points(id, number)?;
+                        Some(Value::Boolean(at.checked_sub(1).and_then(|i| selected.get(i)).copied().unwrap_or(false)))
+                    },
                     _ => None,
                 })
             }
@@ -2555,6 +2730,7 @@ impl<'a> WorkbookHost<'a> {
         let shape = self.shape(id)?.clone();
         let chart = self.chart(id)?.clone();
         Ok(match lower {
+            "chartgroups" => Some(self.part(DrawingPart::ChartGroups(id))),
             "charttype" => Some(Value::Integer(match chart.chart_type {
                 kind if chart.series.is_empty() => match kind {
                     87 => 15,
@@ -3336,6 +3512,7 @@ impl<'a> WorkbookHost<'a> {
                             // plain bubbles and remains so when data is added.
                             chart.chart_type = if kind == 87 && chart.series.is_empty() { 15 } else { kind };
                             chart.plot_modified = true;
+                            chart.of_pie = chart_plot_options(kind).of_pie;
                             for series in &mut chart.series {
                                 series.chart_type = None;
                                 if matches!(kind, 15 | 87) {
@@ -3628,8 +3805,10 @@ impl<'a> WorkbookHost<'a> {
                     format!("OLEObjects \u{30af}\u{30e9}\u{30b9}\u{306e} {name} \u{30d7}\u{30ed}\u{30d1}\u{30c6}\u{30a3}\u{3092}\u{8a2d}\u{5b9a}\u{3067}\u{304d}\u{307e}\u{305b}\u{3093}\u{3002}"),
                 ))
             }
-            DrawingPart::GroupItems(_) => Ok(false),
-            DrawingPart::OleFormat(_) | DrawingPart::Shapes(_) | DrawingPart::OleObjects(_) | DrawingPart::OleObjectsSnapshot(..) | DrawingPart::ChartObjects(_) | DrawingPart::SeriesCollection(_) | DrawingPart::Points(..) | DrawingPart::Point(..) | DrawingPart::Axes(_) => Ok(false),
+            DrawingPart::ChartGroup(id) => self.set_ofpie_split(id, &lower, &value),
+            DrawingPart::Point(id, number, at) => if lower == "secondaryplot" { self.set_ofpie_secondary_point(id, number, at, &value) } else { Ok(false) },
+            DrawingPart::ChartGroups(_) | DrawingPart::GroupItems(_) => Ok(false),
+            DrawingPart::OleFormat(_) | DrawingPart::Shapes(_) | DrawingPart::OleObjects(_) | DrawingPart::OleObjectsSnapshot(..) | DrawingPart::ChartObjects(_) | DrawingPart::SeriesCollection(_) | DrawingPart::Points(..) | DrawingPart::Axes(_) => Ok(false),
         }
     }
 
@@ -3997,7 +4176,23 @@ impl<'a> WorkbookHost<'a> {
                 }
                 _ => Ok(None),
             },
+            DrawingPart::ChartGroups(id) => match lower.as_str() {
+                "item" | "_default" => {
+                    let at = args.first().and_then(any_whole_number).unwrap_or(0);
+                    if at != 1 { return Err(host_error(1004, "there is no such chart group")); }
+                    Ok(Some(self.part(DrawingPart::ChartGroup(id))))
+                },
+                _ => self.drawing_get(part, &lower),
+            },
+            DrawingPart::ChartGroup(_) => self.drawing_get(part, &lower),
             DrawingPart::Chart(id) => match lower.as_str() {
+                "chartgroups" => {
+                    if args.first().is_none_or(|v| matches!(v, Value::Missing)) {
+                        Ok(Some(self.part(DrawingPart::ChartGroups(id))))
+                    } else {
+                        self.drawing_call(DrawingPart::ChartGroups(id), "item", args)
+                    }
+                },
                 "setsourcedata" => {
                     let Some(range) = args.first().and_then(|value| self.cells_of_range_object(value)) else {
                         return Err(host_error(1004, "SetSourceData takes a Range"));
@@ -4173,7 +4368,8 @@ impl<'a> WorkbookHost<'a> {
                 _ => Ok(None),
             },
             DrawingPart::Points(id, number) => match lower.as_str() {
-                "item" | "_default" | "count" => Ok(Some(Value::Integer(self.series_point_count(id, number)? as i64))),
+                "item" | "_default" => self.drawing_call(DrawingPart::Series(id, number), "points", args),
+                "count" => Ok(Some(Value::Integer(self.series_point_count(id, number)? as i64))),
                 _ => Ok(None),
             },
             DrawingPart::ChartTitle(id) => match lower.as_str() {
@@ -4344,7 +4540,7 @@ fn auto_shape_name(kind: i64) -> &'static str {
 }
 
 fn chart_is_pie(kind: i64) -> bool {
-    matches!(kind, 5 | 69 | 70 | 71 | -4102 | -4120 | 80)
+    matches!(kind, 5 | 68 | 69 | 70 | 71 | -4102 | -4120 | 80)
 }
 
 /// Text for what a macro hands a text property that is not text.
