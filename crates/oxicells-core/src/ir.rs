@@ -1549,7 +1549,11 @@ pub struct Chart {
     /// The displayed title is derived from series data rather than literal text.
     #[serde(default)]
     pub title_from_data: bool,
-    /// Last derived text; changing the displayed title is an explicit IR edit.
+    /// A default title object is present even though its text is derived.
+    /// An implicit automatic title can omit this object in the source file.
+    #[serde(default)]
+    pub title_default_is_explicit: bool,
+    /// Last default text; changing the displayed title is an explicit IR edit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_from_data_cache: Option<String>,
     /// "line", "bar", "pie" 窶・the first plot the chart holds.
@@ -1561,6 +1565,9 @@ pub struct Chart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot: Option<Frame>,
     pub series: Vec<ChartSeries>,
+    /// Logical series indices in their original source order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_series_order: Vec<usize>,
     /// What the category axis is labelled with, shared by every series.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub categories: Vec<String>,
@@ -1583,6 +1590,20 @@ pub struct Chart {
     pub fill: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_fill: Option<String>,
+}
+
+impl Chart {
+    /// Preserve known source positions and append newly modeled series.
+    pub fn source_series_indices(&self) -> Vec<usize> {
+        let mut indices = Vec::with_capacity(self.series.len());
+        let mut seen = vec![false; self.series.len()];
+        for index in self.source_series_order.iter().copied().chain(0..self.series.len()) {
+            if let Some(used) = seen.get_mut(index) {
+                if !*used { indices.push(index); *used = true; }
+            }
+        }
+        indices
+    }
 }
 
 /// Portable plot choices, without application-specific chart type numbers.
