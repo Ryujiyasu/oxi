@@ -59134,6 +59134,51 @@ End Function
 
 
 
+
+    #[test]
+    fn cold_category_full_states_match_actual_excel_including_missing_values() {
+        let controls: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/vba/chart_import_contracts.json")).unwrap();
+        let fixture = include_bytes!("../../../tests/fixtures/vba/chart_boundary_operations.xlsm");
+        let source = crate::vba_project::read_project_source_with_code_page(fixture, Some(932)).unwrap().unwrap();
+        let mut differences = Vec::new();
+        for case in controls["category_cases"].as_array().unwrap() {
+            let mut input = zip::ZipArchive::new(std::io::Cursor::new(fixture)).unwrap();
+            let mut output = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            for i in 0..input.len() {
+                let entry = input.by_index(i).unwrap();
+                let replacement = match entry.name() {
+                    "xl/charts/chart1.xml" => case["xml"].as_str(),
+                    "xl/worksheets/sheet1.xml" => case["sheet_xml"].as_str(),
+                    _ => None,
+                };
+                if let Some(text) = replacement {
+                    output.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+                    std::io::Write::write_all(&mut output, text.as_bytes()).unwrap();
+                } else { output.raw_copy_file(entry).unwrap(); }
+            }
+            let bytes = output.finish().unwrap().into_inner();
+            let mut book = oxicells_core::parse_xlsx_preserving_values(&bytes).unwrap();
+            for saved in [false, true] {
+                if saved {
+                    let mut editor = oxicells_core::editor::XlsxEditor::new(&bytes).unwrap();
+                    editor.apply_workbook(&book).unwrap();
+                    book = oxicells_core::parse_xlsx_preserving_values(&editor.save().unwrap()).unwrap();
+                }
+                let mut context = failure_context();
+                context.document_modules = Some(crate::vba_project::read_document_modules(&bytes).unwrap());
+                context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+                let outcome = execute_workbook_vba(book.clone(), &source,
+                    "BoundaryInspection.BoundaryState", vec![], 0, context).unwrap();
+                let actual = serde_json::to_value(&outcome.result).unwrap();
+                if outcome.error.is_some() || actual != serde_json::json!({"type":"string","value":case["native_state"]}) {
+                    differences.push(format!("{} saved={saved}: {actual}; {:?}", case["id"], outcome.error.as_ref().map(|e|&e.message)));
+                }
+            }
+        }
+        assert!(differences.is_empty(), "{} differences: {:?}", differences.len(), differences);
+    }
+
     #[test]
     fn selected_source_titles_match_actual_excel_runtime_and_save() {
         let module = parse_module(r###"Option Explicit

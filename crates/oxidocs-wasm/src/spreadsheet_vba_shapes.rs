@@ -168,6 +168,9 @@ pub(super) struct ChartRecord {
     pub plot_modified: bool,
     pub of_pie: Option<oxicells_core::ir::ChartOfPieOptions>,
     pub series: Vec<SeriesRecord>,
+    /// Imported text labels belong to the chart axis, independently of series order.
+    pub category_axis_labels: Vec<String>,
+    pub category_axis_reference: Option<String>,
     pub has_title: bool,
     pub title: String,
     pub has_legend: bool,
@@ -199,6 +202,7 @@ pub(super) struct SeriesRecord {
     pub implicit_categories: bool,
     /// Imported categories have completed the file-open normalization step.
     pub categories_imported: bool,
+    pub text_category_gaps: bool,
     pub values: Vec<f64>,
     /// Original sparse cache, retained until values are explicitly assigned.
     pub sparse_values: Option<Vec<Option<f64>>>,
@@ -655,29 +659,35 @@ impl<'a> WorkbookHost<'a> {
                             chart_type: chart_type_of(chart),
                             plot_modified: false,
                             of_pie: chart.plot_options.of_pie.clone(),
+                            category_axis_labels: chart.categories.clone(),
+                            category_axis_reference: chart.category_reference.clone(),
                             series: chart
                                 .series
                                 .iter()
                                 .enumerate()
-                                .map(|(index, series)| SeriesRecord {
+                                .map(|(index, series)| {
+                                    let text_categories = series.text_category_gaps || series.category_values.as_ref()
+                                        .is_some_and(|values| values.iter().any(|value| matches!(value, oxicells_core::ir::ChartCategoryValue::Text(_))));
+                                    SeriesRecord {
                                     name: if series.name.is_empty() && !series.explicit_empty_name && series.name_reference.is_none() {
                                         format!("系列{}", index + 1)
                                     } else { series.name.clone() },
                                     name_auto: series.name.is_empty() && !series.explicit_empty_name && series.name_reference.is_none(),
                                     categories_imported: true,
+                                    text_category_gaps: series.text_category_gaps,
                                     name_ref: series.name_reference.clone(),
                                     values_ref: series.values_reference.clone(),
                                     bubble_sizes: series.bubble_sizes.clone(),
                                     bubble_sizes_ref: series.bubble_sizes_reference.clone(),
                                     shaded_bubbles: series.shaded_bubbles,
                                     x_ref: series.category_reference.clone(),
-                                    implicit_categories: series.category_reference.is_none() && series.category_values.as_ref()
+                                    implicit_categories: series.category_reference.is_none() && !series.text_category_gaps && series.category_values.as_ref()
                                         .map_or(chart.categories.is_empty(), Vec::is_empty),
                                     typed_xs: series.category_values.as_ref().filter(|xs| !xs.is_empty())
                                         .map(|xs| xs.iter().map(|x| match x {
                                             oxicells_core::ir::ChartCategoryValue::Number(n) => Value::Double(*n),
                                             oxicells_core::ir::ChartCategoryValue::Text(s) => Value::String(s.clone()),
-                                            oxicells_core::ir::ChartCategoryValue::Blank => Value::Empty,
+                                            oxicells_core::ir::ChartCategoryValue::Blank => if text_categories { Value::String(String::new()) } else { Value::Empty },
                                         }).collect()).or_else(|| {
                                             (series.category_values.is_none() && !chart.categories.is_empty())
                                                 .then(|| chart.categories.iter().cloned().map(Value::String).collect())
@@ -695,7 +705,7 @@ impl<'a> WorkbookHost<'a> {
                                     color: None,
                                     chart_type: None,
                                     has_labels: !series.labels.is_empty(),
-                                })
+                                }})
                                 .collect(),
                             has_title: chart.title.is_some(),
                             title: chart.title.clone().unwrap_or_default(),
@@ -1571,8 +1581,13 @@ impl<'a> WorkbookHost<'a> {
     }
 
     pub(super) fn chart_of(&self, chart: &ChartRecord) -> Chart {
-        let categories = chart.series.first().map(|series| series.xs.clone()).unwrap_or_default();
+        let categories = if chart.series.iter().all(|series| series.categories_imported) {
+            chart.category_axis_labels.clone()
+        } else { chart.series.first().map(|series| series.xs.clone()).unwrap_or_default() };
         Chart {
+            category_reference: if chart.series.iter().all(|series| series.categories_imported) {
+                chart.category_axis_reference.clone()
+            } else { chart.series.first().and_then(|series| series.x_ref.clone()) },
             origin_id: None,
             // A single named series selected at chart creation acquires its title
             // when Excel saves the chart, while the live HasTitle remains false.
@@ -1600,6 +1615,7 @@ impl<'a> WorkbookHost<'a> {
                     bubble_sizes_reference: series.bubble_sizes_ref.clone(),
                     shaded_bubbles: series.shaded_bubbles,
                     category_reference: series.x_ref.clone(),
+                    text_category_gaps: series.text_category_gaps,
                     category_values: Some(series.typed_xs.as_ref().map(|xs| xs.iter().map(|value| {
                         use oxicells_core::ir::ChartCategoryValue;
                         if value.string_units().is_some() { ChartCategoryValue::Text(text_of_value(value)) }
