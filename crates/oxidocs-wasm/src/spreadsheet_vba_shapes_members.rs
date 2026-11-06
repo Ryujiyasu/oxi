@@ -2445,7 +2445,19 @@ impl<'a> WorkbookHost<'a> {
         let shape = self.shape(id)?.clone();
         let chart = self.chart(id)?.clone();
         Ok(match lower {
-            "charttype" => Some(Value::Integer(chart.chart_type)),
+            "charttype" => Some(Value::Integer(match chart.chart_type {
+                kind if chart.series.is_empty() => match kind {
+                    87 => 15,
+                    4 => 65,
+                    63 => 66,
+                    64 => 67,
+                    73 => 72,
+                    75 | -4169 => 74,
+                    -4151 => 81,
+                    _ => kind,
+                },
+                kind => kind,
+            })),
             "type" => match chart.chart_type {
                 51..=53 => Some(Value::Integer(3)),
                 54..=56 => Some(Value::Integer(-4100)),
@@ -3178,6 +3190,7 @@ impl<'a> WorkbookHost<'a> {
                 Ok(taken)
             }
             DrawingPart::Chart(id) => {
+                let language = self.error_language;
                 let taken = {
                     let chart = self.chart_mut(id)?;
                     match lower.as_str() {
@@ -3185,7 +3198,33 @@ impl<'a> WorkbookHost<'a> {
                             let Some(kind) = any_whole_number(&value) else {
                                 return Err("Chart.ChartType takes an xlChartType".to_string());
                             };
-                            chart.chart_type = kind;
+                            // Validate before changing the record. Empty charts cannot
+                            // satisfy surface/stock data requirements; modern chart
+                            // conversion also fails before any series is added.
+                            let failure = match kind {
+                                83..=86 | -4103 if chart.series.is_empty() => Some(-1_328_086_638),
+                                88 if chart.series.is_empty() => Some(-1_328_086_642),
+                                89 if chart.series.is_empty() => Some(-1_328_086_640),
+                                90 if chart.series.is_empty() => Some(-1_328_086_641),
+                                91 if chart.series.is_empty() => Some(-1_328_086_639),
+                                113..=140 if chart.series.is_empty() => Some(5),
+                                1 | 4 | 5 | 15 | 51..=140
+                                | -4169 | -4151 | -4120 | -4103 | -4102 | -4101 | -4100 | -4098 => None,
+                                _ => Some(-2_147_467_259),
+                            };
+                            if let Some(number) = failure {
+                                if number == 5 {
+                                    return Err(host_error(5, "Chart.ChartType conversion is invalid"));
+                                }
+                                let description = match language {
+                                    ErrorLanguage::Japanese => "'ChartType' メソッドは失敗しました: '_Chart' オブジェクト",
+                                    ErrorLanguage::English => "Method 'ChartType' of object '_Chart' failed",
+                                };
+                                return Err(host_error_described(number, description));
+                            }
+                            // A 3-D bubble type set before any series collapses to
+                            // plain bubbles and remains so when data is added.
+                            chart.chart_type = if kind == 87 && chart.series.is_empty() { 15 } else { kind };
                             for series in &mut chart.series {
                                 series.chart_type = None;
                             }
