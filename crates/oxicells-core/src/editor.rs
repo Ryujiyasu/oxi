@@ -994,7 +994,11 @@ impl XlsxEditor {
         let mut distinct: Vec<CellStyle> = Vec::new();
         let mut style_slot: HashMap<(usize, u32, u32), usize> = HashMap::new();
         let has_styles_part = archive.file_names().any(|name| name == "xl/styles.xml");
-        for (key, style) in &self.styles {
+        // Allocate style IDs in coordinate order, independent of map seeds
+        // and edit history, so equivalent saves agree across runtimes.
+        let mut ordered_styles: Vec<_> = self.styles.iter().collect();
+        ordered_styles.sort_unstable_by_key(|(key, _)| **key);
+        for (key, style) in ordered_styles {
             if !has_styles_part && *style == CellStyle::default() {
                 continue;
             }
@@ -1010,7 +1014,9 @@ impl XlsxEditor {
         let mut row_band_slots = HashMap::new();
         let mut column_band_slots = HashMap::new();
         for (source, slots) in [(&self.row_band_styles, &mut row_band_slots), (&self.column_band_styles, &mut column_band_slots)] {
-            for (key, style) in source {
+            let mut ordered_bands: Vec<_> = source.iter().collect();
+            ordered_bands.sort_unstable_by_key(|(key, _)| **key);
+            for (key, style) in ordered_bands {
                 let slot = style.as_ref().map(|style| {
                     match distinct.iter().position(|held| held == style) {
                         Some(slot) => slot,
@@ -1062,7 +1068,9 @@ impl XlsxEditor {
         let mut conditional_styles: Vec<(Option<DiffStyle>, DiffStyle)> = Vec::new();
         let mut conditional_style_slots = HashMap::new();
         let mut added_conditional_style_slots = HashMap::new();
-        for (&sheet, rules) in &self.conditional_rules {
+        let mut ordered_rules: Vec<_> = self.conditional_rules.iter().collect();
+        ordered_rules.sort_unstable_by_key(|(sheet, _)| **sheet);
+        for (&sheet, rules) in ordered_rules {
             let before = &self.workbook.sheets[sheet].conditional_rules;
             for rule in rules {
                 let old = rule.origin_priority.and_then(|origin| before.iter().find(|old| old.origin_priority == Some(origin)));
@@ -11560,6 +11568,42 @@ mod tests {
         let imported=crate::ir::CellFormatReference::for_style(0);
         assert_eq!(cell.style.format_reference.as_deref(),Some(&imported));
         assert!(!cell.style.bold);
+    }
+
+    #[test]
+    fn equivalent_style_edits_save_identical_packages() {
+        let bytes = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let formats = ["0.00", "$0.0000", "0%", "yyyy-mm-dd"];
+        let mut expected = None;
+        for attempt in 0..16 {
+            let mut editor = super::XlsxEditor::new(bytes).unwrap();
+            let columns: Vec<usize> = if attempt % 2 == 0 {
+                (0..formats.len()).collect()
+            } else {
+                (0..formats.len()).rev().collect()
+            };
+            for col in columns {
+                editor.set_cell(0, 1, col as u32, "12".into());
+                editor.set_cell_style(0, 1, col as u32, CellStyle {
+                    number_format: Some(formats[col].into()),
+                    font_size: Some(11.0 + col as f32),
+                    ..Default::default()
+                });
+            }
+            let saved = editor.save().unwrap();
+            let reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();
+            for (col, format) in formats.iter().enumerate() {
+                let cell = reopened.sheets[0].rows.iter().find(|row| row.index == 1).unwrap()
+                    .cells.iter().find(|cell| cell.col == col as u32).unwrap();
+                assert_eq!(cell.style.number_format.as_deref(), Some(*format));
+                assert_eq!(cell.style.font_size, Some(11.0 + col as f32));
+            }
+            if let Some(expected) = &expected {
+                assert!(&saved == expected, "save changed with edit order or map seed at attempt {attempt}");
+            } else {
+                expected = Some(saved);
+            }
+        }
     }
 
     #[test]
