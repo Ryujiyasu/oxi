@@ -153,6 +153,7 @@ let anyFormulas = false;
 let filling = null;
 let beyondValues = false;
 let macroSourceDirty = false;
+let macroSaveBusy = false, macroEditRevision = 0, macroSavedEditRevision = 0;
 // Moving a formula's references is the engine's job and has its own test.
 // Here it only has to be visible when a formula is carried across.
 const translate_formula = (text, rows, cols) =>
@@ -286,6 +287,7 @@ const merged = () => (sheet.merge_cells || [])
   .sort();
 // Start over as if a fresh file had been opened.
 const forget = () => {
+  macroSaveBusy = false; macroEditRevision = 0; macroSavedEditRevision = 0;
   cutFrom = null;
   sheet.frozen_rows = 0;
   sheet.frozen_cols = 0;
