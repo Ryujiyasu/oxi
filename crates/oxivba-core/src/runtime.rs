@@ -10094,48 +10094,44 @@ impl<'a> Runtime<'a> {
         for index in 0..args.len() {
             let Some(target) = self.host.as_deref().and_then(|host|
                 host.scalar_argument_type(receiver, name, args, names, index)) else { continue; };
+            if !matches!(&args[index], Value::Object(object) if
+                matches!(self.internal_objects.get(&object.handle), Some(InternalObject::Instance(_)))) {
+                continue;
+            }
             let mut value = args[index].clone();
-            let mut resolved = false;
-            loop {
+            // Early VBA dereferences the argument, then performs one scalar
+            // Automation conversion if that getter returned another object.
+            // Late dispatch performs only the scalar Automation conversion.
+            for level in 0..if late { 1 } else { 2 } {
                 let Value::Object(object) = &value else { break; };
-                let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&object.handle) else { break; };
-                let getter = self.source_class_procedure_view(&instance.class, "_default",
-                    &[ProcKind::PropertyGet, ProcKind::Function], object.dispatch_view.as_deref())
-                    .map(|(_, getter)| getter.name.clone())
-                    .ok_or_else(|| language_error(if late { 13 } else { 438 },
-                        "the argument has no scalar default member", line))?;
+                let automation = late || level > 0;
                 self.tick(Some(line))?;
-                value = self.with_callback_error_context(frame, |runtime, _|
-                    runtime.instance_member(object, &getter, &[], line))
-                    .map_err(|failure| {
-                        if late && !matches!(failure.kind, RuntimeErrorKind::StepLimit |
-                            RuntimeErrorKind::CallDepth | RuntimeErrorKind::ExecutionTerminated |
-                            RuntimeErrorKind::EndStatement | RuntimeErrorKind::Compile) {
-                            language_error(13, "the default member could not supply a scalar argument", line)
-                        } else { failure }
-                    })?;
-                resolved = true;
-                // Automation converts the one returned VARIANT, whereas an
-                // early scalar argument can read another object's default.
-                if late {
-                    if matches!(value, Value::Object(_) | Value::Nothing | Value::Null) {
-                        return Err(language_error(13, "the default member did not return a scalar argument", line));
+                let answer = if let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&object.handle) {
+                    let getter = self.source_class_procedure_view(&instance.class, "_default",
+                        &[ProcKind::PropertyGet, ProcKind::Function], object.dispatch_view.as_deref())
+                        .map(|(_, getter)| getter.name.clone());
+                    match getter {
+                        Some(getter) => self.with_callback_error_context(frame, |runtime, _|
+                            runtime.instance_member(object, &getter, &[], line)),
+                        None => Err(language_error(438, "the argument has no scalar default member", line)),
                     }
-                    break;
+                } else {
+                    self.let_value(value.clone(), frame, line)
+                };
+                value = answer.map_err(|failure| {
+                    if automation && !matches!(failure.kind, RuntimeErrorKind::StepLimit |
+                        RuntimeErrorKind::CallDepth | RuntimeErrorKind::ExecutionTerminated |
+                        RuntimeErrorKind::EndStatement | RuntimeErrorKind::Compile) {
+                        language_error(13, "the default member could not supply a scalar argument", line)
+                    } else { failure }
+                })?;
+                if matches!(value, Value::Nothing) ||
+                    automation && matches!(value, Value::Object(_) | Value::Null) {
+                    return Err(language_error(13, "the default member did not return a scalar argument", line));
                 }
             }
-            if resolved {
-                // Nothing returned by a getter is a type mismatch, distinct
-                // from dereferencing an initial Nothing argument (error 91).
-                if matches!(value, Value::Nothing) {
-                    return Err(language_error(13, "the default member returned Nothing", line));
-                }
-                if !matches!(value, Value::Object(_)) {
-                    value = coerce_automation_scalar(&value, target)
-                        .map_err(|message| host_failure(message, line))?;
-                }
-                args[index] = value;
-            }
+            args[index] = coerce_automation_scalar(&value, target)
+                .map_err(|message| host_failure(message, line))?;
         }
         Ok(())
     }

@@ -51627,6 +51627,114 @@ End Function
     }
 
     #[test]
+    fn areas_item_nested_defaults_follow_one_scalar_conversion_layer() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "AreaIndexLeaf"
+Public Kind As Long
+Public Calls As Long
+Public Property Get LeafIndex() As Variant
+Attribute LeafIndex.VB_UserMemId = 0
+ Calls = Calls + 1
+ Select Case Kind
+ Case 13: Set LeafIndex = Nothing
+ Case 14: Err.Raise 513, "LeafCustom", "leaf raised"
+ Case 15: LeafIndex = Null
+ Case 16: Set LeafIndex = ThisWorkbook.Worksheets(1).Range("Z1")
+ Case 17: Set LeafIndex = ThisWorkbook.Worksheets(1)
+ Case 18: LeafIndex = Array(1)
+ Case 19: LeafIndex = "bad"
+ Case 20: LeafIndex = 2147483648#
+ Case 21: LeafIndex = 0
+ Case 22: LeafIndex = CVErr(2042)
+ Case Else: LeafIndex = 2
+ End Select
+End Property
+VERSION 1.0 CLASS
+Attribute VB_Name = "AreaIndexProvider"
+Public Kind As Long
+Public Calls As Long
+Public Leaf As AreaIndexLeaf
+Public Property Get IndexValue() As Variant
+Attribute IndexValue.VB_UserMemId = 0
+ Calls = Calls + 1
+ Select Case Kind
+ Case 11: Set IndexValue = ThisWorkbook.Worksheets(1)
+ Case 12: Set IndexValue = ThisWorkbook.Worksheets(1).Range("Z1:Z2")
+ Case Else: Set IndexValue = Leaf
+ End Select
+End Property
+Attribute VB_Name = "AreasProbe"
+Public Function Probe(ByVal mode As Long, ByVal kind As Long) As String
+ Dim provider As AreaIndexProvider
+ Dim index As Variant
+ Dim query As Range
+ Dim collection As Areas
+ Dim lateCollection As Object
+ Dim lateRange As Object
+ Dim selected As Range
+ Dim status As String
+ Range("Z1").Value2 = 2
+ On Error GoTo Failed
+ Set provider = New AreaIndexProvider
+ provider.Kind = kind
+ Set provider.Leaf = New AreaIndexLeaf
+ provider.Leaf.Kind = kind
+ Set index = provider
+ Set query = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7,J10:L10")
+ Set collection = query.Areas
+ Set lateCollection = collection
+ Set lateRange = query
+ Select Case mode
+ Case 0: Set selected = query.Areas(index)
+ Case 1: Set selected = collection.Item(index)
+ Case 2: Set selected = lateCollection.Item(index)
+ Case 3: Set selected = lateRange.Areas(index)
+ Case 4: Set selected = collection(index)
+ Case 5: Set selected = lateCollection(index)
+ Case 6: Set selected = CallByName(collection, "Item", VbGet, index)
+ Case 7: With collection
+ Set selected = .Item(index)
+ End With
+ Case 8: With lateCollection
+ Set selected = .Item(index)
+ End With
+ Case 9: With query
+ Set selected = .Areas(index)
+ End With
+ Case 10: With lateRange
+ Set selected = .Areas(index)
+ End With
+ End Select
+ status = "OK|" & selected.Address
+ GoTo Finished
+Failed:
+ status = CStr(Err.Number)
+Finished:
+ Probe = status & "|calls=" & CStr(provider.Calls) & "|leafCalls=" & CStr(provider.Leaf.Calls)
+End Function
+"#;
+        // Both default getter counts and error outcomes measured in native Excel.
+        for mode in 0..11 {
+            for kind in 10..=22 {
+                let early = matches!(mode, 0 | 1 | 4 | 7 | 9);
+                let status = match (early, kind) {
+                    (true, 10) => "OK|$F$6:$G$7",
+                    (true, 20) => "6",
+                    (true, 21) => "1004",
+                    _ => "13",
+                };
+                let leaf_calls = i32::from(early && !matches!(kind, 11 | 12));
+                let outcome = execute_workbook_vba(workbook(), source, "AreasProbe.Probe",
+                    vec![Value::Integer(mode), Value::Integer(kind)], 0, failure_context()).unwrap();
+                assert!(outcome.error.is_none(), "mode {mode}, kind {kind}: {}",
+                    outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                    format!("{status}|calls=1|leafCalls={leaf_calls}"), "mode {mode}, kind {kind}");
+            }
+        }
+    }
+
+    #[test]
     fn areas_item_resolves_range_default_values_and_object_errors() {
         for access in ["query.Areas(index)", "collection.Item(index)",
             "lateCollection.Item(index)", "lateRange.Areas(index)",
