@@ -448,6 +448,9 @@ fn check_with_environment<'a>(
     checker.project_name = project_name;
     checker.call_references = call_references;
     checker.module_storage_syntax()?;
+    if checker.call_references.is_some() {
+        checker.module_declaration_types()?;
+    }
     if checker.known_types.is_some() && intrinsic_operator(&key(&procedure.name)) {
         return Err(checker.failure(CompileErrorKind::SyntaxError, procedure.span));
     }
@@ -961,9 +964,10 @@ impl<'a> Checker<'a> {
         if self.standard_module_key(&kind.name).is_some() {
             return Err(self.failure(CompileErrorKind::InvalidModule, span));
         }
-        let Some(known) = self.known_types else {
+        let known = self.known_types;
+        if known.is_none() && self.call_references.is_none() {
             return Ok(());
-        };
+        }
         let name = self.source_type_key(&kind.name);
         if name == "decimal" {
             return Err(self.failure(CompileErrorKind::SyntaxError, span));
@@ -974,7 +978,13 @@ impl<'a> Checker<'a> {
             || self
                 .document_modules
                 .is_some_and(|documents| documents.contains_key(&name))
-            || known.contains_key(&name)
+            || known.is_some_and(|types| types.contains_key(&name))
+            // On-demand checks also resolve declarations against the host's
+            // reference catalogue before any procedure statement executes.
+            || self.call_references.is_some_and(|references| {
+                references.types.iter().any(|(found, _)| key(found) == name)
+                    || references.library.resolve_type(&kind.name).is_some()
+            })
             || matches!(
                 name.as_str(),
                 "byte"
@@ -999,6 +1009,33 @@ impl<'a> Checker<'a> {
         } else {
             Err(self.failure(CompileErrorKind::UserDefinedTypeNotDefined, span))
         }
+    }
+
+    fn module_declaration_types(&self) -> Result<(), CompileError> {
+        for item in &self.module.items {
+            match item {
+                ModuleItem::Variables(declaration) => {
+                    for variable in &declaration.items {
+                        self.validate_type(&variable.type_name, declaration.span)?;
+                    }
+                }
+                ModuleItem::Type(record) => {
+                    for field in &record.fields {
+                        self.validate_type(&field.type_name, record.span)?;
+                    }
+                }
+                ModuleItem::ExternalProc(procedure) => {
+                    for parameter in &procedure.params {
+                        self.validate_type(&parameter.type_name, procedure.span)?;
+                    }
+                    if let Some(kind) = &procedure.return_type {
+                        self.validate_type(kind, procedure.span)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     fn module_storage_syntax(&self) -> Result<(), CompileError> {
@@ -2694,6 +2731,14 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+            if self.known_types.is_some() || self.call_references.is_some() {
+                let mut checker = Self::for_context(module, self.globals, self.classes, None);
+                checker.project_name = self.project_name;
+                checker.known_types = self.known_types;
+                checker.call_references = self.call_references;
+                checker.document_modules = self.document_modules;
+                checker.module_declaration_types()?;
+            }
         }
         Ok(())
     }
@@ -3167,6 +3212,15 @@ impl<'a> Checker<'a> {
                     return;
                 }
                 if let Err(error) = self.check_class(type_name, *span) {
+                    failure = Some(error);
+                    return;
+                }
+                let kind = TypeName {
+                    name: type_name.clone(),
+                    is_new: true,
+                    ..TypeName::implicit()
+                };
+                if let Err(error) = self.validate_type(&kind, *span) {
                     failure = Some(error);
                     return;
                 }
