@@ -1174,13 +1174,14 @@ fn resolve_font_styled(family: Option<&str>, bold: bool, italic: bool) -> String
         }
     }
 
-    // Nothing embedded for this face: fall back to the base-14 mapping, which
-    // at least names a font every viewer has.
+    // Nothing embedded for this face: draw it with an embedded stand-in. Times
+    // goes there too, not to base-14 Times-Roman: its substitute is only
+    // missing here when the run asks for glyphs it lacks, and a base-14 name
+    // is a font with no file, which a PDF/A check rejects.
     if bold {
         match base {
             "Calibri" | "Arial" | "Helvetica" => "OxiLatin-Bold".to_string(),
             "Cambria" | "Century" => "OxiCambria-Bold".to_string(),
-            "Times New Roman" | "Times" => "Times-Bold".to_string(),
             "Courier New" | "Courier" => "Courier-Bold".to_string(),
             other => stand_in_face(other, true),
         }
@@ -1188,7 +1189,6 @@ fn resolve_font_styled(family: Option<&str>, bold: bool, italic: bool) -> String
         match base {
             "Calibri" | "Arial" | "Helvetica" => "OxiLatin-Regular".to_string(),
             "Cambria" | "Century" => "OxiCambria-Regular".to_string(),
-            "Times New Roman" => "Times-Roman".to_string(),
             "Courier New" => "Courier".to_string(),
             other => stand_in_face(other, false),
         }
@@ -3084,7 +3084,14 @@ fn build_embedded_fonts(
     // drawn in text boxes, a header, a shape's label. Deciding from them alone
     // left such a document with no East Asian face at all, and its text went
     // out under a bare font name no viewer can draw it with.
-    if drawn_chars.iter().any(|c| is_cjk_char(*c)) {
+    // An East Asian family drawing only Latin text -- MS Gothic for the digits
+    // of an English form -- needs its face as much: its runs are named after
+    // it whatever they hold.
+    let east_asian_runs = layout.pages.iter().flat_map(|page| &page.elements).any(|elem| {
+        matches!(&elem.content, oxidocs_core::layout::LayoutContent::Text { text, font_family: Some(family), .. }
+            if is_cjk_family(family) && !text.trim().is_empty())
+    });
+    if east_asian_runs || drawn_chars.iter().any(|c| is_cjk_char(*c)) {
         needs_cjk_font = true;
     }
     if !needs_cjk_font {
