@@ -51681,6 +51681,76 @@ End Function
     }
 
     #[test]
+    fn named_source_default_indices_validate_names_and_preserve_byref() {
+        for factory in [false, true] {
+            for (argument, byref, has_default, rejected, expected) in [
+                ("2", false, true, false, "OK|$F$6:$G$7"),
+                ("Index:=2", false, true, false, "OK|$F$6:$G$7"),
+                ("Missing:=2", false, true, true, ""),
+                ("Index:=slot", true, true, false, "OK|$F$6:$G$7|12"),
+                ("Index:=2", false, false, true, ""),
+                ("2", false, false, false, "ERR|438"),
+            ] {
+                let declaration = if factory { "" } else { "Public collection As IndexBox" };
+                let setup = if factory { "" } else { "Set collection = New IndexBox" };
+                let target = if factory { "MakeCollection" } else { "NamedDefaultProbe.collection" };
+                let extra = if factory {
+                    "Public Function MakeCollection() As IndexBox\n Set MakeCollection = New IndexBox\nEnd Function\n"
+                } else { "" };
+                let mode = if byref { "ByRef" } else { "ByVal" };
+                let mutate = if byref { " Index = Index + 10\n" } else { "" };
+                let class_body = if has_default {
+                    format!(r#"Public Property Get ValueAt({mode} Index As Long) As Range
+Attribute ValueAt.VB_UserMemId = 0
+ Set ValueAt = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7").Areas.Item(Index)
+{mutate}End Property
+"#)
+                } else { "Public marker As Long\n".to_string() };
+                let suffix = if byref { r#" & "|" & CStr(slot)"# } else { "" };
+                let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+{declaration}
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function Probe() As String
+ Dim selected As Range
+ Dim slot As Long
+ On Error GoTo Failed
+ slot = 2
+ {setup}
+ Set selected = {target}({argument})
+ Probe = "OK|" & selected.Address{suffix}
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number)
+End Function
+{extra}VERSION 1.0 CLASS
+Attribute VB_Name = "IndexBox"
+{class_body}"#);
+                let control = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Control", vec![], 0, failure_context()).unwrap();
+                assert!(control.error.is_none(), "uncalled invalid procedure must stay uncompiled");
+                assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+                let outcome = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+                if rejected {
+                    let error = outcome.error.as_ref().expect("invalid named index must not execute");
+                    assert_eq!(error.kind, "compile", "factory={factory} {argument}: {}", error.message);
+                    assert!(error.message.ends_with("\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}"),
+                        "factory={factory} {argument}: {}", error.message);
+                } else {
+                    assert!(outcome.error.is_none(), "factory={factory} {argument}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+                    assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected,
+                        "factory={factory} {argument}");
+                }
+                assert!(!outcome.workbook_changed);
+                assert!(outcome.debug_output.is_empty() && outcome.messages.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn named_index_arrays_fail_at_compile_time_and_keep_positional_indices() {
         for (name, declaration, seed, index) in [
             ("typed", "Dim collection(1 To 2) As Long", "collection(1) = 5\n collection(2) = 7", 2),

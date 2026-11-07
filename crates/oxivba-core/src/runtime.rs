@@ -8467,7 +8467,18 @@ impl<'a> Runtime<'a> {
                     }
                     // Variable subscripts are evaluated in the caller. The
                     // selected array/object itself belongs to the module.
-                    let evaluated = args.iter().map(|arg| match &arg.value { Some(expr) => self.eval_expr(expr, frame), None => Ok(Value::Missing) }).collect::<Result<Vec<_>, _>>()?;
+                    let class = self.source_class_name(target, frame);
+                    let instance = class.is_some() || self.expression_slot(target, frame).is_some_and(|slot|
+                        matches!(&*slot.borrow(), Value::Object(object) if
+                            matches!(self.internal_objects.get(&object.handle), Some(InternalObject::Instance(_)))));
+                    let parameters = class.as_deref().and_then(|class| self.source_class_parameters(class, "_default"));
+                    let arguments = if instance {
+                        Some(self.evaluate_source_arguments(args, *force_by_value, parameters.as_deref(), frame)?)
+                    } else { None };
+                    let evaluated = args.iter().enumerate().map(|(index, arg)| {
+                        if let Some(arguments) = &arguments { return Ok(arguments[index].value()); }
+                        match &arg.value { Some(expr) => self.eval_expr(expr, frame), None => Ok(Value::Missing) }
+                    }).collect::<Result<Vec<_>, _>>()?;
                     let name = name.to_string();
                     return self.in_standard(module, |this| {
                         let scope = empty_frame(this.error_environment.clone(), this.project_name.clone());
@@ -8478,6 +8489,14 @@ impl<'a> Runtime<'a> {
                                 Ok(array.values[array_offset(&array, &indices, span.line)?].clone())
                             }
                             Some(Value::Object(receiver)) => {
+                                if let Some(answer) = this.call_instance_source(&receiver, "_default", args,
+                                    *force_by_value, arguments.as_deref(), class.as_deref(), frame, span.line)?
+                                {
+                                    return Ok(answer);
+                                }
+                                if instance {
+                                    return Err(no_such_member("the class has no default member".into(), Some(span.line)));
+                                }
                                 let answer = if args.iter().any(|argument| argument.name.is_some()) {
                                     let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
                                     this.host_call_named(Some(&receiver), "Item", &evaluated, &names, span.line)?
@@ -8877,7 +8896,6 @@ impl<'a> Runtime<'a> {
             && (args.iter().all(|arg| arg.name.is_none())
                 || procedure.return_type.as_ref().is_some_and(|kind| {
                     !kind.is_array && self.is_specific_object_type(&kind.name)
-                        && !self.classes.contains_key(&key(&kind.name))
                 }))
             && matches!(procedure.kind, ProcKind::Function | ProcKind::PropertyGet)
             && procedure.return_type.as_ref().is_none_or(|kind| {
@@ -8908,9 +8926,8 @@ impl<'a> Runtime<'a> {
         if self.indexes_procedure_result(procedure, args) {
             // Index operands are evaluated in the caller before invoking the
             // parameterless factory, and retain their places for its default.
-            let class = procedure.return_type.as_ref().map(|kind| kind.name.as_str())
-                .filter(|name| self.classes.contains_key(&key(name)));
-            let parameters = class.and_then(|name| self.source_class_parameters(name, "_default"));
+            let class = procedure.return_type.as_ref().and_then(|kind| self.source_class_key(&kind.name));
+            let parameters = class.as_deref().and_then(|name| self.source_class_parameters(name, "_default"));
             let arguments = match evaluated {
                 Some(values) => values.to_vec(),
                 None => self.evaluate_source_arguments(args, force_by_value, parameters.as_deref(), frame)?,
@@ -8918,7 +8935,7 @@ impl<'a> Runtime<'a> {
             let value = self.call_resolved_source_body(module, procedure, receiver, &[], false, None, frame, line)?;
             return match value {
                 Value::Object(object) => {
-                    if let Some(value) = self.call_instance_source(&object, "_default", args, force_by_value, Some(&arguments), class, frame, line.unwrap_or(0))? {
+                    if let Some(value) = self.call_instance_source(&object, "_default", args, force_by_value, Some(&arguments), class.as_deref(), frame, line.unwrap_or(0))? {
                         return Ok(value);
                     }
                     if matches!(self.internal_objects.get(&object.handle), Some(InternalObject::Instance(_))) {
