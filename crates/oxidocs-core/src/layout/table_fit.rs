@@ -10392,13 +10392,16 @@ impl<'a> TableFitLayouter<'a> {
                                                                 underline_style: None,
                                                                 strikethrough: false,
                                                                 double_strikethrough: false,
-                                                                color: color.clone(),
+                                                                color: ruby_ir.annotation_style.as_deref()
+                                                                    .and_then(|a| a.color.clone())
+                                                                    .or_else(|| color.clone()),
                                                                 highlight: None,
                                                                 character_spacing: ruby_cs,
                                                                 field_type: None,
                                                                 text_scale: rt_scale * 100.0,
                                                                 is_vertical: false,
-                                                                effects: TextEffects::default(),
+                                                                effects: ruby_ir.annotation_style.as_deref()
+                                                                    .map(TextEffects::of_run).unwrap_or_default(),
                                                             },
                                                         );
                                                         ruby_el.text_y_off = ruby_baseline - content_h + 1.0 - ruby_m.win_ascent * hps_pt;

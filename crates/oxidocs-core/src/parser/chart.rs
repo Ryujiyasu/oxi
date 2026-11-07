@@ -73,6 +73,39 @@ struct Series {
     line_none: bool,
     marker: bool,
     point_fills: HashMap<usize, String>,
+    /// A cached point's own `formatCode` (c:pt/@formatCode), over `format`.
+    point_formats: HashMap<usize, String>,
+}
+
+impl Series {
+    /// OXI_CHART_POINT_FORMAT (2026-11-07, default ON, opt-out _DISABLE): a value
+    /// label takes its cached point's own formatCode. blind-J ja/reports__7a8daf36
+    /// chart2: the cache's formatCode is 0.0% with points 0/2/3 marked 0%; Word's
+    /// labels read 64% / 47.6% / 77% / 78%, Oxi gave 63.6% / 47.6% / 77.3% / 77.8%.
+    fn format_at(&self, i: usize) -> &str {
+        if !crate::env_flag!("OXI_CHART_POINT_FORMAT_DISABLE") {
+            if let Some(f) = self.point_formats.get(&i) {
+                return f;
+            }
+        }
+        if self.format.is_empty() { "General" } else { &self.format }
+    }
+}
+
+/// The per-point formatCode overrides of a value cache.
+fn point_formats(n: Option<&Node>) -> HashMap<usize, String> {
+    let Some(c) = n
+        .and_then(|n| n.child("numRef"))
+        .and_then(|r| r.child("numCache"))
+        .or_else(|| n.and_then(|n| n.child("numLit")))
+    else {
+        return HashMap::new();
+    };
+    c.children
+        .iter()
+        .filter(|p| p.name == "pt")
+        .filter_map(|p| Some((p.num("idx")? as usize, p.attr("formatCode")?.to_string())))
+        .collect()
 }
 
 /// The cached points of a reference or literal: (values by index, format).
@@ -140,6 +173,7 @@ fn series(ser: &Node, xml: &str, theme: &ThemeColors) -> Series {
         line_none: ln.is_some_and(|l| l.child("noFill").is_some()),
         marker: ser.path(&["marker", "symbol"]).and_then(|s| s.attr("val")).is_some_and(|v| v != "none"),
         point_fills,
+        point_formats: point_formats(ser.child("val").or_else(|| ser.child("yVal"))),
     }
 }
 
@@ -783,7 +817,7 @@ fn draw_category(
                     let r = if horizontal { (a.min(b), start, (a - b).abs(), bw) } else { (start, a.min(b), bw, (a - b).abs()) };
                     rect(g, r, Some(fill), stroke);
                     if labels {
-                        let txt = format_number(s.vals.get(i).copied().flatten().unwrap_or(0.0), if s.format.is_empty() { "General" } else { &s.format });
+                        let txt = format_number(s.vals.get(i).copied().flatten().unwrap_or(0.0), s.format_at(i));
                         let lh = line_h(&st_lbl);
                         let lw = text_width(&txt, st_lbl.size) + 6.0;
                         let rr = if stacked {
@@ -848,7 +882,7 @@ fn draw_category(
                 if labels {
                     for (i, p) in pts.iter().enumerate() {
                         let Some((x, y)) = p else { continue };
-                        let txt = format_number(s.vals.get(i).copied().flatten().unwrap_or(0.0), if s.format.is_empty() { "General" } else { &s.format });
+                        let txt = format_number(s.vals.get(i).copied().flatten().unwrap_or(0.0), s.format_at(i));
                         let lw = text_width(&txt, st_lbl.size) + 6.0;
                         label(g, &txt, &st_lbl, (x - lw / 2.0, y - line_h(&st_lbl) - 2.0, lw, line_h(&st_lbl)), Alignment::Center);
                     }
@@ -1002,7 +1036,7 @@ fn draw_pie(
         if show_val || show_pct || show_cat {
             let mut parts = Vec::new();
             if show_cat { parts.push(s.cats.get(i).cloned().unwrap_or_default()); }
-            if show_val { parts.push(format_number(*v, if s.format.is_empty() { "General" } else { &s.format })); }
+            if show_val { parts.push(format_number(*v, s.format_at(i))); }
             if show_pct { parts.push(format!("{:.0}%", v.abs() / total * 100.0)); }
             let txt = parts.join("; ");
             let (lx, ly) = on_circle(cx, cy, (r + hole) / 2.0 + if hole > 0.0 { 0.0 } else { r * 0.2 }, angle + sweep / 2.0);

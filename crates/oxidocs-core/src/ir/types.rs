@@ -1743,6 +1743,9 @@ pub struct Ruby {
     /// Horizontal scale of the annotation run, percent (`<w:w>` in the rt run's rPr).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_scale: Option<f32>,
+    /// The annotation run's own run properties (the rt run's rPr), when parsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation_style: Option<Box<RunStyle>>,
 }
 
 /// Column layout definition (from w:cols)

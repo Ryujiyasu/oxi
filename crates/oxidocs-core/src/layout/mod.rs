@@ -2867,6 +2867,22 @@ pub struct TextEffects {
     pub line: Option<(f32, u32)>,
 }
 
+impl TextEffects {
+    /// A run's Word character effects (S702 / S1327 / OXI_TEXT_GLOW), as the body
+    /// text builds them.
+    pub(crate) fn of_run(st: &crate::ir::RunStyle) -> Self {
+        TextEffects {
+            shadow: st.shadow,
+            emboss: st.emboss,
+            imprint: st.imprint,
+            outline: st.outline,
+            no_fill: st.no_fill,
+            glow: st.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
+            line: st.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum LayoutContent {
     Text {

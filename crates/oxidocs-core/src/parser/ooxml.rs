@@ -7247,7 +7247,7 @@ fn parse_run(
                         depth += 1;
                     }
                     "ruby" if depth == 0 => {
-                        ruby = Some(parse_ruby(reader)?);
+                        ruby = Some(parse_ruby_with(reader, Some((ctx, styles)))?);
                     }
                     _ => {
                         depth += 1;
@@ -16813,8 +16813,17 @@ fn parse_tracked_change_runs(
 /// Parse w:ruby element (furigana). Populates all rubyPr children:
 /// rubyAlign, hps, hpsRaise, hpsBaseText, lid (per ECMA-376 §17.3.3.25).
 /// Geometry rules in spec/word_layout_spec_ra.md §18.
+#[cfg(test)]
 fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
+    parse_ruby_with(reader, None)
+}
+
+fn parse_ruby_with(
+    reader: &mut Reader<&[u8]>,
+    rpr_ctx: Option<(&ParseContext, &StyleSheet)>,
+) -> Result<Ruby, ParseError> {
     let mut annotation_fonts = Vec::new();
+    let mut annotation_style: Option<Box<RunStyle>> = None;
     let mut base_text = String::new();
     let mut ruby_text = String::new();
     let mut ruby_font_size: Option<f32> = None;
@@ -16856,6 +16865,25 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
                     }
                     if let Some(family) = east_asia.or(latin) {
                         if !annotation_fonts.contains(&family) { annotation_fonts.push(family); }
+                    }
+                }
+                // OXI_RUBY_RUN_STYLE (2026-11-07, default ON, opt-out _DISABLE): the rt
+                // run's rPr is read in full -- colour, w14 textFill / textOutline,
+                // shadow -- and the annotation is painted with it. blind-J
+                // ja/creative__9aa11078's title ruby «ししょ» / «こうざ» (w:color 4472C4,
+                // w14:textFill FFFFFF, w14:textOutline accent5): Word draws white glyphs
+                // with a blue outline, Oxi painted them flat 4472C4 with no effects.
+                if in_rt && local == "rPr" && annotation_style.is_none()
+                    && !crate::env_flag!("OXI_RUBY_RUN_STYLE_DISABLE")
+                {
+                    if let Some((ctx, styles)) = rpr_ctx {
+                        let (st, _) = parse_run_properties(reader, ctx, styles, true)?;
+                        for family in [st.font_family_east_asia.clone(), st.font_family.clone()].into_iter().flatten() {
+                            if !annotation_fonts.contains(&family) { annotation_fonts.push(family); break; }
+                        }
+                        if st.text_scale.is_some() { rt_scale = st.text_scale; }
+                        annotation_style = Some(Box::new(st));
+                        continue;
                     }
                 }
                 match local.as_str() {
@@ -17001,6 +17029,7 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
         hps_base_text_halfpt,
         lang,
         text_scale: rt_scale,
+        annotation_style,
     })
 }
 

@@ -280,6 +280,7 @@ mod tests {
             hps_halfpt: hps,
             hps_raise_halfpt: raise,
             hps_base_text_halfpt: Some(21), text_scale: None,
+            annotation_style: None,
             lang: None,
         }
     }
@@ -363,6 +364,7 @@ mod tests {
                 hps_halfpt: Some(hps_halfpt),
                 hps_raise_halfpt: Some(raise_halfpt),
                 hps_base_text_halfpt: Some((base_pt * 2.0) as u32), text_scale: None,
+            annotation_style: None,
                 lang: None,
             };
             let exp = ruby_expansion_pt(&r, base_pt);
@@ -428,6 +430,7 @@ mod tests {
                 hps_halfpt: Some(hps_halfpt),
                 hps_raise_halfpt: None, // exercises default_hps_raise_pt
                 hps_base_text_halfpt: Some((base_pt * 2.0) as u32), text_scale: None,
+            annotation_style: None,
                 lang: None,
             };
             let predicted = (base_pt + 0.5) + 0.75 * hps_pt - base_pt * (9.0 / 10.5);
@@ -483,6 +486,7 @@ mod tests {
                 hps_halfpt: Some(hps_halfpt),
                 hps_raise_halfpt: None, // ← exercises default_hps_raise_pt
                 hps_base_text_halfpt: Some((base_pt * 2.0) as u32), text_scale: None,
+            annotation_style: None,
                 lang: None,
             };
             let predicted = (base_pt - 1.0) + 0.75 * hps_pt - base_pt * (9.0 / 10.5);
@@ -608,6 +612,7 @@ mod tests {
             hps_halfpt: Some(11),
             hps_raise_halfpt: Some(18),  // 9pt → expansion 4.125
             hps_base_text_halfpt: Some(21), text_scale: None,
+            annotation_style: None,
             lang: None,
         };
         let r2 = Ruby {
@@ -640,7 +645,8 @@ mod tests {
                 base: "a".into(), text: "x".into(), font_size: Some(5.5),
                 align: Some(RubyAlign::Center),
                 hps_halfpt: Some(11), hps_raise_halfpt: Some(36),
-                hps_base_text_halfpt: Some(21), text_scale: None, lang: None,
+                hps_base_text_halfpt: Some(21), text_scale: None,
+            annotation_style: None, lang: None,
             },
             10.5,
         );

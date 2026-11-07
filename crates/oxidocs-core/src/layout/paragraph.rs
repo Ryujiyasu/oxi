@@ -9348,8 +9348,11 @@ impl<'a> ParagraphLayouter<'a> {
                             } else {
                                 base_el_y + base_ascent - hps_raise_pt - ruby_ascent
                             };
-                            let ruby_color = self
-                                .resolve_color(&ruby_run_style, &para.style)
+                            // OXI_RUBY_RUN_STYLE: the rt run's own colour and effects.
+                            let ann_style = ruby_ir.annotation_style.as_deref();
+                            let ruby_color = ann_style
+                                .and_then(|a| self.resolve_color(a, &para.style))
+                                .or_else(|| self.resolve_color(&ruby_run_style, &para.style))
                                 .map(|s| s.to_string());
                             let ruby_font_family = self
                                 .resolve_font_family_for_text(
@@ -9379,7 +9382,7 @@ impl<'a> ParagraphLayouter<'a> {
                                     character_spacing: ruby_char_spacing,
                                     text_scale: rt_scale * 100.0,
                                     is_vertical: false,
-                                    effects: TextEffects::default(),
+                                    effects: ann_style.map(TextEffects::of_run).unwrap_or_default(),
                                 },
                             );
                             if let Some(pi) = body_para_index {
