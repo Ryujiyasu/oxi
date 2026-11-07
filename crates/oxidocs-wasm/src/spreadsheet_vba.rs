@@ -5132,7 +5132,7 @@ impl<'a> WorkbookHost<'a> {
         }
     }
 
-    fn areas_item_index(&self, value: &Value, count: usize) -> Result<usize, String> {
+    fn areas_item_index(&self, value: &Value, count: usize, automation: bool) -> Result<usize, String> {
         let scalar;
         let value = if let Value::Object(object) = value {
             let range = self.range(object).or_else(|| match self.objects.get(host_object_index(object.handle)) {
@@ -5144,6 +5144,9 @@ impl<'a> WorkbookHost<'a> {
                 scalar = self.range_value(range)?;
                 &scalar
             } else {
+                if automation {
+                    return Err(host_error(13, "Areas.Item dispatch index has no scalar default value"));
+                }
                 if let Some(number) = self.default_member_error(object) {
                     return Err(host_error(number, "Areas.Item index has no scalar default value"));
                 }
@@ -5152,6 +5155,11 @@ impl<'a> WorkbookHost<'a> {
         } else {
             value
         };
+        // Late-bound Automation rejects these conversions as type mismatches;
+        // an ordinary VBA argument conversion retains its specific error.
+        if automation && matches!(value, Value::Null | Value::Nothing) {
+            return Err(host_error(13, "Areas.Item dispatch index must be numeric"));
+        }
         areas_item_index(value, count)
     }
 
@@ -5733,7 +5741,7 @@ impl<'a> WorkbookHost<'a> {
             return match args {
                 [] | [Value::Missing] => Ok(Some(self.object(HostObject::Areas(handle)))),
                 [wanted] => {
-                    let at = self.areas_item_index(wanted, areas.len())?;
+                    let at = self.areas_item_index(wanted, areas.len(), false)?;
                     let block = &areas[at];
                     Ok(Some(self.object(HostObject::Range(*block))))
                 }
@@ -28333,6 +28341,13 @@ impl Host for ApplicationHost<'_> {
             host.default_member_error(receiver.expect("native receiver"))
         })
     }
+    fn prepare_late_bound_call(&self, receiver: &ObjectRef, name: &str,
+        args: &[Value], argument_names: &[Option<String>])
+        -> Result<Option<(String, Vec<Value>)>, String> {
+        self.read(Some(receiver), name, false, |host, receiver| {
+            host.prepare_late_bound_call(receiver.expect("native receiver"), name, args, argument_names)
+        })
+    }
     fn prepare_automation_get(
         &self,
         _receiver: &ObjectRef,
@@ -28640,7 +28655,40 @@ impl Host for WorkbookHost<'_> {
         normalize_named_arguments(args, names, &parameters, name).map(Some)
     }
 
+    fn prepare_late_bound_call(&self, receiver: &ObjectRef, name: &str,
+        args: &[Value], argument_names: &[Option<String>])
+        -> Result<Option<(String, Vec<Value>)>, String> {
+        let item = name.eq_ignore_ascii_case("item")
+            && matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::Areas(_)));
+        let areas = name.eq_ignore_ascii_case("areas") && (self.range(receiver).is_some()
+            || matches!(self.objects.get(host_object_index(receiver.handle)),
+                Some(HostObject::Blocks(_) | HostObject::BlocksAxis(..))));
+        if !item && !areas { return Ok(None); }
+        // Bind unknown names through the ordinary host path before conversion.
+        if argument_names.iter().any(|name| name.as_deref()
+            .is_some_and(|name| !item || !name.eq_ignore_ascii_case("index"))) {
+            return Ok(None);
+        }
+        self.prepare_automation_get(receiver, name, args)
+    }
+
     fn prepare_automation_get(&self, receiver: &ObjectRef, name: &str, args: &[Value]) -> Result<Option<(String, Vec<Value>)>, String> {
+        let area_count = match self.objects.get(host_object_index(receiver.handle)) {
+            Some(HostObject::Areas(handle)) if name.eq_ignore_ascii_case("item") =>
+                Some(self.blocks[*handle].len()),
+            Some(HostObject::Blocks(handle) | HostObject::BlocksAxis(handle, _))
+                if name.eq_ignore_ascii_case("areas") => Some(self.blocks[*handle].len()),
+            Some(HostObject::Range(_) | HostObject::RangeCollection(..))
+                if name.eq_ignore_ascii_case("areas") => Some(1),
+            _ => None,
+        };
+        if let (Some(count), [index]) = (area_count, args) {
+            if !matches!(index, Value::Missing) {
+                let at = self.areas_item_index(index, count, true)?;
+                // Pass the resolved Long onward, so a default value is read once.
+                return Ok(Some((name.into(), vec![Value::Integer((at + 1) as i64)])));
+            }
+        }
         if self.is_application(receiver) && name.eq_ignore_ascii_case("build") && !args.is_empty() {
             return Err(host_error(450, "Application.Build takes no arguments"));
         }
@@ -29878,7 +29926,7 @@ impl Host for WorkbookHost<'_> {
                     let [wanted] = args else {
                         return Err("Areas.Item takes one number".to_string());
                     };
-                    let at = self.areas_item_index(wanted, areas.len())?;
+                    let at = self.areas_item_index(wanted, areas.len(), false)?;
                     let block = &areas[at];
                     return Ok(Some(self.object(HostObject::Range(*block))));
                 }
@@ -30521,7 +30569,7 @@ impl Host for WorkbookHost<'_> {
                     return match args {
                         [] | [Value::Missing] => Ok(Some(self.areas_of(range))),
                         [wanted] => {
-                            self.areas_item_index(wanted, 1)?;
+                            self.areas_item_index(wanted, 1, false)?;
                             Ok(Some(self.object(HostObject::Range(range))))
                         }
                         _ => Err("Areas takes one number".to_string()),
@@ -51457,12 +51505,16 @@ End Function
     #[test]
     fn areas_item_resolves_range_default_values_and_object_errors() {
         for access in ["query.Areas(index)", "collection.Item(index)",
-            "lateCollection.Item(index)", "lateRange.Areas(index)"] {
+            "lateCollection.Item(index)", "lateRange.Areas(index)",
+            "collection(index)", "lateCollection(index)",
+            "CallByName(collection, \"Item\", VbGet, index)",
+            "CallByName(query, \"Areas\", VbGet, index)"] {
             for (index, expected) in [
                 ("Range(\"Z1\")", 1004), ("Range(\"Z1:Z2\")", 13),
                 ("Nothing", 91), ("Worksheets(1)", 438),
             ] {
                 let source = format!("Attribute VB_Name = \"AreasProbe\"\nPublic Function Probe() As String\n Dim query As Range\n Dim collection As Areas\n Dim lateCollection As Object\n Dim lateRange As Object\n Dim selected As Range\n Dim index As Variant\n On Error GoTo Failed\n Set query = Range(\"B2:C3,F6:G7,J10:L10\")\n Set collection = query.Areas\n Set lateCollection = collection\n Set lateRange = query\n Set index = {index}\n Set selected = {access}\n Probe = \"unexpected success\"\n Exit Function\nFailed:\n Probe = CStr(Err.Number)\nEnd Function\n");
+                let expected = if (access.starts_with("late") || access.starts_with("CallByName")) && matches!(expected, 91 | 94 | 438) { 13 } else { expected };
                 let outcome = execute_workbook_vba(workbook(), &source, "AreasProbe.Probe",
                     vec![], 0, failure_context()).unwrap();
                 assert!(outcome.error.is_none(), "{access} ({index}): {}",
@@ -51475,9 +51527,36 @@ End Function
     }
 
     #[test]
+    fn areas_item_with_blocks_preserve_static_and_dispatch_conversion() {
+        for (block, late) in [
+            ("With collection\n Set selected = .Item(index)\nEnd With", false),
+            ("With lateCollection\n Set selected = .Item(index)\nEnd With", true),
+            ("With query\n Set selected = .Areas(index)\nEnd With", false),
+            ("With lateRange\n Set selected = .Areas(index)\nEnd With", true),
+        ] {
+            for (assignment, expected) in [
+                ("index = Null", 94), ("Set index = Nothing", 91),
+                ("Set index = Worksheets(1)", 438),
+            ] {
+                let source = format!("Attribute VB_Name = \"AreasProbe\"\nPublic Function Probe() As String\n Dim query As Range\n Dim collection As Areas\n Dim lateCollection As Object\n Dim lateRange As Object\n Dim selected As Range\n Dim index As Variant\n On Error GoTo Failed\n Set query = Range(\"B2:C3,F6:G7,J10:L10\")\n Set collection = query.Areas\n Set lateCollection = collection\n Set lateRange = query\n {assignment}\n {block}\n Probe = \"unexpected success\"\n Exit Function\nFailed:\n Probe = CStr(Err.Number)\nEnd Function\n");
+                let outcome = execute_workbook_vba(workbook(), &source, "AreasProbe.Probe",
+                    vec![], 0, failure_context()).unwrap();
+                assert!(outcome.error.is_none(), "{block} ({assignment}): {}",
+                    outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                    if late { 13 } else { expected }.to_string(), "{block} ({assignment})");
+                assert!(!outcome.workbook_changed, "{block} ({assignment})");
+            }
+        }
+    }
+
+    #[test]
     fn areas_item_coerces_numeric_indices_like_excel() {
         for access in ["query.Areas(index)", "collection.Item(index)",
-            "lateCollection.Item(index)", "lateRange.Areas(index)"] {
+            "lateCollection.Item(index)", "lateRange.Areas(index)",
+            "collection(index)", "lateCollection(index)",
+            "CallByName(collection, \"Item\", VbGet, index)",
+            "CallByName(query, \"Areas\", VbGet, index)"] {
             for (index, expected) in [
                 ("1.4", "$B$2:$C$3"), ("1.5", "$F$6:$G$7"),
                 ("2.5", "$F$6:$G$7"), ("\"2\"", "$F$6:$G$7"),
@@ -51497,13 +51576,17 @@ End Function
     #[test]
     fn areas_item_preserves_typed_argument_errors() {
         for access in ["query.Areas(index)", "collection.Item(index)",
-            "lateCollection.Item(index)", "lateRange.Areas(index)"] {
+            "lateCollection.Item(index)", "lateRange.Areas(index)",
+            "collection(index)", "lateCollection(index)",
+            "CallByName(collection, \"Item\", VbGet, index)",
+            "CallByName(query, \"Areas\", VbGet, index)"] {
             for (index, expected) in [
                 ("\"bad\"", 13), ("Null", 94), ("CVErr(2042)", 13),
                 ("Array(1)", 13), ("2147483648#", 6), ("\"\"", 13),
                 ("Empty", 1004), ("-1", 1004),
             ] {
                 let source = format!("Attribute VB_Name = \"AreasProbe\"\nPublic Function Probe() As String\n Dim query As Range\n Dim collection As Areas\n Dim lateCollection As Object\n Dim lateRange As Object\n Dim selected As Range\n Dim index As Variant\n On Error GoTo Failed\n Set query = Range(\"B2:C3,F6:G7,J10:L10\")\n Set collection = query.Areas\n Set lateCollection = collection\n Set lateRange = query\n index = {index}\n Set selected = {access}\n Probe = \"unexpected success\"\n Exit Function\nFailed:\n Probe = CStr(Err.Number)\nEnd Function\n");
+                let expected = if (access.starts_with("late") || access.starts_with("CallByName")) && matches!(expected, 91 | 94 | 438) { 13 } else { expected };
                 let outcome = execute_workbook_vba(workbook(), &source, "AreasProbe.Probe",
                     vec![], 0, failure_context()).unwrap();
                 assert!(outcome.error.is_none(), "{access} ({index}): {}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
