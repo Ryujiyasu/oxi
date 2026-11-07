@@ -30956,6 +30956,17 @@ impl Host for WorkbookHost<'_> {
         args: &[Value],
         argument_names: &[Option<String>],
     ) -> Result<Option<Value>, String> {
+        if argument_names.iter().any(Option::is_some)
+            && (name.eq_ignore_ascii_case("item") || name.eq_ignore_ascii_case("_default"))
+        {
+            if let Some(parameters) = receiver.and_then(|receiver|
+                builtin_compilation_references().library.member_parameter_names(&receiver.kind, name, 3))
+            {
+                let parameters: Vec<_> = parameters.iter().map(String::as_str).collect();
+                let args = normalize_named_arguments(args, argument_names, &parameters, name)?;
+                return self.call(receiver, name, &args);
+            }
+        }
         let parameters = if name.eq_ignore_ascii_case("find") {
             Some(
                 &[
@@ -51550,22 +51561,150 @@ End Function
     }
 
     #[test]
-    fn named_index_arrays_fail_at_compile_time_and_keep_positional_indices() {
-        for (name, declaration, seed, index) in [
-            ("typed", "Dim collection(1 To 2) As Long", "collection(1) = 5\n collection(2) = 7", 2),
-            ("variant", "Dim collection As Variant", "collection = Array(5,7)", 1),
+    fn named_index_qualified_variables_and_factory_results_keep_native_compile_phase() {
+        for (kind, factory) in [
+            ("Object", false), ("Object", true),
+            ("Variant", false), ("Variant", true),
+            ("Areas", false), ("Areas", true),
         ] {
             for named in [true, false] {
-                let argument = if named { format!("Index:={index}") } else { index.to_string() };
+                let argument = if named { "Index:=2" } else { "2" };
+                let factory_source = format!(r#"Public Function MakeCollection() As {kind}
+ Set MakeCollection = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7").Areas
+End Function
+"#);
+                let variable_declaration = format!("Public collection As {kind}");
+                let (declaration, setup, target, extra) = if factory {
+                    ("", "", "MakeCollection", factory_source.as_str())
+                } else {
+                    (variable_declaration.as_str(),
+                        r#"Set collection = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7").Areas"#,
+                        "NamedDefaultProbe.collection", "")
+                };
                 let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
 Option Explicit
+{declaration}
 Public Function Control() As String
  Control = "ready"
 End Function
 Public Function Probe() As String
- {declaration}
+ Dim selected As Range
+ On Error GoTo Failed
+ {setup}
+ Set selected = {target}({argument})
+ Probe = "OK|" & selected.Address
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number)
+End Function
+{extra}"#);
+                let control = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Control", vec![], 0, failure_context()).unwrap();
+                assert!(control.error.is_none(), "uncalled invalid procedure must stay uncompiled");
+                assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+                let outcome = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+                if named && kind != "Areas" {
+                    let error = outcome.error.as_ref().expect("named index must fail before execution");
+                    assert_eq!(error.kind, "compile", "factory={factory}: {}", error.message);
+                    let message = if kind == "Variant" {
+                        "\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{306f}\u{4f7f}\u{3048}\u{307e}\u{305b}\u{3093}\u{3002}"
+                    } else {
+                        "\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}"
+                    };
+                    assert!(error.message.ends_with(message), "{kind} factory={factory}: {}", error.message);
+                } else {
+                    assert!(outcome.error.is_none(), "factory={factory}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+                    assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], "OK|$F$6:$G$7");
+                }
+                assert!(!outcome.workbook_changed);
+                assert!(outcome.debug_output.is_empty() && outcome.messages.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn named_index_reference_results_validate_names_and_bind_operand_positions() {
+        for (kind, factory, argument, rejected) in [
+            ("Areas", true, "Missing:=2", true),
+            ("Areas", false, "Missing:=2", true),
+            ("Range", true, "ColumnIndex:=2, RowIndex:=1", false),
+            ("Range", false, "ColumnIndex:=2, RowIndex:=1", false),
+            ("Range", true, "Missing:=2", true),
+        ] {
+            let value = if kind == "Areas" {
+                r#"ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7").Areas"#
+            } else {
+                r#"ThisWorkbook.Worksheets(1).Range("B2:D4")"#
+            };
+            let declaration = if factory { String::new() } else { format!("Public collection As {kind}") };
+            let setup = if factory { String::new() } else { format!("Set collection = {value}") };
+            let target = if factory { "MakeCollection" } else { "NamedDefaultProbe.collection" };
+            let extra = if factory {
+                format!("Public Function MakeCollection() As {kind}\n Set MakeCollection = {value}\nEnd Function\n")
+            } else { String::new() };
+            let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+{declaration}
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function Probe() As String
+ Dim selected As Range
+ On Error GoTo Failed
+ {setup}
+ Set selected = {target}({argument})
+ Probe = "OK|" & selected.Address
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number)
+End Function
+{extra}"#);
+            let control = execute_workbook_vba(workbook(), &source,
+                "NamedDefaultProbe.Control", vec![], 0, failure_context()).unwrap();
+            assert!(control.error.is_none(), "uncalled invalid procedure must stay uncompiled");
+            assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+            let outcome = execute_workbook_vba(workbook(), &source,
+                "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+            if rejected {
+                let error = outcome.error.as_ref().expect("unknown named index must not execute");
+                assert_eq!(error.kind, "compile", "{kind} factory={factory}: {}", error.message);
+                assert!(error.message.ends_with("\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}"),
+                    "{kind} factory={factory}: {}", error.message);
+            } else {
+                assert!(outcome.error.is_none(), "{kind} factory={factory}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], "OK|$C$2");
+            }
+            assert!(!outcome.workbook_changed);
+            assert!(outcome.debug_output.is_empty() && outcome.messages.is_empty());
+        }
+    }
+
+    #[test]
+    fn named_index_arrays_fail_at_compile_time_and_keep_positional_indices() {
+        for (name, declaration, seed, index) in [
+            ("typed", "Dim collection(1 To 2) As Long", "collection(1) = 5\n collection(2) = 7", 2),
+            ("variant", "Dim collection As Variant", "collection = Array(5,7)", 1),
+            ("qualified", "Public collection(1 To 2) As Long", "collection(1) = 5\n collection(2) = 7", 2),
+        ] {
+            for named in [true, false] {
+                let argument = if named { format!("Index:={index}") } else { index.to_string() };
+                let target = if name == "qualified" { "NamedDefaultProbe.collection" } else { "collection" };
+                let (module_declaration, local_declaration) = if name == "qualified" {
+                    (declaration, "")
+                } else {
+                    ("", declaration)
+                };
+                let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+{module_declaration}
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function Probe() As String
+ {local_declaration}
  {seed}
- Probe = CStr(collection({argument}))
+ Probe = CStr({target}({argument}))
 End Function
 "#);
                 let control = execute_workbook_vba(workbook(), &source,

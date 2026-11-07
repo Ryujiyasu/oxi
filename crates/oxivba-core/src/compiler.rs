@@ -2588,9 +2588,10 @@ impl<'a> Checker<'a> {
         write: bool,
     ) -> Result<Option<ReferenceSignature>, CompileErrorKind> {
         if let Some(owner) = self.source_indexed_owner(target, args) {
-            // Named arguments still address the parameterless procedure;
-            // positional indices can address its returned default member.
-            if self.source_signature(target, false)?.is_some()
+            // A typed reference result exposes its default-member signature.
+            // Keep source-class factory binding separate from host references.
+            if !matches!(owner, Type::Reference(..))
+                && self.source_signature(target, false)?.is_some()
                 && args.iter().any(|arg| arg.name.is_some())
             {
                 return Err(CompileErrorKind::NamedArgumentNotFound);
@@ -2604,18 +2605,43 @@ impl<'a> Checker<'a> {
         if !args.iter().any(|argument| argument.name.is_some()) {
             return None;
         }
-        let name = bare_name(target)?;
-        if !self.variables.contains_key(&key(name))
-            || self.source_signature(target, false).ok().flatten().is_some()
-        {
+        let indexed_kind = if self.source_signature(target, false).ok().flatten().is_some() {
+            self.source_indexed_owner(target, args)?
+        } else if let Some(name) = bare_name(target) {
+            self.variables.get(&key(name))?.clone()
+        } else if let Expr::Member { object, name, .. } = target {
+            let module = self.expression_module(object)?;
+            let (_, scope) = self.globals.standard_modules.iter()
+                .find(|(found, _)| found.eq_ignore_ascii_case(&module))?;
+            scope.items.iter().find_map(|item| match item {
+                ModuleItem::Variables(declaration)
+                    if std::ptr::eq(scope, self.module)
+                        || matches!(declaration.visibility, Visibility::Public | Visibility::Global) =>
+                {
+                    declaration.items.iter()
+                        .find(|variable| variable.name.eq_ignore_ascii_case(name))
+                        .map(|variable| {
+                            let kind = self.declared(&variable.type_name);
+                            if variable.array_bounds.is_some() {
+                                Type::Array(Box::new(kind))
+                            } else {
+                                kind
+                            }
+                        })
+                }
+                _ => None,
+            })?
+        } else {
             return None;
-        }
-        // These parentheses index a declared variable, rather than calling a
-        // named procedure/member. Run and explicit Compile reject named indices
-        // with the same type-specific diagnostic before evaluating the body.
-        match self.infer(target) {
+        };
+        // Resolve variable indices and parameterless factory results before
+        // evaluating the body, including module-qualified variables. Typed
+        // default members and explicit Item calls keep their own signatures.
+        match indexed_kind {
             Type::Object => Some(CompileErrorKind::NamedArgumentNotFound),
             Type::Variant | Type::Array(_) => Some(CompileErrorKind::NamedArgumentsNotAllowed),
+            kind @ Type::Reference(..) => self.source_default_signature(&kind, false)
+                .and_then(|signature| Self::reference_argument_error(&signature, args)),
             _ => None,
         }
     }
