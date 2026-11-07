@@ -314,6 +314,22 @@ fn apply_rpr(d: Option<&Node>, xml: &str, theme: &ThemeColors, mut st: TextStyle
         if let Some(c) = d.child("solidFill").and_then(|f| color_of(f, xml, theme)) {
             st.color = c;
         }
+        // OXI_CHART_TXPR_FONT (2026-11-07, default ON, opt-out _DISABLE): the
+        // typefaces a txPr / rPr names. blind-J ja/reports__7a8daf36: every label
+        // is «Meiryo UI» bold (latin + ea); Word draws the bar values white in it,
+        // Oxi fell back to the theme Mincho -- thin white strokes read grey on the
+        // dark bars.
+        if !crate::env_flag!("OXI_CHART_TXPR_FONT_DISABLE") {
+            let face = |k: &str| d.child(k).and_then(|f| f.attr("typeface"))
+                .filter(|t| !t.is_empty() && !t.starts_with('+'))
+                .map(|t| t.to_string());
+            if let Some(f) = face("latin") {
+                st.latin = Some(f);
+            }
+            if let Some(f) = face("ea") {
+                st.ea = Some(f);
+            }
+        }
     }
     st
 }
@@ -358,6 +374,19 @@ fn label(g: &mut Group, text: &str, st: &TextStyle, rect: (f32, f32, f32, f32), 
         ppr_change: None,
         paragraph_mark_revision: None,
     });
+    // A one-line label never wraps: its box is only the rough `text_width`
+    // estimate, which a wide face (Meiryo UI) overruns. Widen it about its
+    // alignment anchor so the text stays where the estimate put it.
+    let rect = if !text.contains('\n') && !crate::env_flag!("OXI_CHART_TXPR_FONT_DISABLE") {
+        let extra = rect.2 * 0.6;
+        match align {
+            Alignment::Right => (rect.0 - extra, rect.1, rect.2 + extra, rect.3),
+            Alignment::Center => (rect.0 - extra / 2.0, rect.1, rect.2 + extra, rect.3),
+            _ => (rect.0, rect.1, rect.2 + extra, rect.3),
+        }
+    } else {
+        rect
+    };
     g.texts.push(text_box(vec![para], [0.0; 4], "middle", false, rect));
 }
 
@@ -516,7 +545,29 @@ pub(super) fn from_chart(xml: &str, theme: &ThemeColors, w: f32, h: f32) -> Opti
             let first_run = para.and_then(|p| p.children.iter().find(|r| r.name == "r")).and_then(|r| r.child("rPr"));
             let st = apply_rpr(first_run, xml, theme, st);
             let th = st.size * 1.3 * text.lines().count().max(1) as f32;
-            label(&mut g, &text, &st, (left, top, right - left, th), Alignment::Center);
+            // OXI_CHART_TITLE_LAYOUT (2026-11-07, default ON, opt-out _DISABLE): a
+            // title's edge-mode manualLayout x / y is its box's top-left corner in
+            // the chart frame. blind-J ja/reports__7a8daf36 chart2 «★摂取量と体感の
+            // 有無» (x 0.250, y 0.114) sits left of the legend in Word; Oxi centred it
+            // over the legend.
+            let tm = t.path(&["layout", "manualLayout"]).filter(|_| !crate::env_flag!("OXI_CHART_TITLE_LAYOUT_DISABLE"));
+            let at = tm.and_then(|m| {
+                let edge = |k: &str| m.child(k).and_then(|n| n.attr("val")).map_or(true, |v| v == "edge");
+                if !edge("xMode") || !edge("yMode") {
+                    return None;
+                }
+                Some((m.child("x")?.num("val")? as f32 * w, m.child("y")?.num("val")? as f32 * h))
+            });
+            if let Some((tx, ty)) = at {
+                // The box's own insets come first: Office's chart text default 3pt
+                // left/right, 1.5pt top/bottom (the lIns 38100 / tIns 19050 the same
+                // chart's dLbls state explicitly). 7a8daf36's five titles sat
+                // 2.9-3.4pt left and 1.3-1.5pt high of Word without them.
+                let tw = text.lines().map(|l| text_width(l, st.size)).fold(0.0, f32::max) + 8.0;
+                label(&mut g, &text, &st, (tx + 3.0, ty + 1.5, tw, th), Alignment::Left);
+            } else {
+                label(&mut g, &text, &st, (left, top, right - left, th), Alignment::Center);
+            }
             top += th + 4.0;
         }
     }
@@ -786,6 +837,16 @@ fn draw_category(
         let pk = p.name.as_str();
         let labels = show_values(p, false);
         let st_lbl = text_style(p.child("dLbls"), xml, theme, base);
+        // OXI_CHART_TXPR_FONT: a series' own dLbls txPr over the plot's.
+        // 7a8daf36's bar values carry Meiryo UI bold white on each c:ser/c:dLbls.
+        let ser_nodes: Vec<&Node> = p.children.iter().filter(|c| c.name == "ser").collect();
+        let st_ser: Vec<TextStyle> = ser_nodes.iter().map(|sn| {
+            if crate::env_flag!("OXI_CHART_TXPR_FONT_DISABLE") {
+                st_lbl.clone()
+            } else {
+                text_style(sn.child("dLbls"), xml, theme, &st_lbl)
+            }
+        }).collect();
         if pk.starts_with("bar") {
             let gap = p.child("gapWidth").and_then(|n| n.num("val")).unwrap_or(150.0) / 100.0;
             let overlap = p.child("overlap").and_then(|n| n.num("val")).map_or(if stacked { 1.0 } else { 0.0 }, |o| o / 100.0);
@@ -818,7 +879,8 @@ fn draw_category(
                     rect(g, r, Some(fill), stroke);
                     if labels {
                         let txt = format_number(s.vals.get(i).copied().flatten().unwrap_or(0.0), s.format_at(i));
-                        let lh = line_h(&st_lbl);
+                        let st_lbl = st_ser.get(j).unwrap_or(&st_lbl);
+                        let lh = line_h(st_lbl);
                         let lw = text_width(&txt, st_lbl.size) + 6.0;
                         let rr = if stacked {
                             (r.0 + r.2 / 2.0 - lw / 2.0, r.1 + r.3 / 2.0 - lh / 2.0, lw, lh)
@@ -827,7 +889,7 @@ fn draw_category(
                         } else {
                             (r.0 + r.2 / 2.0 - lw / 2.0, r.1 - lh, lw, lh)
                         };
-                        label(g, &txt, &st_lbl, rr, Alignment::Center);
+                        label(g, &txt, st_lbl, rr, Alignment::Center);
                     }
                 }
             }
