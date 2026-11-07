@@ -280,7 +280,8 @@ fn drawn_coverage(data: &[u8], pdf: &PdfDocument, hf_parts_shown: &std::collecti
 /// `w:t` contents of each `w:r` that neither its own `w:vanish`, its
 /// character style nor its paragraph's style hides (`hidden` holds the style
 /// IDs that hide), with `mc:Fallback` blocks (a second copy of what their
-/// `mc:Choice` holds) skipped. A scan rather than a parse: it only has to
+/// `mc:Choice` holds) skipped, and so are the cached results of the fields
+/// the engine recomputes (`recomputed_field`). A scan rather than a parse: it only has to
 /// count characters, and it must see what the parser may have missed.
 fn story_text(xml: &str, hidden: &std::collections::HashSet<String>) -> Vec<String> {
     let mut visible = String::with_capacity(xml.len());
@@ -296,6 +297,8 @@ fn story_text(xml: &str, hidden: &std::collections::HashSet<String>) -> Vec<Stri
 
     let mut texts = Vec::new();
     let mut paragraph_hidden = false;
+    // Open complex fields: (instruction so far, past its `separate`).
+    let mut fields: Vec<(String, bool)> = Vec::new();
     let mut pos = 0;
     while let Some(offset) = visible[pos..].find("<w:") {
         let at = pos + offset;
@@ -307,6 +310,12 @@ fn story_text(xml: &str, hidden: &std::collections::HashSet<String>) -> Vec<Stri
         } else if tail.starts_with("pStyle ") {
             paragraph_hidden = attr_value(&visible[at..tag_end], "w:val").is_some_and(|id| hidden.contains(id));
             pos = tag_end;
+        } else if tail.starts_with("fldSimple ") {
+            let tag = &visible[at..tag_end];
+            pos = tag_end;
+            if !tag.ends_with("/>") && attr_value(tag, "w:instr").is_some_and(|i| recomputed_field(&unescape_xml(i))) {
+                pos = visible[pos..].find("</w:fldSimple>").map_or(visible.len(), |e| pos + e);
+            }
         } else if tail.starts_with("r>") || tail.starts_with("r ") {
             // <w:r> or <w:r ...>, not <w:rPr>, <w:rFonts>, <w:rStyle>...
             let end = tail.find("</w:r>").map_or(visible.len(), |e| at + 3 + e);
@@ -316,31 +325,50 @@ fn story_text(xml: &str, hidden: &std::collections::HashSet<String>) -> Vec<Stri
                 let tag = &run[i..run[i..].find('>').map_or(run.len(), |e| i + e)];
                 attr_value(tag, "w:val").is_some_and(|id| hidden.contains(id))
             });
-            if vanish_in(run).unwrap_or(styled || paragraph_hidden) {
-                continue;
-            }
+            let run_hidden = vanish_in(run).unwrap_or(styled || paragraph_hidden);
             let mut body = run;
-            while let Some(t) = body.find("<w:t") {
-                let tail = &body[t + 4..];
-                if !(tail.starts_with('>') || tail.starts_with(' ')) {
-                    body = tail;
-                    continue;
-                }
+            while let Some(t) = body.find("<w:") {
+                let tail = &body[t + 3..];
                 let Some(open_end) = tail.find('>') else { break };
-                if tail[..open_end].ends_with('/') {
-                    body = &tail[open_end..];
+                let tag = &tail[..open_end];
+                let content = &tail[open_end + 1..];
+                body = content;
+                if tag.starts_with("fldChar ") {
+                    match attr_value(tag, "w:fldCharType") {
+                        Some("begin") => fields.push((String::new(), false)),
+                        Some("separate") => if let Some(f) = fields.last_mut() { f.1 = true },
+                        Some("end") => { fields.pop(); }
+                        _ => {}
+                    }
                     continue;
                 }
-                let content = &tail[open_end + 1..];
-                let close = content.find("</w:t>").unwrap_or(content.len());
-                texts.push(unescape_xml(&content[..close]));
+                let is_text = tag == "t" || tag.starts_with("t ");
+                let is_instr = tag == "instrText" || tag.starts_with("instrText ");
+                if !(is_text || is_instr) || tag.ends_with('/') {
+                    continue;
+                }
+                let close = content.find("</w:").unwrap_or(content.len());
+                let text = unescape_xml(&content[..close]);
                 body = &content[close..];
+                if is_instr {
+                    if let Some(f) = fields.last_mut().filter(|f| !f.1) { f.0.push_str(&text) }
+                } else if !run_hidden && !fields.iter().any(|(instr, result)| *result && recomputed_field(instr)) {
+                    texts.push(text);
+                }
             }
         } else {
             pos = at + 3;
         }
     }
     texts
+}
+
+/// A field whose result the engine works out itself (page numbers, a
+/// running style reference), so the cached result in the package is not
+/// what the page shows.
+fn recomputed_field(instruction: &str) -> bool {
+    let name = instruction.split_whitespace().next().unwrap_or("").to_ascii_uppercase();
+    matches!(name.as_str(), "PAGE" | "NUMPAGES" | "SECTIONPAGES" | "SECTION" | "STYLEREF")
 }
 
 /// What the first `w:vanish` in `xml` says, if there is one: hidden unless
@@ -4306,6 +4334,16 @@ mod serve_tests {
 #[cfg(test)]
 mod coverage_tests {
     use super::*;
+
+    #[test]
+    fn story_text_leaves_out_results_the_engine_recomputes() {
+        let xml = r#"<w:hdr><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> STYLEREF  Divider </w:instrText></w:r>
+            <w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Error! No text of specified style in document.</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>
+            <w:r><w:t>Table 1</w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>7</w:t></w:r></w:fldSimple>
+            <w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>REF note</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>
+            <w:r><w:t>kept</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:fldSimple w:instr="DATE"><w:r><w:t>today</w:t></w:r></w:fldSimple></w:p></w:hdr>"#;
+        assert_eq!(story_text(xml, &Default::default()), vec!["Table 1", "kept", "today"]);
+    }
 
     #[test]
     fn story_text_keeps_visible_runs_once() {
