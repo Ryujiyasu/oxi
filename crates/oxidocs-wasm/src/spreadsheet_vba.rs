@@ -28595,6 +28595,9 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn prepare_automation_get(&self, receiver: &ObjectRef, name: &str, args: &[Value]) -> Result<Option<(String, Vec<Value>)>, String> {
+        if self.is_application(receiver) && name.eq_ignore_ascii_case("build") && !args.is_empty() {
+            return Err(host_error(450, "Application.Build takes no arguments"));
+        }
         if self.is_workbook(receiver) && name.eq_ignore_ascii_case("colors") {
             if args.len() > 1 {
                 return Err(host_error(450, "Workbook.Colors takes at most one index"));
@@ -28623,6 +28626,13 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn automation_invocation_error(&self, receiver: &ObjectRef, name: &str, kind: u8) -> Option<i64> {
+        if self.is_application(receiver) && name.eq_ignore_ascii_case("build") {
+            return match kind {
+                1 | 4 => Some(1004),
+                8 => Some(13),
+                _ => None,
+            };
+        }
         (self.is_application(receiver) && name.eq_ignore_ascii_case("calculationstate") && kind == 4).then_some(450)
     }
 
@@ -29356,8 +29366,12 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::String(format!("{book} - Excel"))));
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("build") {
-                // A Double, as Excel hands it: measured, TypeName(Build).
-                return Ok(Some(Value::Double(20326.0)));
+                if !args.is_empty() {
+                    return Err(host_error(450, "Application.Build takes no arguments"));
+                }
+                // The reference Excel build. Automation returns Double;
+                // statically bound reads use the typelib's declared Long.
+                return Ok(Some(Value::Double(20527.0)));
             }
             // The two rulers page setup is measured with: measured,
             // `InchesToPoints(1)` is 72 and `CentimetersToPoints(2)` is
@@ -83117,6 +83131,189 @@ End Function
         let outcome = execute_workbook_action_in_session(book, source, Some(procedure), arguments, 0, failure_context(), &mut session).unwrap();
         assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
         assert_eq!(serde_json::to_value(&outcome.result).unwrap(), serde_json::json!({"type":"string", "value":expected}));
+    }
+
+
+    #[test]
+    fn application_build_binding_and_automation_match_excel() {
+        let source = r#"Attribute VB_Name = "ApplicationBuildProbe"
+Option Explicit
+Private Function Typed(ByVal value As Variant) As String
+ Typed = CStr(VarType(value)) & ":" & TypeName(value) & ":" & CStr(value)
+End Function
+Public Function Probe(ByVal route As Long) As String
+ Dim early As Application, late As Object, held As Variant
+ Set early = Application
+ Set late = Application
+ Set held = Application
+ On Error GoTo Failed
+ Select Case route
+ Case 0
+  Probe = Typed(Application.Build)
+ Case 1
+  Probe = Typed(CallByName(Application, "Build", VbGet))
+ Case 2
+  CallByName Application, "Build", VbLet, 123
+  Probe = "write-returned|" & Typed(Application.Build)
+ Case 3
+  Probe = Typed(CallByName(Application, "Build", VbGet, 1))
+ Case 4
+  Probe = Typed(CallByName(Application, "Build", VbMethod))
+ Case 5
+  Probe = Typed(Application.Build + 0.5)
+ Case 6
+  Probe = Typed(early.Build)
+ Case 7
+  Probe = Typed(late.Build)
+ Case 8
+  Probe = Typed(held.Build)
+ Case 9
+  With Application
+   Probe = Typed(.Build)
+  End With
+ Case 10
+  With late
+   Probe = Typed(.Build)
+  End With
+ Case 11
+  Probe = Typed(Application.Application.Build)
+ Case 12
+  Probe = Typed(ActiveWorkbook.Application.Build)
+ Case 13
+  With late.Application
+   Probe = Typed(.Build)
+  End With
+ Case 14
+  Probe = Typed(CallByName(early, "Build", VbGet))
+ Case 15
+  Probe = Typed(CallByName(Application, "Build", VbGet, Empty))
+ Case 16
+  Probe = Typed(CallByName(Application, "Build", 3))
+ Case 17
+  CallByName Application, "Build", VbSet, Nothing
+  Probe = "write-returned"
+ Case 18
+  CallByName Application, "Build", VbLet
+  Probe = "write-returned"
+ Case 19
+  Probe = Typed(CallByName(Application, "Build", VbMethod, 1))
+ Case 20
+  CallByName Application, "Build", VbSet, Application
+  Probe = "write-returned"
+ Case 21
+  CallByName Application, "Build", VbSet, Range("A1")
+  Probe = "write-returned"
+ Case 22
+  CallByName Application, "Build", VbSet, 123
+  Probe = "write-returned"
+ Case 23
+  CallByName Application, "Build", VbSet, Null
+  Probe = "write-returned"
+ Case 24
+  CallByName Application, "Build", VbLet, Nothing
+  Probe = "write-returned"
+ Case 25
+  CallByName Application, "Build", VbLet, Range("A1")
+  Probe = "write-returned"
+ Case 26
+  CallByName Application, "Build", VbLet, Null
+  Probe = "write-returned"
+ Case 27
+  Probe = Typed(CallByName(Application, "Build", VbGet, Null))
+ Case 28
+  CallByName Application, "Build", VbLet, 0, 123
+  Probe = "write-returned"
+ End Select
+ Exit Function
+Failed:
+ Probe = "error|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description
+End Function
+"#;
+        let expected = [
+            "3:Long:20527",
+            "5:Double:20527",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+            "error|450|OxiNamedProject|引数の数が一致していません。または不正なプロパティを指定しています。",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+            "5:Double:20527.5",
+            "3:Long:20527",
+            "5:Double:20527",
+            "5:Double:20527",
+            "3:Long:20527",
+            "5:Double:20527",
+            "3:Long:20527",
+            "3:Long:20527",
+            "5:Double:20527",
+            "5:Double:20527",
+            "error|450|OxiNamedProject|引数の数が一致していません。または不正なプロパティを指定しています。",
+            "5:Double:20527",
+            "error|13|OxiNamedProject|型が一致しません。",
+            "error|446|OxiNamedProject|オブジェクトは名前付き引数をサポートしていません。",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+            "error|13|OxiNamedProject|型が一致しません。",
+            "error|13|OxiNamedProject|型が一致しません。",
+            "error|13|OxiNamedProject|型が一致しません。",
+            "error|13|OxiNamedProject|型が一致しません。",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+            "error|450|OxiNamedProject|引数の数が一致していません。または不正なプロパティを指定しています。",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+        ];
+        for (route, expected) in expected.iter().enumerate() {
+            let mut context = failure_context();
+            context.project_name = "OxiNamedProject".to_string();
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(
+                workbook(), source, Some("ApplicationBuildProbe.Probe"),
+                vec![Value::Integer(route as i64)], 0, context, &mut session,
+            ).unwrap();
+            assert!(outcome.error.is_none(), "route {route}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap(),
+                serde_json::json!({"type":"string", "value":expected}), "route {route}");
+        }
+    }
+
+    #[test]
+    fn host_typelib_result_types_do_not_override_source_classes() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "Range"
+Attribute VB_Base = "0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+Public Property Get Row() As String
+ Row = "source-row"
+End Property
+
+VERSION 1.0 CLASS
+Attribute VB_Name = "Application"
+Attribute VB_Base = "0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+Public Property Get Build() As String
+ Build = "source-build"
+End Property
+
+Attribute VB_Name = "SourceShadowProbe"
+Option Explicit
+Public Function Probe(ByVal route As Long) As String
+ Dim ownRange As Range, ownApplication As Application
+ If route = 0 Then
+  Set ownRange = New Range
+  Probe = TypeName(ownRange.Row) & "|" & ownRange.Row
+ Else
+  Set ownApplication = New Application
+  Probe = TypeName(ownApplication.Build) & "|" & ownApplication.Build
+ End If
+End Function
+"#;
+        for (route, expected) in ["String|source-row", "String|source-build"].iter().enumerate() {
+            check_imported_reference_result(source, "SourceShadowProbe.Probe", vec![Value::Integer(route as i64)], expected);
+        }
     }
 
     #[test]

@@ -8120,6 +8120,48 @@ impl<'a> Runtime<'a> {
     }
 
     fn eval_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+        let value = self.eval_uncoerced_expr(expr, frame)?;
+        if self.host.is_none() { return Ok(value); }
+        let target = match expr {
+            Expr::Index { target, .. } => target.as_ref(),
+            other => other,
+        };
+        let (owner, member) = match target {
+            Expr::Member { object, name, .. } => {
+                if let Some(owner) = expr_name(object) {
+                    if self.lookup_slot(frame, owner).is_none() && self.enum_member(owner, name).is_some() {
+                        return Ok(value);
+                    }
+                }
+                (self.assignment_receiver_type(object, frame), name.as_str())
+            }
+            Expr::WithMember(name, _) => {
+                let owner = match frame.with_objects.last() {
+                    Some(WithSubject::Object { assignment_type, .. }) => assignment_type.clone(),
+                    _ => None,
+                };
+                (owner, name.as_str())
+            }
+            _ => return Ok(value),
+        };
+        let declared = owner.as_deref().filter(|owner| {
+            self.source_class_key(owner).is_none() && self.find_type(owner).is_none()
+        }).and_then(|owner| {
+            self.host.as_deref()?.assignment_call_result(Some(owner), member)
+        });
+        let Some(declared) = declared else { return Ok(value); };
+        let scalar = self.reference_scalar_type(&declared).unwrap_or(declared);
+        // A vtable result has its declared primitive type. Object/Variant
+        // receivers and CallByName retain the host's raw Automation variant.
+        if matches!(key(&scalar).as_str(), "byte" | "integer" | "long" | "longlong" | "longptr"
+            | "single" | "double" | "currency" | "decimal" | "date" | "boolean" | "string") {
+            self.coerce_runtime(value, &scalar, expr.span().line, self.this_year())
+        } else {
+            Ok(value)
+        }
+    }
+
+    fn eval_uncoerced_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
         self.ensure_expression_module(expr, frame)?;
         if let Expr::Member { object, name, .. } = expr {
             if let Some(enumeration) = expr_name(object) {
