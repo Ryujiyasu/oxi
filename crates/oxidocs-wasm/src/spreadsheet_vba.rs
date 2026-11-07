@@ -64049,10 +64049,11 @@ End Function
             debug_output,
             vec![
                 "True\tFalse\tNull".to_string(),
+                // EntireColumn retains the column collection: CountLarge is 1.
                 // Excel abbreviates a whole row and a whole column rather than
                 // spelling out its far corner — measured, where this
                 // expectation had been written the long way without asking.
-                "$3:$3	$C:$C	1048576".to_string(),
+                "$3:$3	$C:$C	1".to_string(),
                 "Sheet1\t1".to_string(),
             ]
         );
