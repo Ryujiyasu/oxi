@@ -133,7 +133,7 @@ try {
     // its default instance is unbound, while the native workbook still exists.
     const fileDocuments = item.metadata_before.map(document => document.name === 'ArchiveHost'
       ? { name: 'ArchiveHost', baseType: 'Excel.Workbook', unbound: true } : document);
-    fileDocuments.push({ name: 'ThisWorkbook', baseType: 'Excel.Workbook', codeName: 'ThisWorkbook', hostOnly: true });
+    fileDocuments.push({ name: 'ThisWorkbook', baseType: 'Excel.Workbook', codeName: 'ThisWorkbook' });
     const byName = documents => [...documents].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     assert.deepEqual(byName(descriptors), byName(fileDocuments), item.name);
     const session = new wasm.SpreadsheetVbaSession();
