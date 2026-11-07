@@ -7640,6 +7640,21 @@ fn parse_run(
             // Conditional fields display the outer cached result. Operand fields
             // are hidden by the enclosing code context and never paint here.
             field_type = Some(FieldType::Cached);
+        } else if field.split_whitespace().next().is_some_and(|name| {
+            ["FORMTEXT", "BIBLIOGRAPHY", "INDEX", "CITATION", "MERGEFIELD", "FILLIN"]
+                .iter()
+                .any(|kept| name.eq_ignore_ascii_case(kept))
+        }) && !crate::env_flag!("OXI_RESULT_FIELDS_DISABLE")
+        {
+            // OXI_RESULT_FIELDS (2026-11-07, opt-out _DISABLE): fields whose
+            // display is the result Word cached on save and Oxi cannot rebuild.
+            // Unclassified, their results were cleared by the field-result
+            // suppression. On a 4,988-document docx-corpus sample that was
+            // 34,028 characters of FORMTEXT in 66 documents -- a form's filled-in
+            // answers, e.g. every course description of a JROTC catalogue left
+            // its table cells empty -- plus bibliographies (4 documents, 16,254
+            // characters), an index, citations, a merge field and a fill-in.
+            field_type = Some(FieldType::Cached);
         } else if command.contains("DATE")
             || command.contains("TIME")
             || command.contains("AUTHOR")

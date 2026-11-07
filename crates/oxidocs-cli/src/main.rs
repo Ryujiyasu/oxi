@@ -198,10 +198,284 @@ fn convert(input: &str, output: &str, strict: bool) -> Result<Converted, Convert
     }
 
     let pdf_doc = doc_to_pdf(&doc);
+
+    if let Some((coverage, chars)) = drawn_coverage(&data, &pdf_doc) {
+        eprintln!("Drawn text coverage: {coverage:.4} of {chars} characters");
+        if strict && coverage < MIN_DRAWN_COVERAGE {
+            // Nothing in the census named it, but text was lost all the same,
+            // by the parser or the layout: a table's cells, a text box, half
+            // a form. Answered like any other content Oxi does not draw, so
+            // the caller can fall back.
+            return Err(ConvertError::Unsupported(vec![oxidocs_core::ir::UnsupportedContent {
+                kind: format!("undrawn-text ({:.0}% drawn)", coverage * 100.0),
+                part: "layout".to_string(),
+                count: 1,
+            }]));
+        }
+    }
+
     let pdf_bytes = oxipdf_core::write_pdf(&pdf_doc);
 
     fs::write(output, &pdf_bytes).map_err(|e| ConvertError::Failed(format!("write {output}: {e}")))?;
     Ok(Converted { bytes: pdf_bytes.len(), pages: pdf_doc.pages.len() })
+}
+
+/// Below this share of its own text drawn, `--strict` refuses a document.
+const MIN_DRAWN_COVERAGE: f64 = 0.90;
+
+/// The share of the document's own text that the pages draw, counting each
+/// character as often as it occurs (case folded, whitespace left out), and
+/// how many characters that was out of. `None` for a document with too
+/// little text to judge or one whose parts cannot be read.
+///
+/// "Its own text" is read off the package, not the parsed document: every
+/// `w:t` of the main story, the headers and footers a section shows,
+/// footnotes and endnotes, less the `mc:Fallback` copies that repeat a text
+/// box and the runs a `w:vanish` or a hiding style takes out. Text the parser never picked up is exactly what a check on
+/// the parsed document cannot see, and on a 4,988-document sample most lost
+/// text was lost there. Symbol-font codes are left out because they are
+/// drawn as the Unicode symbol they stand for.
+fn drawn_coverage(data: &[u8], pdf: &PdfDocument) -> Option<(f64, usize)> {
+    fn counted(c: char) -> bool {
+        !c.is_whitespace() && !c.is_control() && !('\u{E000}'..='\u{F8FF}').contains(&c)
+    }
+    let mut package = oxidocs_common::archive::OoxmlArchive::new(data).ok()?;
+    let body = package.read_part("word/document.xml").ok()?;
+    let mut stories = vec!["word/document.xml".to_string()];
+    stories.extend(shown_header_parts(&body, &mut package, pdf.pages.len() == 1));
+    stories.extend(
+        ["word/footnotes.xml", "word/endnotes.xml"]
+            .into_iter()
+            .filter(|name| package.file_names().iter().any(|n| n == name))
+            .map(str::to_string),
+    );
+    let hidden = package.read_part("word/styles.xml").map(|xml| hidden_styles(&xml)).unwrap_or_default();
+    let mut wanted: HashMap<char, usize> = HashMap::new();
+    for name in stories {
+        let Ok(xml) = package.read_part(&name) else { continue };
+        for text in story_text(&xml, &hidden) {
+            for c in text.chars().flat_map(char::to_lowercase).filter(|c| counted(*c)) {
+                *wanted.entry(c).or_default() += 1;
+            }
+        }
+    }
+    let total: usize = wanted.values().sum();
+    if total < 50 {
+        return None;
+    }
+    let mut drawn: HashMap<char, usize> = HashMap::new();
+    for span in pdf.pages.iter().flat_map(|page| &page.contents).filter_map(|e| e.text_span()) {
+        for c in span.text.chars().flat_map(char::to_lowercase) {
+            *drawn.entry(c).or_default() += 1;
+        }
+    }
+    let found: usize = wanted.iter().map(|(c, n)| (*n).min(drawn.get(c).copied().unwrap_or(0))).sum();
+    Some((found as f64 / total as f64, total))
+}
+
+/// The header and footer parts some section of `body` shows: each one a
+/// section references as `default`, as `first` where that section sets
+/// `w:titlePg`, as `even` where settings.xml sets `w:evenAndOddHeaders`.
+/// Templates often carry the others unused, and Word draws none of them. A
+/// one-page document has no page two: with a first-page header it shows
+/// neither the default nor the even one.
+fn shown_header_parts(body: &str, package: &mut oxidocs_common::archive::OoxmlArchive, one_page: bool) -> Vec<String> {
+    let even_and_odd = package
+        .read_part("word/settings.xml")
+        .is_ok_and(|settings| toggle_in(&settings, "<w:evenAndOddHeaders").unwrap_or(false));
+    let rels = package.read_part("word/_rels/document.xml.rels").unwrap_or_default();
+    let target = |id: &str| -> Option<String> {
+        let at = rels.find(&format!("Id=\"{id}\""))?;
+        let start = rels[..at].rfind('<')?;
+        let end = at + rels[at..].find('>')?;
+        attr_value(&rels[start..end], "Target").map(|t| format!("word/{}", t.trim_start_matches('/').trim_start_matches("word/")))
+    };
+    let mut parts = Vec::new();
+    let mut rest = body;
+    while let Some(start) = rest.find("<w:sectPr") {
+        let tail = &rest[start..];
+        let end = tail.find("</w:sectPr>").unwrap_or(tail.len());
+        let section = &tail[..end];
+        rest = &tail[end..];
+        let title_page = toggle_in(section, "<w:titlePg").unwrap_or(false);
+        for kind in ["<w:headerReference ", "<w:footerReference "] {
+            for (i, _) in section.match_indices(kind) {
+                let tag = &section[i..i + section[i..].find('>').unwrap_or(section.len() - i)];
+                let shown = match attr_value(tag, "w:type").unwrap_or("default") {
+                    "first" => title_page,
+                    "even" => even_and_odd && !one_page,
+                    _ => !(one_page && title_page),
+                };
+                if let Some(part) = attr_value(tag, "r:id").filter(|_| shown).and_then(target) {
+                    if !parts.contains(&part) {
+                        parts.push(part);
+                    }
+                }
+            }
+        }
+    }
+    parts
+}
+
+/// The text of every visible run in one WordprocessingML story part: the
+/// `w:t` contents of each `w:r` that neither its own `w:vanish`, its
+/// character style nor its paragraph's style hides (`hidden` holds the style
+/// IDs that hide), with `mc:Fallback` blocks (a second copy of what their
+/// `mc:Choice` holds) skipped. A scan rather than a parse: it only has to
+/// count characters, and it must see what the parser may have missed.
+fn story_text(xml: &str, hidden: &std::collections::HashSet<String>) -> Vec<String> {
+    let mut visible = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(start) = rest.find("<mc:Fallback") {
+        visible.push_str(&rest[..start]);
+        rest = match rest[start..].find("</mc:Fallback>") {
+            Some(end) => &rest[start + end + "</mc:Fallback>".len()..],
+            None => "",
+        };
+    }
+    visible.push_str(rest);
+
+    let mut texts = Vec::new();
+    let mut paragraph_hidden = false;
+    let mut pos = 0;
+    while let Some(offset) = visible[pos..].find("<w:") {
+        let at = pos + offset;
+        let tail = &visible[at + 3..];
+        let tag_end = tail.find('>').map_or(visible.len(), |e| at + 3 + e + 1);
+        if tail.starts_with("p>") || tail.starts_with("p ") {
+            paragraph_hidden = false;
+            pos = tag_end;
+        } else if tail.starts_with("pStyle ") {
+            paragraph_hidden = attr_value(&visible[at..tag_end], "w:val").is_some_and(|id| hidden.contains(id));
+            pos = tag_end;
+        } else if tail.starts_with("r>") || tail.starts_with("r ") {
+            // <w:r> or <w:r ...>, not <w:rPr>, <w:rFonts>, <w:rStyle>...
+            let end = tail.find("</w:r>").map_or(visible.len(), |e| at + 3 + e);
+            let run = &visible[at..end];
+            pos = end;
+            let styled = run.find("<w:rStyle ").is_some_and(|i| {
+                let tag = &run[i..run[i..].find('>').map_or(run.len(), |e| i + e)];
+                attr_value(tag, "w:val").is_some_and(|id| hidden.contains(id))
+            });
+            if vanish_in(run).unwrap_or(styled || paragraph_hidden) {
+                continue;
+            }
+            let mut body = run;
+            while let Some(t) = body.find("<w:t") {
+                let tail = &body[t + 4..];
+                if !(tail.starts_with('>') || tail.starts_with(' ')) {
+                    body = tail;
+                    continue;
+                }
+                let Some(open_end) = tail.find('>') else { break };
+                if tail[..open_end].ends_with('/') {
+                    body = &tail[open_end..];
+                    continue;
+                }
+                let content = &tail[open_end + 1..];
+                let close = content.find("</w:t>").unwrap_or(content.len());
+                texts.push(unescape_xml(&content[..close]));
+                body = &content[close..];
+            }
+        } else {
+            pos = at + 3;
+        }
+    }
+    texts
+}
+
+/// What the first `w:vanish` in `xml` says, if there is one: hidden unless
+/// its `w:val` is 0 or false.
+fn vanish_in(xml: &str) -> Option<bool> {
+    toggle_in(xml, "<w:vanish")
+}
+
+/// What the first on/off element opening with `open` (`<w:titlePg`, say) in
+/// `xml` says, if there is one: on unless its `w:val` is 0, false or off.
+fn toggle_in(xml: &str, open: &str) -> Option<bool> {
+    let i = xml.match_indices(open).map(|(i, _)| i).find(|i| {
+        xml[i + open.len()..].starts_with(['/', '>', ' '])
+    })?;
+    let tag = &xml[i..xml[i..].find('>').map_or(xml.len(), |e| i + e)];
+    Some(!["0", "false", "off"].iter().any(|off| tag.contains(&format!("w:val=\"{off}\""))))
+}
+
+/// The value of attribute `name` in the tag text `tag`.
+fn attr_value<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let start = tag.find(&format!("{name}=\""))? + name.len() + 2;
+    let len = tag[start..].find('"')?;
+    Some(&tag[start..start + len])
+}
+
+/// IDs of the styles in `styles.xml` that hide their text: by their own
+/// `w:vanish`, or by one inherited through `w:basedOn`. A style's `w:rPr` is
+/// its run formatting, so any `w:vanish` in it hides the text it styles --
+/// "Note to specifier" paragraphs of a specification template are the usual
+/// case, printed by neither Word nor any other engine.
+fn hidden_styles(xml: &str) -> std::collections::HashSet<String> {
+    let mut styles: HashMap<String, (Option<bool>, Option<String>)> = HashMap::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<w:style ") {
+        let tail = &rest[start..];
+        let end = tail.find("</w:style>").unwrap_or(tail.len());
+        let style = &tail[..end];
+        rest = &tail[end..];
+        let open = &style[..style.find('>').unwrap_or(style.len())];
+        let Some(id) = attr_value(open, "w:styleId") else { continue };
+        let based_on = style.find("<w:basedOn ").and_then(|i| attr_value(&style[i..], "w:val")).map(str::to_string);
+        styles.insert(id.to_string(), (vanish_in(style), based_on));
+    }
+    styles
+        .keys()
+        .filter(|id| {
+            let mut current = id.as_str();
+            for _ in 0..16 {
+                match styles.get(current) {
+                    Some((Some(hides), _)) => return *hides,
+                    Some((None, Some(parent))) => current = parent,
+                    _ => return false,
+                }
+            }
+            false
+        })
+        .cloned()
+        .collect()
+}
+
+/// `text` with XML's five named entities and numeric character references
+/// replaced by the characters they stand for.
+fn unescape_xml(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let tail = &rest[amp..];
+        let Some(semi) = tail.find(';') else {
+            out.push_str(tail);
+            return out;
+        };
+        let entity = &tail[1..semi];
+        let decoded = match entity {
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "amp" => Some('&'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => entity
+                .strip_prefix("#x")
+                .map(|hex| u32::from_str_radix(hex, 16))
+                .or_else(|| entity.strip_prefix('#').map(|dec| dec.parse::<u32>()))
+                .and_then(|n| n.ok())
+                .and_then(char::from_u32),
+        };
+        match decoded {
+            Some(c) => out.push(c),
+            None => out.push_str(&tail[..=semi]),
+        }
+        rest = &tail[semi + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn docx_to_pdf(input: &str, output: &str, strict: bool) {
@@ -4065,5 +4339,48 @@ mod serve_tests {
         let no_output = serve_one(r#"{"id": "a", "input": "x.docx"}"#);
         assert_eq!(no_output["id"], "a");
         assert_eq!(no_output["ok"].as_bool(), Some(false));
+    }
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    #[test]
+    fn story_text_keeps_visible_runs_once() {
+        let xml = r#"<w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="A"/></w:rPr><w:t>One</w:t></w:r>
+            <w:r><w:rPr><w:vanish/></w:rPr><w:t>hidden</w:t></w:r>
+            <w:r><w:rPr><w:vanish w:val="0"/></w:rPr><w:t xml:space="preserve"> two &amp; &#x41;</w:t></w:r>
+            <w:r><mc:AlternateContent><mc:Choice><w:txbxContent><w:p><w:r><w:t>box</w:t></w:r></w:p></w:txbxContent></mc:Choice>
+            <mc:Fallback><w:txbxContent><w:p><w:r><w:t>box</w:t></w:r></w:p></w:txbxContent></mc:Fallback></mc:AlternateContent></w:r>
+            <w:r><w:t/><w:tab/><w:t>end</w:t></w:r></w:p></w:body>"#;
+        assert_eq!(story_text(xml, &Default::default()), vec!["One", " two & A", "box", "end"]);
+    }
+
+    #[test]
+    fn story_text_leaves_out_what_styles_hide() {
+        let styles = r#"<w:styles><w:style w:type="paragraph" w:styleId="Note"><w:rPr><w:vanish/></w:rPr></w:style>
+            <w:style w:type="paragraph" w:styleId="NoteChild"><w:basedOn w:val="Note"/></w:style>
+            <w:style w:type="paragraph" w:styleId="Shown"><w:basedOn w:val="Note"/><w:rPr><w:vanish w:val="0"/></w:rPr></w:style>
+            <w:style w:type="character" w:styleId="Secret"><w:rPr><w:vanish/></w:rPr></w:style></w:styles>"#;
+        let hidden = hidden_styles(styles);
+        let xml = r#"<w:body><w:p><w:pPr><w:pStyle w:val="NoteChild"/></w:pPr><w:r><w:t>note</w:t></w:r>
+            <w:r><w:rPr><w:vanish w:val="0"/></w:rPr><w:t>shown anyway</w:t></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="Shown"/></w:pPr><w:r><w:t>body</w:t></w:r><w:r><w:rPr><w:rStyle w:val="Secret"/></w:rPr><w:t>secret</w:t></w:r></w:p>
+            <w:p><w:r><w:t>plain</w:t></w:r></w:p></w:body>"#;
+        assert_eq!(story_text(xml, &hidden), vec!["shown anyway", "body", "plain"]);
+    }
+
+    #[test]
+    fn toggle_in_reads_on_off_elements() {
+        assert_eq!(toggle_in("<w:sectPr><w:titlePg/></w:sectPr>", "<w:titlePg"), Some(true));
+        assert_eq!(toggle_in(r#"<w:titlePg w:val="0"/>"#, "<w:titlePg"), Some(false));
+        assert_eq!(toggle_in("<w:titlePgX/>", "<w:titlePg"), None);
+        assert_eq!(toggle_in("<w:specVanish/>", "<w:vanish"), None);
+    }
+
+    #[test]
+    fn unescape_xml_leaves_unknown_entities() {
+        assert_eq!(unescape_xml("a&lt;b&#65;&nbsp;&"), "a<bA&nbsp;&");
     }
 }
