@@ -306,6 +306,15 @@ pub trait Host {
         Ok(None)
     }
 
+    /// Prepare arguments for a late-bound host call after its receiver
+    /// and argument expressions have been evaluated. Source classes retain their
+    /// runtime-owned dispatch; statically typed host calls do not use this hook.
+    fn prepare_late_bound_call(&self, _receiver: &ObjectRef, _name: &str,
+        _args: &[Value], _argument_names: &[Option<String>])
+        -> Result<Option<(String, Vec<Value>)>, String> {
+        Ok(None)
+    }
+
     /// Bind a host property's named indices without invoking its getter.
     /// None leaves resolution to a getter returning the assignment object.
     fn bind_indexed_assignment(&self, _receiver: &ObjectRef, _name: &str, args: &[Value], names: &[Option<String>]) -> Result<Option<Vec<Value>>, String> {
@@ -8484,6 +8493,18 @@ impl<'a> Runtime<'a> {
                                         None => Value::Missing,
                                     }});
                                 }
+                                if self.assignment_receiver_type(target, frame).is_none() {
+                                    let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                                    let prepared = self.host.as_deref()
+                                        .map(|host| host.prepare_late_bound_call(&receiver, "Item", &values, &names))
+                                        .transpose().map_err(|message| host_failure(message, span.line))?.flatten();
+                                    if let Some((member, arguments)) = prepared {
+                                        return self.with_callback_error_context(frame, |runtime, _| {
+                                            runtime.host_call_named(Some(&receiver), &member, &arguments, &names, span.line)
+                                        })?.ok_or_else(|| no_such_member(
+                                            format!("default member is not available: {}.{member}", receiver.kind), Some(span.line)));
+                                    }
+                                }
                                 return self
                                     .host_call(Some(&receiver), "Item", &values, span.line)?
                                     .ok_or_else(|| {
@@ -8612,6 +8633,29 @@ impl<'a> Runtime<'a> {
                         Some(value) => self.eval_expr(value, frame)?,
                         None => Value::Missing,
                     }});
+                }
+                let late_host_call = match target.as_ref() {
+                    Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
+                    Expr::WithMember(..) | Expr::WithBangMember(..) => matches!(
+                        frame.with_objects.last(), Some(WithSubject::Object { assignment_type: None, .. })),
+                    _ => false,
+                };
+                if late_host_call {
+                    if let Some(receiver) = receiver.as_ref() {
+                        let name = match target.as_ref() {
+                            Expr::Member { name, .. } | Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => name,
+                            _ => unreachable!("late host member"),
+                        };
+                        let prepared = self.host.as_deref()
+                            .map(|host| host.prepare_late_bound_call(receiver, name, &values, &argument_names))
+                            .transpose().map_err(|message| host_failure(message, span.line))?.flatten();
+                        if let Some((member, arguments)) = prepared {
+                            return self.with_callback_error_context(frame, |runtime, _| {
+                                runtime.host_call_named(Some(receiver), &member, &arguments, &argument_names, span.line)
+                            })?.ok_or_else(|| no_such_member(
+                                format!("host method is not available: {}.{member}", receiver.kind), Some(span.line)));
+                        }
+                    }
                 }
                 match target.as_ref() {
                     Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
