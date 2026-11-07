@@ -152,7 +152,72 @@ impl fmt::Display for LexError {
 impl std::error::Error for LexError {}
 
 pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
-    Lexer::new(source).run()
+    if source.is_ascii() || !source.chars().any(|ch| lexical_width(ch) != ch) {
+        return Lexer::new(source).run();
+    }
+    let (normalized, offsets) = normalize_lexical_width(source);
+    if offsets.is_empty() {
+        return Lexer::new(source).run();
+    }
+    let original = |at: usize| {
+        let index = offsets.partition_point(|&(end, _)| end <= at);
+        at + index.checked_sub(1).map_or(0, |index| offsets[index].1)
+    };
+    let mut tokens = Lexer::new(&normalized).run()?;
+    for token in &mut tokens {
+        token.span.start = original(token.span.start);
+        token.span.end = original(token.span.end);
+        let raw = &source[token.span.start..token.span.end];
+        match &mut token.kind {
+            TokenKind::Str(text) => *text = raw[1..raw.len() - 1].replace("\"\"", "\""),
+            TokenKind::BracketExpr(text) => *text = raw[1..raw.len() - 1].to_owned(),
+            TokenKind::Directive(text) => *text = raw.trim_end_matches('\r').to_owned(),
+            TokenKind::Comment(text) => {
+                let skip = if raw.starts_with('\'') {
+                    1
+                } else {
+                    raw.char_indices().nth(3).map_or(raw.len(), |(at, _)| at)
+                };
+                *text = raw[skip..].trim_end_matches('\r').to_owned();
+            }
+            _ => {}
+        }
+    }
+    Ok(tokens)
+}
+
+fn lexical_width(ch: char) -> char {
+    match ch {
+        '\u{3000}' => ' ',
+        '\u{ff10}'..='\u{ff19}'
+        | '\u{ff21}'..='\u{ff3a}'
+        | '\u{ff41}'..='\u{ff5a}'
+        | '\u{ff05}'
+        | '\u{ff08}'
+        | '\u{ff09}'
+        | '\u{ff0b}'
+        | '\u{ff0c}'
+        | '\u{ff0e}'
+        | '\u{ff1a}'
+        | '\u{ff1d}'
+        | '\u{ff3f}' => char::from_u32(ch as u32 - 0xfee0).unwrap(),
+        _ => ch,
+    }
+}
+
+/// Map width forms for token recognition. The caller restores raw data tokens
+/// from their original spans, so nested quotes and comments need no second scanner.
+fn normalize_lexical_width(source: &str) -> (String, Vec<(usize, usize)>) {
+    let mut output = String::with_capacity(source.len());
+    let mut offsets = Vec::new();
+    for (at, ch) in source.char_indices() {
+        let mapped = lexical_width(ch);
+        output.push(mapped);
+        if ch != mapped {
+            offsets.push((output.len(), at + ch.len_utf8() - output.len()));
+        }
+    }
+    (output, offsets)
 }
 
 struct Lexer<'a> {
@@ -408,7 +473,10 @@ impl<'a> Lexer<'a> {
         // read would have failed, so no input that lexed before lexes
         // differently now. Which of the two the VBE really applies to an
         // Evaluate shortcut holding a quoted `]` has not been measured.
-        if let Some(close) = self.bytes[start + 1..].iter().position(|byte| *byte == b']') {
+        if let Some(close) = self.bytes[start + 1..]
+            .iter()
+            .position(|byte| *byte == b']')
+        {
             let close = start + 1 + close;
             let value = self.src[start + 1..close].to_string();
             self.push_here(TokenKind::BracketExpr(value), start, close + 1);
@@ -422,9 +490,10 @@ impl<'a> Lexer<'a> {
     fn lex_hash(&mut self) -> Result<(), LexError> {
         let start = self.pos;
         let rest = &self.src[self.pos + 1..];
-        let is_directive = ["if", "else", "elseif", "end", "const"]
-            .iter()
-            .any(|kw| rest.len() >= kw.len() && rest[..kw.len()].eq_ignore_ascii_case(kw));
+        let is_directive = ["if", "else", "elseif", "end", "const"].iter().any(|kw| {
+            rest.get(..kw.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(kw))
+        });
 
         if is_directive {
             let mut end = self.pos;
@@ -587,12 +656,12 @@ impl<'a> Lexer<'a> {
         // `Rem` is a comment keyword, not an identifier, but only when it is a
         // whole word: `Remark` is a perfectly good variable name.
         if word.eq_ignore_ascii_case("rem") {
-            self.lex_comment_body(start, 3);
+            self.lex_comment_body(start, self.pos - start);
             self.at_line_start = false;
             return;
         }
 
-        self.push_here(TokenKind::Ident(word.to_string()), start, self.pos);
+        self.push_here(TokenKind::Ident(word.to_owned()), start, self.pos);
         self.at_line_start = false;
 
         if let Some(&b) = self.bytes.get(self.pos) {
@@ -681,6 +750,74 @@ mod tests {
 
     fn ident(name: &str) -> TokenKind {
         TokenKind::Ident(name.to_string())
+    }
+
+    #[test]
+    fn width_mapping_preserves_nested_evaluate_and_directive_data() {
+        let source = "[IF(A1=\"]\", \"\u{ff21}\", \"\u{ff22}\")] \u{ff23} = 13\n\
+                      #Const Label = \"\u{ff21}\"";
+        let tokens = tokenize(source).unwrap();
+        assert_eq!(
+            tokens[0].kind,
+            TokenKind::BracketExpr("IF(A1=\"]\", \"\u{ff21}\", \"\u{ff22}\")".into())
+        );
+        assert_eq!(tokens[1].kind, ident("C"));
+        assert!(tokens
+            .iter()
+            .any(|t| t.kind == TokenKind::Directive("#Const Label = \"\u{ff21}\"".into())));
+    }
+
+    #[test]
+    fn date_directive_detection_does_not_slice_unicode_characters() {
+        for source in ["#\u{03a3}#", "#2026\u{5e74}11\u{6708}7\u{65e5}#"] {
+            assert!(tokenize(source).is_ok());
+        }
+    }
+
+    #[test]
+    fn lexical_width_preserves_data_quotes_comments_and_original_byte_offsets() {
+        let source = "\u{ff24}\u{ff49}\u{ff4d}\u{3000}A\u{ff11}\u{ff3f}B As Long\n\
+                      A\u{ff11}\u{ff3f}B \u{ff1d} \u{ff11}\u{ff0b}\u{ff12}\n\
+                      Rem \u{ff21}\u{ff11}\n\"a\u{3000}\u{ff21}\u{ff02}\"\n[\u{ff21}\u{ff11}]\n\
+                      \u{ff02}ab\u{ff02} \u{ff07}comment";
+        let tokens = tokenize(source).unwrap();
+        assert_eq!(tokens[0].kind, ident("Dim"));
+        assert_eq!(
+            &source[tokens[0].span.start..tokens[0].span.end],
+            "\u{ff24}\u{ff49}\u{ff4d}"
+        );
+        assert!(tokens.iter().any(|t| t.kind == ident("A1_B")));
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Number(2.0)));
+        assert!(tokens
+            .iter()
+            .any(|t| t.kind == TokenKind::Str("a\u{3000}\u{ff21}\u{ff02}".into())));
+        assert!(tokens
+            .iter()
+            .any(|t| t.kind == TokenKind::BracketExpr("\u{ff21}\u{ff11}".into())));
+        assert!(tokens.iter().any(
+            |t| matches!(&t.kind, TokenKind::Comment(text) if text.contains("\u{ff21}\u{ff11}"))
+        ));
+        assert!(tokens.iter().any(|t| t.kind == ident("\u{ff02}ab\u{ff02}")));
+        assert!(tokens.iter().any(|t| t.kind == ident("\u{ff07}comment")));
+        assert_eq!(tokens.last().unwrap().span.end, source.len());
+        for token in tokens {
+            assert!(source.is_char_boundary(token.span.start));
+            assert!(source.is_char_boundary(token.span.end));
+        }
+    }
+
+    #[test]
+    fn fullwidth_identifiers_keep_original_spans_and_literal_text() {
+        let source = "\u{ff21} = \"\u{ff21}\u{ff41}\"\n\u{03a3} \u{03c3}";
+        let tokens = tokenize(source).unwrap();
+        assert_eq!(tokens[0].kind, ident("A"));
+        assert_eq!(
+            &source[tokens[0].span.start..tokens[0].span.end],
+            "\u{ff21}"
+        );
+        assert_eq!(tokens[2].kind, TokenKind::Str("\u{ff21}\u{ff41}".into()));
+        assert_eq!(tokens[4].kind, ident("\u{03a3}"));
+        assert_eq!(tokens[5].kind, ident("\u{03c3}"));
     }
 
     #[test]
