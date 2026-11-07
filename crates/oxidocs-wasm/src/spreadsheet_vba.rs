@@ -51589,6 +51589,14 @@ Public Function Probe(ByVal mode As Long, ByVal kind As Long) As String
  Case 10: With lateRange
  Set selected = .Areas(index)
  End With
+ Case 11: Set selected = collection.Item(Index:=index)
+ Case 12: Set selected = lateCollection.Item(Index:=index)
+ Case 15: With collection
+ Set selected = .Item(Index:=index)
+ End With
+ Case 16: With lateCollection
+ Set selected = .Item(Index:=index)
+ End With
  End Select
  Probe = "OK|" & selected.Address & "|calls=" & CStr(provider.Calls)
  Exit Function
@@ -51604,8 +51612,9 @@ End Function
                     .replace(" Value =", " IndexValue =")
                     .replace("End Property", "End Property\nPublic Property Get Value() As Variant\n Calls = Calls + 1000\n Value = 3\nEnd Property")
             } else { source.to_string() };
-            let (modes, kinds) = if named { (11, 9) } else { (7, 8) };
+            let (modes, kinds) = if named { (17, 9) } else { (7, 8) };
             for mode in 0..modes {
+                if matches!(mode, 13 | 14) { continue; }
                 for kind in 1..=kinds {
                     let early = matches!(mode, 0 | 1 | 4 | 7 | 9);
                     let expected = match kind {

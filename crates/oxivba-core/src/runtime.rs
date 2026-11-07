@@ -315,9 +315,10 @@ pub trait Host {
         None
     }
 
-    /// Prepare arguments for a late-bound host call after its receiver
-    /// and argument expressions have been evaluated. Source classes retain their
-    /// runtime-owned dispatch; statically typed host calls do not use this hook.
+    /// Prepare arguments for a dispatch host call after its receiver and
+    /// argument expressions have been evaluated. Named host arguments also use
+    /// this path with a statically typed receiver. Source classes retain their
+    /// runtime-owned dispatch.
     fn prepare_late_bound_call(&self, _receiver: &ObjectRef, _name: &str,
         _args: &[Value], _argument_names: &[Option<String>])
         -> Result<Option<(String, Vec<Value>)>, String> {
@@ -8646,7 +8647,7 @@ impl<'a> Runtime<'a> {
                         None => Value::Missing,
                     }});
                 }
-                let late_host_call = match target.as_ref() {
+                let late_host_call = argument_names.iter().any(Option::is_some) || match target.as_ref() {
                     Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
                     Expr::WithMember(..) | Expr::WithBangMember(..) => matches!(
                         frame.with_objects.last(), Some(WithSubject::Object { assignment_type: None, .. })),
