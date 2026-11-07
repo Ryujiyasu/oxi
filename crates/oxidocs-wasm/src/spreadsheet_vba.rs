@@ -5735,12 +5735,16 @@ impl<'a> WorkbookHost<'a> {
         if name.eq_ignore_ascii_case("copy") {
             return self.copy_blocks(&areas, args).map(Some);
         }
-        if name.eq_ignore_ascii_case("count") {
+        if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge") {
             let mut total = 0u64;
             for block in &areas {
                 total += Self::range_cell_count_large(*block)?;
             }
-            return Ok(Some(Value::Integer(total as i64)));
+            return Ok(Some(if name.eq_ignore_ascii_case("countlarge") {
+                Value::LongLong(total as i64)
+            } else {
+                Value::Integer(total as i64)
+            }));
         }
         // Excel answers for the FIRST block where a many-block range has to
         // give one answer: `Union(A1:A2, C1:C2).Rows.Count` is 2, and `.Row`
@@ -29827,12 +29831,17 @@ impl Host for WorkbookHost<'_> {
             }
             if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(host_object_index(receiver.handle)).copied() {
                 let first = self.blocks[handle][0];
-                if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("item") {
-                    if name.eq_ignore_ascii_case("count") && args.is_empty() {
-                        return Ok(Some(Value::Integer(i64::from(match axis {
+                if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge") || name.eq_ignore_ascii_case("item") {
+                    if (name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge")) && args.is_empty() {
+                        let count = i64::from(match axis {
                             RangeAxis::Rows => first.end_row - first.start_row + 1,
                             RangeAxis::Columns => first.end_column - first.start_column + 1,
-                        }))));
+                        });
+                        return Ok(Some(if name.eq_ignore_ascii_case("countlarge") {
+                            Value::LongLong(count)
+                        } else {
+                            Value::Integer(count)
+                        }));
                     }
                     return self.range_collection_object_or_item(first, axis, args).map(Some);
                 }
@@ -31306,12 +31315,17 @@ impl Host for WorkbookHost<'_> {
             return self.blocks_member(*handle, name, &[]);
         }
         if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(host_object_index(receiver.handle)).copied() {
-            if name.eq_ignore_ascii_case("count") {
+            if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge") {
                 let first = self.blocks[handle][0];
-                return Ok(Some(Value::Integer(i64::from(match axis {
+                let count = i64::from(match axis {
                     RangeAxis::Rows => first.end_row - first.start_row + 1,
                     RangeAxis::Columns => first.end_column - first.start_column + 1,
-                }))));
+                });
+                return Ok(Some(if name.eq_ignore_ascii_case("countlarge") {
+                    Value::LongLong(count)
+                } else {
+                    Value::Integer(count)
+                }));
             }
             return self.blocks_member(handle, name, &[]);
         }
@@ -32574,12 +32588,16 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if let Some((range, axis)) = self.range_collection(receiver) {
-            if name.eq_ignore_ascii_case("count") {
-                let count = match axis {
+            if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge") {
+                let count = i64::from(match axis {
                     RangeAxis::Rows => range.end_row - range.start_row + 1,
                     RangeAxis::Columns => range.end_column - range.start_column + 1,
-                };
-                return Ok(Some(Value::Integer(i64::from(count))));
+                });
+                return Ok(Some(if name.eq_ignore_ascii_case("countlarge") {
+                    Value::LongLong(count)
+                } else {
+                    Value::Integer(count)
+                }));
             }
             // Everything else a range answers, a row or a column answers the
             // same way, so this falls through to the ordinary range arms
@@ -51400,6 +51418,50 @@ End Function
             assert!(outcome.error.is_none(), "{}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
             assert!(!outcome.workbook_changed);
             assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], 7);
+        }
+    }
+
+    #[test]
+    fn countlarge_preserves_all_range_areas_and_longlong_type() {
+        for (query, expected) in [
+            ("Range(\"A1,A3\")", "2"),
+            ("Range(\"A1,A1\")", "2"),
+            ("Range(\"A:A,C:C\")", "2097152"),
+            ("Range(\"A1:B2,D4:E5\")", "8"),
+            ("Range(\"A1:XFD131072,A1\")", "2147483649"),
+            ("Range(\"A:XFD,A:XFD\")", "34359738368"),
+        ] {
+            let source = format!("Attribute VB_Name = \"CountProbe\"\nPublic Function Probe() As String\n Dim held As Variant\n held = {query}.CountLarge\n Probe = CStr(held) & \"|\" & TypeName(held) & \"|\" & CStr(VarType(held))\nEnd Function\n");
+            let outcome = execute_workbook_vba(workbook(), &source, "CountProbe.Probe",
+                vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{query}: {}", outcome.error.as_ref().map_or("", |e| e.message.as_str()));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                format!("{expected}|LongLong|20"), "{query}");
+            assert!(!outcome.workbook_changed, "{query}");
+        }
+    }
+
+    #[test]
+    fn countlarge_preserves_row_and_column_collection_extent() {
+        for (query, expected) in [
+            ("Worksheets(1).Rows(1)", "1"),
+            ("Worksheets(1).Columns(1)", "1"),
+            ("Worksheets(1).Rows", "1048576"),
+            ("Worksheets(1).Columns", "16384"),
+            ("Range(\"A1:C3\").Rows", "3"),
+            ("Range(\"A1:C3\").Columns", "3"),
+            ("Range(\"A1:C3,D4:F5\").Rows", "3"),
+            ("Range(\"A1:C3,D4:F5\").Columns", "3"),
+            ("Range(\"A1:C3,D4:F5\").Cells", "15"),
+            ("Range(\"A1\").EntireRow", "1"),
+        ] {
+            let source = format!("Attribute VB_Name = \"CountProbe\"\nPublic Function Probe() As String\n Dim held As Variant\n held = {query}.CountLarge\n Probe = CStr(held) & \"|\" & TypeName(held) & \"|\" & CStr(VarType(held))\nEnd Function\n");
+            let outcome = execute_workbook_vba(workbook(), &source, "CountProbe.Probe",
+                vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{query}: {}", outcome.error.as_ref().map_or("", |e| e.message.as_str()));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                format!("{expected}|LongLong|20"), "{query}");
+            assert!(!outcome.workbook_changed, "{query}");
         }
     }
 
