@@ -676,8 +676,7 @@ fn paragraph_base_run_style(styles: &StyleSheet, id: Option<&str>) -> RunStyle {
 
 impl OoxmlParser {
     pub fn new(data: &[u8]) -> Result<Self, ParseError> {
-        let cursor = Cursor::new(data.to_vec());
-        let archive = ZipArchive::new(cursor)?;
+        let archive = oxidocs_common::archive::open_zip(data.to_vec())?;
         Ok(Self { archive })
     }
 
