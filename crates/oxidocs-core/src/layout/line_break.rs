@@ -3468,7 +3468,17 @@ impl<'a> LineBreaker<'a> {
                 } else {
                     false
                 };
-                let vertical_font_advance = if vertical
+                // OXI_VERT_HALFWIDTH_SIDEWAYS (2026-11-08, default ON, opt-out _DISABLE): a
+                // half-width form (U+FF61..FF9F) is set sideways in a vertical column and
+                // takes its horizontal advance, not the vmtx em. blind-J ja/creative__
+                // 95f17b17 p3 «…忘れちゃったけど･･････» fills one 20-cell column in Word
+                // (17 + 6 x 0.5); Oxi counted the six «･» as whole cells and wrapped,
+                // and the book ran to 23 pages against Word's 22.
+                let vert_sideways = vertical && ('\u{FF61}'..='\u{FF9F}').contains(&ch)
+                    && !crate::env_flag!("OXI_VERT_HALFWIDTH_SIDEWAYS_DISABLE");
+                let vertical_font_advance = if vert_sideways {
+                    Some(char_metrics.char_width_em(ch) * font_size)
+                } else if vertical
                     && crate::font::vertical_font_advance_on()
                 {
                     self.registry.vertical_advance_pt(&char_metrics.family, ch, font_size)
@@ -6954,7 +6964,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             && !prop_final_nohang
                             && !alt_closing_nohang
                             && !s1429_cell_oidashi
-                            && (!vertical_natural_boundary || vertical_grid_hang)
+                            // OXI_VERT_FULLWIDTH_HANG (2026-11-08, default ON, opt-out _DISABLE):
+                            // S1446's no-hang boundary is the PROPORTIONAL face's; a full-width
+                            // mark on a char-grid column hangs as it does across. `_pb_vert_close
+                            // _hang_slice.py` (blind-J ja/creative__95f17b17 p4, ＭＳ 明朝 12pt,
+                            // compat 15, linesAndChars, 20-cell column): Word keeps «か」» /
+                            // «か。» / «か）» on the column with the mark hung past its end, as
+                            // in the 20-cell horizontal arms; Oxi sent «か」» down.
+                            && (!vertical_natural_boundary || vertical_grid_hang
+                                || (!s1446_proportional
+                                    && !crate::env_flag!("OXI_VERT_FULLWIDTH_HANG_DISABLE")))
                             && !modern_cjk_line_end
                             && !next_is_proh
                             && !s228_block_hang
@@ -7752,6 +7771,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         f.width = (f.width - per).max(floor);
                     }
                 }
+            }
+        }
+        // OXI_HANG_TRAILING_SPACE (2026-11-08, default ON, opt-out _DISABLE): the blanks
+        // that end a paragraph after a hung mark ride on the hung line; they never open
+        // a line of their own. blind-J ja/creative__95f17b17 p17 «…先に進まない。　»
+        // (the «。» hung on a 20-cell column, then U+3000): Word starts the next
+        // paragraph on the next column, Oxi spent a column on the lone «　».
+        if !crate::env_flag!("OXI_HANG_TRAILING_SPACE_DISABLE") && lines.len() >= 2 {
+            let n = lines.len();
+            let only_blank = !lines[n - 1].fragments.is_empty()
+                && lines[n - 1].fragments.iter().all(|f| f.text.chars().all(|c| c == ' ' || c == '\u{3000}'));
+            let prev_hung = lines[n - 2].fragments.last()
+                .and_then(|f| f.text.chars().last())
+                .is_some_and(kinsoku::is_hangable_punct);
+            if only_blank && prev_hung {
+                let mut tail = lines.pop().unwrap();
+                for f in tail.fragments.iter_mut() {
+                    f.width = 0.0;
+                }
+                lines.last_mut().unwrap().fragments.extend(tail.fragments);
             }
         }
         for line in &mut lines {
