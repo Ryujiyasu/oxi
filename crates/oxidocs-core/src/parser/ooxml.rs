@@ -10070,9 +10070,16 @@ fn parse_drawing(
                             // snip2DiagRect (adj1 10823, noFill, lnRef 2 dk1) plus a quarter-
                             // turned roundRect (adj 50000, bg1 fill) behind a vertical label;
                             // Oxi drew neither. A quarter turn swaps the box about its centre.
+                            // OXI_WPG_ELLIPSE_CALLOUT (2026-11-07, default ON, opt-out _DISABLE):
+                            // a wedgeEllipseCallout member is the ECMA outline -- the ellipse
+                            // from 11 degrees past the tail direction round to 11 before it,
+                            // then the tip at the centre + (adj1 w, adj2 h). blind-J ja/
+                            // creative__99e3d9f9's «初心者向け» bubble (00B0F0) was not drawn.
+                            let ellipse_callout = w.prst.as_deref() == Some("wedgeEllipseCallout")
+                                && std::env::var_os("OXI_WPG_ELLIPSE_CALLOUT_DISABLE").is_none();
                             let s1120_path = if s1120_path.is_empty() && !is_line && !is_rect
                                 && std::env::var_os("OXI_WPG_PRESET_PATHS_DISABLE").is_none()
-                                && matches!(w.prst.as_deref(), Some("snip2DiagRect") | Some("roundRect"))
+                                && (matches!(w.prst.as_deref(), Some("snip2DiagRect") | Some("roundRect")) || ellipse_callout)
                             {
                                 use crate::ir::PathSeg::{C, L, M, Z};
                                 let quarter = ((w.rot / 90.0).round() as i32).rem_euclid(2) == 1;
@@ -10080,7 +10087,29 @@ fn parse_drawing(
                                 let (bw, bh) = (bw.max(1.0), bh.max(1.0));
                                 let ss = bw.min(bh);
                                 let g = |n: &str, d: f32| w.adj.iter().find(|(k, _)| k == n).map_or(d, |(_, v)| *v);
-                                if w.prst.as_deref() == Some("snip2DiagRect") {
+                                if ellipse_callout {
+                                    let (cw, chh) = (w.ext.0.max(1.0), w.ext.1.max(1.0));
+                                    let (dx, dy) = (cw * g("adj1", -20833.0) / 100000.0, chh * g("adj2", 62500.0) / 100000.0);
+                                    let pang = (dy * cw).atan2(dx * chh);
+                                    let (st, en) = (pang + 11f32.to_radians(), pang - 11f32.to_radians() + std::f32::consts::TAU);
+                                    let mut v = Vec::new();
+                                    // the member's own turn (xfrm rot, clockwise) about its centre
+                                    let th = w.rot.to_radians();
+                                    let turn = |px: f32, py: f32| {
+                                        let (ax, ay) = ((px - 0.5) * cw, (py - 0.5) * chh);
+                                        (0.5 + (ax * th.cos() - ay * th.sin()) / cw,
+                                         0.5 + (ax * th.sin() + ay * th.cos()) / chh)
+                                    };
+                                    for i in 0..=48 {
+                                        let t = st + (en - st) * i as f32 / 48.0;
+                                        let (px, py) = turn(0.5 + 0.5 * t.cos(), 0.5 + 0.5 * t.sin());
+                                        v.push(if i == 0 { M(px, py) } else { L(px, py) });
+                                    }
+                                    let (tx, ty) = turn(0.5 + dx / cw, 0.5 + dy / chh);
+                                    v.push(L(tx, ty));
+                                    v.push(Z);
+                                    v
+                                } else if w.prst.as_deref() == Some("snip2DiagRect") {
                                     let a1 = (g("adj1", 0.0).clamp(0.0, 50000.0) / 100000.0) * ss;
                                     let a2 = (g("adj2", 16667.0).clamp(0.0, 50000.0) / 100000.0) * ss;
                                     let (x1, y1, x2, y2) = (a1 / bw, a1 / bh, a2 / bw, a2 / bh);
