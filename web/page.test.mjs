@@ -55,6 +55,8 @@ const ids = new Set([...page.matchAll(/\bid="([^"]+)"/g)].map((one) => one[1]));
 
 const asked = [];
 const hung = [];
+const documentHooks = new Map(), windowHooks = new Map();
+function rememberHook(hooks, kind, handler) { hung.push(kind); if (!hooks.has(kind)) hooks.set(kind, []); hooks.get(kind).push(handler); }
 const made = [];
 
 function element(name, id) {
@@ -121,7 +123,7 @@ function element(name, id) {
       left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20,
     }),
     scrollIntoView() {},
-    focus() {},
+    focus() { document.activeElement = this; },
     blur() {},
     click() { this.clicked = true; if (this.tagName === 'A' && blobUrls.has(this.href)) written.push(blobUrls.get(this.href)); },
     select() {},
@@ -172,7 +174,7 @@ globalThis.document = {
     return nodes.get(id);
   },
   createElement: (name) => element(name),
-  addEventListener: (kind) => hung.push(kind),
+  addEventListener: (kind, handler) => rememberHook(documentHooks, kind, handler),
   body: element('body'),
   activeElement: null,
   // The page asks the root element which host it is running in, and walks
@@ -182,7 +184,7 @@ globalThis.document = {
   querySelector: () => null,
   querySelectorAll: () => [],
 };
-globalThis.window = { addEventListener: (kind) => hung.push(kind), dispatchEvent: () => true, devicePixelRatio: 1 };
+globalThis.window = { addEventListener: (kind, handler) => rememberHook(windowHooks, kind, handler), dispatchEvent: () => true, devicePixelRatio: 1 };
 globalThis.performance = { now: () => 0 };
 globalThis.Blob = class { constructor(parts, options = {}) { this.parts = parts; this.type = options.type || ''; } };
 // The real URL class stays: the wasm glue builds one to find its own binary
@@ -392,6 +394,32 @@ if (bold && saveButton && bold.listeners.has('click')) {
   await saveButton.fire('click', {});
   await new Promise((go) => setTimeout(go, 0));
   is('and saving then writes a file', written.length, 1);
+
+  const wouldWarnOnClose = () => {
+    let prevented = false;
+    const event = { preventDefault() { prevented = true; }, returnValue: undefined };
+    for (const handler of windowHooks.get('beforeunload') || []) handler(event);
+    return prevented;
+  };
+  const key = value => {
+    const event = { key: value, target: nodes.get('sheet'), defaultPrevented: false,
+      preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+      getModifierState() { return false; } };
+    for (const handler of documentHooks.get('keydown') || []) handler(event);
+  };
+  is('a completed Save has no pending close warning', wouldWarnOnClose(), false);
+  document.activeElement = nodes.get('sheet');
+  key('F2');
+  const originalText = nodes.get('entry').value;
+  key('Enter');
+  is('accepting the original cell text still enables Save', saveButton.disabled, false);
+  is('the same-value edit retains its displayed text', nodes.get('entry').value, originalText);
+  is('the same-value edit warns before leaving the page', wouldWarnOnClose(), true);
+  written.length = 0;
+  await saveButton.fire('click', {});
+  is('saving that accepted edit downloads a workbook', written.length, 1);
+  is('saving that accepted edit clears the close warning', wouldWarnOnClose(), false);
+
 } else {
   is('the page has a bold button and a save button', false, true);
 }

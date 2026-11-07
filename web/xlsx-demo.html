@@ -4427,7 +4427,8 @@ if (saveButton) saveButton.addEventListener('click', save);
 // outstanding loses them. The browser will only show its own wording, but it
 // will show it.
 window.addEventListener('beforeunload', (event) => {
-  if (changes.size === 0) return;
+  if (!book || (changes.size === 0 && !beyondValues && !macroSourceDirty
+      && !calculationPendingSave() && macroEditRevision === macroSavedEditRevision)) return;
   event.preventDefault();
   event.returnValue = '';
 });
