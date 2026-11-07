@@ -11,6 +11,10 @@ pub(super) struct FileContext {
     pub package_bytes: Option<Vec<u8>>,
     pub full_name: Option<String>,
     pub read_only: Option<bool>,
+    /// Monotonic host editor revision, including edits restored to their old values.
+    pub edit_revision: Option<u64>,
+    /// Source decoding profile used when the editor loaded this package.
+    pub source_code_page: Option<u16>,
     pub folders: Vec<String>,
     pub files: Vec<ProducedFile>,
 }
@@ -76,6 +80,7 @@ pub(super) struct WorkbookFiles {
     pub shared_cell_edits: Vec<SharedCellEdit>,
     pub shared_format_ids: BTreeMap<String,u32>,
     pub source: String,
+    pub edit_revision: Option<u64>,
     pub files: Files,
     pub exports: BTreeSet<String>,
     mounted_folders: BTreeSet<String>,
@@ -1178,6 +1183,7 @@ impl WorkbookFiles {
             }
         }
         let Some(context) = context else { return Ok(()); };
+        if let Some(revision) = context.edit_revision { self.edit_revision = Some(revision); }
         // A retained workbook owns its current saved package. Repeated editor
         // bootstrap bytes are a mount, not a reload of pre-SaveAs metadata.
         if self.package.is_none() {
