@@ -11216,6 +11216,8 @@ fn parse_vml_pict(
     let mut is_hr = false;
     // OXI_VML_ABS_TXBX: <v:textbox inset="l,t,r,b"> (VML default 7.2,3.6,7.2,3.6).
     let mut vml_tb_inset: Option<[f32; 4]> = None;
+    // OXI_VML_CONNECTOR_LINE: style flip:x / flip:y.
+    let (mut vml_flip_h, mut vml_flip_v) = (false, false);
 
     loop {
         match reader.read_event()? {
@@ -11229,8 +11231,19 @@ fn parse_vml_pict(
                     {
                         let d = [7.2f32, 3.6, 7.2, 3.6];
                         let mut out = d;
+                        // OXI_VML_INSET_ZERO (2026-11-08, default ON, opt-out _DISABLE): an
+                        // explicit 0 is a zero inset; only an empty slot keeps the default.
+                        // blind-J ja/educational__2a8abbb2's callouts (v:roundrect h 24.1,
+                        // inset="0,0,0,0", two 8pt lines): Word shows both lines, Oxi kept
+                        // 7.2/3.6 and clipped the second away.
+                        let zero_ok = !crate::env_flag!("OXI_VML_INSET_ZERO_DISABLE");
                         for (k, t) in v.split(',').take(4).enumerate() {
-                            if let Some(x) = parse_css_length_opt(t.trim()) { out[k] = x; }
+                            let t = t.trim();
+                            if let Some(x) = parse_css_length_opt(t) {
+                                out[k] = x;
+                            } else if zero_ok && !t.is_empty() {
+                                out[k] = parse_css_length(t).max(0.0);
+                            }
                         }
                         vml_tb_inset = Some(out);
                     }
@@ -11409,6 +11422,12 @@ fn parse_vml_pict(
                                     // Map VML shapetype IDs to OOXML preset names
                                     match vml_type_attr.as_deref() {
                                         Some(t) if t.contains("t185") => "bracketPair", // double bracket 〔〕
+                                        // OXI_VML_CONNECTOR_LINE (2026-11-08, default ON, opt-out
+                                        // _DISABLE): shapetype 32 is the straight connector -- a
+                                        // line corner to corner (flip picks the diagonal). blind-J
+                                        // ja/educational__2a8abbb2's callout leaders drew as boxes.
+                                        Some(t) if t.ends_with("_x0000_t32")
+                                            && !crate::env_flag!("OXI_VML_CONNECTOR_LINE_DISABLE") => "line",
                                         _ => "rect",
                                     }
                                 }
@@ -11433,6 +11452,10 @@ fn parse_vml_pict(
                                             if let Some(v) = part.strip_prefix("mso-wrap-distance-right:") {
                                                 vml_dist_r = Some(parse_css_length(v.trim()));
                                             }
+                                        }
+                                        if let Some(f) = part.strip_prefix("flip:") {
+                                            vml_flip_h |= f.contains('x');
+                                            vml_flip_v |= f.contains('y');
                                         }
                                         if let Some(w) = part.strip_prefix("width:") {
                                             if !in_grp {
@@ -12371,8 +12394,8 @@ fn parse_vml_pict(
         gradient_angle: None,
         anchor_block_index: 0,
         v_text_anchor,
-        flip_h: false,
-        flip_v: false,
+        flip_h: vml_flip_h && !crate::env_flag!("OXI_VML_CONNECTOR_LINE_DISABLE"),
+        flip_v: vml_flip_v && !crate::env_flag!("OXI_VML_CONNECTOR_LINE_DISABLE"),
         arrow_head: false,
         arrow_tail: false,
         wrap_polygon: shape_wrap_points.into_iter().map(|(x, y)| (x / shape_coord_size.0, y / shape_coord_size.1)).collect(),
