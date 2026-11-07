@@ -4682,7 +4682,7 @@ impl<'a> WorkbookHost<'a> {
     fn borders_object(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
         let selection = match args {
             [] => BorderSelection::All,
-            [value] => border_selection(value)?,
+            [value] => self.border_selection(value)?,
             _ => return Err("Range.Borders expects zero or one border index".to_string()),
         };
         Ok(self.object(HostObject::RangeBorders(range, selection)))
@@ -5132,7 +5132,7 @@ impl<'a> WorkbookHost<'a> {
         }
     }
 
-    fn areas_item_index(&self, value: &Value, count: usize, automation: bool) -> Result<usize, String> {
+    fn coerce_index_long(&self, value: &Value, automation: bool) -> Result<Value, String> {
         let scalar;
         let value = if let Value::Object(object) = value {
             let range = self.range(object).or_else(|| match self.objects.get(host_object_index(object.handle)) {
@@ -5145,10 +5145,10 @@ impl<'a> WorkbookHost<'a> {
                 &scalar
             } else {
                 if automation {
-                    return Err(host_error(13, "Areas.Item dispatch index has no scalar default value"));
+                    return Err(host_error(13, "dispatch index has no scalar default value"));
                 }
                 if let Some(number) = self.default_member_error(object) {
-                    return Err(host_error(number, "Areas.Item index has no scalar default value"));
+                    return Err(host_error(number, "index has no scalar default value"));
                 }
                 value
             }
@@ -5158,9 +5158,28 @@ impl<'a> WorkbookHost<'a> {
         // Late-bound Automation rejects these conversions as type mismatches;
         // an ordinary VBA argument conversion retains its specific error.
         if automation && matches!(value, Value::Null | Value::Nothing) {
-            return Err(host_error(13, "Areas.Item dispatch index must be numeric"));
+            return Err(host_error(13, "dispatch index must be numeric"));
         }
-        areas_item_index(value, count)
+        oxivba_core::runtime::coerce_automation_scalar(value, oxivba_core::runtime::AutomationScalarType::Long)
+    }
+
+    fn areas_item_index(&self, value: &Value, count: usize, automation: bool) -> Result<usize, String> {
+        areas_item_index(&self.coerce_index_long(value, automation)?, count)
+    }
+
+    fn border_selection(&self, value: &Value) -> Result<BorderSelection, String> {
+        border_selection(&self.coerce_index_long(value, false)?)
+    }
+
+    fn border_index_member(&self, receiver: &ObjectRef, name: &str) -> bool {
+        if name.eq_ignore_ascii_case("item") {
+            return matches!(self.objects.get(host_object_index(receiver.handle)),
+                Some(HostObject::RangeBorders(_, BorderSelection::All)
+                    | HostObject::BlocksStyle(_, StyleFace::Borders(BorderSelection::All))));
+        }
+        name.eq_ignore_ascii_case("borders") && (self.range(receiver).is_some()
+            || matches!(self.objects.get(host_object_index(receiver.handle)),
+                Some(HostObject::Blocks(_) | HostObject::BlocksAxis(..))))
     }
 
     /// The `Areas` of a range that is one block: a collection of one, which
@@ -6014,7 +6033,7 @@ impl<'a> WorkbookHost<'a> {
         if name.eq_ignore_ascii_case("borders") {
             let selection = match args {
                 [] | [Value::Missing] => BorderSelection::All,
-                [wanted] => border_selection(wanted)?,
+                [wanted] => self.border_selection(wanted)?,
                 _ => return Err("Range.Borders takes one index".to_string()),
             };
             return Ok(Some(
@@ -28667,12 +28686,13 @@ impl Host for WorkbookHost<'_> {
         args: &[Value], argument_names: &[Option<String>], index: usize)
         -> Option<oxivba_core::runtime::AutomationScalarType> {
         if index != 0 || args.len() != 1 { return None; }
+        let borders = self.border_index_member(receiver, name);
         let item = name.eq_ignore_ascii_case("item")
-            && matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::Areas(_)));
+            && (borders || matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::Areas(_))));
         let areas = name.eq_ignore_ascii_case("areas") && (self.range(receiver).is_some()
             || matches!(self.objects.get(host_object_index(receiver.handle)),
                 Some(HostObject::Blocks(_) | HostObject::BlocksAxis(..))));
-        if (!item && !areas) || argument_names.iter().any(|name| name.as_deref()
+        if (!item && !areas && !borders) || argument_names.iter().any(|name| name.as_deref()
             .is_some_and(|name| !item || !name.eq_ignore_ascii_case("index"))) {
             return None;
         }
@@ -28682,12 +28702,13 @@ impl Host for WorkbookHost<'_> {
     fn prepare_late_bound_call(&self, receiver: &ObjectRef, name: &str,
         args: &[Value], argument_names: &[Option<String>])
         -> Result<Option<(String, Vec<Value>)>, String> {
+        let borders = self.border_index_member(receiver, name);
         let item = name.eq_ignore_ascii_case("item")
-            && matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::Areas(_)));
+            && (borders || matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::Areas(_))));
         let areas = name.eq_ignore_ascii_case("areas") && (self.range(receiver).is_some()
             || matches!(self.objects.get(host_object_index(receiver.handle)),
                 Some(HostObject::Blocks(_) | HostObject::BlocksAxis(..))));
-        if !item && !areas { return Ok(None); }
+        if !item && !areas && !borders { return Ok(None); }
         // Bind unknown names through the ordinary host path before conversion.
         if argument_names.iter().any(|name| name.as_deref()
             .is_some_and(|name| !item || !name.eq_ignore_ascii_case("index"))) {
@@ -28697,6 +28718,13 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn prepare_automation_get(&self, receiver: &ObjectRef, name: &str, args: &[Value]) -> Result<Option<(String, Vec<Value>)>, String> {
+        if self.border_index_member(receiver, name) {
+            if let [index] = args {
+                if !matches!(index, Value::Missing) {
+                    return Ok(Some((name.into(), vec![self.coerce_index_long(index, true)?])));
+                }
+            }
+        }
         let area_count = match self.objects.get(host_object_index(receiver.handle)) {
             Some(HostObject::Areas(handle)) if name.eq_ignore_ascii_case("item") =>
                 Some(self.blocks[*handle].len()),
@@ -29271,7 +29299,7 @@ impl Host for WorkbookHost<'_> {
                     return match args {
                         [] => Ok(Some(self.object(HostObject::FormatBorders(replace)))),
                         [index] => {
-                            let selection = border_selection(index)?;
+                            let selection = self.border_selection(index)?;
                             Ok(Some(self.object(HostObject::FormatBorder(replace, selection))))
                         }
                         _ => Err(host_error(450, "CellFormat.Borders takes zero or one border index")),
@@ -29375,13 +29403,26 @@ impl Host for WorkbookHost<'_> {
                     };
                 }
             }
+            if let Some(HostObject::BlocksStyle(handle, StyleFace::Borders(BorderSelection::All))) =
+                self.objects.get(host_object_index(receiver.handle)).copied()
+            {
+                if name.is_empty() || ["item", "_default"].iter().any(|member| name.eq_ignore_ascii_case(member)) {
+                    return match args {
+                        [index] => {
+                            let selection = self.border_selection(index)?;
+                            Ok(Some(self.object(HostObject::BlocksStyle(handle, StyleFace::Borders(selection)))))
+                        }
+                        _ => Err(host_error(450, "Borders.Item takes one index")),
+                    };
+                }
+            }
             if let Some(HostObject::FormatBorders(replace)) =
                 self.objects.get(host_object_index(receiver.handle)).copied()
             {
                 if name.is_empty() || ["item", "_default"].iter().any(|member| name.eq_ignore_ascii_case(member)) {
                     return match args {
                         [index] => {
-                            let selection = border_selection(index)?;
+                            let selection = self.border_selection(index)?;
                             Ok(Some(self.object(HostObject::FormatBorder(replace, selection))))
                         }
                         _ => Err(host_error(450, "CellFormat.Borders.Item takes one index")),
@@ -51739,6 +51780,322 @@ End Function
                     outcome.error.as_ref().map_or("", |error| error.message.as_str()));
                 assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
                     format!("{status}|calls=1|leafCalls={leaf_calls}"), "mode {mode}, kind {kind}");
+            }
+        }
+    }
+
+    #[test]
+    fn borders_item_coercion_matches_native_colored_indices() {
+        // Two native Excel range shapes, fourteen call paths, 32 input kinds.
+        let source = r#"Attribute VB_Name = "BordersCoercionProbe"
+Option Explicit
+Private Function Query(ByVal shape As Long) As Range
+ If shape = 0 Then
+ Set Query = ThisWorkbook.Worksheets(1).Range("B2:C3")
+ Else
+ Set Query = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7,J10:L11")
+ End If
+End Function
+Public Sub Seed()
+ Dim shape As Long
+ Dim i As Long
+ Dim r As Range
+ For shape = 0 To 1
+ Set r = Query(shape)
+ For i = 5 To 12
+ r.Borders(i).LineStyle = 1
+ r.Borders(i).Color = i * 1000
+ Next i
+ Next shape
+ ThisWorkbook.Worksheets(1).Range("Z1").Value2 = 7
+ ThisWorkbook.Worksheets(1).Range("Z2").Value2 = 8
+End Sub
+Public Function Probe(ByVal mode As Long, ByVal kind As Long, ByVal shape As Long) As String
+ Dim queryRange As Range
+ Dim collection As Borders
+ Dim lateCollection As Object
+ Dim lateRange As Object
+ Dim selected As Border
+ Dim index As Variant
+ Dim value As Variant
+ Dim written As String
+ On Error GoTo Failed
+ Set queryRange = Query(shape)
+ Set collection = queryRange.Borders
+ Set lateCollection = collection
+ Set lateRange = queryRange
+ Select Case kind
+ Case 1: index = 7
+ Case 2: index = 8
+ Case 3: index = 12
+ Case 4: index = 0
+ Case 5: index = -1
+ Case 6: index = 13
+ Case 7: index = 7.4
+ Case 8: index = 7.5
+ Case 9: index = 8.5
+ Case 10: index = 12.5
+ Case 11: index = "7"
+ Case 12: index = "7.5"
+ Case 13: index = "bad"
+ Case 14: index = Empty
+ Case 15: index = Null
+ Case 16: index = True
+ Case 17: index = False
+ Case 18: index = CCur(7.5)
+ Case 19: index = CLngLng(7)
+ Case 20: index = CVErr(2042)
+ Case 21: index = Array(1)
+ Case 22: index = 2147483648#
+ Case 23: index = ""
+ Case 24: index = CDate(7)
+ Case 25: index = 2147483647.5
+ Case 26: index = -2147483648.5
+ Case 27: index = " 7 "
+ Case 28: index = CDec(7.5)
+ Case 29: Set index = ThisWorkbook.Worksheets(1).Range("Z1")
+ Case 30: Set index = ThisWorkbook.Worksheets(1).Range("Z1:Z2")
+ Case 31: Set index = Nothing
+ Case 32: Set index = ThisWorkbook.Worksheets(1)
+ End Select
+ Select Case mode
+ Case 0: Set selected = queryRange.Borders(index)
+ Case 1: Set selected = collection.Item(index)
+ Case 2: Set selected = lateCollection.Item(index)
+ Case 3: Set selected = lateRange.Borders(index)
+ Case 4: Set selected = collection(index)
+ Case 5: Set selected = lateCollection(index)
+ Case 6: Set selected = CallByName(collection, "Item", VbGet, index)
+ Case 7: With collection
+ Set selected = .Item(index)
+ End With
+ Case 8: With lateCollection
+ Set selected = .Item(index)
+ End With
+ Case 9: With queryRange
+ Set selected = .Borders(index)
+ End With
+ Case 10: With lateRange
+ Set selected = .Borders(index)
+ End With
+ Case 11: Set selected = CallByName(queryRange, "Borders", VbGet, index)
+ Case 12: Set selected = collection.Item(index:=index)
+ Case 13: Set selected = lateCollection.Item(index:=index)
+ End Select
+ value = selected.Color
+ If IsNull(value) Then
+ written = "NULL"
+ Else
+ written = CStr(value)
+ End If
+ Probe = "OK|" & written & "|" & TypeName(value) & "|" & CStr(VarType(value)) & "|" & TypeName(selected)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+
+"#;
+        let expected_early = [
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|12000|Double|5|Border",
+            "ERR|1004",
+            "ERR|1004",
+            "ERR|1004",
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|12000|Double|5|Border",
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "ERR|13",
+            "ERR|1004",
+            "ERR|94",
+            "ERR|1004",
+            "ERR|1004",
+            "OK|8000|Double|5|Border",
+            "OK|7000|Double|5|Border",
+            "ERR|13",
+            "ERR|13",
+            "ERR|6",
+            "ERR|13",
+            "OK|7000|Double|5|Border",
+            "ERR|6",
+            "ERR|1004",
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|7000|Double|5|Border",
+            "ERR|13",
+            "ERR|91",
+            "ERR|438",
+        ];
+        let expected_dispatch = [
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|12000|Double|5|Border",
+            "ERR|1004",
+            "ERR|1004",
+            "ERR|1004",
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|12000|Double|5|Border",
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "ERR|13",
+            "ERR|1004",
+            "ERR|13",
+            "ERR|1004",
+            "ERR|1004",
+            "OK|8000|Double|5|Border",
+            "OK|7000|Double|5|Border",
+            "ERR|13",
+            "ERR|13",
+            "ERR|6",
+            "ERR|13",
+            "OK|7000|Double|5|Border",
+            "ERR|6",
+            "ERR|1004",
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|7000|Double|5|Border",
+            "ERR|13",
+            "ERR|13",
+            "ERR|13",
+        ];
+        let seeded = execute_workbook_vba(workbook(), source, "BordersCoercionProbe.Seed",
+            vec![], 0, failure_context()).unwrap();
+        assert!(seeded.error.is_none(), "{}", seeded.error.as_ref().map_or("", |e| e.message.as_str()));
+        for shape in 0..2 {
+            for mode in 0..14 {
+                for kind in 1..=32 {
+                    let outcome = execute_workbook_vba(seeded.workbook.clone(), source,
+                        "BordersCoercionProbe.Probe", vec![Value::Integer(mode),
+                        Value::Integer(kind), Value::Integer(shape)], 0, failure_context()).unwrap();
+                    assert!(outcome.error.is_none(), "shape {shape}, mode {mode}, kind {kind}: {}",
+                        outcome.error.as_ref().map_or("", |e| e.message.as_str()));
+                    let result = serde_json::to_value(&outcome.result).unwrap();
+                    let actual = result["value"].as_str().expect("probe result");
+                    let projected = if actual.starts_with("ERR|") {
+                        actual.split('|').take(2).collect::<Vec<_>>().join("|")
+                    } else { actual.to_string() };
+                    let expected = if matches!(mode, 0 | 1 | 4 | 7 | 9) {
+                        &expected_early
+                    } else { &expected_dispatch };
+                    assert_eq!(projected, expected[kind as usize - 1],
+                        "shape {shape}, mode {mode}, kind {kind}");
+                    assert!(!outcome.workbook_changed, "probe must only read borders");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn borders_item_source_defaults_match_native_getter_counts() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "BorderIndexProvider"
+Attribute VB_Base = "0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}"
+Attribute VB_TemplateDerived = False
+Attribute VB_Customizable = False
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+Option Explicit
+Public Kind As Long
+Public Calls As Long
+Public Property Get Value() As Variant
+Attribute Value.VB_UserMemId = 0
+ Calls = Calls + 1
+ Select Case Kind
+ Case 1: Value = 7
+ Case 2: Value = 7.5
+ Case 3: Value = "7"
+ Case 4: Value = Null
+ Case 5: Value = CVErr(2042)
+ Case 6: Set Value = ThisWorkbook.Worksheets(1).Range("Z1")
+ Case 7: Set Value = Nothing
+ Case 8: Value = Array(1)
+ End Select
+End Property
+
+Attribute VB_Name = "BorderSourceDefaultProbe"
+Option Explicit
+Public Sub Seed()
+ Range("Z1").Value2 = 7
+End Sub
+Public Function Probe(ByVal mode As Long, ByVal kind As Long) As String
+ Dim provider As BorderIndexProvider
+ Dim index As Variant
+ Dim query As Range
+ Dim collection As Borders
+ Dim lateCollection As Object
+ Dim lateRange As Object
+ Dim selected As Border
+ Dim failureText As String
+ On Error GoTo Failed
+ Set provider = New BorderIndexProvider
+ provider.Kind = kind
+ Set index = provider
+ Set query = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7,J10:L10")
+ Set collection = query.Borders
+ Set lateCollection = collection
+ Set lateRange = query
+ Select Case mode
+ Case 0: Set selected = query.Borders(index)
+ Case 1: Set selected = collection.Item(index)
+ Case 2: Set selected = lateCollection.Item(index)
+ Case 3: Set selected = lateRange.Borders(index)
+ Case 4: Set selected = collection(index)
+ Case 5: Set selected = lateCollection(index)
+ Case 6: Set selected = CallByName(collection,"Item",VbGet,index)
+ End Select
+ Probe = "OK|" & selected.LineStyle & "|" & TypeName(selected) & "|calls=" & CStr(provider.Calls)
+ Exit Function
+Failed:
+ failureText = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ Probe = failureText & "|calls=" & CStr(provider.Calls)
+End Function
+
+"#;
+        let expected_early = [
+            "OK|-4142|Border|calls=1",
+            "OK|-4142|Border|calls=1",
+            "OK|-4142|Border|calls=1",
+            "ERR|94|calls=1",
+            "ERR|13|calls=1",
+            "OK|-4142|Border|calls=1",
+            "ERR|13|calls=1",
+            "ERR|13|calls=1",
+        ];
+        let expected_dispatch = [
+            "OK|-4142|Border|calls=1",
+            "OK|-4142|Border|calls=1",
+            "OK|-4142|Border|calls=1",
+            "ERR|13|calls=1",
+            "ERR|13|calls=1",
+            "ERR|13|calls=1",
+            "ERR|13|calls=1",
+            "ERR|13|calls=1",
+        ];
+        let seeded = execute_workbook_vba(workbook(), source, "BorderSourceDefaultProbe.Seed",
+            vec![], 0, failure_context()).unwrap();
+        assert!(seeded.error.is_none());
+        for mode in 0..7 {
+            for kind in 1..=8 {
+                let outcome = execute_workbook_vba(seeded.workbook.clone(), source,
+                    "BorderSourceDefaultProbe.Probe", vec![Value::Integer(mode), Value::Integer(kind)],
+                    0, failure_context()).unwrap();
+                assert!(outcome.error.is_none(), "mode {mode}, kind {kind}: {}",
+                    outcome.error.as_ref().map_or("", |e| e.message.as_str()));
+                let result = serde_json::to_value(&outcome.result).unwrap();
+                let actual = result["value"].as_str().expect("probe result");
+                let projected = if actual.starts_with("ERR|") {
+                    format!("ERR|{}|{}", actual.split('|').nth(1).unwrap(), actual.split('|').next_back().unwrap())
+                } else { actual.to_string() };
+                let expected = if matches!(mode, 0 | 1 | 4) { &expected_early } else { &expected_dispatch };
+                assert_eq!(projected, expected[kind as usize - 1], "mode {mode}, kind {kind}");
+                assert!(!outcome.workbook_changed);
             }
         }
     }
