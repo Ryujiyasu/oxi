@@ -1034,6 +1034,25 @@ impl OoxmlParser {
             };
 
             hf_text_boxes.extend(take_hf_text_boxes().into_iter().map(|t| (5, t)));
+            // The parts each variant came from, for callers that check what the
+            // pages show (the CLI's drawn-text coverage).
+            let part_names = |refs: &[HdrFtrRef]| -> Vec<String> {
+                refs.iter()
+                    .filter_map(|r| ctx._rels.get(&r.rel_id))
+                    .filter_map(|r| oxidocs_common::security::sanitize_rel_target("word", &r.target).ok())
+                    .collect()
+            };
+            let or_fallback = |used: &[HdrFtrRef], refs: &[HdrFtrRef]| -> Vec<String> {
+                if used.is_empty() { part_names(&pick_fallback(refs)) } else { part_names(used) }
+            };
+            let hf_parts: [Vec<String>; 6] = [
+                or_fallback(&use_headers, effective_header_refs),
+                if section.properties.title_pg { part_names(&fh) } else { Vec::new() },
+                if even_odd_hf { part_names(&eh) } else { Vec::new() },
+                or_fallback(&use_footers, effective_footer_refs),
+                if section.properties.title_pg { part_names(&ff) } else { Vec::new() },
+                if even_odd_hf { part_names(&ef) } else { Vec::new() },
+            ];
             // Collect referenced footnotes and endnotes for this section
             let mut footnotes_list = Vec::new();
             let mut endnotes_list = Vec::new();
@@ -1192,6 +1211,7 @@ impl OoxmlParser {
                     title_pg: section.properties.title_pg,
                     even_odd_hf,
                     hf_text_boxes: hf_text_boxes.clone(),
+                    hf_parts: hf_parts.clone(),
                 });
                 last.section_grid_runs.push(crate::ir::SectionGridRun {
                         block_start: last.blocks.len(),
@@ -1332,6 +1352,7 @@ impl OoxmlParser {
                     title_pg: section.properties.title_pg,
                     even_odd_hf,
                     hf_text_boxes: hf_text_boxes.clone(),
+                    hf_parts: hf_parts.clone(),
                 }];
                 // S735: seed the grid-run list with the first section's pitch.
                 let grid_runs = vec![(0usize, section.properties.grid_line_pitch)];

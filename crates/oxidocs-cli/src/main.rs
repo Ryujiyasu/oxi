@@ -197,9 +197,9 @@ fn convert(input: &str, output: &str, strict: bool) -> Result<Converted, Convert
         }
     }
 
-    let pdf_doc = doc_to_pdf(&doc);
+    let (pdf_doc, hf_parts_shown) = doc_to_pdf(&doc);
 
-    if let Some((coverage, chars)) = drawn_coverage(&data, &pdf_doc) {
+    if let Some((coverage, chars)) = drawn_coverage(&data, &pdf_doc, &hf_parts_shown) {
         eprintln!("Drawn text coverage: {coverage:.4} of {chars} characters");
         if strict && coverage < MIN_DRAWN_COVERAGE {
             // Nothing in the census named it, but text was lost all the same,
@@ -229,20 +229,23 @@ const MIN_DRAWN_COVERAGE: f64 = 0.90;
 /// little text to judge or one whose parts cannot be read.
 ///
 /// "Its own text" is read off the package, not the parsed document: every
-/// `w:t` of the main story, the headers and footers a section shows,
+/// `w:t` of the main story, the header and footer parts some page shows
+/// (`hf_parts_shown`, the variants the layout picked page by page: a
+/// section's references to parts its pages never use count for nothing),
 /// footnotes and endnotes, less the `mc:Fallback` copies that repeat a text
-/// box and the runs a `w:vanish` or a hiding style takes out. Text the parser never picked up is exactly what a check on
-/// the parsed document cannot see, and on a 4,988-document sample most lost
-/// text was lost there. Symbol-font codes are left out because they are
-/// drawn as the Unicode symbol they stand for.
-fn drawn_coverage(data: &[u8], pdf: &PdfDocument) -> Option<(f64, usize)> {
+/// box and the runs a `w:vanish` or a hiding style takes out. Text the
+/// parser never picked up is exactly what a check on the parsed document
+/// cannot see, and on a 4,988-document sample most lost text was lost there.
+/// Symbol-font codes are left out because they are drawn as the Unicode
+/// symbol they stand for.
+fn drawn_coverage(data: &[u8], pdf: &PdfDocument, hf_parts_shown: &std::collections::BTreeSet<String>) -> Option<(f64, usize)> {
     fn counted(c: char) -> bool {
         !c.is_whitespace() && !c.is_control() && !('\u{E000}'..='\u{F8FF}').contains(&c)
     }
     let mut package = oxidocs_common::archive::OoxmlArchive::new(data).ok()?;
-    let body = package.read_part("word/document.xml").ok()?;
+    package.read_part("word/document.xml").ok()?;
     let mut stories = vec!["word/document.xml".to_string()];
-    stories.extend(shown_header_parts(&body, &mut package, pdf.pages.len() == 1));
+    stories.extend(hf_parts_shown.iter().cloned());
     stories.extend(
         ["word/footnotes.xml", "word/endnotes.xml"]
             .into_iter()
@@ -271,50 +274,6 @@ fn drawn_coverage(data: &[u8], pdf: &PdfDocument) -> Option<(f64, usize)> {
     }
     let found: usize = wanted.iter().map(|(c, n)| (*n).min(drawn.get(c).copied().unwrap_or(0))).sum();
     Some((found as f64 / total as f64, total))
-}
-
-/// The header and footer parts some section of `body` shows: each one a
-/// section references as `default`, as `first` where that section sets
-/// `w:titlePg`, as `even` where settings.xml sets `w:evenAndOddHeaders`.
-/// Templates often carry the others unused, and Word draws none of them. A
-/// one-page document has no page two: with a first-page header it shows
-/// neither the default nor the even one.
-fn shown_header_parts(body: &str, package: &mut oxidocs_common::archive::OoxmlArchive, one_page: bool) -> Vec<String> {
-    let even_and_odd = package
-        .read_part("word/settings.xml")
-        .is_ok_and(|settings| toggle_in(&settings, "<w:evenAndOddHeaders").unwrap_or(false));
-    let rels = package.read_part("word/_rels/document.xml.rels").unwrap_or_default();
-    let target = |id: &str| -> Option<String> {
-        let at = rels.find(&format!("Id=\"{id}\""))?;
-        let start = rels[..at].rfind('<')?;
-        let end = at + rels[at..].find('>')?;
-        attr_value(&rels[start..end], "Target").map(|t| format!("word/{}", t.trim_start_matches('/').trim_start_matches("word/")))
-    };
-    let mut parts = Vec::new();
-    let mut rest = body;
-    while let Some(start) = rest.find("<w:sectPr") {
-        let tail = &rest[start..];
-        let end = tail.find("</w:sectPr>").unwrap_or(tail.len());
-        let section = &tail[..end];
-        rest = &tail[end..];
-        let title_page = toggle_in(section, "<w:titlePg").unwrap_or(false);
-        for kind in ["<w:headerReference ", "<w:footerReference "] {
-            for (i, _) in section.match_indices(kind) {
-                let tag = &section[i..i + section[i..].find('>').unwrap_or(section.len() - i)];
-                let shown = match attr_value(tag, "w:type").unwrap_or("default") {
-                    "first" => title_page,
-                    "even" => even_and_odd && !one_page,
-                    _ => !(one_page && title_page),
-                };
-                if let Some(part) = attr_value(tag, "r:id").filter(|_| shown).and_then(target) {
-                    if !parts.contains(&part) {
-                        parts.push(part);
-                    }
-                }
-            }
-        }
-    }
-    parts
 }
 
 /// The text of every visible run in one WordprocessingML story part: the
@@ -1613,7 +1572,8 @@ fn classify_paragraph(para: &Paragraph, block_index: usize, _total_blocks: usize
     ParaRole::Body
 }
 
-fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
+/// The PDF, and the header and footer parts its pages draw.
+fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::BTreeSet<String>) {
     // Use LayoutEngine for layout (single source of truth with WASM path)
     let engine = oxidocs_core::layout::LayoutEngine::for_document(doc);
     let layout_result = engine.layout(doc);
@@ -2014,7 +1974,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
             _ => None,
         });
 
-    PdfDocument {
+    let pdf = PdfDocument {
         version: PdfVersion::new(1, 7),
         info: DocumentInfo {
             title,
@@ -2024,7 +1984,8 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
         pages,
         outline: Vec::new(),
         embedded_fonts,
-    }
+    };
+    (pdf, layout_result.hf_parts_shown)
 }
 
 /// Render cover page elements with professional layout

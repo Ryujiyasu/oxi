@@ -167,6 +167,16 @@ pub struct HeaderFooterRun {
     /// variant codes as `Page::hf_text_boxes`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hf_text_boxes: Vec<(u8, TextBox)>,
+    /// The package parts (e.g. `word/header2.xml`) each variant was parsed
+    /// from, in the `hf_text_boxes` code order: header default / first /
+    /// even, footer default / first / even. Empty where the variant is not in
+    /// effect. Lets a caller tell which parts the pages actually show.
+    #[serde(default, skip_serializing_if = "hf_parts_unset")]
+    pub hf_parts: [Vec<String>; 6],
+}
+
+fn hf_parts_unset(parts: &[Vec<String>; 6]) -> bool {
+    parts.iter().all(Vec::is_empty)
 }
 
 /// Grid settings belonging to a range of blocks in a continuous section.

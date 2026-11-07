@@ -98,6 +98,24 @@ impl<'a> PageLayouter<'a> {
                     lp.elements.splice(0..0, behind);
                 }
             }
+            // The parts these pages would show (the vertical builder draws only
+            // their boxes, so text they hold counts as not drawn).
+            if let Some(run) = page.header_runs.first() {
+                super::HF_PARTS_SHOWN.with(|shown| {
+                    let mut shown = shown.borrow_mut();
+                    for page_idx in 0..out.len() {
+                        let variant = if page.title_pg && page_idx == 0 {
+                            1
+                        } else if page.even_odd_hf && (first_logical as usize + page_idx) % 2 == 0 {
+                            2
+                        } else {
+                            0
+                        };
+                        shown.extend(run.hf_parts[variant].iter().cloned());
+                        shown.extend(run.hf_parts[variant + 3].iter().cloned());
+                    }
+                });
+            }
             *logical = (logical_base + out.len() as i64 - 1).max(0) as u32;
             return out;
         }
@@ -11256,6 +11274,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 }
             };
             let (hf_hv, hf_fv) = (hf_variant(0), hf_variant(3));
+            if let Some(run) = s1553_run.or(page.header_runs.first()) {
+                super::HF_PARTS_SHOWN.with(|shown| {
+                    let mut shown = shown.borrow_mut();
+                    for code in [hf_hv, hf_fv] {
+                        shown.extend(run.hf_parts[code as usize].iter().cloned());
+                    }
+                });
+            }
             let hf_paint = |this: &Self, code: u8, tops: &[f32], fallback_y: f32, blocks: &[Block]| -> Vec<LayoutElement> {
                 let tops: Vec<f32> = if tops.is_empty() { vec![fallback_y] } else { tops.to_vec() };
                 let col_x = vec![page.margin.left; tops.len()];

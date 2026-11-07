@@ -450,3 +450,66 @@ fn row_vertical_margin_overrides_preserve_geometry_and_page_breaks() {
         }
     }
 }
+
+// Which header/footer parts the pages draw: a titlePg section's first page
+// shows the first-type part only, later pages the default one, and an even
+// part needs both the evenAndOddHeaders flag and an even page.
+fn package_with_headers(paragraphs: usize, even_and_odd: bool) -> Vec<u8> {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    let body: String = (0..paragraphs).map(|i| format!("<w:p><w:r><w:t>Line {i}</w:t></w:r></w:p>")).collect();
+    let document = format!(r#"<w:document xmlns:w="{W}" xmlns:r="{R}"><w:body>{body}<w:sectPr><w:headerReference w:type="default" r:id="h1"/><w:headerReference w:type="first" r:id="h2"/><w:headerReference w:type="even" r:id="h3"/><w:footerReference w:type="even" r:id="f1"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:bottom="1440" w:left="1440" w:right="1440" w:header="720" w:footer="720"/><w:titlePg/></w:sectPr></w:body></w:document>"#);
+    let part = |tag: &str, text: &str| format!(r#"<w:{tag} xmlns:w="{W}"><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:{tag}>"#);
+    let settings = format!(r#"<w:settings xmlns:w="{W}">{}</w:settings>"#, if even_and_odd { "<w:evenAndOddHeaders/>" } else { "" });
+    let rel = |id: &str, kind: &str, target: &str| format!(r#"<Relationship Id="{id}" Type="{R}/{kind}" Target="{target}"/>"#);
+    let document_rels = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{}{}{}{}{}</Relationships>"#,
+        rel("h1", "header", "header1.xml"), rel("h2", "header", "header2.xml"), rel("h3", "header", "header3.xml"),
+        rel("f1", "footer", "footer1.xml"), rel("s", "settings", "settings.xml"));
+    let content_types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
+    let root_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="document" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    for (name, text) in [
+        ("[Content_Types].xml", content_types.to_string()),
+        ("_rels/.rels", root_rels.to_string()),
+        ("word/document.xml", document),
+        ("word/_rels/document.xml.rels", document_rels),
+        ("word/settings.xml", settings),
+        ("word/header1.xml", part("hdr", "Default header")),
+        ("word/header2.xml", part("hdr", "First header")),
+        ("word/header3.xml", part("hdr", "Even header")),
+        ("word/footer1.xml", part("ftr", "Even footer")),
+    ] {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(text.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+fn hf_parts_shown(paragraphs: usize, even_and_odd: bool) -> (usize, Vec<String>) {
+    let doc = crate::parser::parse_docx(&package_with_headers(paragraphs, even_and_odd)).unwrap();
+    let layout = LayoutEngine::for_document(&doc).layout(&doc);
+    (layout.pages.len(), layout.hf_parts_shown.into_iter().collect())
+}
+
+#[test]
+fn one_page_title_section_shows_only_its_first_header() {
+    let (pages, parts) = hf_parts_shown(3, true);
+    assert_eq!(pages, 1);
+    assert_eq!(parts, vec!["word/header2.xml"]);
+}
+
+#[test]
+fn later_pages_show_the_default_and_even_parts() {
+    let (pages, parts) = hf_parts_shown(120, true);
+    assert!(pages >= 3, "{pages} pages");
+    assert_eq!(parts, vec!["word/footer1.xml", "word/header1.xml", "word/header2.xml", "word/header3.xml"]);
+}
+
+#[test]
+fn even_parts_need_the_settings_flag() {
+    let (pages, parts) = hf_parts_shown(120, false);
+    assert!(pages >= 3, "{pages} pages");
+    assert_eq!(parts, vec!["word/header1.xml", "word/header2.xml"]);
+}
