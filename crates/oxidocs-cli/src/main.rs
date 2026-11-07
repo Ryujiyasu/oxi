@@ -1098,11 +1098,22 @@ fn bundled_font_dirs() -> Vec<std::path::PathBuf> {
     // Installed with `cargo install`, neither of those exists: only the binary
     // is copied, and the faces it needs are compiled into it. So they are
     // written out once, next to the binary, and found by the first path on
-    // every run after that.
+    // every run after that. Next to the binary is often not writable -- a
+    // container runs /usr/bin/oxidocs as an unprivileged user -- so the user's
+    // cache and then the temporary directory are tried after it. Without
+    // this, such an install ran with none of its own faces at all.
     if dirs.iter().all(|dir| !dir.is_dir()) {
-        if let Some(dir) = exe.as_ref().and_then(|e| e.parent()) {
-            if let Some(written) = lay_out_fonts(&dir.join("fonts")) {
+        let cache = std::env::var_os("XDG_CACHE_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cache")))
+            .map(|dir| dir.join("oxidocs").join(concat!("fonts-", env!("CARGO_PKG_VERSION"))));
+        let candidates = exe.as_ref().and_then(|e| e.parent()).map(|dir| dir.join("fonts")).into_iter()
+            .chain(cache)
+            .chain(std::iter::once(std::env::temp_dir().join(concat!("oxidocs-fonts-", env!("CARGO_PKG_VERSION")))));
+        for candidate in candidates {
+            if let Some(written) = lay_out_fonts(&candidate) {
                 dirs.insert(0, written);
+                break;
             }
         }
     }
@@ -1171,7 +1182,7 @@ fn resolve_font_styled(family: Option<&str>, bold: bool, italic: bool) -> String
             "Cambria" | "Century" => "OxiCambria-Bold".to_string(),
             "Times New Roman" | "Times" => "Times-Bold".to_string(),
             "Courier New" | "Courier" => "Courier-Bold".to_string(),
-            other => other.to_string(),
+            other => stand_in_face(other, true),
         }
     } else {
         match base {
@@ -1179,9 +1190,38 @@ fn resolve_font_styled(family: Option<&str>, bold: bool, italic: bool) -> String
             "Cambria" | "Century" => "OxiCambria-Regular".to_string(),
             "Times New Roman" => "Times-Roman".to_string(),
             "Courier New" => "Courier".to_string(),
-            other => other.to_string(),
+            other => stand_in_face(other, false),
         }
     }
+}
+
+/// The always-embedded face that draws a family this machine does not have
+/// and no base-14 name stands for: Verdana, Aptos, Segoe UI, Wingdings and
+/// the like. The family's own name used to go into the PDF instead, as a
+/// simple font with no file and no width table. A viewer then drew it with
+/// whatever it picked, at that face's widths; a PDF/A check rejects it
+/// outright; and a symbol font's codes, mapped to Unicode for want of the
+/// face, came out as whatever those bytes mean in WinAnsi. An embedded
+/// stand-in draws the same glyphs everywhere, and what it lacks goes on to
+/// the fallback faces. Serif families get the serif stand-in, the rest the
+/// sans one.
+fn stand_in_face(family: &str, bold: bool) -> String {
+    let lower = family.to_lowercase();
+    const SERIF: &[&str] = &[
+        "serif", "times", "roman", "georgia", "garamond", "book", "century", "cambria", "palatino",
+        "baskerville", "bodoni", "caslon", "minion", "constantia", "didot", "perpetua", "rockwell",
+        "sabon", "goudy", "cochin", "charter", "mincho", "ming", "song",
+    ];
+    // Century Gothic and Franklin Gothic are sans faces whatever else their
+    // names hold.
+    let serif = SERIF.iter().any(|k| lower.contains(k)) && !lower.contains("sans") && !lower.contains("gothic");
+    match (serif, bold) {
+        (true, true) => "OxiCambria-Bold",
+        (true, false) => "OxiCambria-Regular",
+        (false, true) => "OxiLatin-Bold",
+        (false, false) => "OxiLatin-Regular",
+    }
+    .to_string()
 }
 
 fn parse_hex_color(hex: &str) -> Option<Color> {
@@ -3040,6 +3080,13 @@ fn build_embedded_fonts(
     embed_latin_fonts(&used_chars_latin, &mut fonts);
     embed_cambria_fonts(&used_chars_latin, &mut fonts);
 
+    // The body blocks are not the only place East Asian text lives: a form
+    // drawn in text boxes, a header, a shape's label. Deciding from them alone
+    // left such a document with no East Asian face at all, and its text went
+    // out under a bare font name no viewer can draw it with.
+    if drawn_chars.iter().any(|c| is_cjk_char(*c)) {
+        needs_cjk_font = true;
+    }
     if !needs_cjk_font {
         return fonts;
     }
