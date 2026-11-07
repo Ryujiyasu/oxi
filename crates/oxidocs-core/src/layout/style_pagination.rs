@@ -77,14 +77,15 @@ impl StylePagination {
             last[pno].insert(id.to_owned(), text.to_owned());
             first_blocks[pno] = first_blocks[pno].min(block);
         };
+        let index = index_elements(laid_out);
         for (bi, block) in page.blocks.iter().enumerate() {
             let fallback = starts.get(bi).copied().unwrap_or(0).min(laid_out.len().saturating_sub(1));
             match block {
                 Block::Paragraph(p) => {
-                    let elements = paragraph_elements(laid_out, bi, None);
+                    let elements = paragraph_elements(&index, bi, None);
                     locate(p, bi, fallback, &elements, &mut record);
                 }
-                Block::Table(t) => visit_table(t, bi, &[], fallback, laid_out, &mut record),
+                Block::Table(t) => visit_table(t, bi, &[], fallback, &index, &mut record),
                 _ => {}
             }
         }
@@ -98,15 +99,31 @@ impl StylePagination {
     }
 }
 
-fn paragraph_elements<'a>(pages: &'a [LayoutPage], block: usize, cell: Option<&CellFlowKey>) -> Vec<(usize, &'a LayoutElement)> {
-    pages.iter().enumerate().flat_map(|(pi, p)| p.elements.iter().filter_map(move |e| {
-        if e.paragraph_index != Some(block) || !matches!(e.content, LayoutContent::Text { .. }) { return None; }
-        let matching = match cell { Some(key) => e.cell_flow_key().as_ref() == Some(key), None => e.cell_paragraph_index.is_none() };
-        matching.then_some((pi,e))
-    })).collect()
+/// The text elements laid out for each body block, in page and paint order.
+/// Built once per `observe`: looking every block up by scanning every page
+/// made the pass quadratic -- a 9,403-block reference document spent half of
+/// a 70-second layout here.
+type BlockElements<'a> = HashMap<usize, Vec<(usize, &'a LayoutElement)>>;
+
+fn index_elements(pages: &[LayoutPage]) -> BlockElements<'_> {
+    let mut index: BlockElements<'_> = HashMap::new();
+    for (pi, p) in pages.iter().enumerate() {
+        for e in &p.elements {
+            if let (Some(block), LayoutContent::Text { .. }) = (e.paragraph_index, &e.content) {
+                index.entry(block).or_default().push((pi, e));
+            }
+        }
+    }
+    index
 }
 
-fn visit_table(table: &Table, block: usize, path: &[(usize,usize,usize)], fallback: usize, pages: &[LayoutPage],
+fn paragraph_elements<'a>(index: &BlockElements<'a>, block: usize, cell: Option<&CellFlowKey>) -> Vec<(usize, &'a LayoutElement)> {
+    index.get(&block).map_or_else(Vec::new, |elements| elements.iter().copied().filter(|(_, e)| {
+        match cell { Some(key) => e.cell_flow_key().as_ref() == Some(key), None => e.cell_paragraph_index.is_none() }
+    }).collect())
+}
+
+fn visit_table(table: &Table, block: usize, path: &[(usize,usize,usize)], fallback: usize, pages: &BlockElements<'_>,
     record: &mut impl FnMut(usize,usize,&str,&str)) {
     for (ri,row) in table.rows.iter().enumerate() {
         for (ci,cell) in row.cells.iter().enumerate() {

@@ -368,9 +368,14 @@ impl<'a> PageLayouter<'a> {
         let mut s755_geom = s755_geom;
         let mut reference_boxes = std::collections::BTreeMap::new();
         if s1174_have_ref {
+            // The geometry below reads margins and the header/footer stories,
+            // never the body. Cloning the whole page for every laid-out page
+            // copied the body once per page: a 9,403-block reference document
+            // spent 29% of its layout here.
+            let geometry_base = Page { blocks: Vec::new(), text_boxes: Vec::new(), ..page.clone() };
             for (&(ir, pno), resolved) in &references.known {
                 if ir != ir_index { continue; }
-                let mut rp = page.clone();
+                let mut rp = geometry_base.clone();
                 if page.vertical_runs.len() > 1 {
                     let run = page.vertical_runs.iter().rposition(|r| r.0 <= resolved.first_block).unwrap_or(0);
                     let (_,top,bottom,hd,fd) = page.vertical_runs[run];
