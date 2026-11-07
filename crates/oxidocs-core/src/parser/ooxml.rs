@@ -7958,6 +7958,12 @@ impl DrawingResult {
 /// Parse DrawingML color modifier child elements (lumMod, lumOff, tint, shade, etc.)
 /// and apply them to a base hex color. Consumes elements until the closing tag.
 pub(super) fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, end_tag: &str) -> String {
+    parse_color_modifiers_alpha(reader, base_hex, end_tag).0
+}
+
+/// `parse_color_modifiers` plus the colour's `a:alpha` (0..1), if any.
+pub(super) fn parse_color_modifiers_alpha(reader: &mut Reader<&[u8]>, base_hex: &str, end_tag: &str) -> (String, Option<f32>) {
+    let mut alpha: Option<f32> = None;
     let mut lum_mod: Option<f32> = None;
     let mut lum_off: Option<f32> = None;
     let mut tint: Option<f32> = None;
@@ -7984,7 +7990,7 @@ pub(super) fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, 
                             "tint" => tint = Some(v),
                             "shade" => shade = Some(v),
                             "satMod" => sat_mod = Some(v),
-                            "alpha" => {} // Recognized but not yet applied (opacity)
+                            "alpha" => alpha = Some(v),
                             _ => {}
                         }
                     }
@@ -8102,12 +8108,12 @@ pub(super) fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, 
         }
     }
 
-    format!(
+    (format!(
         "{:02X}{:02X}{:02X}",
         (r * 255.0).round() as u8,
         (g * 255.0).round() as u8,
         (b * 255.0).round() as u8,
-    )
+    ), alpha)
 }
 
 /// Parse a w:drawing element to extract image, shape, or text box info
@@ -8157,6 +8163,7 @@ fn parse_drawing(
     // Shape properties
     let mut shape_type: Option<String> = None;
     let mut shape_fill: Option<String> = None;
+    let mut shape_fill_alpha: Option<f32> = None;
     // S1326: wps:style/a:fontRef colour (the box text's default colour).
     let mut font_ref_color: Option<String> = None;
     let mut stroke_color: Option<String> = None;
@@ -8896,9 +8903,10 @@ fn parse_drawing(
                             }
                         }
                         if let Some(hex) = base_hex {
-                            let final_color = parse_color_modifiers(reader, &hex, "schemeClr");
+                            let (final_color, a) = parse_color_modifiers_alpha(reader, &hex, "schemeClr");
                             if shape_fill.is_none() && !has_no_fill {
                                 shape_fill = Some(final_color);
+                                shape_fill_alpha = a;
                             }
                         }
                         depth -= 1; // consumed schemeClr End
@@ -8912,7 +8920,7 @@ fn parse_drawing(
                             }
                         }
                         if !hex.is_empty() {
-                            let final_color = parse_color_modifiers(reader, &hex, "srgbClr");
+                            let (final_color, a) = parse_color_modifiers_alpha(reader, &hex, "srgbClr");
                             if let Some(wsp) = s839_wsp.as_mut() {
                                 if wsp.fill.is_none() && !wsp.no_fill {
                                     wsp.fill = Some(final_color.clone());
@@ -8920,6 +8928,7 @@ fn parse_drawing(
                             }
                             if shape_fill.is_none() && !has_no_fill {
                                 shape_fill = Some(final_color);
+                                shape_fill_alpha = a;
                             }
                         }
                         depth -= 1;
@@ -8933,9 +8942,10 @@ fn parse_drawing(
                             }
                         }
                         if !hex.is_empty() {
-                            let final_color = parse_color_modifiers(reader, &hex, "sysClr");
+                            let (final_color, a) = parse_color_modifiers_alpha(reader, &hex, "sysClr");
                             if shape_fill.is_none() && !has_no_fill {
                                 shape_fill = Some(final_color);
+                                shape_fill_alpha = a;
                             }
                         }
                         depth -= 1;
@@ -10718,8 +10728,19 @@ fn parse_drawing(
             } else {
                 stroke_width_saved
             },
+            // OXI_SHAPE_FILL_ALPHA (2026-11-07, default ON, opt-out _DISABLE): the
+            // fill's a:alpha. BoxRect has no alpha, so the colour is laid over white
+            // (the page), as the shadow is. blind-J ja/creative__9aa11078's header band
+            // (0070C0, alpha 89804, behindDoc): Word's PDF fills it at opacity 0.898;
+            // Oxi painted it opaque.
             fill: if has_no_fill || s839_attach {
                 None
+            } else if let (Some(f), Some(a), false) = (shape_fill.as_ref(), shape_fill_alpha,
+                std::env::var_os("OXI_SHAPE_FILL_ALPHA_DISABLE").is_some())
+            {
+                let c = |i: usize| u8::from_str_radix(f.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0) as f32;
+                let mix = |v: f32| (255.0 - a.clamp(0.0, 1.0) * (255.0 - v)).round() as u8;
+                Some(format!("{:02X}{:02X}{:02X}", mix(c(0)), mix(c(2)), mix(c(4))))
             } else if dml_rect_box {
                 shape_fill.clone()
             } else {

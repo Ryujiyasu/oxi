@@ -522,7 +522,13 @@ unsafe fn render_page_elements(
             }
             LayoutContent::TableBorder { x1, y1, x2, y2, color, width, style } => {
                 if exclude.iter().any(|e| e == "border") { continue; }
-                render_line(rt, *x1, *y1, *x2, *y2, color.as_deref(), *width, style.as_deref())?;
+                // OXI_RULE_BELOW (2026-11-07, default ON, opt-out _DISABLE): Word draws a
+                // horizontal table rule as the band [y, y + width] BELOW its boundary,
+                // not centred on it. blind-J ja/forms__036beb01 p6: rules 87.60-88.08 /
+                // 110.66-111.14 against row boundaries 87.55 / 110.70; 03a0b38a's
+                // underline 93.62-94.10 under 93.55. blind-J 50 A/B net +0.326.
+                let dy = if std::env::var_os("OXI_RULE_BELOW_DISABLE").is_none() && (*y1 - *y2).abs() < 0.01 { *width / 2.0 } else { 0.0 };
+                render_line(rt, *x1, *y1 + dy, *x2, *y2 + dy, color.as_deref(), *width, style.as_deref())?;
             }
             LayoutContent::ClipStart => {
                 if exclude.iter().any(|e| e == "clip") { continue; }

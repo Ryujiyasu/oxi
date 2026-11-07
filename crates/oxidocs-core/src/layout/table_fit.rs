@@ -393,9 +393,16 @@ impl<'a> TableFitLayouter<'a> {
             let top_bw = table.style.border_width.unwrap_or(0.4);
             cursor.advance(top_bw);
         }
+        // OXI_NESTED_LAC_FOOT (2026-11-07, default ON, opt-out _DISABLE): a NESTED
+        // table on a linesAndChars grid charges its bottom rule as well -- a body
+        // table gets it after the block (page.rs), a `lines`-grid one here; the
+        // nested linesAndChars table got neither. blind-J ja/forms__03a0b38a: the
+        // outer row holding six 17pt nested rows (tops nil, bottoms single) is
+        // 105.48 in Word = 0.48 + 6 x 17.5.
         let s1618_foot = if s1618_on
             && !crate::env_flag!("OXI_BUG_A_REVERT")
-            && grid_char_pitch.is_none()
+            && (grid_char_pitch.is_none()
+                || (is_nested && !crate::env_flag!("OXI_NESTED_LAC_FOOT_DISABLE")))
             && table.style.border
             && !separate_outer_edges
         {
@@ -408,9 +415,18 @@ impl<'a> TableFitLayouter<'a> {
             if !crate::env_flag!("OXI_FOOT_BOTTOM_EDGE_DISABLE")
                 && (table.style.top_border.is_some() || table.style.bottom_border.is_some())
             {
+                // OXI_FOOT_DRAWN_EDGE (2026-11-07, default ON, opt-out _DISABLE): the
+                // edge's DRAWN extent (double = 3w). blind-J ja/educational__28102e23
+                // p3: a one-row «【発展課題】» table with tblBorders double sz4 on a lines
+                // grid; Word starts the paragraph below it 1.5 under the row, Oxi 0.5
+                // (everything after it on the page 1.1 high).
                 table.style.bottom_border.as_ref()
                     .filter(|b| !matches!(b.style.as_str(), "none" | "nil"))
-                    .map_or(0.0, |b| b.width)
+                    .map_or(0.0, |b| if crate::env_flag!("OXI_FOOT_DRAWN_EDGE_DISABLE") {
+                        b.width
+                    } else {
+                        self.s1188_drawn(&b.style, b.width)
+                    })
             } else {
                 table.style.border_width.unwrap_or(0.4)
             }
@@ -1293,6 +1309,25 @@ impl<'a> TableFitLayouter<'a> {
                                 }
                                 cell_content_h += nr_h;
                                 cell_content_h_visual += nr_h;
+                            }
+                            // OXI_NESTED_EST_EDGES (2026-11-07, default ON, opt-out
+                            // _DISABLE): the nested table's row rules belong to its
+                            // height -- each row's collapsed top edge and the table's
+                            // bottom rule, as the rendered rows carry them. blind-J
+                            // ja/forms__03a0b38a: the vAlign=center number beside six
+                            // 17pt nested rows (insideH / bottoms single) is centred on
+                            // 105 in Word; the estimate gave 102.5 and set it 1.65 high.
+                            if !crate::env_flag!("OXI_NESTED_EST_EDGES_DISABLE") && !nested.rows.is_empty() {
+                                let mut edges: f32 = (0..nested.rows.len())
+                                    .map(|k| self.s1188_edge_bw(nested, k))
+                                    .sum();
+                                if nested.style.border {
+                                    edges += nested.style.bottom_border.as_ref()
+                                        .filter(|b| !matches!(b.style.as_str(), "none" | "nil"))
+                                        .map_or(0.0, |b| b.width);
+                                }
+                                cell_content_h += edges;
+                                cell_content_h_visual += edges;
                             }
                         }
                         Block::Image(img) => {

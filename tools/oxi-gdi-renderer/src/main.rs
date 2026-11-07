@@ -693,9 +693,12 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         };
                         let old_pen = SelectObject(mem_dc, pen);
                         let bx1 = (*x1 as f64 * scale) as i32;
-                        let by1 = (*y1 as f64 * scale) as i32;
+                        // OXI_RULE_BELOW (same as the DWrite renderer): a horizontal
+                        // rule is the band [y, y + width] below its boundary.
+                        let rb = if std::env::var_os("OXI_RULE_BELOW_DISABLE").is_none() && (*y1 - *y2).abs() < 0.01 { *width / 2.0 } else { 0.0 };
+                        let by1 = ((*y1 + rb) as f64 * scale) as i32;
                         let bx2 = (*x2 as f64 * scale) as i32;
-                        let by2 = (*y2 as f64 * scale) as i32;
+                        let by2 = ((*y2 + rb) as f64 * scale) as i32;
                         MoveToEx(mem_dc, bx1, by1, None);
                         LineTo(mem_dc, bx2, by2);
                         SelectObject(mem_dc, old_pen);

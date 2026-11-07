@@ -9790,7 +9790,12 @@ impl<'a> ParagraphLayouter<'a> {
                     // from "truly mid-cell" (after irregular non-LM2 paragraph).
                     // Threshold: <10tw or >pitch-10tw means within ceiling-noise
                     // of cell boundary → use absolute (drift-free).
-                    let cell_aligned = cell_remainder < 10 || cell_remainder > pitch_tw_i - 10;
+                    // OXI_LM2_NO_TENTH_CEIL: with no 10tw ceiling there is no ceiling
+                    // noise to absorb; a line 1-9tw off the lattice (after a table)
+                    // keeps its own stream. 03a0b38a: «（２）» after the 0.5-off
+                    // stream started below its table stays 0.5 off in Word (128.05).
+                    let s_tenth = if !crate::env_flag!("OXI_LM2_NO_TENTH_CEIL_DISABLE") { 1 } else { 10 };
+                    let cell_aligned = cell_remainder < s_tenth || cell_remainder > pitch_tw_i - s_tenth;
                     let target_tw = if cell_aligned {
                         // Cell-aligned (or near-aligned): pre-R56 absolute formula
                         //
@@ -9827,7 +9832,17 @@ impl<'a> ParagraphLayouter<'a> {
                         let s325_fix = std::env::var("OXI_S325_PROPER_CEIL")
                             .map(|v| v != "0" && v != "false")
                             .unwrap_or(true);
-                        if s325_fix {
+                        // OXI_LM2_NO_TENTH_CEIL (2026-11-07, default ON, opt-out _DISABLE):
+                        // the cell-aligned line lands ON margin + n*pitch, not on it
+                        // ceiled to 10tw. `_pb_grid_tenth_ceil_slice.py` (blind-J
+                        // ja/forms__03a0b38a, linesAndChars 340, top -851/-860/851/
+                        // 1440/1531/1701/1985): the first plain line's baseline is
+                        // margin + 46.35 (±0.06) in every arm, where the ceiling
+                        // predicts +0.45 at 851/1531/1701 and +0.25 at 1985. Oxi
+                        // carried 03a0b38a's whole page 0.45-1.3pt low.
+                        if s325_fix && !crate::env_flag!("OXI_LM2_NO_TENTH_CEIL_DISABLE") {
+                            margin_tw + target_n * pitch_tw_i
+                        } else if s325_fix {
                             let raw = margin_tw + target_n * pitch_tw_i;
                             if raw % 10 == 0 {
                                 raw

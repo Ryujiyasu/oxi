@@ -15217,7 +15217,13 @@ cells={} pitch={:.2} text={:?}",
                 ),
                 None => 0.0,
             };
-            if !self.doc_body_has_real_cjk {
+            // OXI_ROW0_CELL_TOP_REPLACES (2026-11-07, default ON, opt-out _DISABLE):
+            // in a CJK document too. blind-J ja/forms__03a0b38a (Table Grid style,
+            // every first-row cell top nil, linesAndChars 340): Word's first-row
+            // text sits on margin + 2 pitches (baseline 88.94), Oxi's max(outer,
+            // declared) charged the style's 0.5 rule and set it 0.5 lower; the
+            // nested tables in the page's main table lost the same 0.5 per row.
+            if !self.doc_body_has_real_cjk || !crate::env_flag!("OXI_ROW0_CELL_TOP_REPLACES_DISABLE") {
                 // Cell declarations replace the outer rule for their columns,
                 // including an explicit nil. Only missing edges inherit it.
                 return table.rows.first().map_or(outer, |row| {
