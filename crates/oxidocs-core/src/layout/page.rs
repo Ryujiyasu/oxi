@@ -1659,6 +1659,13 @@ impl<'a> PageLayouter<'a> {
         // page starts, which is exactly the causal last-before-page set).
         // `snapshots` records each page's resolved map for the emit loop.
         let mut s1174_ingested = 0usize;
+        // The odd and even body boxes the header and footer leave for each
+        // style-reference text they can show. Recomputed for every body block
+        // they were the bulk of a long reference document's layout (two
+        // header and two footer layouts per block, 9,194 blocks); the text
+        // changes only where a referenced heading does.
+        let mut s1174_box_cache: std::collections::HashMap<Vec<(String, String)>, ((f32, f32), (f32, f32))> =
+            std::collections::HashMap::new();
         let mut s1174_snapshots: std::collections::HashMap<
             usize,
             std::collections::HashMap<String, String>,
@@ -1763,24 +1770,29 @@ impl<'a> PageLayouter<'a> {
                     // snapshot keeps the page-START state (first write wins).
                     {
                         let map = references.map(ir_index,pno).cloned().unwrap_or_else(LayoutEngine::s1174_map);
-                        let hdr_sub = LayoutEngine::s1174_substitute(&page.header, &map);
-                        let hb_odd = self.s755_header_bottom(&hdr_sub, page);
-                        let sy_odd = page.body_start_y(hb_odd, self.s1381_header_band(&hdr_sub, page));
-                        let (fr_odd, _) = self
-                            .s755_footer_geom(&LayoutEngine::s1174_substitute(&page.footer, &map), page);
-                        let ch_odd = page.size.height - sy_odd - fr_odd;
-                        let (sy_even, ch_even) = if page.even_odd_hf {
-                            let hdr_even_sub = LayoutEngine::s1174_substitute(&page.header_even, &map);
-                            let hb = self.s755_header_bottom(&hdr_even_sub, page);
-                            let sy = page.body_start_y(hb, self.s1381_header_band(&hdr_even_sub, page));
-                            let (fr, _) = self.s755_footer_geom(
-                                &LayoutEngine::s1174_substitute(&page.footer_even, &map),
-                                page,
-                            );
-                            (sy, page.size.height - sy - fr)
-                        } else {
-                            (sy_odd, ch_odd)
-                        };
+                        let mut key: Vec<(String, String)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                        key.sort();
+                        let ((sy_odd, ch_odd), (sy_even, ch_even)) = *s1174_box_cache.entry(key).or_insert_with(|| {
+                            let hdr_sub = LayoutEngine::s1174_substitute(&page.header, &map);
+                            let hb_odd = self.s755_header_bottom(&hdr_sub, page);
+                            let sy_odd = page.body_start_y(hb_odd, self.s1381_header_band(&hdr_sub, page));
+                            let (fr_odd, _) = self
+                                .s755_footer_geom(&LayoutEngine::s1174_substitute(&page.footer, &map), page);
+                            let ch_odd = page.size.height - sy_odd - fr_odd;
+                            let even = if page.even_odd_hf {
+                                let hdr_even_sub = LayoutEngine::s1174_substitute(&page.header_even, &map);
+                                let hb = self.s755_header_bottom(&hdr_even_sub, page);
+                                let sy = page.body_start_y(hb, self.s1381_header_band(&hdr_even_sub, page));
+                                let (fr, _) = self.s755_footer_geom(
+                                    &LayoutEngine::s1174_substitute(&page.footer_even, &map),
+                                    page,
+                                );
+                                (sy, page.size.height - sy - fr)
+                            } else {
+                                (sy_odd, ch_odd)
+                            };
+                            ((sy_odd, ch_odd), even)
+                        });
                         let first = s755_geom
                             .as_ref()
                             .map(|g| g.first)
