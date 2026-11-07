@@ -961,9 +961,10 @@ impl<'a> Checker<'a> {
         if self.standard_module_key(&kind.name).is_some() {
             return Err(self.failure(CompileErrorKind::InvalidModule, span));
         }
-        let Some(known) = self.known_types else {
+        let known = self.known_types;
+        if known.is_none() && self.call_references.is_none() {
             return Ok(());
-        };
+        }
         let name = self.source_type_key(&kind.name);
         if name == "decimal" {
             return Err(self.failure(CompileErrorKind::SyntaxError, span));
@@ -974,7 +975,13 @@ impl<'a> Checker<'a> {
             || self
                 .document_modules
                 .is_some_and(|documents| documents.contains_key(&name))
-            || known.contains_key(&name)
+            || known.is_some_and(|types| types.contains_key(&name))
+            // On-demand checks also resolve declarations against the host's
+            // reference catalogue before any procedure statement executes.
+            || self.call_references.is_some_and(|references| {
+                references.types.iter().any(|(found, _)| key(found) == name)
+                    || references.library.resolve_type(&kind.name).is_some()
+            })
             || matches!(
                 name.as_str(),
                 "byte"

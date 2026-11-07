@@ -51324,6 +51324,31 @@ End Function
     }
 
     #[test]
+    fn on_demand_declared_types_fail_before_side_effects() {
+        for name in ["MissingType", "A"] {
+            let source = format!("Attribute VB_Name = \"TypeProbe\"\nPublic Function Probe() As Long\n On Error Resume Next\n Range(\"A1\").Value = 99\n Debug.Print \"ran\"\n MsgBox \"ran\"\n Dim obj As {name}\n Probe = 1\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"\u{ff21}\"\nPublic marker As Long\n");
+            let outcome = execute_workbook_vba(failure_workbook(), &source,
+                "TypeProbe.Probe", vec![], 0, failure_context()).unwrap();
+            let error = outcome.error.as_ref().expect("unknown declared type must not run");
+            assert_eq!(error.kind, "compile", "{name}: {}", error.message);
+            assert_eq!(error.line, Some(7), "{name}: {}", error.message);
+            assert!(!outcome.workbook_changed, "{name}");
+            assert!(outcome.debug_output.is_empty(), "{name}");
+            assert!(outcome.messages.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn on_demand_type_validation_leaves_uncalled_procedures_uncompiled() {
+        let source = "Attribute VB_Name = \"TypeProbe\"\nPublic Function Good() As Long\n Good = 7\nEnd Function\nPublic Function Bad() As Long\n Dim value As MissingType\n Bad = 9\nEnd Function\n";
+        let outcome = execute_workbook_vba(failure_workbook(), source,
+            "TypeProbe.Good", vec![], 0, failure_context()).unwrap();
+        assert!(outcome.error.is_none(), "{}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+        assert!(!outcome.workbook_changed);
+        assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], 7);
+    }
+
+    #[test]
     fn vba_failure_outcome_retains_compile_order_and_outputs() {
         let source = include_str!("../../../tests/fixtures/vba/failure_state.bas");
         for (procedure, changed, output) in [("CompileEntryFailure", false, vec![]),
