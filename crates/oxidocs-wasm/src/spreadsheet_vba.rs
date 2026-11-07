@@ -51349,6 +51349,46 @@ End Function
     }
 
     #[test]
+    fn on_demand_module_and_new_types_fail_before_side_effects() {
+        let header = "Attribute VB_Name = \"TypeProbe\"\n";
+        let body = |declarations: &str, statements: &str| format!(
+            "{header}{declarations}Public Function Probe() As Long\n On Error Resume Next\n Range(\"A1\").Value = 99\n Debug.Print \"ran\"\n MsgBox \"ran\"\n{statements} Probe = 1\nEnd Function\n"
+        );
+        let cases = [
+            ("module", body("Private bad As MissingType\n", "")),
+            ("record", body("Private Type UnusedRecord\n bad As MissingType\nEnd Type\n", "")),
+            ("new", body("", " Dim obj As Object\n Set obj = New MissingType\n")),
+            ("class", format!("{}VERSION 1.0 CLASS\nAttribute VB_Name = \"InvalidFieldClass\"\nPublic bad As MissingType\n",
+                body("", " Dim obj As InvalidFieldClass\n Set obj = New InvalidFieldClass\n"))),
+        ];
+        for (name, source) in cases {
+            let outcome = execute_workbook_vba(failure_workbook(), &source,
+                "TypeProbe.Probe", vec![], 0, failure_context()).unwrap();
+            let error = outcome.error.as_ref().expect(name);
+            assert_eq!(error.kind, "compile", "{name}: {}", error.message);
+            assert!(!outcome.workbook_changed, "{name}");
+            assert!(outcome.debug_output.is_empty(), "{name}");
+            assert!(outcome.messages.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn on_demand_types_leave_unreferenced_declaration_scopes_uncompiled() {
+        let entry = "Attribute VB_Name = \"TypeProbe\"\nPublic Function Probe() As Long\n Probe = 7\nEnd Function\n";
+        for unused in [
+            "Attribute VB_Name = \"OtherUnusedModule\"\nPrivate bad As MissingType\n",
+            "VERSION 1.0 CLASS\nAttribute VB_Name = \"UnusedClass\"\nPublic bad As MissingType\n",
+        ] {
+            let source = format!("{entry}{unused}");
+            let outcome = execute_workbook_vba(failure_workbook(), &source,
+                "TypeProbe.Probe", vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+            assert!(!outcome.workbook_changed);
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], 7);
+        }
+    }
+
+    #[test]
     fn vba_failure_outcome_retains_compile_order_and_outputs() {
         let source = include_str!("../../../tests/fixtures/vba/failure_state.bas");
         for (procedure, changed, output) in [("CompileEntryFailure", false, vec![]),
