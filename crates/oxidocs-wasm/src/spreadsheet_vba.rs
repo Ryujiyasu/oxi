@@ -44483,6 +44483,49 @@ mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
 
+    fn standard_module_shadow_run(body: &str) -> RunOutcome {
+        let source = format!("Attribute VB_Name = \"Driver\"\nPublic Function Probe() As String\nOn Error GoTo failed\n{body}\nExit Function\nfailed:\nProbe = \"caught|\" & CStr(Err.Number)\nEnd Function\n\
+            Attribute VB_Name = \"ThisWorkbook\"\nPublic Token As Long\n");
+        let mut context = failure_context();
+        context.document_modules = Some(vec![VbaDocumentModule { name: "ThisWorkbook1".into(),
+            base_type: "Excel.Workbook".into(), code_name: Some("ThisWorkbook1".into()), ..Default::default() }]);
+        execute_workbook_vba(workbook(), &source, "Driver.Probe", vec![], 0, context).unwrap()
+    }
+
+    #[test]
+    fn standard_module_type_names_fail_before_the_error_handler() {
+        for kind in ["ThisWorkbook", "VBAProject.ThisWorkbook"] {
+            let result = standard_module_shadow_run(&format!("Dim item As {kind}\nSet item = ActiveWorkbook\nProbe = TypeName(item)"));
+            let error = result.error.expect("a standard module is not an object type");
+            assert_eq!(error.kind, "compile");
+            assert!(error.message.ends_with("\u{4e0d}\u{6b63}\u{306a}\u{30e2}\u{30b8}\u{30e5}\u{30fc}\u{30eb}\u{3067}\u{3059}\u{3002}"), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn standard_module_values_and_calls_fail_before_the_error_handler() {
+        for body in ["Probe = TypeName(ThisWorkbook)", "ThisWorkbook\nProbe = \"ok\"",
+            "Call ThisWorkbook\nProbe = \"ok\"", "Probe = ThisWorkbook()",
+            "Probe = TypeName(VBAProject.ThisWorkbook)"] {
+            let result = standard_module_shadow_run(body);
+            let error = result.error.expect("a standard module is not a value or procedure");
+            assert_eq!(error.kind, "compile");
+            assert!(error.message.ends_with("\u{30e2}\u{30b8}\u{30e5}\u{30fc}\u{30eb}\u{3067}\u{306f}\u{306a}\u{304f}\u{3001}\u{5909}\u{6570}\u{307e}\u{305f}\u{306f}\u{30d7}\u{30ed}\u{30b7}\u{30fc}\u{30b8}\u{30e3}\u{3092}\u{6307}\u{5b9a}\u{3057}\u{3066}\u{304f}\u{3060}\u{3055}\u{3044}\u{3002}"), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn standard_module_qualifiers_and_local_shadowing_keep_their_native_meaning() {
+        for (body, expected) in [
+            ("ThisWorkbook.Token = 7\nProbe = CStr(ThisWorkbook.Token)", "7"),
+            ("Dim ThisWorkbook As Object\nSet ThisWorkbook = ActiveWorkbook\nProbe = TypeName(ThisWorkbook)", "Workbook"),
+        ] {
+            let result = standard_module_shadow_run(body);
+            assert!(result.error.is_none(), "{:?}", result.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"string", "value":expected}));
+        }
+    }
+
     #[test]
     fn generated_workbook_document_survives_save_without_resetting_live_storage() {
         let seed = include_bytes!("../../../tests/fixtures/vba/document_context_book.xlsm");

@@ -57,6 +57,8 @@ pub enum CompileErrorKind {
     InheritedMemberIdentifier,
     InvalidNewUse,
     ReadOnlyProperty,
+    InvalidModule,
+    ModuleNotValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,6 +243,10 @@ pub fn compile_project(source: &str) -> Result<(), ProjectCompileError> {
 impl CompileError {
     pub fn description(&self, language: ErrorLanguage) -> &'static str {
         match (self.kind, language) {
+            (CompileErrorKind::InvalidModule, ErrorLanguage::English) => "Invalid module",
+            (CompileErrorKind::InvalidModule, ErrorLanguage::Japanese) => "\u{4e0d}\u{6b63}\u{306a}\u{30e2}\u{30b8}\u{30e5}\u{30fc}\u{30eb}\u{3067}\u{3059}\u{3002}",
+            (CompileErrorKind::ModuleNotValue, ErrorLanguage::English) => "Expected variable or procedure, not module",
+            (CompileErrorKind::ModuleNotValue, ErrorLanguage::Japanese) => "\u{30e2}\u{30b8}\u{30e5}\u{30fc}\u{30eb}\u{3067}\u{306f}\u{306a}\u{304f}\u{3001}\u{5909}\u{6570}\u{307e}\u{305f}\u{306f}\u{30d7}\u{30ed}\u{30b7}\u{30fc}\u{30b8}\u{30e3}\u{3092}\u{6307}\u{5b9a}\u{3057}\u{3066}\u{304f}\u{3060}\u{3055}\u{3044}\u{3002}",
             (CompileErrorKind::InvalidNewUse,ErrorLanguage::English)=>"Invalid use of New keyword",
             (CompileErrorKind::InvalidNewUse,ErrorLanguage::Japanese)=>"New キーワードの使用法が不正です。",
             (CompileErrorKind::ReadOnlyProperty,ErrorLanguage::English)=>"Can't assign to read-only property",
@@ -928,7 +934,33 @@ impl<'a> Checker<'a> {
         self.source_class_key(name).unwrap_or_else(|| key(name))
     }
 
+    fn standard_module_key(&self, name: &str) -> Option<String> {
+        let lowered = key(name);
+        let local = match lowered.split_once('.') {
+            Some((project, module)) if project.eq_ignore_ascii_case(self.project_name) => module,
+            Some(_) => return None,
+            None => lowered.as_str(),
+        };
+        self.globals.standard_modules.iter().any(|(name, _)| name.eq_ignore_ascii_case(local))
+            .then(|| local.to_owned())
+    }
+
+    fn expression_module(&self, expression: &Expr) -> Option<String> {
+        match expression {
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. }
+                if !self.variables.contains_key(&key(name)) && !self.functions.contains_key(&key(name))
+                    && !self.later_locals.contains(&key(name)) => self.standard_module_key(name),
+            Expr::Member { object, name, .. } if matches!(object.as_ref(), Expr::Ident(project, _)
+                if project.eq_ignore_ascii_case(self.project_name) && !self.variables.contains_key(&key(project))
+                    && !self.later_locals.contains(&key(project))) => self.standard_module_key(name),
+            _ => None,
+        }
+    }
+
     fn validate_type(&self, kind: &TypeName, span: Span) -> Result<(), CompileError> {
+        if self.standard_module_key(&kind.name).is_some() {
+            return Err(self.failure(CompileErrorKind::InvalidModule, span));
+        }
         let Some(known) = self.known_types else {
             return Ok(());
         };
@@ -2006,6 +2038,7 @@ impl<'a> Checker<'a> {
                 .or_else(|| self.functions.get(&key(name)))
                 .cloned()
                 .unwrap_or_else(|| {
+                    if self.standard_module_key(name).is_some() { return Type::Unknown; }
                     if let Some(signature) = self.implicit_document_member(name) {
                         return self.reference_result(signature);
                     }
@@ -2940,6 +2973,12 @@ impl<'a> Checker<'a> {
                 call_targets.insert(target.as_ref() as *const Expr as usize);
             }
         });
+        let mut module_qualifiers = BTreeSet::new();
+        expr.visit(&mut |part| {
+            if let Expr::Member { object, .. } = part {
+                module_qualifiers.insert(object.as_ref() as *const Expr as usize);
+            }
+        });
         let mut ordered = Vec::new();
         if self.known_types.is_some() {
             self.check_expression_syntax(expr, bare_call)?;
@@ -2950,6 +2989,11 @@ impl<'a> Checker<'a> {
         let mut failure = None;
         ordered.into_iter().for_each(|part| {
             if failure.is_some() {
+                return;
+            }
+            if !module_qualifiers.contains(&(part as *const Expr as usize))
+                && self.expression_module(part).is_some() {
+                failure = Some(self.failure(CompileErrorKind::ModuleNotValue, part.span()));
                 return;
             }
             if self.known_types.is_some() {
