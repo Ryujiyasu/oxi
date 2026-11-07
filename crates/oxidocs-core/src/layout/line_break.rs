@@ -5636,6 +5636,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // edge only because the text before it ends 5.8 short of the floor).
                     let s1318_avail_tw = available_tw;
                     let s1318_natural_over_tw = current_width_tw + s1317_cw_tw - s1318_avail_tw - s1318_pair_credit_tw;
+                    // OXI_S1318_EXACT_HALF (2026-11-07, default ON, opt-out _DISABLE): the
+                    // half-cell pull-in is decided on the unrounded overflow. The twip sum
+                    // rounds every half-width advance on its own, so it can read one twip
+                    // past a half Word meets exactly. ja/reference__704212ae p6 «…1,447施設
+                    // （平成29年５月31日現» + «在» is exactly half a cell over (19.5 cells +
+                    // 在): Word keeps 在 with the （ halved and hangs the ） (`_pb_paren_tail
+                    // _slice.py` noclose / comma / longtail); the twip sum read 119 against
+                    // 118. ja/educational__2a8abbb2 «愛知…著者のう» + «投» (firstLine 93 tw on
+                    // a 184.75 cell) is 0.6 twip past the half and Word wraps it.
+                    let s1318_exact_half_fit = !crate::env_flag!("OXI_S1318_EXACT_HALF_DISABLE")
+                        && s1318_cap_tw >= s1318_half_cell_tw
+                        && s1318_half_cell_tw > 0
+                        && (current_width + char_width) * 20.0 - (s1318_avail_tw + s1318_pair_credit_tw) as f32
+                            <= 10.0 * if char_width >= 0.75 * font_size {
+                                char_width
+                            } else {
+                                grid_char_pitch.unwrap_or(font_size).max(font_size)
+                            } + 0.25;
                     // （：；） are line-final marks too: 0ea3ec86 p11 「…福祉手当（都・市町村：」
                     // holds 21 with the 「：」 at the end where Oxi stopped at 「市町」.
                     // S1346: ・ is a line-final mark too -- 0ea3ec86 「どに入院・入所中の
@@ -5838,7 +5856,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let fit = if s1490_regime {
                             !s1490_unit_refused && over <= s1490_cap(s1318_n_solo, true).max(S1318_TOL_TW)
                         } else {
-                            over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW)
+                            over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW) || s1318_exact_half_fit
                         };
                         if s1490_regime && fit && paired_unit {
                             let count = following_punctuation.iter().take_while(|&&nc|
@@ -5852,7 +5870,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let fit = if s1490_regime {
                             over <= s1490_cap(s1318_n_solo, false).max(S1318_TOL_TW)
                         } else {
-                            over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW)
+                            over <= s1318_half_cell_tw.min(s1318_cap_tw).max(S1318_TOL_TW) || s1318_exact_half_fit
                         };
                         (fit, !fit)
                     };

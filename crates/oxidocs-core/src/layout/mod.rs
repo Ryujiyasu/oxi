@@ -8410,9 +8410,32 @@ impl LayoutEngine {
             }
         }
         let mut cy = [top, top];
+        // OXI_COLBAL_RIGHT_TOP_BEFORE (2026-11-07, default ON, opt-out _DISABLE): the
+        // right column's first row keeps its paragraph's space-before (the S1435
+        // law), also when the flow had suppressed it at a column top. blind-J
+        // ja/reference__704212ae p7: «❖ 児 童 館» (beforeLines 50) heads the right
+        // column 10.25 below the band top in Word; Oxi drew it at the top.
+        let right_top_before = if crate::env_flag!("OXI_COLBAL_RIGHT_TOP_BEFORE_DISABLE") || best.1 == 0 || best.1 >= rows.len() {
+            0.0
+        } else {
+            let pi = rows[best.1].2.first().and_then(|&ei| elements[ei].paragraph_index);
+            let first_line = pi.is_some() && !rows[..best.1].iter()
+                .any(|r| r.2.iter().any(|&ei| elements[ei].paragraph_index == pi));
+            match (first_line, pi.and_then(|pi| blocks.get(pi))) {
+                (true, Some(Block::Paragraph(p))) => {
+                    let before = match (p.style.before_lines, active_grid_pitch) {
+                        (Some(bl), Some(pitch)) => bl / 100.0 * pitch,
+                        _ => p.style.space_before.unwrap_or(0.0),
+                    };
+                    (before.max(0.0) - rows[best.1].4).max(0.0)
+                }
+                _ => 0.0,
+            }
+        };
         for (i, (old_col, y, members, h, lead)) in rows.iter().enumerate() {
             let col = usize::from(i >= best.1);
             cy[col] += lead;
+            if i == best.1 { cy[col] += right_top_before; }
             for &ei in members {
                 elements[ei].x += xs[col] - xs[*old_col];
                 elements[ei].y += cy[col] - y;
