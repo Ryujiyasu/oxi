@@ -94,6 +94,113 @@ struct ParseField {
     result: bool,
 }
 
+/// The text an `EQ` field instruction draws, or `None` for any other field.
+///
+/// Word builds an equation from the instruction itself; Oxi draws its text and
+/// leaves the geometry to the run: an overlay (`\o`) shows its text argument
+/// -- `\o\ad(氏名,　　　)` spreads 氏名 to the spacer's width, which is not
+/// reproduced, and texts overlaid on each other show one after the other --
+/// or, for a character in a circle, the enclosed character
+/// Unicode has (`\o\ac(○,印)` is ㊞); a fraction reads a/b, a radical √x, and
+/// every other switch shows its arguments in order.
+fn eq_field_text(instruction: &str) -> Option<String> {
+    let trimmed = instruction.trim_start();
+    if !trimmed.get(..2).is_some_and(|name| name.eq_ignore_ascii_case("eq")) {
+        return None;
+    }
+    let body = &trimmed[2..];
+    if !(body.starts_with(char::is_whitespace) || body.starts_with('\\')) {
+        return None;
+    }
+    let shown = eq_text(&body.chars().collect::<Vec<_>>(), &mut 0);
+    let shown = shown.trim().to_string();
+    (!shown.is_empty()).then_some(shown)
+}
+
+/// The text of an EQ expression from `chars[*at..]`, up to an unmatched `)`,
+/// or an argument-separating `,`/`;` when `in_args`.
+fn eq_text(chars: &[char], at: &mut usize) -> String {
+    let mut out = String::new();
+    while *at < chars.len() {
+        match chars[*at] {
+            ')' | ',' | ';' => break,
+            '\\' => {
+                let mut switches = Vec::new();
+                while *at < chars.len() && chars[*at] == '\\' {
+                    *at += 1;
+                    let name: String = chars[*at..].iter().take_while(|c| c.is_ascii_alphabetic()).collect();
+                    *at += name.chars().count();
+                    if name.is_empty() {
+                        // An escaped character: `\(` or `\,` is the character itself.
+                        if let Some(&c) = chars.get(*at) {
+                            out.push(c);
+                            *at += 1;
+                        }
+                        break;
+                    }
+                    // Switch parameters: `\up 10`, `\co3`, `\lc\{` (a bracket character).
+                    while *at < chars.len() && (chars[*at] == ' ' || chars[*at].is_ascii_digit()) {
+                        *at += 1;
+                    }
+                    switches.push(name.to_ascii_lowercase());
+                }
+                if chars.get(*at) == Some(&'(') {
+                    *at += 1;
+                    let mut args = vec![eq_text(chars, at)];
+                    while matches!(chars.get(*at), Some(',') | Some(';')) {
+                        *at += 1;
+                        args.push(eq_text(chars, at));
+                    }
+                    if chars.get(*at) == Some(&')') {
+                        *at += 1;
+                    }
+                    out.push_str(&eq_combine(&switches, args));
+                }
+            }
+            c => {
+                out.push(c);
+                *at += 1;
+            }
+        }
+    }
+    out
+}
+
+/// What one EQ construct shows, from its switch names and argument texts.
+fn eq_combine(switches: &[String], args: Vec<String>) -> String {
+    let has = |name: &str| switches.iter().any(|s| s == name);
+    if has("o") {
+        const RINGS: &[char] = &['○', '〇', '◯', '□', '◇'];
+        let ring = args.iter().any(|a| a.trim().chars().all(|c| RINGS.contains(&c)) && !a.trim().is_empty());
+        let inner = args.iter().find(|a| {
+            let a = a.trim();
+            !a.is_empty() && !a.chars().all(|c| RINGS.contains(&c))
+        });
+        if let (true, Some(inner)) = (ring, inner) {
+            let inner = inner.trim();
+            let enclosed = match inner {
+                "印" => Some('㊞'),
+                "秘" => Some('㊙'),
+                "注" => Some('㊟'),
+                "優" => Some('㊝'),
+                "済" | "可" => None,
+                digits => digits.parse::<u32>().ok().filter(|n| (1..=20).contains(n)).and_then(|n| char::from_u32(0x2460 + n - 1)),
+            };
+            return enclosed.map_or_else(|| inner.to_string(), String::from);
+        }
+        // Text over a spacer of blanks shows the text; two texts overlaid
+        // (a reading set over a name) both show.
+        return args.iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect();
+    }
+    if has("f") && args.len() == 2 {
+        return format!("{}/{}", args[0].trim(), args[1].trim());
+    }
+    if has("r") {
+        return format!("√{}", args.last().map_or("", |a| a.trim()));
+    }
+    args.concat()
+}
+
 /// Presentation state for visible complex fields. Nested result fields restore
 /// their parent's cache policy and style-reference continuation on exit.
 #[derive(Default)]
@@ -206,8 +313,22 @@ impl ParseContext {
                 }
                 b"end" => {
                     let visible = fields.iter().take(fields.len().saturating_sub(1)).all(|f| f.result);
-                    fields.pop();
+                    let field = fields.pop();
                     if visible { text.push('\u{FFFF}'); }
+                    // OXI_EQ (2026-11-07, opt-out _DISABLE): an EQ field draws
+                    // the text of its own instruction -- `eq \o\ad(事業所所在地,
+                    // 　　　　)` spreads a form's label across a cell, `eq
+                    // \o\ac(○,印)` circles a character -- and has no result
+                    // to keep. Oxi drew nothing for it; on a 4,988-document
+                    // sample 24 of the 988 Japanese ones lost labels this
+                    // way. The text goes after the field, outside it.
+                    if let Some(field) = field.filter(|f| visible && !f.result) {
+                        if let Some(shown) = eq_field_text(&field.instruction) {
+                            if !crate::env_flag!("OXI_EQ_DISABLE") {
+                                text.push_str(&shown);
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -7641,7 +7762,7 @@ fn parse_run(
             // are hidden by the enclosing code context and never paint here.
             field_type = Some(FieldType::Cached);
         } else if field.split_whitespace().next().is_some_and(|name| {
-            ["FORMTEXT", "BIBLIOGRAPHY", "INDEX", "CITATION", "MERGEFIELD", "FILLIN"]
+            ["FORMTEXT", "BIBLIOGRAPHY", "INDEX", "CITATION", "MERGEFIELD", "FILLIN", "EQ"]
                 .iter()
                 .any(|kept| name.eq_ignore_ascii_case(kept))
         }) && !crate::env_flag!("OXI_RESULT_FIELDS_DISABLE")
@@ -7654,6 +7775,8 @@ fn parse_run(
             // answers, e.g. every course description of a JROTC catalogue left
             // its table cells empty -- plus bibliographies (4 documents, 16,254
             // characters), an index, citations, a merge field and a fill-in.
+            // An EQ field that was given a result shows it too; one without
+            // draws its instruction's text (`eq_field_text`).
             field_type = Some(FieldType::Cached);
         } else if command.contains("DATE")
             || command.contains("TIME")
@@ -18976,4 +19099,22 @@ fn dash_path(segs: &[crate::ir::PathSeg], w: f32, h: f32, pattern: &[f32]) -> Ve
         }
     }
     out
+}
+
+#[cfg(test)]
+mod eq_field_tests {
+    use super::eq_field_text;
+
+    #[test]
+    fn eq_fields_show_their_text() {
+        assert_eq!(eq_field_text(" eq \\o\\ad(事業所所在地,　　　　　　　　)").as_deref(), Some("事業所所在地"));
+        assert_eq!(eq_field_text("EQ \\o\\ac(○,印)").as_deref(), Some("㊞"));
+        assert_eq!(eq_field_text("eq \\o\\ac(○,3)").as_deref(), Some("③"));
+        assert_eq!(eq_field_text("eq \\o\\ac(〇,済)").as_deref(), Some("済"));
+        assert_eq!(eq_field_text("eq \\f(1,2)").as_deref(), Some("1/2"));
+        assert_eq!(eq_field_text("eq \\o\\ad(\\s\\up 9(ふりがな),氏名)").as_deref(), Some("ふりがな氏名"));
+        assert_eq!(eq_field_text("eq \\o\\ad(　,　)"), None);
+        assert_eq!(eq_field_text("SEQ Figure"), None);
+        assert_eq!(eq_field_text("equation"), None);
+    }
 }
