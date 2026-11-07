@@ -27559,6 +27559,10 @@ impl<'a> WorkbookApplication<'a> {
         };
         let documents = crate::vba_project::read_document_modules(&package)
             .map_err(|error| host_error(1004, error))?;
+        let source = if empty_source { source } else {
+            crate::vba_project::bootstrap_workbook_source(&package, &source)
+                .map_err(|error| host_error(1004, error))?.0
+        };
         oxivba_core::parse_project(&source).map_err(|error| host_error(1004, error.to_string()))?;
         let (name, serial, key) = if from_open {
             let (name, serial) = self.new_opened_template_name(&prefix)?;
@@ -27655,6 +27659,8 @@ impl<'a> WorkbookApplication<'a> {
             .map_err(|error| host_error(1004, error))?.unwrap_or_else(|| "VBAProject".into());
         let documents = crate::vba_project::read_document_modules(package)
             .map_err(|error| host_error(1004, error))?;
+        let source = crate::vba_project::bootstrap_workbook_source(package, &source)
+            .map_err(|error| host_error(1004, error))?.0;
         // Validate before publishing either native objects or a source request.
         oxivba_core::parse_project(&source).map_err(|error| host_error(1004, error.to_string()))?;
         let read_only = args.get(2).filter(|value| !matches!(value, Value::Missing))
@@ -44056,9 +44062,6 @@ fn execute_workbook_invocation(
     let on_save = context.application_state.as_ref().map_or(workbook.calculation.on_save, |state| state.calculate_before_save);
     let should_calculate = mode != -4135 || on_save;
     let needs_runtime = procedure.is_some() || action.is_some() || should_calculate;
-    let parsed = if needs_runtime || context.source_edits.is_some() {
-        Some(oxivba_core::parse_project(source).map_err(|error| error.to_string())?)
-    } else { None };
     let incoming = serde_json::to_vec(&workbook).map_err(|error| error.to_string())?;
     let previous_workbook:Option<Workbook>=session.as_ref().map(|previous|serde_json::from_slice(&previous.workbook))
         .transpose().map_err(|error|error.to_string())?;
@@ -44071,6 +44074,13 @@ fn execute_workbook_invocation(
     } else {
         inherited_documents()
     };
+    let bootstrapped_source = context.file_context.as_ref().and_then(|file| file.package_bytes.as_deref())
+        .map(|package| crate::vba_project::bootstrap_workbook_source(package, source))
+        .transpose()?;
+    let source = bootstrapped_source.as_ref().map_or(source, |(source, _)| source.as_str());
+    let parsed = if needs_runtime || context.source_edits.is_some() {
+        Some(oxivba_core::parse_project(source).map_err(|error| error.to_string())?)
+    } else { None };
     let mut document_names=std::collections::BTreeSet::new();
     let mut document_targets=std::collections::BTreeSet::new();
     for document in &documents {
@@ -44472,6 +44482,44 @@ fn execute_workbook_invocation(
 mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
+
+    #[test]
+    fn generated_workbook_document_survives_save_without_resetting_live_storage() {
+        let seed = include_bytes!("../../../tests/fixtures/vba/document_context_book.xlsm");
+        let source = crate::vba_project::read_project_source_with_code_page(seed, None).unwrap().unwrap()
+            + "\nAttribute VB_Name = \"BootstrapProbe\"\n\
+               Public Function Tick() As String\n Static counter As Long\n counter = counter + 1\n\
+               Tick = CStr(counter) & \"|\" & ActiveWorkbook.CodeName\nEnd Function\n";
+        let package = crate::vba_project::write_project_source(seed, &source, None).unwrap();
+        let source = crate::vba_project::read_project_source_with_code_page(&package, None).unwrap().unwrap();
+        let book = oxicells_core::parse_xlsx_preserving_values(&package).unwrap();
+        let context = |package: Vec<u8>| {
+            let mut context = failure_context();
+            context.file_context = Some(file_io::FileContext { package_bytes: Some(package),
+                full_name: Some(r"C:\bootstrap.xlsm".into()), ..Default::default() });
+            context
+        };
+        let mut session = None;
+        let first = execute_workbook_action_in_session(book, &source, Some("BootstrapProbe.Tick"), vec![],
+            0, context(package.clone()), &mut session).unwrap();
+        assert!(first.error.is_none(), "{:?}", first.error.as_ref().map(|error| &error.message));
+        assert_eq!(serde_json::to_value(&first.result).unwrap(), serde_json::json!({"type":"string", "value":"1|ThisWorkbook"}));
+        let saved = crate::vba_project::save_workbook_project(&package, &source, None).unwrap();
+        let reloaded_source = crate::vba_project::read_project_source_with_code_page(&saved, None).unwrap().unwrap();
+        let second = execute_workbook_action_in_session(first.workbook, &reloaded_source, Some("BootstrapProbe.Tick"), vec![],
+            0, context(saved.clone()), &mut session).unwrap();
+        assert!(second.error.is_none(), "{:?}", second.error.as_ref().map(|error| &error.message));
+        assert_eq!(serde_json::to_value(&second.result).unwrap(), serde_json::json!({"type":"string", "value":"2|ThisWorkbook"}));
+        let retained = execute_workbook_action_in_session(second.workbook, &source, Some("BootstrapProbe.Tick"), vec![],
+            0, context(saved.clone()), &mut session).unwrap();
+        assert!(retained.error.is_none());
+        assert_eq!(serde_json::to_value(&retained.result).unwrap(), serde_json::json!({"type":"string", "value":"3|ThisWorkbook"}));
+        let cold_book = oxicells_core::parse_xlsx_preserving_values(&saved).unwrap();
+        let cold = execute_workbook_action_in_session(cold_book, &reloaded_source, Some("BootstrapProbe.Tick"), vec![],
+            0, context(saved), &mut None).unwrap();
+        assert!(cold.error.is_none());
+        assert_eq!(serde_json::to_value(&cold.result).unwrap(), serde_json::json!({"type":"string", "value":"1|ThisWorkbook"}));
+    }
 
 
 
@@ -49979,11 +50027,12 @@ End Function
             // of unicode_workbook.xlsm instead raises 429: its XML code name
             // remains ThisWorkbook and its Japanese document class is detached.
             // Keep that original live measurement intact and assert the separately
-            // remeasured file-import result here.
+            // remeasured file-import result here. Native also supplies a distinct
+            // ThisWorkbook document; it does not reattach the Japanese class.
             let detached_workbook = case["name"] == "unicode_workbook";
             let mut expected = if detached_workbook {
                 serde_json::json!([
-                    {"name":"ThisWorkbook","baseType":"Excel.Workbook","codeName":"ThisWorkbook","hostOnly":true},
+                    {"name":"ThisWorkbook","baseType":"Excel.Workbook","codeName":"ThisWorkbook"},
                     {"name":"Sheet1","baseType":"Excel.Worksheet","sheetIndex":0,"codeName":"Sheet1"},
                     {"name":"\u{65e5}\u{672c}\u{8a9e}\u{53f0}\u{5e33}","baseType":"Excel.Workbook","unbound":true}
                 ]).as_array().unwrap().clone()

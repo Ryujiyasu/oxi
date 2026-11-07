@@ -741,9 +741,13 @@ pub fn edit_xlsx_from_workbook(data: &[u8], workbook: JsValue) -> Result<Vec<u8>
     editor
         .apply_workbook(&workbook)
         .map_err(|error| JsError::new(&error.to_string()))?;
-    editor
+    let bytes = editor
         .save()
-        .map_err(|error| JsError::new(&error.to_string()))
+        .map_err(|error| JsError::new(&error.to_string()))?;
+    if let Some(source) = vba_project::read_project_source_with_code_page(&bytes, None)
+        .map_err(|error| JsError::new(&error))? {
+        vba_project::save_workbook_project(&bytes, &source, None).map_err(|error| JsError::new(&error))
+    } else { Ok(bytes) }
 }
 
 /// Which cells one sheet's conditional rules catch, and the look each puts on.
