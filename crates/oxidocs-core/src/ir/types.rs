@@ -625,6 +625,10 @@ pub struct RunStyle {
     /// S1314b: this run carries a ruby, so its base text wraps as one atomic unit.
     #[serde(default)]
     pub ruby_field: bool,
+    /// Layout-only: this run is a footnote / endnote reference mark (Word's special
+    /// character, not text -- it takes no digit/ideograph auto-space).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub note_reference: bool,
     /// East-Asian language tag (`<w:lang w:eastAsia="ja-JP">`). Drives Word's
     /// ambiguous-quote font choice: a CJK eastAsia lang (ja/zh/ko) renders
     /// curly quotes in the eastAsia font; a Latin one (en-US) renders them in
@@ -856,6 +860,7 @@ impl Default for RunStyle {
             ruby_spread: false,
             ruby_lead: 0.0,
             ruby_field: false,
+            note_reference: false,
             east_asia_lang: None,
             latin_lang: None,
             font_size: None,
@@ -1735,6 +1740,9 @@ pub struct Ruby {
     /// Language code for the ruby annotation (`<w:lid w:val="...">`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
+    /// Horizontal scale of the annotation run, percent (`<w:w>` in the rt run's rPr).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_scale: Option<f32>,
 }
 
 /// Column layout definition (from w:cols)

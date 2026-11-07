@@ -10320,14 +10320,20 @@ impl<'a> TableFitLayouter<'a> {
                                                         };
                                                         let ruby_text = ruby_ir.text.as_str();
                                                         let ruby_n = ruby_text.chars().count();
+                                                        // OXI_RUBY_WSCALE: each side scaled by its own run's w:w (paragraph.rs).
+                                                        let ruby_wscale = !crate::env_flag!("OXI_RUBY_WSCALE_DISABLE");
+                                                        let scale_of = |s: Option<f32>| -> f32 {
+                                                            if ruby_wscale { s.map(|s| s / 100.0).filter(|s| *s > 0.0).unwrap_or(1.0) } else { 1.0 }
+                                                        };
+                                                        let rt_scale = scale_of(ruby_ir.text_scale);
                                                         let ruby_w: f32 = ruby_text.chars()
                                                             .map(|c| self.registry.char_width_pt_with_fallback(c, hps_pt, &ruby_m))
-                                                            .sum();
+                                                            .sum::<f32>() * rt_scale;
                                                         let base_w: f32 = group.iter().map(|r| {
                                                             let n = r.text.chars().count() as f32;
                                                             r.text.chars()
                                                                 .map(|c| self.registry.char_width_pt_with_fallback(c, base_pt, &base_m))
-                                                                .sum::<f32>()
+                                                                .sum::<f32>() * scale_of(r.style.text_scale)
                                                                 + r.style.character_spacing.unwrap_or(0.0) * n
                                                         }).sum();
                                                         let (dx, ruby_cs) = ruby::ruby_position(base_w, ruby_w, ruby_n, ruby_ir.align);
@@ -10355,7 +10361,7 @@ impl<'a> TableFitLayouter<'a> {
                                                                 highlight: None,
                                                                 character_spacing: ruby_cs,
                                                                 field_type: None,
-                                                                text_scale: 100.0,
+                                                                text_scale: rt_scale * 100.0,
                                                                 is_vertical: false,
                                                                 effects: TextEffects::default(),
                                                             },

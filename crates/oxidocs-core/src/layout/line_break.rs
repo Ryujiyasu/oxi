@@ -806,6 +806,15 @@ impl<'a> LineBreaker<'a> {
             && grid_char_pitch.is_none()
             && self.compat_mode >= 15
             && self.compat_mode_explicit;
+        // OXI_NOTE_REF_NO_AUTOSPACE: a note reference mark has no auto-space, so it
+        // lends no gap to the gap-squeeze credits (S1585 / S1499 / legacy) either.
+        // bunkacontract_93901101 «という）²を委託し、受注者|は»: the mark counted as
+        // a digit gave S1585 two gaps (~2pt) and kept «は», where Word (new PC,
+        // doNotCompress, jc=both) wraps it with the mark flush both sides.
+        let note_ref_gapless = !crate::env_flag!("OXI_NOTE_REF_NO_AUTOSPACE_DISABLE");
+        let gap_view = |text: &str, st: &crate::ir::RunStyle| -> Vec<char> {
+            if note_ref_gapless && st.note_reference { text.chars().map(|_| '\u{FFFC}').collect() } else { text.chars().collect() }
+        };
         let s1585_counts = |chars: &[char]| -> (usize, usize) {
             let solid = |c: char| kinsoku::is_cjk(c) && c != '\u{3000}';
             let mut gaps = 0usize;
@@ -957,7 +966,7 @@ impl<'a> LineBreaker<'a> {
                         && word.chars().all(|c| c.is_ascii_alphanumeric())
                     {
                         let fs = $style.font_size.unwrap_or(self.default_font_size);
-                        let line_chars: Vec<char> = current_line.fragments.iter().flat_map(|f| f.text.chars()).collect();
+                        let line_chars: Vec<char> = current_line.fragments.iter().flat_map(|f| gap_view(&f.text, &f.style)).collect();
                         let (g0, mid_sp) = s1585_counts(&line_chars);
                         let gap_before = line_chars.last().map_or(false, |&c| kinsoku::is_cjk(c) && c != '\u{3000}');
                         let g = g0 + gap_before as usize;
@@ -991,7 +1000,7 @@ impl<'a> LineBreaker<'a> {
                     {
                         let fs = $style.font_size.unwrap_or(self.default_font_size);
                         let line_chars: Vec<char> = current_line.fragments.iter()
-                            .flat_map(|f| f.text.chars()).chain(word.chars()).collect();
+                            .flat_map(|f| gap_view(&f.text, &f.style)).chain(word.chars()).collect();
                         pt_to_tw(legacy_gap_floor(&line_chars, fs))
                     } else { 0 });
                     if dbg_flush {
@@ -5148,8 +5157,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let s1316_ruby_adjacent = !crate::env_flag!("OXI_S1316_DISABLE")
                         && (style.ruby_field
                             || current_line.fragments.last().map_or(false, |f| f.style.ruby_field));
+                    // OXI_NOTE_REF_NO_AUTOSPACE (2026-11-07, default ON, opt-out _DISABLE): a
+                    // footnote / endnote reference mark is Word's special character, not a
+                    // digit -- no auto-space after it. `_pb_fnref_autospace_slice.py`
+                    // (ja/reports__75ebb654 «…Score）¹調查報告», 8pt mark): the reference
+                    // sits flush against «調» at compat 15 and 14, the same «1» typed as
+                    // superscript text gets the 2.06pt quarter-em.
+                    let note_ref_before = !crate::env_flag!("OXI_NOTE_REF_NO_AUTOSPACE_DISABLE")
+                        && word.is_empty()
+                        && current_line.fragments.last().map_or(false, |f| f.style.note_reference);
                     if cur_is_cjk
                         && !s1316_ruby_adjacent
+                        && !note_ref_before
                         && ((prev_is_alpha && (para_style.auto_space_de && self.doc_autospace()))
                             || (prev_is_digit && (para_style.auto_space_dn && self.doc_autospace())))
                     {
@@ -6124,7 +6143,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else { overflow_tw };
                     // S1585: the CJK-unit arm (the gap term alone).
                     if overflow_tw > 0 && s1585_on && kinsoku::is_cjk(ch) && ch != '\u{3000}' {
-                        let line_chars: Vec<char> = current_line.fragments.iter().flat_map(|f| f.text.chars()).collect();
+                        let line_chars: Vec<char> = current_line.fragments.iter().flat_map(|f| gap_view(&f.text, &f.style)).collect();
                         let (g0, _) = s1585_counts(&line_chars);
                         let gap_before = line_chars.last().map_or(false, |c| c.is_ascii_alphanumeric());
                         overflow_tw -= pt_to_tw(s1585_gap_part(g0 + gap_before as usize, font_size));
@@ -6156,7 +6175,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let line_chars: Vec<char> = current_line
                             .fragments
                             .iter()
-                            .flat_map(|f| f.text.chars())
+                            .flat_map(|f| gap_view(&f.text, &f.style))
                             .chain(word.chars())
                             .chain(std::iter::once(ch))
                             .collect();
@@ -6200,7 +6219,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let line_chars: Vec<char> = current_line
                             .fragments
                             .iter()
-                            .flat_map(|f| f.text.chars())
+                            .flat_map(|f| gap_view(&f.text, &f.style))
                             .chain(word.chars())
                             .chain(std::iter::once(ch))
                             .collect();

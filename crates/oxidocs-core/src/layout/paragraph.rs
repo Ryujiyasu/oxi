@@ -9259,6 +9259,19 @@ impl<'a> ParagraphLayouter<'a> {
                             // monospace approximation; matches non-CJK ruby
                             // and proportional fonts correctly.
                             let ruby_char_count = ruby_text.chars().count();
+                            // OXI_RUBY_WSCALE (2026-11-07, default ON, opt-out _DISABLE): w:w
+                            // scales each side by its OWN run -- the base width by the base
+                            // run's, the annotation advance by the rt run's.
+                            // `_pb_ruby_wscale_slice.py` on 1fc69a4f «ことし»/«今年» (both 90):
+                            // こ 116.06 pitch 5.40 (= 16.2 base, 12.15 ruby); rt100 115.82 / 5.4,
+                            // base100 116.42 / 6.0, base150 117.98 / 9.0 -- each the
+                            // distributeSpace of the scaled widths. Unscaled, Oxi spread
+                            // «ことし» over 18 and squeezed the w150 «ねん»/«がつごう».
+                            let ruby_wscale = !crate::env_flag!("OXI_RUBY_WSCALE_DISABLE");
+                            let scale_of = |s: Option<f32>| -> f32 {
+                                if ruby_wscale { s.map(|s| s / 100.0).filter(|s| *s > 0.0).unwrap_or(1.0) } else { 1.0 }
+                            };
+                            let rt_scale = scale_of(ruby_ir.text_scale);
                             let ruby_w: f32 = ruby_text
                                 .chars()
                                 .map(|c| {
@@ -9268,7 +9281,8 @@ impl<'a> ParagraphLayouter<'a> {
                                         ruby_metrics,
                                     )
                                 })
-                                .sum();
+                                .sum::<f32>()
+                                * rt_scale;
                             let base_metrics =
                                 &*self.metrics_for_text(run.text.as_str(), &frag.style, &para.style);
                             let base_w: f32 = run
@@ -9281,7 +9295,8 @@ impl<'a> ParagraphLayouter<'a> {
                                         base_metrics,
                                     )
                                 })
-                                .sum();
+                                .sum::<f32>()
+                                * scale_of(frag.style.text_scale);
                             // S1314: a spread base is as wide as its ruby field.
                             let base_w = if s1628 {
                                 // S1628: every run of the group, each with its own
@@ -9298,7 +9313,7 @@ impl<'a> ParagraphLayouter<'a> {
                                     let n = gr.text.chars().count() as f32;
                                     w += gr.text.chars()
                                         .map(|c| self.registry.char_width_pt_with_fallback(c, gfs, gm))
-                                        .sum::<f32>()
+                                        .sum::<f32>() * scale_of(gr.style.text_scale)
                                         + gr.style.character_spacing.unwrap_or(0.0) * n;
                                     gi += 1;
                                 }
@@ -9362,7 +9377,7 @@ impl<'a> ParagraphLayouter<'a> {
                                     highlight: None,
                                     field_type: None,
                                     character_spacing: ruby_char_spacing,
-                                    text_scale: 100.0,
+                                    text_scale: rt_scale * 100.0,
                                     is_vertical: false,
                                     effects: TextEffects::default(),
                                 },

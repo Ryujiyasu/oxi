@@ -7677,6 +7677,7 @@ fn parse_run(
     }
 
     if custom_note_reference { field_type = Some(FieldType::CustomNoteReference); }
+    style.note_reference = footnote_ref.is_some() || endnote_ref.is_some();
     // OXI_FORMCHECKBOX (2026-10-30, default ON, opt-out _DISABLE): Word draws a
     // FORMCHECKBOX (no result) as a stroked square; the field's begin run carries
     // it as a width-bearing object (sized and drawn by the layout).
@@ -16801,6 +16802,7 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
     let mut hps_raise_halfpt: Option<u32> = None;
     let mut hps_base_text_halfpt: Option<u32> = None;
     let mut lang: Option<String> = None;
+    let mut rt_scale: Option<f32> = None;
     let mut depth = 0;
     let mut in_rt = false;
     let mut in_ruby_base = false;
@@ -16878,6 +16880,9 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
                     if let Some(family) = east_asia.or(latin) {
                         if !annotation_fonts.contains(&family) { annotation_fonts.push(family); }
                     }
+                }
+                if in_rt && local == "w" {
+                    rt_scale = read_val_attr(&e).and_then(|v| v.parse::<f32>().ok());
                 }
                 if !in_ruby_pr {
                     continue;
@@ -16974,6 +16979,7 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
         hps_raise_halfpt,
         hps_base_text_halfpt,
         lang,
+        text_scale: rt_scale,
     })
 }
 
