@@ -33092,7 +33092,11 @@ impl Host for WorkbookHost<'_> {
             let lower = name.to_ascii_lowercase();
             let found = self.formula_links(range, lower.contains("precedents"), lower.starts_with("direct"));
             if found.is_empty() {
-                return Err(oxivba_core::host_error_explained(1004, "No cells were found.", "nothing on this sheet is linked"));
+                let description = match self.error_language {
+                    ErrorLanguage::Japanese => "\u{8a72}\u{5f53}\u{3059}\u{308b}\u{30bb}\u{30eb}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}",
+                    ErrorLanguage::English => "No cells were found.",
+                };
+                return Err(oxivba_core::host_error_from(1004, "Microsoft Excel", description));
             }
             return self.blocks_object(found).map(Some);
         }
@@ -51385,6 +51389,50 @@ End Function
             assert!(outcome.error.is_none(), "{}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
             assert!(!outcome.workbook_changed);
             assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], 7);
+        }
+    }
+
+    #[test]
+    fn dependency_getter_errors_retain_excel_metadata() {
+        for member in ["Precedents", "DirectPrecedents", "Dependents", "DirectDependents"] {
+            for (language, description) in [
+                (ErrorLanguage::Japanese, "\u{8a72}\u{5f53}\u{3059}\u{308b}\u{30bb}\u{30eb}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}"),
+                (ErrorLanguage::English, "No cells were found."),
+            ] {
+                let source = format!("Attribute VB_Name = \"DependencyProbe\"\nPublic Function Probe() As String\n Dim linked As Range\n On Error GoTo Failed\n Set linked = Range(\"A1\").{member}\n Probe = \"unexpected\"\n Exit Function\nFailed:\n Probe = CStr(Err.Number) & \"|\" & Err.Source & \"|\" & Err.Description & \"|\" & Err.HelpFile & \"|\" & CStr(Err.HelpContext)\nEnd Function\n");
+                let mut book = workbook();
+                for sheet in &mut book.sheets { sheet.rows.clear(); }
+                let mut context = failure_context();
+                context.environment.language = language;
+                let outcome = execute_workbook_vba(book, &source, "DependencyProbe.Probe",
+                    vec![], 0, context).unwrap();
+                assert!(outcome.error.is_none(), "{member}: {}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+                let expected = format!("1004|Microsoft Excel|{description}|xlmain11.chm|1001004");
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected, "{member}");
+                assert!(!outcome.workbook_changed, "{member}");
+            }
+        }
+    }
+
+    #[test]
+    fn dependency_getters_preserve_inactive_sheet_access() {
+        for member in ["Precedents", "DirectPrecedents", "Dependents", "DirectDependents"] {
+            let precedents = member.ends_with("Precedents");
+            let query = if precedents { "C1" } else { "A1" };
+            let address = if precedents { "$A$1" } else { "$C$1" };
+            let source = format!("Attribute VB_Name = \"DependencyProbe\"\nPublic Function Probe() As String\n Dim linked As Range\n Worksheets(1).Name = \"ProbeFirst\"\n Worksheets(2).Name = \"ProbeSecond\"\n Worksheets(2).Range(\"A1\").Value = 3\n Worksheets(2).Range(\"C1\").Formula = \"=A1+2\"\n Worksheets(1).Activate\n Set linked = Worksheets(2).Range(\"{query}\").{member}\n Probe = linked.Parent.Name & \"|\" & linked.Address & \"|\" & ActiveSheet.Name\nEnd Function\n");
+            let mut book = workbook();
+            let mut second = book.sheets[0].clone();
+            second.name = "Sheet2".to_string();
+            second.rows.clear();
+            book.sheets.push(second);
+            for sheet in &mut book.sheets { sheet.rows.clear(); }
+            let outcome = execute_workbook_vba(book, &source, "DependencyProbe.Probe",
+                vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{member}: {}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                format!("ProbeSecond|{address}|ProbeFirst"), "{member}");
+            assert_eq!(outcome.active_sheet, 0, "{member}");
         }
     }
 
