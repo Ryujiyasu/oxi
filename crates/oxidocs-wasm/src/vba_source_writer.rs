@@ -134,6 +134,110 @@ fn unicode_name(name: &str) -> Vec<u8> {
     name.encode_utf16().flat_map(u16::to_le_bytes).collect()
 }
 
+const MODULE_NAME_BEST_FIT_1252: &[(u16, u8)] = &[
+    (0x0081, 0x81), (0x008d, 0x8d), (0x008f, 0x8f), (0x0090, 0x90), (0x009d, 0x9d), (0x0100, 0x41),
+    (0x0101, 0x61), (0x0102, 0x41), (0x0103, 0x61), (0x0104, 0x41), (0x0105, 0x61), (0x0106, 0x43),
+    (0x0107, 0x63), (0x0108, 0x43), (0x0109, 0x63), (0x010a, 0x43), (0x010b, 0x63), (0x010c, 0x43),
+    (0x010d, 0x63), (0x010e, 0x44), (0x010f, 0x64), (0x0110, 0xd0), (0x0111, 0x64), (0x0112, 0x45),
+    (0x0113, 0x65), (0x0114, 0x45), (0x0115, 0x65), (0x0116, 0x45), (0x0117, 0x65), (0x0118, 0x45),
+    (0x0119, 0x65), (0x011a, 0x45), (0x011b, 0x65), (0x011c, 0x47), (0x011d, 0x67), (0x011e, 0x47),
+    (0x011f, 0x67), (0x0120, 0x47), (0x0121, 0x67), (0x0122, 0x47), (0x0123, 0x67), (0x0124, 0x48),
+    (0x0125, 0x68), (0x0126, 0x48), (0x0127, 0x68), (0x0128, 0x49), (0x0129, 0x69), (0x012a, 0x49),
+    (0x012b, 0x69), (0x012c, 0x49), (0x012d, 0x69), (0x012e, 0x49), (0x012f, 0x69), (0x0130, 0x49),
+    (0x0131, 0x69), (0x0134, 0x4a), (0x0135, 0x6a), (0x0136, 0x4b), (0x0137, 0x6b), (0x0139, 0x4c),
+    (0x013a, 0x6c), (0x013b, 0x4c), (0x013c, 0x6c), (0x013d, 0x4c), (0x013e, 0x6c), (0x0141, 0x4c),
+    (0x0142, 0x6c), (0x0143, 0x4e), (0x0144, 0x6e), (0x0145, 0x4e), (0x0146, 0x6e), (0x0147, 0x4e),
+    (0x0148, 0x6e), (0x014c, 0x4f), (0x014d, 0x6f), (0x014e, 0x4f), (0x014f, 0x6f), (0x0150, 0x4f),
+    (0x0151, 0x6f), (0x0154, 0x52), (0x0155, 0x72), (0x0156, 0x52), (0x0157, 0x72), (0x0158, 0x52),
+    (0x0159, 0x72), (0x015a, 0x53), (0x015b, 0x73), (0x015c, 0x53), (0x015d, 0x73), (0x015e, 0x53),
+    (0x015f, 0x73), (0x0162, 0x54), (0x0163, 0x74), (0x0164, 0x54), (0x0165, 0x74), (0x0166, 0x54),
+    (0x0167, 0x74), (0x0168, 0x55), (0x0169, 0x75), (0x016a, 0x55), (0x016b, 0x75), (0x016c, 0x55),
+    (0x016d, 0x75), (0x016e, 0x55), (0x016f, 0x75), (0x0170, 0x55), (0x0171, 0x75), (0x0172, 0x55),
+    (0x0173, 0x75), (0x0174, 0x57), (0x0175, 0x77), (0x0176, 0x59), (0x0177, 0x79), (0x0179, 0x5a),
+    (0x017a, 0x7a), (0x017b, 0x5a), (0x017c, 0x7a), (0x0180, 0x62), (0x0189, 0xd0), (0x0191, 0x83),
+    (0x0197, 0x49), (0x019a, 0x6c), (0x019f, 0x4f), (0x01a0, 0x4f), (0x01a1, 0x6f), (0x01ab, 0x74),
+    (0x01ae, 0x54), (0x01af, 0x55), (0x01b0, 0x75), (0x01b6, 0x7a), (0x01c0, 0x7c), (0x01c3, 0x21),
+    (0x01cd, 0x41), (0x01ce, 0x61), (0x01cf, 0x49), (0x01d0, 0x69), (0x01d1, 0x4f), (0x01d2, 0x6f),
+    (0x01d3, 0x55), (0x01d4, 0x75), (0x01d5, 0x55), (0x01d6, 0x75), (0x01d7, 0x55), (0x01d8, 0x75),
+    (0x01d9, 0x55), (0x01da, 0x75), (0x01db, 0x55), (0x01dc, 0x75), (0x01de, 0x41), (0x01df, 0x61),
+    (0x01e4, 0x47), (0x01e5, 0x67), (0x01e6, 0x47), (0x01e7, 0x67), (0x01e8, 0x4b), (0x01e9, 0x6b),
+    (0x01ea, 0x4f), (0x01eb, 0x6f), (0x01ec, 0x4f), (0x01ed, 0x6f), (0x01f0, 0x6a), (0x0261, 0x67),
+    (0x02b9, 0x27), (0x02ba, 0x22), (0x02bc, 0x27), (0x02c4, 0x5e), (0x02c8, 0x27), (0x02c9, 0xaf),
+    (0x02ca, 0xb4), (0x02cb, 0x60), (0x02cd, 0x5f), (0x02da, 0xb0), (0x0300, 0x60), (0x0301, 0xb4),
+    (0x0302, 0x5e), (0x0303, 0x7e), (0x0304, 0xaf), (0x0305, 0xaf), (0x0308, 0xa8), (0x030a, 0xb0),
+    (0x030e, 0x22), (0x0327, 0xb8), (0x0331, 0x5f), (0x0332, 0x5f), (0x037e, 0x3b), (0x0393, 0x47),
+    (0x0398, 0x54), (0x03a3, 0x53), (0x03a6, 0x46), (0x03a9, 0x4f), (0x03b1, 0x61), (0x03b2, 0xdf),
+    (0x03b4, 0x64), (0x03b5, 0x65), (0x03bc, 0xb5), (0x03c0, 0x70), (0x03c3, 0x73), (0x03c4, 0x74),
+    (0x03c6, 0x66), (0x04bb, 0x68), (0x0589, 0x3a), (0x066a, 0x25), (0x2000, 0x20), (0x2001, 0x20),
+    (0x2002, 0x20), (0x2003, 0x20), (0x2004, 0x20), (0x2005, 0x20), (0x2006, 0x20), (0x2007, 0xa0),
+    (0x2008, 0x20), (0x2009, 0x20), (0x200a, 0x20), (0x2010, 0x2d), (0x2011, 0x2d), (0x2012, 0x2d),
+    (0x2015, 0x2d), (0x2017, 0x3d), (0x201b, 0x27), (0x201f, 0x22), (0x2024, 0xb7), (0x202f, 0xa0),
+    (0x2032, 0x27), (0x2033, 0x22), (0x2035, 0x60), (0x2036, 0x22), (0x2044, 0x2f), (0x2070, 0xb0),
+    (0x2074, 0x34), (0x2075, 0x35), (0x2076, 0x36), (0x2077, 0x37), (0x2078, 0x38), (0x207f, 0x6e),
+    (0x2080, 0x30), (0x2081, 0x31), (0x2082, 0x32), (0x2083, 0x33), (0x2084, 0x34), (0x2085, 0x35),
+    (0x2086, 0x36), (0x2087, 0x37), (0x2088, 0x38), (0x2089, 0x39), (0x20a1, 0xa2), (0x20a4, 0xa3),
+    (0x20a7, 0x50), (0x2102, 0x43), (0x2107, 0x45), (0x210a, 0x67), (0x210b, 0x48), (0x210c, 0x48),
+    (0x210d, 0x48), (0x210e, 0x68), (0x2110, 0x49), (0x2111, 0x49), (0x2112, 0x4c), (0x2113, 0x6c),
+    (0x2115, 0x4e), (0x2118, 0x50), (0x2119, 0x50), (0x211a, 0x51), (0x211b, 0x52), (0x211c, 0x52),
+    (0x211d, 0x52), (0x2124, 0x5a), (0x2128, 0x5a), (0x212a, 0x4b), (0x212b, 0xc5), (0x212c, 0x42),
+    (0x212d, 0x43), (0x212e, 0x65), (0x212f, 0x65), (0x2130, 0x45), (0x2131, 0x46), (0x2133, 0x4d),
+    (0x2134, 0x6f), (0x2205, 0xd8), (0x2212, 0x2d), (0x2213, 0xb1), (0x2215, 0x2f), (0x2216, 0x5c),
+    (0x2217, 0x2a), (0x2218, 0xb0), (0x2219, 0xb7), (0x221a, 0x76), (0x221e, 0x38), (0x2223, 0x7c),
+    (0x2229, 0x6e), (0x2236, 0x3a), (0x223c, 0x7e), (0x2248, 0x98), (0x2261, 0x3d), (0x2264, 0x3d),
+    (0x2265, 0x3d), (0x226a, 0xab), (0x226b, 0xbb), (0x22c5, 0xb7), (0x2302, 0xa6), (0x2303, 0x5e),
+    (0x2310, 0xac), (0x2320, 0x28), (0x2321, 0x29), (0x2329, 0x3c), (0x232a, 0x3e), (0x2500, 0x2d),
+    (0x2502, 0xa6), (0x250c, 0x2b), (0x2510, 0x2b), (0x2514, 0x2b), (0x2518, 0x2b), (0x251c, 0x2b),
+    (0x2524, 0xa6), (0x252c, 0x2d), (0x2534, 0x2d), (0x253c, 0x2b), (0x2550, 0x2d), (0x2551, 0xa6),
+    (0x2552, 0x2b), (0x2553, 0x2b), (0x2554, 0x2b), (0x2555, 0x2b), (0x2556, 0x2b), (0x2557, 0x2b),
+    (0x2558, 0x2b), (0x2559, 0x2b), (0x255a, 0x2b), (0x255b, 0x2b), (0x255c, 0x2b), (0x255d, 0x2b),
+    (0x255e, 0xa6), (0x255f, 0xa6), (0x2560, 0xa6), (0x2561, 0xa6), (0x2562, 0xa6), (0x2563, 0xa6),
+    (0x2564, 0x2d), (0x2565, 0x2d), (0x2566, 0x2d), (0x2567, 0x2d), (0x2568, 0x2d), (0x2569, 0x2d),
+    (0x256a, 0x2b), (0x256b, 0x2b), (0x256c, 0x2b), (0x2580, 0xaf), (0x2584, 0x5f), (0x2588, 0xa6),
+    (0x258c, 0xa6), (0x2590, 0xa6), (0x2591, 0xa6), (0x2592, 0xa6), (0x2593, 0xa6), (0x25a0, 0xa6),
+    (0x263c, 0xa4), (0x2758, 0x7c), (0x3000, 0x20), (0x3008, 0x3c), (0x3009, 0x3e), (0x300a, 0xab),
+    (0x300b, 0xbb), (0x301a, 0x5b), (0x301b, 0x5d), (0x30fb, 0xb7), (0xff01, 0x21), (0xff02, 0x22),
+    (0xff03, 0x23), (0xff04, 0x24), (0xff05, 0x25), (0xff06, 0x26), (0xff07, 0x27), (0xff08, 0x28),
+    (0xff09, 0x29), (0xff0a, 0x2a), (0xff0b, 0x2b), (0xff0c, 0x2c), (0xff0d, 0x2d), (0xff0e, 0x2e),
+    (0xff0f, 0x2f), (0xff10, 0x30), (0xff11, 0x31), (0xff12, 0x32), (0xff13, 0x33), (0xff14, 0x34),
+    (0xff15, 0x35), (0xff16, 0x36), (0xff17, 0x37), (0xff18, 0x38), (0xff19, 0x39), (0xff1a, 0x3a),
+    (0xff1b, 0x3b), (0xff1c, 0x3c), (0xff1d, 0x3d), (0xff1e, 0x3e), (0xff20, 0x40), (0xff21, 0x41),
+    (0xff22, 0x42), (0xff23, 0x43), (0xff24, 0x44), (0xff25, 0x45), (0xff26, 0x46), (0xff27, 0x47),
+    (0xff28, 0x48), (0xff29, 0x49), (0xff2a, 0x4a), (0xff2b, 0x4b), (0xff2c, 0x4c), (0xff2d, 0x4d),
+    (0xff2e, 0x4e), (0xff2f, 0x4f), (0xff30, 0x50), (0xff31, 0x51), (0xff32, 0x52), (0xff33, 0x53),
+    (0xff34, 0x54), (0xff35, 0x55), (0xff36, 0x56), (0xff37, 0x57), (0xff38, 0x58), (0xff39, 0x59),
+    (0xff3a, 0x5a), (0xff3b, 0x5b), (0xff3c, 0x5c), (0xff3d, 0x5d), (0xff3e, 0x5e), (0xff3f, 0x5f),
+    (0xff40, 0x60), (0xff41, 0x61), (0xff42, 0x62), (0xff43, 0x63), (0xff44, 0x64), (0xff45, 0x65),
+    (0xff46, 0x66), (0xff47, 0x67), (0xff48, 0x68), (0xff49, 0x69), (0xff4a, 0x6a), (0xff4b, 0x6b),
+    (0xff4c, 0x6c), (0xff4d, 0x6d), (0xff4e, 0x6e), (0xff4f, 0x6f), (0xff50, 0x70), (0xff51, 0x71),
+    (0xff52, 0x72), (0xff53, 0x73), (0xff54, 0x74), (0xff55, 0x75), (0xff56, 0x76), (0xff57, 0x77),
+    (0xff58, 0x78), (0xff59, 0x79), (0xff5a, 0x7a), (0xff5b, 0x7b), (0xff5c, 0x7c), (0xff5d, 0x7d),
+    (0xff5e, 0x7e),
+];
+
+fn encoded_module_name(name: &str, code_page: u16) -> Result<Vec<u8>, String> {
+    let encoding = codepage::to_encoding(code_page)
+        .ok_or_else(|| format!("unsupported VBA code page {code_page}"))?;
+    let (encoded, _, replaced) = encoding.encode(name);
+    if !replaced { return Ok(encoded.into_owned()); }
+    // Keep the real identifier in the Unicode records and source. The legacy
+    // name uses default characters, rather than HTML numeric references.
+    let mut output = Vec::new();
+    for character in name.chars() {
+        let mut utf8 = [0; 4];
+        let (bytes, _, replaced) = encoding.encode(character.encode_utf8(&mut utf8));
+        if !replaced {
+            output.extend_from_slice(&bytes);
+        } else if code_page == 1252 && (character as u32) <= 0xffff {
+            let mapped = MODULE_NAME_BEST_FIT_1252.binary_search_by_key(&(character as u16), |entry| entry.0)
+                .ok().map(|index| MODULE_NAME_BEST_FIT_1252[index].1).unwrap_or(b'?');
+            output.push(mapped);
+        } else {
+            output.extend(std::iter::repeat_n(b'?', character.len_utf16()));
+        }
+    }
+    Ok(output)
+}
+
 fn valid_module_name(name: &str) -> bool {
     let mut characters = name.chars();
     name.encode_utf16().count() <= 31
@@ -271,12 +375,16 @@ fn update_project_inner(project_bytes: &[u8], source: &str, source_code_page: Op
                 if replaced {
                     return Err(format!("VBA source in {name} cannot be represented in code page {source_code_page_value}"));
                 }
-                let (name_bytes, _, replaced) = declared_encoding.encode(name);
-                if replaced {
-                    return Err(format!("VBA module name {name} cannot be represented in project code page {}", project.information.code_page));
-                }
+                let name_bytes = if module.class && !document {
+                    encoded_module_name(name, 1252)?
+                } else {
+                    let name_encoding = if document { declared_encoding } else { encoding };
+                    let (bytes, _, replaced) = name_encoding.encode(name);
+                    if replaced { return Err(format!("VBA module name {name} cannot be represented in its source code page")); }
+                    bytes.into_owned()
+                };
                 additions.push(AddedModule { name: name.clone(), class: module.class, document,
-                    encoded_name: name_bytes.into_owned(), source: encoded.into_owned() });
+                    encoded_name: name_bytes, source: encoded.into_owned() });
                 continue;
             }
             if matches.len() != 1 {
@@ -342,6 +450,16 @@ fn update_project_inner(project_bytes: &[u8], source: &str, source_code_page: Op
     let removed: BTreeSet<usize> = project.modules.iter().enumerate()
         .filter(|(index, _)| !retain_omitted && !seen.contains(index) && !documents.contains(&names[*index].name.to_ascii_lowercase()))
         .map(|(index, _)| index).collect();
+    let mut project_names: BTreeSet<String> = project.modules.iter().enumerate()
+        .filter(|(index, _)| !removed.contains(index))
+        .map(|(_, module)| module.name.to_ascii_lowercase()).collect();
+    for addition in &additions {
+        let name = declared_encoding.decode_without_bom_handling_and_without_replacement(&addition.encoded_name)
+            .ok_or("invalid VBA module name encoding")?;
+        if !project_names.insert(name.to_ascii_lowercase()) {
+            return Err(format!("VBA module name {} has an ambiguous project code page identity", addition.name));
+        }
+    }
     if edits.is_empty() && additions.is_empty() && removed.is_empty() {
         return Ok(project_bytes.to_vec());
     }
@@ -384,13 +502,15 @@ fn update_project_inner(project_bytes: &[u8], source: &str, source_code_page: Op
         let old_map = project.read_stream("/PROJECTwm")
             .map_err(|error| format!("cannot read VBA module name map: {error}"))?;
         let removed_names: BTreeSet<String> = removed.iter().map(|index| names[*index].name.to_ascii_lowercase()).collect();
+        let removed_project_names: BTreeSet<String> = removed.iter()
+            .map(|index| project.modules[*index].name.to_ascii_lowercase()).collect();
         let mut map = filtered_project_name_map(&old_map, &removed_names)?;
         map.truncate(map.len() - 2);
         let mut properties = project_text.to_string();
         if !removed_names.is_empty() {
             properties = properties.split_inclusive('\n').filter(|line| {
                 let Some((kind, name)) = line.trim_end_matches(['\r', '\n']).split_once('=') else { return true; };
-                !matches!(kind, "Module" | "Class") || !removed_names.contains(&name.to_ascii_lowercase())
+                !matches!(kind, "Module" | "Class") || !removed_project_names.contains(&name.to_ascii_lowercase())
             }).collect();
         }
         let mut insertion = None;
@@ -419,7 +539,7 @@ fn update_project_inner(project_bytes: &[u8], source: &str, source_code_page: Op
             };
             let wide_name = unicode_name(&name);
             module_record(&mut directory, 0x0019, &encoded_name)?;
-            module_record(&mut directory, 0x0047, &wide_name)?;
+            if class { module_record(&mut directory, 0x0047, &wide_name)?; }
             module_record(&mut directory, 0x001a, stream_name.as_bytes())?;
             module_record(&mut directory, 0x0032, &unicode_name(&stream_name))?;
             module_record(&mut directory, 0x001c, &[])?;
@@ -434,7 +554,9 @@ fn update_project_inner(project_bytes: &[u8], source: &str, source_code_page: Op
             map.extend_from_slice(&wide_name);
             map.extend_from_slice(&[0, 0]);
             added_properties.push_str(if document { "Document=" } else if class { "Class=" } else { "Module=" });
-            added_properties.push_str(&name);
+            let project_name = declared_encoding.decode_without_bom_handling_and_without_replacement(&encoded_name)
+                .ok_or("invalid VBA module name encoding")?;
+            added_properties.push_str(&project_name);
             if document { added_properties.push_str("/&H00000000"); }
             added_properties.push_str("\r\n");
             sources.push((format!("/VBA/{stream_name}"), compress_source(&bytes)));
@@ -475,4 +597,75 @@ fn update_project_inner(project_bytes: &[u8], source: &str, source_code_page: Op
             .write_all(&bytes).map_err(|error| error.to_string())?;
     }
     Ok(compound.into_inner().into_inner())
+}
+
+#[cfg(test)]
+mod unicode_module_tests {
+    use super::*;
+
+    fn original_project() -> Vec<u8> {
+        let template = include_bytes!("../../../tests/fixtures/vba/named_project_ascii.xlsm");
+        let mut archive = oxidocs_common::archive::OoxmlArchive::new(template).unwrap();
+        archive.read_binary_part("xl/vbaProject.bin").unwrap()
+    }
+
+    const BASE: &str = "Attribute VB_Name = \"ProjectSourceProbe\"\nPublic Function Control() As Long\n Control = 1\nEnd Function\n";
+
+    fn source_with_class(name: &str) -> String {
+        format!("{BASE}Attribute VB_Name = \"UnicodeWriterProbe\"\nPublic Function Probe() As String\n Dim obj As {name}\n Set obj = New {name}\n Probe = obj.Label & \"|\" & TypeName(obj)\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"{name}\"\nPublic Property Get Label() As String\n Label = \"FreshClassOK\"\nEnd Property\n")
+    }
+
+    #[test]
+    fn unicode_module_addition_rejects_colliding_project_names() {
+        let source = source_with_class("\u{9867}\u{5ba2}");
+        let extra = "VERSION 1.0 CLASS\nAttribute VB_Name = \"\u{5e33}\u{7968}\"\nPublic marker As Long\n";
+        let combined = source.clone() + extra;
+        let original = original_project();
+        assert!(update_project(&original, &combined, Some(932)).unwrap_err().contains("ambiguous project code page identity"));
+        let changed = update_project(&original, &source, Some(932)).unwrap();
+        assert!(update_project(&changed, &combined, Some(932)).unwrap_err().contains("ambiguous project code page identity"));
+    }
+
+    #[test]
+    fn unicode_module_addition_supports_standard_names_and_class_best_fit() {
+        let name = "\u{65b0}\u{898f}";
+        let source = format!("{BASE}Attribute VB_Name = \"{name}\"\nPublic Function Probe() As String\n Probe = \"UnicodeModuleOK\"\nEnd Function\n");
+        let changed = update_project(&original_project(), &source, Some(932)).unwrap();
+        let project = ovba::open_project(changed.clone()).unwrap();
+        assert!(identities(&project, Some(932)).unwrap().iter().any(|m| m.name == name));
+        assert_eq!(update_project(&changed, &source, Some(932)).unwrap(), changed);
+        let removed = ovba::open_project(update_project(&changed, BASE, Some(932)).unwrap()).unwrap();
+        assert!(!identities(&removed, Some(932)).unwrap().iter().any(|m| m.name == name));
+        let properties = String::from_utf8(removed.read_stream("/PROJECT").unwrap()).unwrap();
+        assert_eq!(properties.lines().filter(|line| line.starts_with("Module=")).collect::<Vec<_>>(),
+            vec!["Module=ProjectSourceProbe"]);
+
+        let source = source_with_class("\u{3a9}");
+        let changed = update_project(&original_project(), &source, Some(932)).unwrap();
+        let project = ovba::open_project(changed).unwrap();
+        assert!(identities(&project, Some(932)).unwrap().iter().any(|m| m.name == "\u{3a9}"));
+        let properties = String::from_utf8(project.read_stream("/PROJECT").unwrap()).unwrap();
+        assert!(properties.lines().any(|line| line == "Class=O"));
+    }
+
+    #[test]
+    fn unicode_module_addition_preserves_names_and_removes_ansi_declarations() {
+        let name = "\u{9867}\u{5ba2}";
+        let source = source_with_class(name);
+        let changed = update_project(&original_project(), &source, Some(932)).unwrap();
+        let project = ovba::open_project(changed.clone()).unwrap();
+        assert_eq!(project.information.code_page, 1252);
+        let names = identities(&project, Some(932)).unwrap();
+        let index = names.iter().position(|m| m.name == name).unwrap();
+        let body = module_source(&project, &project.modules[index], &names[index], Some(932)).unwrap();
+        assert!(body.contains(&format!("Attribute VB_Name = \"{name}\"")));
+        let properties = String::from_utf8(project.read_stream("/PROJECT").unwrap()).unwrap();
+        assert!(properties.lines().any(|line| line == "Class=??"));
+        assert_eq!(update_project(&changed, &source, Some(932)).unwrap(), changed);
+        let removed = update_project(&changed, BASE, Some(932)).unwrap();
+        let project = ovba::open_project(removed).unwrap();
+        assert!(!identities(&project, Some(932)).unwrap().iter().any(|m| m.name == name));
+        let properties = String::from_utf8(project.read_stream("/PROJECT").unwrap()).unwrap();
+        assert!(!properties.lines().any(|line| line == "Class=??"));
+    }
 }
