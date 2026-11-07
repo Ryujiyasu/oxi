@@ -4926,19 +4926,18 @@ impl<'a> WorkbookHost<'a> {
     }
 
     /// The references a cell's formula makes on its own sheet.
-    fn formula_refs(&self, sheet: usize, row: u32, column: u32) -> Vec<CellRange> {
+    fn formula_refs(&self, engine: &oxicells_calc::Workbook, sheet: usize, row: u32, column: u32) -> Vec<CellRange> {
         let Some(cell) = self.cell_here(sheet, row, column) else {
             return Vec::new();
         };
         let Some(formula) = cell.formula.as_deref() else {
             return Vec::new();
         };
-        let Ok(expr) = oxicells_calc::parse(&format!("={}", formula.trim_start_matches('='))) else {
-            return Vec::new();
-        };
         let own = &self.workbook.sheets[sheet].name;
-        expr.references()
-            .into_iter()
+        let Ok(references) = engine.written_formula_references(
+            own, &format!("={}", formula.trim_start_matches('=')), (column, row - 1),
+        ) else { return Vec::new(); };
+        references.into_iter()
             .filter(|reference| {
                 reference.book.is_none()
                     && reference.sheet.as_deref().is_none_or(|named| named.eq_ignore_ascii_case(own))
@@ -4956,8 +4955,11 @@ impl<'a> WorkbookHost<'a> {
     /// The cells linked to `range` by formulas: what its formulas read
     /// (precedents) or which formulas read it (dependents), one step or all
     /// the way.
-    fn formula_links(&self, range: CellRange, precedents: bool, direct: bool) -> Vec<CellRange> {
-        let sheet = range.sheet;
+    fn formula_links(&self, ranges: &[CellRange], precedents: bool, direct: bool) -> Vec<CellRange> {
+        let sheet = ranges[0].sheet;
+        let engine = oxicells_core::formula::assemble_for_evaluation(
+            &self.workbook.sheets, &self.workbook.defined_names, &self.workbook.external_books,
+        );
         let formulas: Vec<(u32, u32)> = self.workbook.sheets[sheet]
             .rows
             .iter()
@@ -4967,7 +4969,7 @@ impl<'a> WorkbookHost<'a> {
         // them to the answer that way, joining as it goes -- measured,
         // D1 = C1+Z9, C1 = B1+A2, B1 = A1*2 gives $Z$9,$B$1:$C$1,$A$1:$A$2.
         let mut found: Vec<CellRange> = Vec::new();
-        let mut frontier: std::collections::VecDeque<CellRange> = std::collections::VecDeque::from([range]);
+        let mut frontier: std::collections::VecDeque<CellRange> = std::collections::VecDeque::from(ranges.to_vec());
         let mut seen_cells: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
         while let Some(current) = frontier.pop_front() {
             let mut next: Vec<CellRange> = Vec::new();
@@ -4976,14 +4978,14 @@ impl<'a> WorkbookHost<'a> {
                     if !seen_cells.insert((row, column)) {
                         continue;
                     }
-                    next.extend(self.formula_refs(sheet, row, column));
+                    next.extend(self.formula_refs(&engine, sheet, row, column));
                 }
             } else {
                 for (row, column) in &formulas {
                     if seen_cells.contains(&(*row, *column)) {
                         continue;
                     }
-                    if self.formula_refs(sheet, *row, *column).iter().any(|r| ranges_overlap(*r, current)) {
+                    if self.formula_refs(&engine, sheet, *row, *column).iter().any(|r| ranges_overlap(*r, current)) {
                         seen_cells.insert((*row, *column));
                         next.push(CellRange::single(CellAddress { sheet, row: *row, column: *column }));
                     }
@@ -4999,6 +5001,20 @@ impl<'a> WorkbookHost<'a> {
             }
         }
         found
+    }
+
+    fn dependency_ranges(&mut self, ranges: &[CellRange], name: &str) -> Result<Value, String> {
+        for range in ranges { self.settle(*range); }
+        let lower = name.to_ascii_lowercase();
+        let found = self.formula_links(ranges, lower.contains("precedents"), lower.starts_with("direct"));
+        if found.is_empty() {
+            let description = match self.error_language {
+                ErrorLanguage::Japanese => "\u{8a72}\u{5f53}\u{3059}\u{308b}\u{30bb}\u{30eb}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}",
+                ErrorLanguage::English => "No cells were found.",
+            };
+            return Err(oxivba_core::host_error_from(1004, "Microsoft Excel", description));
+        }
+        self.blocks_object(found)
     }
 
     fn blocks_object(&mut self, given: Vec<CellRange>) -> Result<Value, String> {
@@ -5682,6 +5698,11 @@ impl<'a> WorkbookHost<'a> {
         args: &[Value],
     ) -> Result<Option<Value>, String> {
         let areas = self.blocks[handle].clone();
+        if ["precedents", "directprecedents", "dependents", "directdependents"]
+            .iter().any(|member| name.eq_ignore_ascii_case(member))
+        {
+            return self.dependency_ranges(&areas, name).map(Some);
+        }
         if name.eq_ignore_ascii_case("validation") && args.is_empty() {
             return Ok(Some(self.object(HostObject::ValidationBlocks(handle))));
         }
@@ -33088,17 +33109,7 @@ impl Host for WorkbookHost<'_> {
             .iter()
             .any(|wanted| name.eq_ignore_ascii_case(wanted))
         {
-            self.settle(range);
-            let lower = name.to_ascii_lowercase();
-            let found = self.formula_links(range, lower.contains("precedents"), lower.starts_with("direct"));
-            if found.is_empty() {
-                let description = match self.error_language {
-                    ErrorLanguage::Japanese => "\u{8a72}\u{5f53}\u{3059}\u{308b}\u{30bb}\u{30eb}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}",
-                    ErrorLanguage::English => "No cells were found.",
-                };
-                return Err(oxivba_core::host_error_from(1004, "Microsoft Excel", description));
-            }
-            return self.blocks_object(found).map(Some);
+            return self.dependency_ranges(&[range], name).map(Some);
         }
         // `ID`: a label the macro may give a cell, empty until it does.
         if name.eq_ignore_ascii_case("id") {
@@ -51389,6 +51400,38 @@ End Function
             assert!(outcome.error.is_none(), "{}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
             assert!(!outcome.workbook_changed);
             assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], 7);
+        }
+    }
+
+    #[test]
+    fn dependency_getters_include_all_areas() {
+        for member in ["Precedents", "DirectPrecedents", "Dependents", "DirectDependents"] {
+            let precedents = member.ends_with("Precedents");
+            let query = if precedents { "B1,C1" } else { "A1,A3" };
+            let expected = if precedents { "$A$1,$A$3|2|2" } else { "$B$1:$C$1|1|2" };
+            let source = format!("Attribute VB_Name = \"GraphProbe\"\nPublic Function Probe() As String\n Dim found As Range\n Range(\"A1\").Value = 2\n Range(\"A3\").Value = 4\n Range(\"B1\").Formula = \"=A1+1\"\n Range(\"C1\").Formula = \"=A3+1\"\n Set found = Range(\"{query}\").{member}\n Probe = found.Address & \"|\" & found.Areas.Count & \"|\" & found.Count\nEnd Function\n");
+            let mut book = workbook();
+            for sheet in &mut book.sheets { sheet.rows.clear(); }
+            let outcome = execute_workbook_vba(book, &source, "GraphProbe.Probe",
+                vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{member}: {}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected, "{member}");
+        }
+    }
+
+    #[test]
+    fn dependency_getters_resolve_defined_names() {
+        for member in ["Precedents", "DirectPrecedents", "Dependents", "DirectDependents"] {
+            let precedents = member.ends_with("Precedents");
+            let query = if precedents { "B1" } else { "A1" };
+            let expected = if precedents { "$A$1" } else { "$B$1" };
+            let source = format!("Attribute VB_Name = \"GraphProbe\"\nPublic Function Probe() As String\n Dim found As Range\n ActiveSheet.Name = \"GraphSheet\"\n Range(\"A1\").Value = 2\n ThisWorkbook.Names.Add Name:=\"ProbeGraphInput\", RefersTo:=\"=GraphSheet!$A$1\"\n Range(\"B1\").Formula = \"=ProbeGraphInput+1\"\n Set found = Range(\"{query}\").{member}\n Probe = found.Address\nEnd Function\n");
+            let mut book = workbook();
+            for sheet in &mut book.sheets { sheet.rows.clear(); }
+            let outcome = execute_workbook_vba(book, &source, "GraphProbe.Probe",
+                vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{member}: {}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected, "{member}");
         }
     }
 
