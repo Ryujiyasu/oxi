@@ -306,6 +306,15 @@ pub trait Host {
         Ok(None)
     }
 
+    /// Typed scalar arguments whose object defaults must be evaluated by the
+    /// runtime before host dispatch. None preserves the host's existing binding.
+    /// The host checks arity and names without executing the member.
+    fn scalar_argument_type(&self, _receiver: &ObjectRef, _name: &str,
+        _args: &[Value], _argument_names: &[Option<String>], _index: usize)
+        -> Option<AutomationScalarType> {
+        None
+    }
+
     /// Prepare arguments for a late-bound host call after its receiver
     /// and argument expressions have been evaluated. Source classes retain their
     /// runtime-owned dispatch; statically typed host calls do not use this hook.
@@ -8493,8 +8502,11 @@ impl<'a> Runtime<'a> {
                                         None => Value::Missing,
                                     }});
                                 }
-                                if self.assignment_receiver_type(target, frame).is_none() {
-                                    let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                                let late = self.assignment_receiver_type(target, frame).is_none();
+                                let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                                self.resolve_host_source_arguments(&receiver, "Item", &mut values, &names,
+                                    late, frame, span.line)?;
+                                if late {
                                     let prepared = self.host.as_deref()
                                         .map(|host| host.prepare_late_bound_call(&receiver, "Item", &values, &names))
                                         .transpose().map_err(|message| host_failure(message, span.line))?.flatten();
@@ -8640,6 +8652,14 @@ impl<'a> Runtime<'a> {
                         frame.with_objects.last(), Some(WithSubject::Object { assignment_type: None, .. })),
                     _ => false,
                 };
+                if let Some(receiver) = receiver.as_ref() {
+                    let name = match target.as_ref() {
+                        Expr::Member { name, .. } | Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => name,
+                        _ => unreachable!("host member"),
+                    };
+                    self.resolve_host_source_arguments(receiver, name, &mut values, &argument_names,
+                        late_host_call, frame, span.line)?;
+                }
                 if late_host_call {
                     if let Some(receiver) = receiver.as_ref() {
                         let name = match target.as_ref() {
@@ -9687,6 +9707,10 @@ impl<'a> Runtime<'a> {
                 }
             }
             1 | 2 | 3 => {
+                let mut values = rest.to_vec();
+                self.resolve_host_source_arguments(receiver, &member, &mut values, &[],
+                    true, frame, at)?;
+                let rest = values.as_slice();
                 let prepared = if matches!(kind, 2 | 3) {
                     self.host.as_deref().map(|host| host.prepare_automation_get(receiver, &member, rest))
                         .transpose().map_err(|message| host_failure(message, at))?.flatten()
@@ -10061,6 +10085,59 @@ impl<'a> Runtime<'a> {
         Ok(self
             .host_get(object, "Value", line)?
             .unwrap_or_else(|| value.clone()))
+    }
+
+    fn resolve_host_source_arguments(&mut self, receiver: &ObjectRef, name: &str,
+        args: &mut [Value], names: &[Option<String>], late: bool, frame: &mut Frame, line: u32)
+        -> Result<(), RuntimeError>
+    {
+        for index in 0..args.len() {
+            let Some(target) = self.host.as_deref().and_then(|host|
+                host.scalar_argument_type(receiver, name, args, names, index)) else { continue; };
+            let mut value = args[index].clone();
+            let mut resolved = false;
+            loop {
+                let Value::Object(object) = &value else { break; };
+                let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&object.handle) else { break; };
+                let getter = self.source_class_procedure_view(&instance.class, "_default",
+                    &[ProcKind::PropertyGet, ProcKind::Function], object.dispatch_view.as_deref())
+                    .map(|(_, getter)| getter.name.clone())
+                    .ok_or_else(|| language_error(if late { 13 } else { 438 },
+                        "the argument has no scalar default member", line))?;
+                self.tick(Some(line))?;
+                value = self.with_callback_error_context(frame, |runtime, _|
+                    runtime.instance_member(object, &getter, &[], line))
+                    .map_err(|failure| {
+                        if late && !matches!(failure.kind, RuntimeErrorKind::StepLimit |
+                            RuntimeErrorKind::CallDepth | RuntimeErrorKind::ExecutionTerminated |
+                            RuntimeErrorKind::EndStatement | RuntimeErrorKind::Compile) {
+                            language_error(13, "the default member could not supply a scalar argument", line)
+                        } else { failure }
+                    })?;
+                resolved = true;
+                // Automation converts the one returned VARIANT, whereas an
+                // early scalar argument can read another object's default.
+                if late {
+                    if matches!(value, Value::Object(_) | Value::Nothing | Value::Null) {
+                        return Err(language_error(13, "the default member did not return a scalar argument", line));
+                    }
+                    break;
+                }
+            }
+            if resolved {
+                // Nothing returned by a getter is a type mismatch, distinct
+                // from dereferencing an initial Nothing argument (error 91).
+                if matches!(value, Value::Nothing) {
+                    return Err(language_error(13, "the default member returned Nothing", line));
+                }
+                if !matches!(value, Value::Object(_)) {
+                    value = coerce_automation_scalar(&value, target)
+                        .map_err(|message| host_failure(message, line))?;
+                }
+                args[index] = value;
+            }
+        }
+        Ok(())
     }
 
     fn let_value(&mut self, value: Value, frame: &Frame, line: u32) -> Result<Value, RuntimeError> {
@@ -17910,6 +17987,7 @@ fn element_type_name(default: &Value) -> Option<&'static str> {
 pub enum AutomationScalarType {
     Bstr,
     Double,
+    Long,
 }
 
 /// Convert a resolved scalar at a typed Automation boundary. The host must
@@ -17929,6 +18007,13 @@ pub fn coerce_automation_scalar(value: &Value, target: AutomationScalarType) -> 
         AutomationScalarType::Bstr if value.is_string() => Ok(value.clone()),
         AutomationScalarType::Bstr => text(value).map(Value::String),
         AutomationScalarType::Double => number(value).map(Value::Double),
+        AutomationScalarType::Long => {
+            let numeric = number(value).map_err(|_| host_error(13, "Type mismatch"))?.round_ties_even();
+            if !numeric.is_finite() || numeric < f64::from(i32::MIN) || numeric > f64::from(i32::MAX) {
+                return Err(host_error(6, "Overflow"));
+            }
+            Ok(Value::Integer(numeric as i64))
+        }
     }.map_err(|_| host_error(13, "Type mismatch"))
 }
 

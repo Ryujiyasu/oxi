@@ -28342,6 +28342,13 @@ impl Host for ApplicationHost<'_> {
             host.default_member_error(receiver.expect("native receiver"))
         })
     }
+    fn scalar_argument_type(&self, receiver: &ObjectRef, name: &str,
+        args: &[Value], argument_names: &[Option<String>], index: usize)
+        -> Option<oxivba_core::runtime::AutomationScalarType> {
+        self.read(Some(receiver), name, false, |host, receiver| {
+            host.scalar_argument_type(receiver.expect("native receiver"), name, args, argument_names, index)
+        })
+    }
     fn prepare_late_bound_call(&self, receiver: &ObjectRef, name: &str,
         args: &[Value], argument_names: &[Option<String>])
         -> Result<Option<(String, Vec<Value>)>, String> {
@@ -28654,6 +28661,22 @@ impl Host for WorkbookHost<'_> {
         parameters.pop();
         let parameters: Vec<_> = parameters.iter().map(String::as_str).collect();
         normalize_named_arguments(args, names, &parameters, name).map(Some)
+    }
+
+    fn scalar_argument_type(&self, receiver: &ObjectRef, name: &str,
+        args: &[Value], argument_names: &[Option<String>], index: usize)
+        -> Option<oxivba_core::runtime::AutomationScalarType> {
+        if index != 0 || args.len() != 1 { return None; }
+        let item = name.eq_ignore_ascii_case("item")
+            && matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::Areas(_)));
+        let areas = name.eq_ignore_ascii_case("areas") && (self.range(receiver).is_some()
+            || matches!(self.objects.get(host_object_index(receiver.handle)),
+                Some(HostObject::Blocks(_) | HostObject::BlocksAxis(..))));
+        if (!item && !areas) || argument_names.iter().any(|name| name.as_deref()
+            .is_some_and(|name| !item || !name.eq_ignore_ascii_case("index"))) {
+            return None;
+        }
+        Some(oxivba_core::runtime::AutomationScalarType::Long)
     }
 
     fn prepare_late_bound_call(&self, receiver: &ObjectRef, name: &str,
@@ -51500,6 +51523,106 @@ End Function
             assert!(outcome.error.is_none(), "{}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
             assert!(!outcome.workbook_changed);
             assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], 7);
+        }
+    }
+
+    #[test]
+    fn areas_item_calls_source_default_once_and_respects_dispatch_depth() {
+        // Outcomes and getter counts measured with Excel 64-bit, Office 16.
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "AreaIndexProvider"
+Option Explicit
+Public Kind As Long
+Public Calls As Long
+Public Property Get Value() As Variant
+Attribute Value.VB_UserMemId = 0
+ Calls = Calls + 1
+ Select Case Kind
+ Case 1: Value = 2
+ Case 2: Value = 1.5
+ Case 3: Value = "2"
+ Case 4: Value = Null
+ Case 5: Value = CVErr(2042)
+ Case 6: Set Value = ThisWorkbook.Worksheets(1).Range("Z1")
+ Case 7: Set Value = Nothing
+ Case 8: Value = Array(1)
+ Case 9: Err.Raise 513, "ProviderCustom", "default raised"
+ End Select
+End Property
+Attribute VB_Name = "AreasProbe"
+Option Explicit
+Public Function Probe(ByVal mode As Long, ByVal kind As Long) As String
+ Dim provider As AreaIndexProvider
+ Dim index As Variant
+ Dim query As Range
+ Dim collection As Areas
+ Dim lateCollection As Object
+ Dim lateRange As Object
+ Dim selected As Range
+ Dim failureNumber As Long
+ Range("Z1").Value2 = 2
+ On Error GoTo Failed
+ Set provider = New AreaIndexProvider
+ provider.Kind = kind
+ Set index = provider
+ Set query = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7,J10:L10")
+ Set collection = query.Areas
+ Set lateCollection = collection
+ Set lateRange = query
+ Select Case mode
+ Case 0: Set selected = query.Areas(index)
+ Case 1: Set selected = collection.Item(index)
+ Case 2: Set selected = lateCollection.Item(index)
+ Case 3: Set selected = lateRange.Areas(index)
+ Case 4: Set selected = collection(index)
+ Case 5: Set selected = lateCollection(index)
+ Case 6: Set selected = CallByName(collection, "Item", VbGet, index)
+ Case 7: With collection
+ Set selected = .Item(index)
+ End With
+ Case 8: With lateCollection
+ Set selected = .Item(index)
+ End With
+ Case 9: With query
+ Set selected = .Areas(index)
+ End With
+ Case 10: With lateRange
+ Set selected = .Areas(index)
+ End With
+ End Select
+ Probe = "OK|" & selected.Address & "|calls=" & CStr(provider.Calls)
+ Exit Function
+Failed:
+ failureNumber = Err.Number
+ Probe = CStr(failureNumber) & "|calls=" & CStr(provider.Calls)
+End Function
+"#;
+        for named in [false, true] {
+            let source = if named {
+                source.replace("Get Value()", "Get IndexValue()")
+                    .replace("Attribute Value.VB_UserMemId", "Attribute IndexValue.VB_UserMemId")
+                    .replace(" Value =", " IndexValue =")
+                    .replace("End Property", "End Property\nPublic Property Get Value() As Variant\n Calls = Calls + 1000\n Value = 3\nEnd Property")
+            } else { source.to_string() };
+            let (modes, kinds) = if named { (11, 9) } else { (7, 8) };
+            for mode in 0..modes {
+                for kind in 1..=kinds {
+                    let early = matches!(mode, 0 | 1 | 4 | 7 | 9);
+                    let expected = match kind {
+                        1..=3 => "OK|$F$6:$G$7|calls=1",
+                        6 if early => "OK|$F$6:$G$7|calls=1",
+                        4 if early => "94|calls=1",
+                        9 if early => "513|calls=1",
+                        _ => "13|calls=1",
+                    };
+                    let outcome = execute_workbook_vba(workbook(), &source, "AreasProbe.Probe",
+                        vec![Value::Integer(mode), Value::Integer(kind)], 0, failure_context()).unwrap();
+                    assert!(outcome.error.is_none(), "mode {mode}, kind {kind}: {}",
+                        outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+                    assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected,
+                        "mode {mode}, kind {kind}");
+                }
+            }
         }
     }
 
