@@ -306,9 +306,19 @@ pub trait Host {
         Ok(None)
     }
 
-    /// Prepare arguments for a late-bound host call after its receiver
-    /// and argument expressions have been evaluated. Source classes retain their
-    /// runtime-owned dispatch; statically typed host calls do not use this hook.
+    /// Typed scalar arguments whose object defaults must be evaluated by the
+    /// runtime before host dispatch. None preserves the host's existing binding.
+    /// The host checks arity and names without executing the member.
+    fn scalar_argument_type(&self, _receiver: &ObjectRef, _name: &str,
+        _args: &[Value], _argument_names: &[Option<String>], _index: usize)
+        -> Option<AutomationScalarType> {
+        None
+    }
+
+    /// Prepare arguments for a dispatch host call after its receiver and
+    /// argument expressions have been evaluated. Named host arguments also use
+    /// this path with a statically typed receiver. Source classes retain their
+    /// runtime-owned dispatch.
     fn prepare_late_bound_call(&self, _receiver: &ObjectRef, _name: &str,
         _args: &[Value], _argument_names: &[Option<String>])
         -> Result<Option<(String, Vec<Value>)>, String> {
@@ -8493,8 +8503,11 @@ impl<'a> Runtime<'a> {
                                         None => Value::Missing,
                                     }});
                                 }
-                                if self.assignment_receiver_type(target, frame).is_none() {
-                                    let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                                let late = self.assignment_receiver_type(target, frame).is_none();
+                                let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                                self.resolve_host_source_arguments(&receiver, "Item", &mut values, &names,
+                                    late, frame, span.line)?;
+                                if late {
                                     let prepared = self.host.as_deref()
                                         .map(|host| host.prepare_late_bound_call(&receiver, "Item", &values, &names))
                                         .transpose().map_err(|message| host_failure(message, span.line))?.flatten();
@@ -8634,12 +8647,20 @@ impl<'a> Runtime<'a> {
                         None => Value::Missing,
                     }});
                 }
-                let late_host_call = match target.as_ref() {
+                let late_host_call = argument_names.iter().any(Option::is_some) || match target.as_ref() {
                     Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
                     Expr::WithMember(..) | Expr::WithBangMember(..) => matches!(
                         frame.with_objects.last(), Some(WithSubject::Object { assignment_type: None, .. })),
                     _ => false,
                 };
+                if let Some(receiver) = receiver.as_ref() {
+                    let name = match target.as_ref() {
+                        Expr::Member { name, .. } | Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => name,
+                        _ => unreachable!("host member"),
+                    };
+                    self.resolve_host_source_arguments(receiver, name, &mut values, &argument_names,
+                        late_host_call, frame, span.line)?;
+                }
                 if late_host_call {
                     if let Some(receiver) = receiver.as_ref() {
                         let name = match target.as_ref() {
@@ -9687,6 +9708,10 @@ impl<'a> Runtime<'a> {
                 }
             }
             1 | 2 | 3 => {
+                let mut values = rest.to_vec();
+                self.resolve_host_source_arguments(receiver, &member, &mut values, &[],
+                    true, frame, at)?;
+                let rest = values.as_slice();
                 let prepared = if matches!(kind, 2 | 3) {
                     self.host.as_deref().map(|host| host.prepare_automation_get(receiver, &member, rest))
                         .transpose().map_err(|message| host_failure(message, at))?.flatten()
@@ -10061,6 +10086,55 @@ impl<'a> Runtime<'a> {
         Ok(self
             .host_get(object, "Value", line)?
             .unwrap_or_else(|| value.clone()))
+    }
+
+    fn resolve_host_source_arguments(&mut self, receiver: &ObjectRef, name: &str,
+        args: &mut [Value], names: &[Option<String>], late: bool, frame: &mut Frame, line: u32)
+        -> Result<(), RuntimeError>
+    {
+        for index in 0..args.len() {
+            let Some(target) = self.host.as_deref().and_then(|host|
+                host.scalar_argument_type(receiver, name, args, names, index)) else { continue; };
+            if !matches!(&args[index], Value::Object(object) if
+                matches!(self.internal_objects.get(&object.handle), Some(InternalObject::Instance(_)))) {
+                continue;
+            }
+            let mut value = args[index].clone();
+            // Early VBA dereferences the argument, then performs one scalar
+            // Automation conversion if that getter returned another object.
+            // Late dispatch performs only the scalar Automation conversion.
+            for level in 0..if late { 1 } else { 2 } {
+                let Value::Object(object) = &value else { break; };
+                let automation = late || level > 0;
+                self.tick(Some(line))?;
+                let answer = if let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&object.handle) {
+                    let getter = self.source_class_procedure_view(&instance.class, "_default",
+                        &[ProcKind::PropertyGet, ProcKind::Function], object.dispatch_view.as_deref())
+                        .map(|(_, getter)| getter.name.clone());
+                    match getter {
+                        Some(getter) => self.with_callback_error_context(frame, |runtime, _|
+                            runtime.instance_member(object, &getter, &[], line)),
+                        None => Err(language_error(438, "the argument has no scalar default member", line)),
+                    }
+                } else {
+                    self.let_value(value.clone(), frame, line)
+                };
+                value = answer.map_err(|failure| {
+                    if automation && !matches!(failure.kind, RuntimeErrorKind::StepLimit |
+                        RuntimeErrorKind::CallDepth | RuntimeErrorKind::ExecutionTerminated |
+                        RuntimeErrorKind::EndStatement | RuntimeErrorKind::Compile) {
+                        language_error(13, "the default member could not supply a scalar argument", line)
+                    } else { failure }
+                })?;
+                if matches!(value, Value::Nothing) ||
+                    automation && matches!(value, Value::Object(_) | Value::Null) {
+                    return Err(language_error(13, "the default member did not return a scalar argument", line));
+                }
+            }
+            args[index] = coerce_automation_scalar(&value, target)
+                .map_err(|message| host_failure(message, line))?;
+        }
+        Ok(())
     }
 
     fn let_value(&mut self, value: Value, frame: &Frame, line: u32) -> Result<Value, RuntimeError> {
@@ -17910,6 +17984,7 @@ fn element_type_name(default: &Value) -> Option<&'static str> {
 pub enum AutomationScalarType {
     Bstr,
     Double,
+    Long,
 }
 
 /// Convert a resolved scalar at a typed Automation boundary. The host must
@@ -17929,6 +18004,13 @@ pub fn coerce_automation_scalar(value: &Value, target: AutomationScalarType) -> 
         AutomationScalarType::Bstr if value.is_string() => Ok(value.clone()),
         AutomationScalarType::Bstr => text(value).map(Value::String),
         AutomationScalarType::Double => number(value).map(Value::Double),
+        AutomationScalarType::Long => {
+            let numeric = number(value).map_err(|_| host_error(13, "Type mismatch"))?.round_ties_even();
+            if !numeric.is_finite() || numeric < f64::from(i32::MIN) || numeric > f64::from(i32::MAX) {
+                return Err(host_error(6, "Overflow"));
+            }
+            Ok(Value::Integer(numeric as i64))
+        }
     }.map_err(|_| host_error(13, "Type mismatch"))
 }
 
