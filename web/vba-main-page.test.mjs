@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import {Worker as ThreadWorker} from 'node:worker_threads';
 import { bindVbaEditorSettings } from './vba-editor-settings.js';
-import { closeVbaProject, getVbaSourceForSave, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
+import { closeVbaProject, getVbaSourceForSave, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, saveVbaWorkbookInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = path.resolve(process.argv[2] || path.join(root, 'crates/oxidocs-wasm/pkg'));
 const wasm = await import('data:text/javascript;base64,' + Buffer.from(await readFile(path.join(pkg, 'oxidocs_wasm.js'))).toString('base64'));
@@ -31,7 +31,7 @@ function lift(name, source = page) {
 }
 const functions = ['xlsxEditKey', 'collectXlsxEdits', 'defaultCellStyle', 'cellStringValue', 'cellUtf16Text', 'setWorkbookCellString',
   'syncPendingXlsxEditsToIr', 'workbookCellMap', 'typedXlsxEdit', 'recordVbaWorkbookChanges',
-  'captureVbaWorkbookView', 'applyVbaWorkbookView', 'clearClosedVbaWorkbookView', 'formatVbaResult', 'formatVbaExecution', 'updateVbaReferenceButton', 'applyVbaExecution', 'executeVbaFromDialog', 'releaseVbaResultsFromDialog', 'compileVbaFromDialog', 'downloadEdited'];
+  'xlsxRuntimeOptions', 'captureVbaWorkbookView', 'applyVbaWorkbookView', 'clearClosedVbaWorkbookView', 'formatVbaResult', 'formatVbaExecution', 'updateVbaReferenceButton', 'applyVbaExecution', 'executeVbaFromDialog', 'releaseVbaResultsFromDialog', 'compileVbaFromDialog', 'downloadEdited'];
 const macroSource = await readFile(path.join(root, 'tests/fixtures/vba/failure_state.bas'), 'utf8');
 const applicationSource = await readFile(path.join(root, 'tests/fixtures/vba/application_state.bas'), 'utf8');
 const applicationFixture = JSON.parse(await readFile(path.join(root, 'tests/fixtures/vba/application_state.json'), 'utf8'));
@@ -82,7 +82,7 @@ const context = vm.createContext({
   URL: { createObjectURL: blob => { written.push(blob); return 'blob:test'; }, revokeObjectURL() {} },
   t: text => text, I18N: { en: { downloaded: count => `saved ${count}` } },
   runVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker,
-  prepareVbaSaveInWorker,
+  prepareVbaSaveInWorker, saveVbaWorkbookInWorker,
   compileVbaInWorker,
   closeVbaProject, bindVbaEditorSettings, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType,
   recordVbaSourceChange, getVbaSourceForSave, setTimeout() { return 0; }, clearTimeout() {},
@@ -92,6 +92,7 @@ let currentFileType = 'xlsx', currentFileName = 'Failure.xlsm', currentLang = 'e
 let vbaWorkbookPicker; let xlsxWorkbookChanged = false, currentXlsxVbaSource = '';
 let xlsxVbaSourceBound = false, xlsxVbaSourceBaseline = '', xlsxVbaSourceDirty = false, xlsxVbaSourceRevision = 0;
 let currentXlsxSavedCalculation = { mode: 'auto', on_save: true }; const xlsxVbaEdits = new Map();
+let xlsxEditRevision = 0, xlsxSaveBusy = false;
 const MIME_TYPES = { xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
 ${functions.map(name => lift(name)).join('\n')}`, context);
 const editorSettings = page.slice(page.indexOf('const vbaEditorSettings ='), page.indexOf('\nfunction refreshVbaProcedures('));
@@ -500,18 +501,18 @@ const demoPage = await readFile(path.join(root,'web/xlsx-demo.html'),'utf8');
 const demoNode = id => node('demo-'+id);
 let demoPaints = 0;
 const demo = vm.createContext({
- ...wasm, Uint8Array, Map, Set, parseVbaArguments: JSON.parse, runVbaInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType, getVbaSourceForSave, prepareVbaSaveInWorker, Blob:context.Blob, URL:context.URL, window:{dispatchEvent(){}}, Event:class{},
+ ...wasm, Uint8Array, Map, Set, parseVbaArguments: JSON.parse, runVbaInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType, getVbaSourceForSave, prepareVbaSaveInWorker, saveVbaWorkbookInWorker, Blob:context.Blob, URL:context.URL, window:{dispatchEvent(){}}, Event:class{},
  document:{getElementById:demoNode,createElement:()=>({click(){downloads.push(this.download);}})}, measureDigit:()=>7,
  weighCalc(){}, markConditional(){}, markFrozen(){}, markSteps(){}, describe(){}, sayFaces(){},
  goTo(){}, listMacroProcedures(){}, showMacroFiles(){}, draw(){demoPaints++;},
  sayMacro(message,bad){demoNode('result').textContent=message;demoNode('result').classList.toggle('error',bad);},
  closeSeed, closePacketA,
 });
-const demoFunctions=['captureMacroWorkbookView','applyMacroWorkbookView','clearClosedMacroWorkbookView',
+const demoFunctions=['macroRuntimeOptions','captureMacroWorkbookView','applyMacroWorkbookView','clearClosedMacroWorkbookView',
  'applyMacroExecution','reportMacro','calculationPendingSave','markSaved','save'];
 vm.runInContext('let book=closeSeed.workbook, source=closePacketA, fileName="CloseUI-A.xlsm", shown=0, geom={};\n'
  +'let macroProjectSource="",macroSourceBound=false,macroSourceBaseline="",macroSourceDirty=false,macroSourceRevision=0,beyondValues=false,digitWidth=7,editor=null;\n'
- +'let savedCalculation={mode:"auto",on_save:true};const at={row:1,col:0},changes=new Map(),pristine=new Map(),conditional=new Map(),undone=[],redone=[];\n'
+ +'let macroEditRevision=0,macroSavedEditRevision=0,macroSaveBusy=false;const sheetBox=document.getElementById("sheet");let savedCalculation={mode:"auto",on_save:true};const at={row:1,col:0},changes=new Map(),pristine=new Map(),conditional=new Map(),undone=[],redone=[];\n'
  +'const macroSource=document.getElementById("source"),macroProc=document.getElementById("proc"),macroArgs=document.getElementById("args");\n'
  +'const macroRun=document.getElementById("run"),macroCompile=document.getElementById("compile"),saveButton=document.getElementById("save"),macroProcList=document.getElementById("list");\n'
  +'const tabsBox=document.getElementById("tabs"),factsBox=document.getElementById("facts"),cellBox=document.getElementById("cell"),missingBox=document.getElementById("missing"),stateBox=document.getElementById("state");\n'
@@ -776,3 +777,115 @@ for(const route of ['main','canvas'])for(const flavor of ['recommended','shared'
 assert.equal(savedPreferenceUiRows.length,4);
 
 console.log(JSON.stringify({ main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, saved_preference_main_ui_cases:2, saved_preference_canvas_ui_cases:2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));
+
+// The new file-context fields cross the real JS validator, serde boundary and
+// persistent worker. Rust-only tests cannot prove those transport contracts.
+const savedUIAdded = '\nAttribute VB_Name = "SavedStateUI"\n'
+ + 'Public Function Probe() As String\nStatic count As Long\ncount=count+1\n'
+ + 'Probe=CStr(ActiveWorkbook.Saved) & "|" & CStr(count)\nEnd Function\n'
+ + 'Public Sub SameValue()\nRange("A1").Value2=Range("A1").Value2\nEnd Sub\n';
+let savedUIPacket = wasm.save_spreadsheet_vba_source(bytes,
+ wasm.spreadsheet_vba_source(bytes,932)+savedUIAdded,932);
+savedUIPacket = wasm.edit_xlsx(savedUIPacket,[{sheet_index:0,row:1,col:0,value_type:'number',new_value:'7'}]);
+const savedUISource = wasm.spreadsheet_vba_source(savedUIPacket,932);
+const savedUIOptions = revision => ({errorLanguage:'ja-JP',hostAnsiCodePage:932,
+ fileContext:{packageBytes:savedUIPacket,editRevision:revision,sourceCodePage:932}});
+{
+ const session = new wasm.SpreadsheetVbaSession();
+ try {
+  let result=session.run(wasm.parse_spreadsheet(savedUIPacket),savedUISource,'SavedStateUI.Probe',[],0,'SavedStateUI.xlsm',savedUIOptions(0));
+  assert.deepEqual(result.result,{type:'string',value:'True|1'});
+  for(const invalid of [{editRevision:-1},{editRevision:1.5},{editRevision:2**53},
+   {sourceCodePage:0},{sourceCodePage:65536},{sourceCodePage:'932'}]){
+   const options=savedUIOptions(0);Object.assign(options.fileContext,invalid);
+   assert.throws(()=>session.run(result.workbook,savedUISource,'SavedStateUI.Probe',[],0,'SavedStateUI.xlsm',options),
+    /fileContext|editor revision/);
+  }
+  result=session.run(result.workbook,savedUISource,'SavedStateUI.Probe',[],0,'SavedStateUI.xlsm',savedUIOptions(0));
+  assert.deepEqual(result.result,{type:'string',value:'True|2'},'bad context did not consume live storage');
+ } finally {session.free();}
+}
+closeVbaProject();
+{
+ const options={errorLanguage:'ja-JP',hostAnsiCodePage:1252,projectSourceCodePage:932,fileContext:{editRevision:0}};
+ let result=await runVbaInWorker(wasm.parse_spreadsheet(savedUIPacket),savedUISource,'SavedStateUI.Probe',[],0,'SavedStateUI.xlsm',options,savedUIPacket);
+ assert.deepEqual(result.result,{type:'string',value:'True|1'});
+ options.fileContext.editRevision=1;
+ result=await runVbaInWorker(result.workbook,savedUISource,'SavedStateUI.Probe',[],0,'SavedStateUI.xlsm',options,savedUIPacket);
+ assert.deepEqual(result.result,{type:'string',value:'False|2'});
+ const saved=await saveVbaWorkbookInWorker(result.workbook,savedUISource,0,'SavedStateUI.xlsm',options,savedUIPacket);
+ assert.equal(saved.error,undefined);
+ assert.equal(saved.save.completed,true);
+ assert.equal(saved.save.saved,true);
+ assert.ok(saved.save.package_bytes.length>0);
+ result=await runVbaInWorker(saved.workbook,savedUISource,'SavedStateUI.Probe',[],0,'SavedStateUI.xlsm',options,new Uint8Array(saved.save.package_bytes));
+ assert.deepEqual(result.result,{type:'string',value:'True|3'},'Save kept module storage');
+ const copied=await saveVbaWorkbookInWorker(result.workbook,savedUISource,0,'SavedStateUI.xlsm',options,savedUIPacket,'copied-ui.xlsm');
+ assert.equal(copied.save.completed,true);
+ assert.equal(copied.save.saved,true);
+}
+closeVbaProject();
+
+// Use the actual put/save handlers: accepting the original text still enables
+// Save, while the native saved output and live counter cross the real worker.
+demo.savedUIPacket=savedUIPacket;demo.savedUISource=savedUISource;
+vm.runInContext('function sheetNow(){return book.sheets[shown];}\n'
+ +'function heldAt(row,col){return sheetNow().rows.find(r=>r.index===row)?.cells.find(c=>c.col===col);}\n'
+ +'function contentOf(cell){return cell?.value?.Number!==undefined?String(cell.value.Number):"";}\n'
+ +'function ruleAt(){return null;}function sameStyle(a,b){return JSON.stringify(a)===JSON.stringify(b);}\n'
+ +'let step=null;\n'+lift('put',demoPage),demo);
+vm.runInContext('book=parse_spreadsheet(savedUIPacket);source=savedUIPacket;fileName="SavedStateUI.xlsm";shown=0;'
+ +'macroProjectSource=savedUISource;macroSourceBound=true;macroSourceBaseline=savedUISource;macroSourceDirty=false;'
+ +'macroEditRevision=0;macroSavedEditRevision=0;macroSaveBusy=false;beyondValues=false;changes.clear();pristine.clear();'
+ +'macroSource.value=savedUISource;macroProc.value="SavedStateUI.Probe";macroArgs.value="[]";'
+ +'macroEditorSettings.options=()=>({errorLanguage:"ja-JP",hostAnsiCodePage:932,projectSourceCodePage:932,applicationState:{enableEvents:true,displayAlerts:false},fileContext:{fullName:"C:\\SavedStateUI.xlsm"}});'
+ +'macroWorkbookPicker.reset(fileName);markSaved();',demo);
+assert.equal(demoNode('save').disabled,true);
+await vm.runInContext('macroRun.onclick()',demo);
+assert.match(demoNode('result').textContent,/True\|1/);
+vm.runInContext('put(1,0,"7")',demo);
+assert.equal(demoNode('save').disabled,false,'same value remains an accepted editor write');
+assert.equal(vm.runInContext('changes.size',demo),0,'no value delta is needed to retain dirty history');
+written.length=0;downloads.length=0;
+await vm.runInContext('save()',demo);
+assert.equal(written.length,1);
+assert.equal(demoNode('save').disabled,true);
+assert.equal(savedCell(wasm.parse_spreadsheet(written[0].parts[0]),0).value.Number,7);
+await vm.runInContext('macroRun.onclick()',demo);
+assert.match(demoNode('result').textContent,/True\|2/);
+closeVbaProject();
+
+// A real workbook callback cancels before publication, or modifies the live
+// workbook after publication. The download must contain the bytes saved.
+for(const cancel of [true,false]){
+ let eventSource=savedUISource;
+ const doc=wasm.spreadsheet_vba_document_modules(savedUIPacket).find(d=>d.sheetIndex===undefined&&!d.unbound&&!d.hostOnly);
+ assert.ok(doc);
+ const marker='Attribute VB_Name = '+JSON.stringify(doc.name),at=eventSource.indexOf(marker);
+ assert.ok(at>=0);
+ const tail=eventSource.slice(at+marker.length);
+ const next=/\n(?:VERSION [^\n]*CLASS|Attribute VB_Name\s*=)/.exec(tail);
+ const pos=at+marker.length+(next?next.index:tail.length);
+ const handlers='\nPrivate Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)\n'
+  +'Range("B1").Value2=11\n'+(cancel?'Cancel=True\n':'')+'End Sub\n'
+  +'Private Sub Workbook_AfterSave(ByVal Success As Boolean)\nIf Success Then Range("C1").Value2=77\nEnd Sub\n';
+ eventSource=eventSource.slice(0,pos)+handlers+eventSource.slice(pos);
+ const packet=wasm.save_spreadsheet_vba_source(savedUIPacket,eventSource,932);
+ demo.savedUIEventPacket=packet;demo.savedUIEventSource=wasm.spreadsheet_vba_source(packet,932);
+ vm.runInContext('book=parse_spreadsheet(savedUIEventPacket);source=savedUIEventPacket;fileName="SavedStateUI.xlsm";shown=0;'
+  +'macroProjectSource=savedUIEventSource;macroSourceBound=true;macroSourceBaseline=savedUIEventSource;macroSource.value=savedUIEventSource;'
+  +'macroSourceDirty=false;macroEditRevision=1;macroSavedEditRevision=0;macroSaveBusy=false;'
+  +'beyondValues=false;changes.clear();pristine.clear();macroWorkbookPicker.reset(fileName);',demo);
+ written.length=0;downloads.length=0;
+ await vm.runInContext('save()',demo);
+ assert.equal(written.length,cancel?0:1);
+ assert.equal(savedCell(vm.runInContext('book',demo),1).value.Number,11);
+ assert.equal(demoNode('save').disabled,false,'the event left unsaved changes');
+ if(!cancel){
+  const persisted=wasm.parse_spreadsheet(written[0].parts[0]);
+  assert.equal(savedCell(persisted,1).value.Number,11);
+  assert.ok(!savedCell(persisted,2)||savedCell(persisted,2).value==='Empty');
+  assert.equal(savedCell(vm.runInContext('book',demo),2).value.Number,77);
+ }
+ closeVbaProject();
+}

@@ -285,10 +285,10 @@ export function releaseVbaResultInWorker(workbook, source, result,
 
 // The same worker owns every open workbook. A selection moves the editor's
 // view while preserving unsent source edits and all caller-owned references.
-export function selectVbaWorkbookInWorker(workbookIdentity, workbook, activeSheet) {
+export function selectVbaWorkbookInWorker(workbookIdentity, workbook, activeSheet, editRevision) {
     if (typeof workbookIdentity !== 'string') return Promise.reject(new Error('Invalid workbook identity.'));
     return startVbaWorker('select-workbook', workbook, undefined, undefined, [], activeSheet, undefined, {}, undefined,
-        {workbookIdentity});
+        {workbookIdentity, editRevision});
 }
 
 // Untitled template copies keep their VBA project or legacy macro sheets.
@@ -340,7 +340,7 @@ export function bindVbaWorkbookPicker(control, {capture, apply, busy, report}) {
             // A rename keeps the editor's position and invocation, while the
             // authoritative saved package supplies its new source baseline.
             const view = identity === previousIdentity && previous
-                ? {procedure: previous.procedure, args: previous.args, cell: previous.cell} : previous;
+                ? {procedure: previous.procedure, args: previous.args, cell: previous.cell, editRevision: previous.editRevision, savedEditRevision: previous.savedEditRevision} : previous;
             apply(selection, view);
             names.set(identity, selection.selected.name);
             for (const book of selection.other_workbooks) names.set(book.identity, book.name);
@@ -360,7 +360,7 @@ export function bindVbaWorkbookPicker(control, {capture, apply, busy, report}) {
         try {
             const current = capture();
             views.set(identity, current.view);
-            const selection = await selectVbaWorkbookInWorker(wanted, current.workbook, current.activeSheet);
+            const selection = await selectVbaWorkbookInWorker(wanted, current.workbook, current.activeSheet, current.editRevision);
             try { apply(selection, views.get(wanted)); }
             catch (error) {
                 // Restore the actual invoking owner if rendering/preparation
@@ -387,6 +387,18 @@ export function bindVbaWorkbookPicker(control, {capture, apply, busy, report}) {
 
 export function prepareVbaSaveInWorker(workbook, source, activeSheet, fileName, options = {}, packageBytes) {
     return startVbaWorker('save', workbook, source, undefined, [], activeSheet, fileName, options, packageBytes);
+}
+
+// Save and SaveCopyAs use the same runtime callbacks as VBA commands. An
+// AfterSave error can coexist with a file that was already written.
+export async function saveVbaWorkbookInWorker(workbook, source, activeSheet, fileName, options = {}, packageBytes, copyName) {
+    try {
+        return await startVbaWorker('save-workbook', workbook, source, undefined, [], activeSheet, fileName,
+            options, packageBytes, { copyName });
+    } catch (error) {
+        if (error?.execution) return error.execution;
+        throw error;
+    }
 }
 
 export function compileVbaInWorker(source, options = {}, workbook, packageBytes) {

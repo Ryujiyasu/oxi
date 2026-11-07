@@ -1543,7 +1543,7 @@ document.addEventListener('keydown', (e) => {
 <script type="module">
 import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_xlsx_from_workbook, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, spreadsheet_vba_source, save_spreadsheet_vba_source, format_cell_number } from './oxidocs_wasm.js';
 import { collectAdvances, familyPresent } from './face-metrics.js';
-import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
+import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, saveVbaWorkbookInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
 import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-settings.js';
 import * as vbaProjectApi from './oxidocs_wasm.js';
 
@@ -1555,6 +1555,8 @@ let currentDocIR = null; // parsed IR for edit mode
 let currentXlsxSheetIndex = 0;
 let vbaWorkbookPicker;
 const xlsxVbaEdits = new Map();
+let xlsxEditRevision = 0;
+let xlsxSaveBusy = false;
 // True once something has changed that a list of cell values cannot
 // carry: a macro's fill, a merge, a hidden row, a filter, a name. The
 // cheap save writes cell values only, so those go by the whole
@@ -2638,9 +2640,15 @@ function applyVbaExecution(execution, before) {
     if (changed || previousSheet !== currentXlsxSheetIndex) renderEditableXlsx(currentDocIR);
 }
 
+function xlsxRuntimeOptions() {
+    const options = vbaEditorSettings.options();
+    return { ...options, fileContext: { ...options.fileContext, editRevision: xlsxEditRevision } };
+}
+
 function captureVbaWorkbookView() {
     syncPendingXlsxEditsToIr();
-    return {workbook: currentDocIR, activeSheet: currentXlsxSheetIndex, view: {
+    return {workbook: currentDocIR, activeSheet: currentXlsxSheetIndex, editRevision: xlsxEditRevision, view: {
+        editRevision: xlsxEditRevision,
         bytes: currentFileBytes, bound: xlsxVbaSourceBound, baseline: xlsxVbaSourceBaseline,
         savedCalculation: currentXlsxSavedCalculation,
         procedure: document.getElementById('vbaProcedure').value,
@@ -2654,6 +2662,7 @@ function applyVbaWorkbookView(selection, previous) {
     if (!bytes) throw new Error('This workbook has no save package.');
     const originalSource = spreadsheet_vba_source(new Uint8Array(bytes), vbaEditorSettings.options().hostAnsiCodePage);
     currentDocIR = selected.workbook;
+    xlsxEditRevision = previous?.editRevision ?? 0;
     currentXlsxSheetIndex = selected.active_sheet;
     currentFileName = selected.name;
     currentFileBytes = bytes;
@@ -2717,7 +2726,7 @@ const vbaEditorSettings = bindVbaEditorSettings({
 
 vbaWorkbookPicker = bindVbaWorkbookPicker(document.getElementById('vbaWorkbook'), {
     capture: captureVbaWorkbookView, apply: applyVbaWorkbookView,
-    busy: () => document.getElementById('vbaRun').disabled || document.getElementById('vbaCompile').disabled,
+    busy: () => xlsxSaveBusy || document.getElementById('vbaRun').disabled || document.getElementById('vbaCompile').disabled,
     report: (message, bad) => {
         document.getElementById('vbaResult').textContent = message;
         document.getElementById('vbaResult').classList.toggle('error', Boolean(bad));
@@ -2803,7 +2812,7 @@ async function executeVbaFromDialog() {
             args,
             currentXlsxSheetIndex,
             currentFileName,
-            vbaEditorSettings.options(),
+            xlsxRuntimeOptions(),
             currentFileBytes ? new Uint8Array(currentFileBytes) : undefined,
         );
         currentXlsxVbaSource = source;
@@ -2852,7 +2861,7 @@ async function releaseVbaResultsFromDialog() {
         syncPendingXlsxEditsToIr();
         before = currentDocIR;
         const execution = await releaseAllVbaObjectsInWorker(currentDocIR, currentXlsxSheetIndex,
-            currentFileName, vbaEditorSettings.options(), currentFileBytes ? new Uint8Array(currentFileBytes) : undefined);
+            currentFileName, xlsxRuntimeOptions(), currentFileBytes ? new Uint8Array(currentFileBytes) : undefined);
         applyVbaExecution(execution, before);
         resultElement.textContent = formatVbaExecution(execution);
         showStatus('Returned objects released.', 'info');
@@ -2909,6 +2918,7 @@ document.getElementById('vbaSource').addEventListener('input', () => {
     vbaSourceBeforeInput = undefined;
     currentXlsxVbaSource = document.getElementById('vbaSource').value;
     xlsxVbaSourceRevision++;
+    xlsxEditRevision++;
     xlsxVbaSourceDirty = xlsxVbaSourceBound && currentXlsxVbaSource !== xlsxVbaSourceBaseline;
     clearTimeout(vbaProcedureRefreshTimer);
     vbaProcedureRefreshTimer = setTimeout(() => refreshVbaProcedures(), 150);
@@ -2944,55 +2954,56 @@ const MIME_TYPES = {
 };
 
 async function downloadEdited() {
-    if (!currentFileBytes || !currentFileType) return;
-
-    // A typed cell lives in the page until something asks for it; the
-    // workbook has to hold it before the workbook is what gets written.
+    if (!currentFileBytes || !currentFileType || xlsxSaveBusy) return;
     if (currentFileType === 'xlsx') syncPendingXlsxEditsToIr();
-
     let edits;
     if (currentFileType === 'docx') edits = collectDocxEdits();
     else if (currentFileType === 'xlsx') edits = collectXlsxEdits();
     else if (currentFileType === 'pptx') edits = collectPptxEdits();
     else return;
-
     let wholeWorkbook = currentFileType === 'xlsx' && (xlsxWorkbookChanged || xlsxVbaSourceDirty
         || (currentDocIR.calculation?.mode ?? 'auto') !== currentXlsxSavedCalculation.mode
         || (currentDocIR.calculation?.on_save ?? true) !== currentXlsxSavedCalculation.on_save);
-    if (edits.length === 0 && !wholeWorkbook) {
+    if (edits.length === 0 && !wholeWorkbook && !(currentFileType === 'xlsx' && xlsxEditRevision)) {
         showStatus(t('noChanges'), 'info');
         return;
     }
-
+    let endVbaOperation;
+    const grid = document.getElementById('pages-container');
+    const gridWasInert = grid?.inert;
+    let nativeExecution;
     try {
         const data = new Uint8Array(currentFileBytes);
         const saveFileBytes = currentFileBytes;
-        const saveRevision = xlsxVbaSourceRevision;
-        let sourceData = data;
-        if (currentFileType === 'xlsx' && (currentXlsxVbaSource || /\.xlsm$/i.test(currentFileName || '') || currentDocIR.calculation?.mode === 'manual'
-            || currentDocIR.calculation?.mode === 'autoNoTable' || currentDocIR.calculation?.on_save === false)) {
-            const before = currentDocIR;
-            const endVbaOperation = vbaEditorSettings.beginOperation();
-            try {
-                const saveSource = xlsxVbaSourceBound ? document.getElementById('vbaSource').value : getVbaSourceForSave(currentXlsxVbaSource);
-                if (xlsxVbaSourceBound) sourceData = save_spreadsheet_vba_source(data, saveSource, vbaEditorSettings.options().hostAnsiCodePage);
-                const prepared = await prepareVbaSaveInWorker(currentDocIR, saveSource, currentXlsxSheetIndex, currentFileName, vbaEditorSettings.options(), data);
-                if (currentFileBytes !== saveFileBytes) return;
-                applyVbaExecution(prepared, before);
-                if (xlsxVbaSourceRevision === saveRevision) currentXlsxVbaSource = saveSource;
-            } catch (error) {
-                if (error?.execution) applyVbaExecution(error.execution, before);
-                throw error;
-            } finally { endVbaOperation(); }
-            wholeWorkbook = true;
-        }
         let editedBytes;
-        if (currentFileType === 'docx') editedBytes = edit_docx(data, edits);
-        else if (wholeWorkbook) editedBytes = edit_xlsx_from_workbook(sourceData, currentDocIR);
+        const savedExtension = currentFileType === 'xlsx'
+            ? vbaWorkbookExtension(currentFileName, currentDocIR, xlsxVbaSourceBound) : currentFileType;
+        if (currentFileType === 'xlsx' && (currentXlsxVbaSource || /\.xlsm$/i.test(currentFileName || '')
+            || currentDocIR.calculation?.mode === 'manual' || currentDocIR.calculation?.mode === 'autoNoTable'
+            || currentDocIR.calculation?.on_save === false)) {
+            const before = currentDocIR;
+            const options = xlsxRuntimeOptions();
+            const saveSource = xlsxVbaSourceBound ? document.getElementById('vbaSource').value
+                : getVbaSourceForSave(currentXlsxVbaSource) || spreadsheet_vba_source(data, options.projectSourceCodePage) || '';
+            xlsxSaveBusy = true;
+            if (grid) grid.inert = true;
+            endVbaOperation = vbaEditorSettings.beginOperation();
+            nativeExecution = await saveVbaWorkbookInWorker(currentDocIR, saveSource, currentXlsxSheetIndex,
+                currentFileName, options, data, `edited.${savedExtension}`);
+            if (currentFileBytes !== saveFileBytes) return;
+            applyVbaExecution(nativeExecution, before);
+            if (!nativeExecution.save?.completed) {
+                if (nativeExecution.error) throw new Error(nativeExecution.error.message);
+                showStatus('Save cancelled.', 'info');
+                return;
+            }
+            if (!nativeExecution.save.package_bytes) throw new Error('The saved file is not available.');
+            editedBytes = new Uint8Array(nativeExecution.save.package_bytes);
+            wholeWorkbook = true;
+        } else if (currentFileType === 'docx') editedBytes = edit_docx(data, edits);
+        else if (wholeWorkbook) editedBytes = edit_xlsx_from_workbook(data, currentDocIR);
         else if (currentFileType === 'xlsx') editedBytes = edit_xlsx(data, edits);
-        else if (currentFileType === 'pptx') editedBytes = edit_pptx(data, edits);
-
-        const savedExtension = currentFileType === 'xlsx' ? vbaWorkbookExtension(currentFileName, currentDocIR, xlsxVbaSourceBound) : currentFileType;
+        else editedBytes = edit_pptx(data, edits);
         const mimeType = currentFileType === 'xlsx' ? vbaWorkbookMimeType(savedExtension) : MIME_TYPES[currentFileType];
         const blob = new Blob([editedBytes], { type: mimeType });
         const url = URL.createObjectURL(blob);
@@ -3001,13 +3012,18 @@ async function downloadEdited() {
         a.download = `edited.${savedExtension}`;
         a.click();
         URL.revokeObjectURL(url);
-        showStatus(
-            I18N[currentLang].downloaded(wholeWorkbook ? edits.length || 1 : edits.length),
-            'info',
-        );
-    } catch(e) {
-        showStatus('Save error: ' + e.message, 'error');
-        console.error(e);
+        // This control downloads an edited copy. The current workbook retains
+        // its dirty state and source baseline, just as SaveCopyAs does.
+        showStatus(nativeExecution?.error ? nativeExecution.error.message
+            : I18N[currentLang].downloaded(wholeWorkbook ? edits.length || 1 : edits.length),
+            nativeExecution?.error ? 'error' : 'info');
+    } catch (error) {
+        showStatus('Save error: ' + (error?.message || error), 'error');
+        console.error(error);
+    } finally {
+        endVbaOperation?.();
+        if (grid) grid.inert = gridWasInert;
+        xlsxSaveBusy = false;
     }
 }
 
@@ -4325,6 +4341,8 @@ function renderEditableXlsx(workbook) {
                 const td = document.createElement('td');
                 td.contentEditable = 'true';
                 td.className = 'edit-cell';
+                td.addEventListener('input', () => { xlsxEditRevision++; });
+                td.addEventListener('keydown', event => { if (event.key === 'Enter') xlsxEditRevision++; });
                 td.dataset.sheet = idx;
                 td.dataset.row = r;
                 td.dataset.col = c;
@@ -4814,6 +4832,7 @@ async function handleFile(file) {
         } else if (ext === 'xlsx') {
             currentXlsxSheetIndex = 0;
             xlsxVbaEdits.clear();
+            xlsxEditRevision = 0;
             xlsxWorkbookChanged = false;
             currentXlsxVbaSource = '';
             xlsxVbaSourceBound = false;

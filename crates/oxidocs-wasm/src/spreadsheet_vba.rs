@@ -42767,6 +42767,8 @@ struct RunResult {
     workbook_closed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     workbook_selection: Option<WorkbookSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    save: Option<WorkbookSaveOutput>,
 }
 
 #[derive(Serialize)]
@@ -42802,13 +42804,15 @@ struct RunOutcome {
     workbook_closed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     workbook_selection: Option<WorkbookSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    save: Option<WorkbookSaveOutput>,
 }
 
 impl RunOutcome {
     fn into_result(self) -> RunResult {
         RunResult { workbook: self.workbook, result: self.result, debug_output: self.debug_output,
             messages: self.messages, status_bar: self.status_bar, files: self.files, deleted_files: self.deleted_files,
-            other_workbooks: self.other_workbooks, active_workbook: self.active_workbook, workbook_closed: self.workbook_closed, workbook_selection: self.workbook_selection }
+            other_workbooks: self.other_workbooks, active_workbook: self.active_workbook, workbook_closed: self.workbook_closed, workbook_selection: self.workbook_selection, save: self.save }
     }
 }
 
@@ -43077,6 +43081,7 @@ impl<'a, A> VbaInvocation<'a, A> {
 enum ExternalObjectAction {
     Invoke { reference: String, member: String, kind: i64 },
     Release { references: Vec<String> },
+    SaveWorkbook { copy_name: Option<String> },
 }
 
 fn value_owns_project_reference(value: &Value) -> bool {
@@ -43244,9 +43249,17 @@ fn selection_snapshot(state: &ProjectSessionState) -> Result<WorkbookSelection, 
 
 /// Keep editor cell/structure changes in the actual host before its view is
 /// detached. This does not run source code or turn activation into a Save.
+#[cfg(test)]
 fn select_session_workbook_with_edits(
     session: &mut Option<ProjectSessionState>, identity: &str,
     workbook: Workbook, active_sheet: usize,
+) -> Result<WorkbookSelection, String> {
+    select_session_workbook_with_revision(session, identity, workbook, active_sheet, None)
+}
+
+fn select_session_workbook_with_revision(
+    session: &mut Option<ProjectSessionState>, identity: &str,
+    workbook: Workbook, active_sheet: usize, edit_revision: Option<u64>,
 ) -> Result<WorkbookSelection, String> {
     let owner: u64 = identity.parse().map_err(|_| "invalid workbook identity".to_string())?;
     if owner.to_string() != identity { return Err("invalid workbook identity".into()); }
@@ -43269,6 +43282,10 @@ fn select_session_workbook_with_edits(
     let mut host = WorkbookHost::resume_storage(WorkbookStorage::Owned(Box::new(workbook)), previous.host);
     remap_workbook_host(&mut host, &old_workbook, &previous.documents, false);
     if previous.workbook != incoming { host.saved = false; }
+    if let Some(revision) = edit_revision {
+        if host.file_io.edit_revision.unwrap_or(0) != revision { host.saved = false; }
+        host.file_io.edit_revision = Some(revision);
+    }
     host.activate_sheet(active_sheet);
     let (_, host) = host.into_parts();
     previous.host = host;
@@ -43469,6 +43486,22 @@ pub struct SpreadsheetVbaSession {
     state: Option<ProjectSessionState>,
 }
 
+fn validate_editor_revision(value: JsValue) -> Result<u64, JsError> {
+    if !js_sys::Number::is_safe_integer(&value) || value.as_f64().is_none_or(|number| number < 0.0) {
+        return Err(JsError::new("editor revision must be a non-negative safe integer"));
+    }
+    Ok(value.as_f64().expect("validated number") as u64)
+}
+
+#[derive(Serialize)]
+struct WorkbookSaveOutput {
+    completed: bool,
+    saved: bool,
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    package_bytes: Option<Vec<u8>>,
+}
+
 #[wasm_bindgen]
 impl SpreadsheetVbaSession {
     #[wasm_bindgen(constructor)]
@@ -43496,12 +43529,24 @@ impl SpreadsheetVbaSession {
 
     /// Preserve pending editor changes before selecting another open book.
     pub fn select_workbook_with_edits(&mut self, identity: &str, workbook: JsValue,
-        active_sheet: usize) -> Result<JsValue, JsError> {
+        active_sheet: usize, edit_revision: Option<JsValue>) -> Result<JsValue, JsError> {
+        let revision = edit_revision.map(validate_editor_revision).transpose()?;
         let workbook = serde_wasm_bindgen::from_value(workbook)
             .map_err(|error| JsError::new(&format!("invalid workbook: {error}")))?;
-        let selection = select_session_workbook_with_edits(&mut self.state, identity, workbook, active_sheet)
+        let selection = select_session_workbook_with_revision(&mut self.state, identity, workbook, active_sheet, revision)
             .map_err(|error| JsError::new(&error))?;
         serde_wasm_bindgen::to_value(&selection).map_err(|error| JsError::new(&error.to_string()))
+    }
+
+    /// Run the selected workbook's native Save or SaveCopyAs path, including
+    /// its callbacks and calculation. Copies leave the original save state.
+    pub fn save_workbook(&mut self, workbook: JsValue, source: &str, active_sheet: usize,
+        file_name: Option<String>, options: JsValue, copy_name: Option<String>) -> Result<JsValue, JsError> {
+        let invocation = VbaInvocation { procedure: None, args: js_sys::Array::new().into(),
+            action: Some(ExternalObjectAction::SaveWorkbook { copy_name }) };
+        let outcome = prepare_spreadsheet_vba(workbook, source, invocation,
+            active_sheet, file_name, options, &mut self.state)?;
+        serialize_vba_outcome(&outcome)
     }
 
     pub fn document_modules(&self,package:&[u8]) -> Result<JsValue,JsError> {
@@ -44061,6 +44106,7 @@ fn execute_workbook_invocation(
     active_sheet: usize, context: VbaRunContext, session: &mut Option<ProjectSessionState>,
 ) -> Result<RunOutcome, String> {
     let VbaInvocation { procedure, args, action } = invocation;
+    let save_request = match &action { Some(ExternalObjectAction::SaveWorkbook { copy_name }) => Some(copy_name.clone()), _ => None };
     // The editor can retain the old IR after Close. It cannot revive that
     // project's macros or save its discarded edits as a new invocation.
     if action.is_none() && session.as_ref().is_some_and(|state| state.application.as_ref()
@@ -44200,6 +44246,7 @@ fn execute_workbook_invocation(
     let action_references: &[String] = match &action {
         Some(ExternalObjectAction::Invoke { reference, .. }) => std::slice::from_ref(reference),
         Some(ExternalObjectAction::Release { references }) => references,
+        Some(ExternalObjectAction::SaveWorkbook { .. }) => &[],
         None => &[],
     };
     let mut seen = BTreeSet::new();
@@ -44247,6 +44294,8 @@ fn execute_workbook_invocation(
     if let Some(page) = context.host_ansi_code_page { host.automation_code_page = Some(page); }
     host.file_name = file_name;
     host.file_io = next_files;
+    let copy_target = save_request.as_ref().and_then(|name| name.as_ref())
+        .map(|name| if name.is_empty() { name.clone() } else { host.file_io.files.absolute_path(name) });
     // Without an explicit application override, use the incoming workbook's
     // settings even when the project already has runtime storage. A reopened
     // package can have different calculation metadata from the previous book.
@@ -44350,6 +44399,14 @@ fn execute_workbook_invocation(
         }
         let external_action = action.is_some();
         let mut result = match action {
+            Some(ExternalObjectAction::SaveWorkbook { copy_name }) => {
+                if copy_name.is_some() {
+                    runtime.invoke_host("ThisWorkbook", "SaveCopyAs",
+                        vec![Value::String(copy_target.clone().expect("copy target"))])
+                } else {
+                    runtime.invoke_host("ThisWorkbook", "Save", vec![])
+                }
+            }
             Some(ExternalObjectAction::Invoke { reference, member, kind }) => {
                 let object = external_references.values.get(&reference).expect("validated reference");
                 runtime.invoke_member(object, &member, kind, args)
@@ -44451,6 +44508,17 @@ fn execute_workbook_invocation(
     let workbook_closed = application_session.as_ref()
         .filter(|state| state.application.closed.contains(&host.objects.owner)).map(|_| true);
     host.file_io.files = file_system;
+    let save = save_request.map(|copy_name| {
+        let target = if copy_name.is_some() { copy_target } else {
+            host.file_io.full_name.clone().or_else(|| host.file_name.clone())
+                .map(|name| host.file_io.files.absolute_path(&name))
+        };
+        let completed = target.as_ref().is_some_and(|target|
+            host.file_io.exports.iter().any(|path| path.eq_ignore_ascii_case(target)));
+        let package_bytes = target.as_ref().filter(|_| completed)
+            .and_then(|target| host.file_io.files.bytes(target).ok()).map(<[u8]>::to_vec);
+        WorkbookSaveOutput { completed, saved: host.saved, path: target, package_bytes }
+    });
     let files = host.file_io.produced_files(&files_before);
     let deleted_files = host.file_io.files.deleted_files(&files_before);
     host.flush_workbook_output();
@@ -44512,6 +44580,7 @@ fn execute_workbook_invocation(
         active_workbook,
         workbook_closed,
         workbook_selection,
+        save,
     })
 }
 
@@ -44627,6 +44696,155 @@ mod tests {
         let third = saved_state_run(acknowledged.workbook, &edited, "SavedStateProbe.Probe",
             &package, None, &mut session);
         saved_state_expect(&third, "True|3");
+    }
+
+
+    fn saved_state_native_save(book: Workbook, source: &str, package: &[u8],
+        copy_name: Option<&str>, session: &mut Option<ProjectSessionState>) -> RunOutcome {
+        let mut context = failure_context();
+        context.file_context = Some(file_io::FileContext { package_bytes:Some(package.to_vec()),
+            full_name:Some(r"C:\saved-state.xlsm".into()), ..Default::default() });
+        execute_workbook_invocation(book, source, VbaInvocation { procedure:None, args:vec![],
+            action:Some(ExternalObjectAction::SaveWorkbook { copy_name:copy_name.map(str::to_string) }) },
+            0, context, session).unwrap()
+    }
+
+    #[test]
+    fn saved_state_native_save_keeps_storage_and_publishes_saved_bytes() {
+        let (package, source, book) = saved_state_package();
+        let mut session = None;
+        let first = saved_state_run(book, &source, "SavedStateProbe.Probe", &package, Some(0), &mut session);
+        saved_state_expect(&first, "True|1");
+        let dirty = saved_state_run(first.workbook, &source, "SavedStateProbe.SameValue",
+            &package, Some(0), &mut session);
+        let saved = saved_state_native_save(dirty.workbook, &source, &package, None, &mut session);
+        assert!(saved.error.is_none(), "{:?}", saved.error.as_ref().map(|error| &error.message));
+        let output = saved.save.as_ref().unwrap();
+        assert!(output.completed && output.saved);
+        let bytes = output.package_bytes.as_ref().unwrap();
+        assert_eq!(session.as_ref().unwrap().host.file_io.files.bytes(r"C:\saved-state.xlsm").unwrap(), bytes);
+        let second = saved_state_run(saved.workbook, &source, "SavedStateProbe.Probe", bytes, Some(0), &mut session);
+        saved_state_expect(&second, "True|2");
+    }
+
+    fn saved_state_event_package(cancel: bool) -> (Vec<u8>, String, Workbook) {
+        let (package, source, _) = saved_state_package();
+        let source: String = oxivba_core::parser::source_modules(&source).into_iter().map(|mut module| {
+            if module.named.as_deref() == Some("ThisWorkbook") {
+                module.text.push_str(&format!("\nPrivate Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)\n\
+                    Range(\"B1\").Value2 = 11\n{}End Sub\n\
+                    Private Sub Workbook_AfterSave(ByVal Success As Boolean)\n\
+                    If Success Then Range(\"C1\").Value2 = 77\nEnd Sub\n",
+                    if cancel { "Cancel = True\n" } else { "" }));
+            }
+            module.text
+        }).collect();
+        let package = crate::vba_project::write_project_source(&package, &source, None).unwrap();
+        let source = crate::vba_project::read_project_source_with_code_page(&package, None).unwrap().unwrap();
+        let book = oxicells_core::parse_xlsx(&package).unwrap();
+        (package, source, book)
+    }
+
+    #[test]
+    fn saved_state_native_save_exports_pre_after_save_bytes_and_honors_cancellation() {
+        for cancel in [false, true] {
+            let (package, source, book) = saved_state_event_package(cancel);
+            let mut session = None;
+            let first = saved_state_run(book, &source, "SavedStateProbe.Probe", &package, Some(0), &mut session);
+            let saved = saved_state_native_save(first.workbook, &source, &package, None, &mut session);
+            assert!(saved.error.is_none(), "{:?}", saved.error.as_ref().map(|error| &error.message));
+            let output = saved.save.as_ref().unwrap();
+            assert_eq!(output.completed, !cancel);
+            assert!(!output.saved, "BeforeSave or AfterSave left an unsaved edit");
+            assert!(matches!(failure_cell(&saved.workbook.sheets[0],1,1).unwrap().value, CellValue::Number(value) if value == 11.0));
+            if cancel {
+                assert!(output.package_bytes.is_none());
+                assert_eq!(session.as_ref().unwrap().host.file_io.package.as_ref().unwrap(), &package);
+            } else {
+                assert!(matches!(failure_cell(&saved.workbook.sheets[0],1,2).unwrap().value, CellValue::Number(value) if value == 77.0));
+                let persisted = oxicells_core::parse_xlsx_preserving_values(output.package_bytes.as_ref().unwrap()).unwrap();
+                assert!(matches!(failure_cell(&persisted.sheets[0],1,1).unwrap().value, CellValue::Number(value) if value == 11.0));
+                assert!(failure_cell(&persisted.sheets[0],1,2).is_none_or(|cell| matches!(cell.value, CellValue::Empty)));
+            }
+            let next = saved_state_run(saved.workbook, &source, "SavedStateProbe.Probe", &package, Some(0), &mut session);
+            saved_state_expect(&next, "False|2");
+        }
+    }
+
+    #[test]
+    fn saved_state_native_save_copy_keeps_original_save_status_and_package() {
+        for clean in [false, true] {
+            let (package, source, book) = saved_state_package();
+            let mut session = None;
+            let first = saved_state_run(book, &source, "SavedStateProbe.Probe", &package, Some(0), &mut session);
+            let book = if clean { first.workbook } else {
+                saved_state_run(first.workbook, &source, "SavedStateProbe.SameValue",
+                    &package, Some(0), &mut session).workbook
+            };
+            let copied = saved_state_native_save(book, &source, &package, Some("saved-state-copy.xlsm"), &mut session);
+            assert!(copied.error.is_none(), "{:?}", copied.error.as_ref().map(|error| &error.message));
+            let output = copied.save.as_ref().unwrap();
+            assert!(output.completed);
+            assert_eq!(output.saved, clean);
+            assert!(output.package_bytes.is_some());
+            assert_eq!(session.as_ref().unwrap().host.file_io.package.as_ref().unwrap(), &package);
+            let next = saved_state_run(copied.workbook, &source, "SavedStateProbe.Probe", &package, Some(0), &mut session);
+            saved_state_expect(&next, if clean { "True|2" } else { "False|2" });
+        }
+    }
+
+    #[test]
+    fn saved_state_switching_workbooks_keeps_pending_editor_history() {
+        let a = "Attribute VB_Name = \"Driver\"\n\
+            Public Function Probe() As String\nStatic count As Long\ncount = count + 1\n\
+            Probe = CStr(ThisWorkbook.Saved) & \"|\" & CStr(count)\nEnd Function\n\
+            Public Sub AssumeSaved()\nThisWorkbook.Saved = True\nEnd Sub\n";
+        let b = "Attribute VB_Name = \"Driver\"\nPublic Sub EmptyProbe()\nEnd Sub\n";
+        let (opened, mut session, source) = close_fixture_session(a, b, "A.xlsm", "B.xlsm", "");
+        let root = session.as_ref().unwrap().host.objects.owner.to_string();
+        let peer = opened.other_workbooks.iter().find(|book| book.name == "B.xlsm").unwrap().identity.clone();
+        let marked = close_fixture_run(opened.workbook, &source, "Driver.AssumeSaved", vec![], "A.xlsm", &mut session);
+        let _ = select_session_workbook_with_revision(&mut session, &peer, marked.workbook, 0, Some(1)).unwrap();
+        let selected = select_session_workbook(&mut session, &root).unwrap();
+        assert!(!selected.selected.saved);
+        let next = close_fixture_run(selected.selected.workbook, &source, "Driver.Probe", vec![], "A.xlsm", &mut session);
+        saved_state_expect(&next, "False|1");
+    }
+
+
+    #[test]
+    fn saved_state_native_save_handles_macro_free_workbooks() {
+        let (package, _, _) = saved_state_package();
+        let package = crate::vba_project::convert_workbook_format(&package, 51, None).unwrap();
+        let book = oxicells_core::parse_xlsx(&package).unwrap();
+        let mut session = None;
+        let saved = saved_state_native_save(book, "", &package, None, &mut session);
+        assert!(saved.error.is_none(), "{:?}", saved.error.as_ref().map(|error| &error.message));
+        let result = saved.save.as_ref().unwrap();
+        assert!(result.completed && result.saved);
+        assert!(crate::vba_project::read_project_source_with_code_page(result.package_bytes.as_ref().unwrap(),None).unwrap().is_none());
+    }
+
+    #[test]
+    fn saved_state_native_save_retains_source_profile_independently_of_host_ansi() {
+        let (seed, source, _) = saved_state_package();
+        let source = source + "\n' \u{65e5}\u{672c}\u{8a9e} source profile\n";
+        let package = crate::vba_project::write_project_source(&seed, &source, Some(932)).unwrap();
+        let source = crate::vba_project::read_project_source_with_code_page(&package,Some(932)).unwrap().unwrap();
+        let book = oxicells_core::parse_xlsx(&package).unwrap();
+        let mut context = failure_context();
+        context.host_ansi_code_page = Some(AnsiCodePage::Western);
+        context.file_context = Some(file_io::FileContext { package_bytes:Some(package.clone()),
+            full_name:Some(r"C:\saved-state.xlsm".into()), source_code_page:Some(932), ..Default::default() });
+        let mut session = None;
+        let first = execute_workbook_action_in_session(book,&source,Some("SavedStateProbe.Probe"),vec![],0,context,&mut session).unwrap();
+        assert!(first.error.is_none());
+        saved_state_expect(&first,"True|1");
+        let saved = saved_state_native_save(first.workbook,&source,&package,None,&mut session);
+        assert!(saved.error.is_none(),"{:?}",saved.error.as_ref().map(|error|&error.message));
+        let text = crate::vba_project::read_project_source_with_code_page(
+            saved.save.as_ref().unwrap().package_bytes.as_ref().unwrap(),Some(932)).unwrap().unwrap();
+        assert!(text.contains("\u{65e5}\u{672c}\u{8a9e} source profile"));
     }
 
     fn standard_module_shadow_run(body: &str) -> RunOutcome {

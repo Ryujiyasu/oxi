@@ -4,14 +4,14 @@ const ready = init();
 const project = ready.then(() => new SpreadsheetVbaSession());
 
 self.addEventListener('message', async event => {
-    const { workbook, source, procedure, args, activeSheet, fileName, options, packageBytes, reference, member, callKind, references, workbookIdentity, action = 'run' } = event.data;
+    const { workbook, source, procedure, args, activeSheet, fileName, options, packageBytes, reference, member, callKind, references, workbookIdentity, editRevision, copyName, action = 'run' } = event.data;
     try {
         await ready;
         const session = await project;
         if (action === 'select-workbook') {
             if (typeof workbookIdentity !== 'string') throw new Error('Invalid workbook identity.');
             const selection = workbook === undefined ? session.select_workbook(workbookIdentity)
-                : session.select_workbook_with_edits(workbookIdentity, workbook, activeSheet);
+                : session.select_workbook_with_edits(workbookIdentity, workbook, activeSheet, editRevision);
             self.postMessage({ ok: true, selection });
             return;
         }
@@ -41,7 +41,7 @@ self.addEventListener('message', async event => {
             self.postMessage({ ok: compilation.compiled, compilation, error: compilation.error?.message });
             return;
         }
-        if (!['run', 'save', 'invoke', 'release', 'release-all'].includes(action)) throw new Error('Invalid VBA worker action.');
+        if (!['run', 'save', 'save-workbook', 'invoke', 'release', 'release-all'].includes(action)) throw new Error('Invalid VBA worker action.');
         if (action === 'invoke' && (typeof reference !== 'string' || typeof member !== 'string'
             || !Number.isSafeInteger(callKind))) throw new Error('Invalid VBA member invocation.');
         if (action === 'release' && (!Array.isArray(references)
@@ -51,9 +51,12 @@ self.addEventListener('message', async event => {
         const calculationSource = action === 'save' && !source.trim() && inputPackage
             ? spreadsheet_vba_source(inputPackage, projectSourceCodePage) || '' : source;
         if (inputPackage) {
-            runtimeOptions.fileContext = { ...runtimeOptions.fileContext, packageBytes: inputPackage };
+            runtimeOptions.fileContext = { ...runtimeOptions.fileContext, packageBytes: inputPackage,
+                ...(projectSourceCodePage != null ? { sourceCodePage: projectSourceCodePage } : {}) };
         }
-        const execution = action === 'invoke'
+        const execution = action === 'save-workbook'
+            ? session.save_workbook(workbook, source, activeSheet, fileName, runtimeOptions, copyName)
+            : action === 'invoke'
             ? session.invoke_member(workbook, source, { reference, member, kind: callKind, args }, activeSheet, fileName, runtimeOptions)
             : action === 'release'
             ? session.release_objects(workbook, references, activeSheet, fileName, runtimeOptions)
