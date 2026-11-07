@@ -51502,6 +51502,91 @@ End Function
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
+
+    #[test]
+    fn named_index_default_calls_keep_native_type_specific_compile_errors() {
+        let cases = [
+            ("typed", "Areas", "collection(Index:=2)", None),
+            ("object", "Object", "collection(Index:=2)", Some("\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}")),
+            ("variant", "Variant", "collection(Index:=2)", Some("\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{306f}\u{4f7f}\u{3048}\u{307e}\u{305b}\u{3093}\u{3002}")),
+            ("variant_positional", "Variant", "collection(2)", None),
+            ("variant_item_named", "Variant", "collection.Item(Index:=2)", None),
+        ];
+        for (name, declaration, call, message) in cases {
+            let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function Probe() As String
+ Dim collection As {declaration}
+ Dim selected As Range
+ On Error GoTo Failed
+ Set collection = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7").Areas
+ Set selected = {call}
+ Probe = "OK|" & selected.Address
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number)
+End Function
+"#);
+            let control = execute_workbook_vba(workbook(), &source,
+                "NamedDefaultProbe.Control", vec![], 0, failure_context()).unwrap();
+            assert!(control.error.is_none(), "{name}: uncalled invalid procedure must stay uncompiled");
+            assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready", "{name}");
+            let outcome = execute_workbook_vba(workbook(), &source,
+                "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+            if let Some(message) = message {
+                let error = outcome.error.as_ref().expect(name);
+                assert_eq!(error.kind, "compile", "{name}: {}", error.message);
+                assert!(error.message.ends_with(message), "{name}: {}", error.message);
+            } else {
+                assert!(outcome.error.is_none(), "{name}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], "OK|$F$6:$G$7", "{name}");
+            }
+            assert!(!outcome.workbook_changed, "{name}");
+            assert!(outcome.debug_output.is_empty() && outcome.messages.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn named_index_arrays_fail_at_compile_time_and_keep_positional_indices() {
+        for (name, declaration, seed, index) in [
+            ("typed", "Dim collection(1 To 2) As Long", "collection(1) = 5\n collection(2) = 7", 2),
+            ("variant", "Dim collection As Variant", "collection = Array(5,7)", 1),
+        ] {
+            for named in [true, false] {
+                let argument = if named { format!("Index:={index}") } else { index.to_string() };
+                let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function Probe() As String
+ {declaration}
+ {seed}
+ Probe = CStr(collection({argument}))
+End Function
+"#);
+                let control = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Control", vec![], 0, failure_context()).unwrap();
+                assert!(control.error.is_none(), "{name}: uncalled invalid procedure must stay uncompiled");
+                assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready", "{name}");
+                let outcome = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+                if named {
+                    let error = outcome.error.as_ref().expect(name);
+                    assert_eq!(error.kind, "compile", "{name}: {}", error.message);
+                    assert!(error.message.ends_with("\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{306f}\u{4f7f}\u{3048}\u{307e}\u{305b}\u{3093}\u{3002}"), "{name}: {}", error.message);
+                } else {
+                    assert!(outcome.error.is_none(), "{name}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+                    assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], "7", "{name}");
+                }
+                assert!(!outcome.workbook_changed, "{name}");
+            }
+        }
+    }
+
     #[test]
     fn on_demand_declared_types_fail_before_side_effects() {
         for name in ["MissingType", "A"] {

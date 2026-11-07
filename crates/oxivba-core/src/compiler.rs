@@ -53,6 +53,7 @@ pub enum CompileErrorKind {
     CircularModuleReference,
     WrongNumberOfArguments,
     NamedArgumentNotFound,
+    NamedArgumentsNotAllowed,
     NamedArgumentAlreadySpecified,
     InheritedMemberIdentifier,
     InvalidNewUse,
@@ -257,6 +258,8 @@ impl CompileError {
             (CompileErrorKind::NamedArgumentAlreadySpecified, ErrorLanguage::Japanese) => "その名前付き引数は、既に指定されています。",
             (CompileErrorKind::WrongNumberOfArguments, ErrorLanguage::English) => "Wrong number of arguments or invalid property assignment",
             (CompileErrorKind::WrongNumberOfArguments, ErrorLanguage::Japanese) => "引数の数が一致していません。または不正なプロパティを指定しています。",
+            (CompileErrorKind::NamedArgumentsNotAllowed, ErrorLanguage::English) => "Named arguments not allowed",
+            (CompileErrorKind::NamedArgumentsNotAllowed, ErrorLanguage::Japanese) => "\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{306f}\u{4f7f}\u{3048}\u{307e}\u{305b}\u{3093}\u{3002}",
             (CompileErrorKind::NamedArgumentNotFound, ErrorLanguage::English) => "Named argument not found",
             (CompileErrorKind::NamedArgumentNotFound, ErrorLanguage::Japanese) => "名前付き引数が見つかりません。",
             (CompileErrorKind::UserDefinedTypeNotDefined, ErrorLanguage::English) => "User-defined type not defined",
@@ -2597,6 +2600,26 @@ impl<'a> Checker<'a> {
         self.source_signature(target, write)
     }
 
+    fn named_index_argument_error(&self, target: &Expr, args: &[Argument]) -> Option<CompileErrorKind> {
+        if !args.iter().any(|argument| argument.name.is_some()) {
+            return None;
+        }
+        let name = bare_name(target)?;
+        if !self.variables.contains_key(&key(name))
+            || self.source_signature(target, false).ok().flatten().is_some()
+        {
+            return None;
+        }
+        // These parentheses index a declared variable, rather than calling a
+        // named procedure/member. Run and explicit Compile reject named indices
+        // with the same type-specific diagnostic before evaluating the body.
+        match self.infer(target) {
+            Type::Object => Some(CompileErrorKind::NamedArgumentNotFound),
+            Type::Variant | Type::Array(_) => Some(CompileErrorKind::NamedArgumentsNotAllowed),
+            _ => None,
+        }
+    }
+
     fn call_parameters(&self, target: &Expr) -> Option<Vec<Param>> {
         let find = |module: &Module, name: &str| {
             module.items.iter().find_map(|item| match item {
@@ -3040,6 +3063,12 @@ impl<'a> Checker<'a> {
                 && self.expression_module(part).is_some() {
                 failure = Some(self.failure(CompileErrorKind::ModuleNotValue, part.span()));
                 return;
+            }
+            if let Expr::Index { target, args, .. } = part {
+                if let Some(kind) = self.named_index_argument_error(target, args) {
+                    failure = Some(self.failure(kind, part.span()));
+                    return;
+                }
             }
             if self.known_types.is_some() {
                 if let Expr::Index { target, args, .. } = part {
