@@ -9128,7 +9128,14 @@ cells={} pitch={:.2} text={:?}",
                 let glyph_chars: Vec<_> = text.chars().collect();
                 let advances: Vec<_> = glyph_chars.iter().copied().map(|ch| {
                     let metrics = self.metrics_for_char_in(ch, true, &run.style, &para.style);
-                    let advance = self.registry.vertical_advance_pt(&metrics.family, ch, fs);
+                    // OXI_VERT_HALFWIDTH_SIDEWAYS: a half-width form runs sideways.
+                    let advance = if ('\u{FF61}'..='\u{FF9F}').contains(&ch)
+                        && !crate::env_flag!("OXI_VERT_HALFWIDTH_SIDEWAYS_DISABLE")
+                    {
+                        Some(metrics.char_width_em(ch) * fs)
+                    } else {
+                        self.registry.vertical_advance_pt(&metrics.family, ch, fs)
+                    };
                     (metrics, advance)
                 }).collect();
                 if advances.iter().any(|(_, advance)| advance.is_some()) || char_grid_active {
