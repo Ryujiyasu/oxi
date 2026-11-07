@@ -5772,7 +5772,8 @@ impl<'a> WorkbookHost<'a> {
             return Ok(Some(if name.eq_ignore_ascii_case("countlarge") {
                 Value::LongLong(total as i64)
             } else {
-                Value::Integer(total as i64)
+                Value::Integer(i64::from(i32::try_from(total)
+                    .map_err(|_| host_error(6, "Range.Count overflows Long"))?))
             }));
         }
         // Excel answers for the FIRST block where a many-block range has to
@@ -51594,6 +51595,23 @@ End Function
                     expected.to_string(), "{access} ({index})");
                 assert!(!outcome.workbook_changed, "{access} ({index})");
             }
+        }
+    }
+
+    #[test]
+    fn multi_area_count_checks_long_overflow_for_object_receivers() {
+        for (query, large) in [
+            ("A1:XFD131072,A1", "2147483649"),
+            ("A:XFD,A:XFD", "34359738368"),
+        ] {
+            let source = format!("Attribute VB_Name = \"CountBoundary\"\nPublic Function Probe() As String\n Dim query As Object\n Dim large As Variant\n Dim small As Variant\n On Error GoTo Failed\n Set query = Range(\"{query}\")\n large = query.CountLarge\n small = query.Count\n Probe = \"unexpected success\"\n Exit Function\nFailed:\n Probe = CStr(Err.Number) & \"|\" & CStr(large) & \"|\" & TypeName(large) & \"|\" & CStr(VarType(large))\nEnd Function\n");
+            let outcome = execute_workbook_vba(workbook(), &source, "CountBoundary.Probe",
+                vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{query}: {}",
+                outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                format!("6|{large}|LongLong|20"), "{query}");
+            assert!(!outcome.workbook_changed, "{query}");
         }
     }
 
