@@ -520,7 +520,7 @@ import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
                row_height_px, spreadsheet_vba_source } from './oxidocs_wasm.js';
 // A macro runs in a worker: the interpreter is free to take as long as the
 // macro asks for without the grid stopping being drawable meanwhile.
-import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, compileVbaInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
+import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, saveVbaWorkbookInWorker, compileVbaInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
 import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-settings.js';
 import * as vbaProjectApi from './oxidocs_wasm.js';
 // The row model is the renderer's own, written out once in JS: what the grid
@@ -733,6 +733,10 @@ let macroProjectSource = '';
 let macroSourceBound = false;
 let macroSourceBaseline = '';
 let macroSourceDirty = false;
+let macroEditRevision = 0;
+let macroSavedEditRevision = 0;
+let macroSaveBusy = false;
+
 let macroSourceRevision = 0;
 let savedCalculation = { mode: 'auto', on_save: true };
 // One entry per cell that has been changed, keyed by sheet/row/column so
@@ -3249,6 +3253,7 @@ const DEPTH = 100;
 
 /** Run `what` so that everything it writes can be undone in one go. */
 function change(what) {
+  if (macroSaveBusy) return;
   if (step) { what(); return; }   // already inside a step: do not nest
   step = {
     sheet: shown, cells: [], columns: [], lines: [], panes: [], books: [], merges: [],
@@ -3262,6 +3267,8 @@ function change(what) {
   if (built.cells.length === 0 && built.columns.length === 0
     && built.lines.length === 0 && built.panes.length === 0
     && built.books.length === 0 && built.merges.length === 0) return;
+  macroEditRevision++;
+  markSaved();
   // Whatever was marked for a cut is no longer what the clipboard holds.
   if (cutFrom) cutFrom = null;
   recompute();
@@ -3355,17 +3362,23 @@ function restore(built, side) {
 }
 
 function undo() {
+  if (macroSaveBusy) return;
   const built = undone.pop();
   if (!built) return;
   restore(built, 'was');
+  macroEditRevision++;
+  markSaved();
   redone.push(built);
   markSteps();
 }
 
 function redo() {
+  if (macroSaveBusy) return;
   const built = redone.pop();
   if (!built) return;
   restore(built, 'now');
+  macroEditRevision++;
+  markSaved();
   undone.push(built);
   markSteps();
 }
@@ -4336,79 +4349,75 @@ function calculationPendingSave() {
 
 function markSaved() {
   if (!saveButton) return;
+  if (!book) { saveButton.disabled = true; return; }
   const count = changes.size;
   // A column's width and a cell's formatting are changes with no cell value
   // behind them, so counting values alone would leave the button dark with
   // work outstanding.
-  saveButton.disabled = count === 0 && !beyondValues && !macroSourceDirty && !calculationPendingSave();
+  saveButton.disabled = macroSaveBusy || (count === 0 && !beyondValues && !macroSourceDirty && !calculationPendingSave() && macroEditRevision === macroSavedEditRevision);
   saveButton.textContent = count === 0 ? t('save') : t('saveSome')(count);
 }
 
 async function save() {
-  // A style, a merge, a column's width: each is a change with no cell value
-  // behind it. The button already knows to light up for those, so the save
-  // has to agree, or it goes dark again having written nothing.
-  if (!source || (changes.size === 0 && !beyondValues && !macroSourceDirty && !calculationPendingSave())) return;
+  if (!source || !book || macroSaveBusy) return;
+  if (editor) commit();
+  if (changes.size === 0 && !beyondValues && !macroSourceDirty && !calculationPendingSave()
+      && macroEditRevision === macroSavedEditRevision) return;
+  const originalSource = source;
+  const submittedRevision = macroEditRevision;
+  const sourceRevision = macroSourceRevision;
+  const options = macroRuntimeOptions();
+  const saveSource = macroSourceBound ? macroSource.value
+    : getVbaSourceForSave(macroProjectSource) || spreadsheet_vba_source(source, options.projectSourceCodePage) || '';
+  macroSaveBusy = true;
   saveButton.disabled = true;
   saveButton.textContent = t('saving');
-  const originalSource = source;
-  const sourceRevision = macroSourceRevision;
-  let sourceData = source;
-  let submittedSource;
+  const gridWasInert = sheetBox.inert;
+  sheetBox.inert = true;
+  const endVbaOperation = macroEditorSettings.beginOperation();
   try {
-    if (macroProjectSource || /\.xlsm$/i.test(fileName) || book.calculation?.mode === 'manual' || book.calculation?.mode === 'autoNoTable'
-        || book.calculation?.on_save === false) {
-      const endVbaOperation = macroEditorSettings.beginOperation();
-      try {
-        const saveSource = macroSourceBound ? macroSource.value : getVbaSourceForSave(macroProjectSource);
-        submittedSource = saveSource;
-        if (macroSourceBound) sourceData = save_spreadsheet_vba_source(source, saveSource, macroEditorSettings.options().hostAnsiCodePage);
-        const prepared = await prepareVbaSaveInWorker(book, saveSource, shown, fileName, macroEditorSettings.options(), source);
-        if (source !== originalSource) return;
-        applyMacroExecution(prepared);
-        if (macroSourceRevision === sourceRevision) macroProjectSource = saveSource;
-      } catch (error) {
-        if (error?.execution) applyMacroExecution(error.execution);
-        throw error;
-      } finally { endVbaOperation(); }
-      beyondValues = true;
+    const execution = await saveVbaWorkbookInWorker(book, saveSource, shown, fileName, options, source);
+    if (source !== originalSource) return;
+    applyMacroExecution(execution);
+    if (!execution.save?.completed) {
+      if (execution.error) throw new Error(execution.error.message);
+      sayMacro('Save cancelled.');
+      return;
     }
-    // Values alone go by the narrow path, which patches only the cells named.
-    // Once formatting has moved, the whole workbook has to cross, because a
-    // list of values has nowhere to say what a cell should look like.
-    const written = beyondValues
-      ? edit_xlsx_from_workbook(sourceData, book)
-      : edit_xlsx(sourceData, [...changes.values()]);
-    const extension = vbaWorkbookExtension(fileName, book, macroSourceBound);
-    const blob = new Blob([written], {
-      type: vbaWorkbookMimeType(extension),
-    });
+    if (!execution.save.package_bytes) throw new Error('The saved file is not available.');
+    const written = new Uint8Array(execution.save.package_bytes);
+    const outputName = execution.save.path?.split(/[\\\\/]/).pop() || fileName || 'workbook';
+    const extension = vbaWorkbookExtension(outputName, book, macroSourceBound);
+    const blob = new Blob([written], { type: vbaWorkbookMimeType(extension) });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = fileName.replace(/\.(?:xls[xm]|xlt[xm])$/i, '') + '-edited.' + extension;
+    link.download = outputName.replace(/\.(?:xls[xm]|xlt[xm])$/i, '') + '-edited.' + extension;
     link.click();
     URL.revokeObjectURL(link.href);
-    // What was saved is now what the file holds: the next save starts from
-    // the bytes just written, so two saves in a row do not send the first
-    // batch of edits twice.
-    source = written;
-    if (macroSourceBound && submittedSource !== undefined) {
-      macroSourceBaseline = submittedSource;
-      macroSourceDirty = macroSource.value !== macroSourceBaseline;
+    if (book && source) {
+      source = written;
+      if (macroSourceRevision === sourceRevision) macroProjectSource = saveSource;
+      if (macroSourceBound) {
+        macroSourceBaseline = saveSource;
+        macroSourceDirty = macroSource.value !== macroSourceBaseline;
+      }
+      macroSavedEditRevision = submittedRevision;
+      savedCalculation = { mode: book.calculation?.mode ?? 'auto', on_save: book.calculation?.on_save ?? true };
+      changes.clear();
+      pristine.clear();
+      beyondValues = !execution.save.saved || macroEditRevision !== submittedRevision;
     }
-    savedCalculation = { mode: book.calculation?.mode ?? 'auto', on_save: book.calculation?.on_save ?? true };
-  // Saving is the sign that someone is using this for real work, which is
-  // what the rating card waits for. It is counted in one place for all three
-  // editors; nothing is sent by saying so.
-  window.dispatchEvent(new Event('oxi:saved'));
-    changes.clear();
-    pristine.clear();
-    beyondValues = false;
-    markSaved();
+    const closed = execution.workbook_closed && execution.error?.kind === 'terminated';
+    sayMacro(reportMacro(execution), !!execution.error && !closed);
+    window.dispatchEvent(new Event('oxi:saved'));
   } catch (error) {
-    markSaved();
     stateBox.style.display = 'block';
-    stateBox.textContent = `Oxi could not save: ${error}`;
+    stateBox.textContent = `Oxi could not save: ${error?.message || error}`;
+  } finally {
+    endVbaOperation();
+    sheetBox.inert = gridWasInert;
+    macroSaveBusy = false;
+    markSaved();
   }
 }
 
@@ -4693,6 +4702,7 @@ function edit(seed) {
 // is a number: `12` right-aligns, `12a` does not, and for most people that is
 // the only sign a column will add up.
 function put(row, col, text, style, runFontField = null) {
+  if (macroSaveBusy) return;
   const sheet = sheetNow();
   if (!sheet) return;
   const holding = heldAt(row, col);
@@ -4719,6 +4729,8 @@ function put(row, col, text, style, runFontField = null) {
   const nowStyle = style === undefined ? wasStyle : style;
   const runChange = runFontField && holding?.runs?.some(run => run.text
     && Boolean(run.dressed ? run[runFontField] : wasStyle[runFontField]) !== !!nowStyle[runFontField]);
+  macroEditRevision++;
+  markSaved();
   if (before === text && sameStyle(wasStyle, nowStyle) && !runChange) return;
   const delta = { row, col, was: before, now: text, wasStyle, nowStyle };
   if (style !== undefined && holding?.runs?.length) delta.wasRuns = structuredClone(holding.runs);
@@ -5244,6 +5256,8 @@ document.addEventListener('keydown', (event) => {
 let opened = 0;
 
 async function open(data, name) {
+  macroEditRevision = 0;
+  macroSavedEditRevision = 0;
   opened += 1;
   try {
     source = new Uint8Array(data).slice();
@@ -5376,9 +5390,15 @@ const macroEditorSettings = bindVbaEditorSettings({
 });
 
 
+function macroRuntimeOptions() {
+  const options = macroEditorSettings.options();
+  return { ...options, fileContext: { ...options.fileContext, editRevision: macroEditRevision } };
+}
+
 function captureMacroWorkbookView() {
   document.activeElement?.blur();
-  return {workbook: book, activeSheet: shown, view: {
+  return {workbook: book, activeSheet: shown, editRevision: macroEditRevision, view: {
+    editRevision: macroEditRevision, savedEditRevision: macroSavedEditRevision,
     bytes: source, bound: macroSourceBound, baseline: macroSourceBaseline,
     savedCalculation, cell: {...at}, procedure: macroProc.value, args: macroArgs.value,
   }};
@@ -5392,6 +5412,8 @@ function applyMacroWorkbookView(selection, previous) {
   source = bytes;
   fileName = selected.name;
   book = selected.workbook;
+  macroEditRevision = previous?.editRevision ?? 0;
+  macroSavedEditRevision = selected.saved ? macroEditRevision : (previous?.savedEditRevision ?? -1);
   shown = selected.active_sheet;
   macroProjectSource = selected.source;
   macroSourceBound = previous?.bound ?? typeof originalSource === 'string';
@@ -5415,7 +5437,7 @@ function applyMacroWorkbookView(selection, previous) {
 
 macroWorkbookPicker = bindVbaWorkbookPicker(document.getElementById('macroWorkbook'), {
   capture: captureMacroWorkbookView, apply: applyMacroWorkbookView,
-  busy: () => macroRun.disabled || macroCompile.disabled,
+  busy: () => macroSaveBusy || macroRun.disabled || macroCompile.disabled,
   report: sayMacro,
 });
 
@@ -5554,6 +5576,7 @@ macroSource.addEventListener('input', () => {
   macroSourceBeforeInput = undefined;
   macroProjectSource = macroSource.value;
   macroSourceRevision++;
+  macroEditRevision++;
   macroSourceDirty = macroSourceBound && macroProjectSource !== macroSourceBaseline;
   markSaved();
 });
@@ -5578,7 +5601,7 @@ macroRun.onclick = async () => {
       parseVbaArguments(macroArgs.value),
       shown,
       fileName,
-      macroEditorSettings.options(),
+      macroRuntimeOptions(),
       source,
     );
     macroProjectSource = submittedSource;

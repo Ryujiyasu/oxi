@@ -11,6 +11,10 @@ pub(super) struct FileContext {
     pub package_bytes: Option<Vec<u8>>,
     pub full_name: Option<String>,
     pub read_only: Option<bool>,
+    /// Monotonic host editor revision, including edits restored to their old values.
+    pub edit_revision: Option<u64>,
+    /// Source decoding profile used when the editor loaded this package.
+    pub source_code_page: Option<u16>,
     pub folders: Vec<String>,
     pub files: Vec<ProducedFile>,
 }
@@ -76,6 +80,8 @@ pub(super) struct WorkbookFiles {
     pub shared_cell_edits: Vec<SharedCellEdit>,
     pub shared_format_ids: BTreeMap<String,u32>,
     pub source: String,
+    pub edit_revision: Option<u64>,
+    pub source_code_page: Option<u16>,
     pub files: Files,
     pub exports: BTreeSet<String>,
     mounted_folders: BTreeSet<String>,
@@ -1178,6 +1184,8 @@ impl WorkbookFiles {
             }
         }
         let Some(context) = context else { return Ok(()); };
+        if let Some(revision) = context.edit_revision { self.edit_revision = Some(revision); }
+        if let Some(page) = context.source_code_page { self.source_code_page = Some(page); }
         // A retained workbook owns its current saved package. Repeated editor
         // bootstrap bytes are a mount, not a reload of pre-SaveAs metadata.
         if self.package.is_none() {
@@ -1241,8 +1249,18 @@ pub(super) fn validate_context_js(options: &JsValue) -> Result<(), JsError> {
     }
     for key in js_sys::Object::keys(&js_sys::Object::from(context.clone())).iter() {
         let key = key.as_string().unwrap_or_default();
-        if !matches!(key.as_str(), "packageBytes" | "fullName" | "readOnly" | "folders" | "files") {
+        if !matches!(key.as_str(), "packageBytes" | "fullName" | "readOnly" | "folders" | "files" | "editRevision" | "sourceCodePage") {
             return Err(JsError::new(&format!("invalid VBA fileContext field {key}")));
+        }
+    }
+    for key in ["editRevision", "sourceCodePage"] {
+        let value = js_sys::Reflect::get(&context, &JsValue::from_str(key))
+            .map_err(|_| JsError::new(&format!("invalid VBA fileContext {key}")))?;
+        if value.is_null() || value.is_undefined() { continue; }
+        let number = value.as_f64().unwrap_or(-1.0);
+        if !js_sys::Number::is_safe_integer(&value) || number < 0.0
+            || key == "sourceCodePage" && !(1.0..=65535.0).contains(&number) {
+            return Err(JsError::new(&format!("invalid VBA fileContext {key}")));
         }
     }
     let files = js_sys::Reflect::get(&context, &JsValue::from_str("files"))
@@ -2027,9 +2045,9 @@ impl WorkbookHost<'_> {
                 .map_err(|_| failure())?;
         }
         if project.is_some() || self.file_io.retained_project.is_some() {
-            let source_code_page = self.automation_code_page.map(|page| match page {
+            let source_code_page = self.file_io.source_code_page.or(self.automation_code_page.map(|page| match page {
                 AnsiCodePage::Japanese => 932, AnsiCodePage::Western => 1252,
-            });
+            }));
             bytes = crate::vba_project::save_workbook_project(&bytes, &self.file_io.source, source_code_page).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
             bytes = crate::vba_project::compact_project_storage(&bytes).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
         }

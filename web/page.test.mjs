@@ -20,10 +20,32 @@
 //! Run with `node web/page.test.mjs`.
 
 import { readFile, writeFile, unlink } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Worker as ThreadWorker } from 'node:worker_threads';
+import { closeVbaProject } from './vba-runner.js';
+import { dirname, join, resolve } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const pkg = resolve(process.argv[2] || here);
+const bindingURL = pathToFileURL(join(pkg, 'oxidocs_wasm.js')).href;
+const shim = `import init,{SpreadsheetVbaSession,spreadsheet_vba_source,spreadsheet_vba_project_name} from ${JSON.stringify(bindingURL)};
+import{readFile}from'node:fs/promises';
+await init({module_or_path:await readFile(${JSON.stringify(join(pkg,'oxidocs_wasm_bg.wasm'))})});
+export{SpreadsheetVbaSession,spreadsheet_vba_source,spreadsheet_vba_project_name};
+export default function ready(){return Promise.resolve();}`;
+const workerSource = (await readFile(join(here,'vba-worker.js'),'utf8'))
+  .replace("'./oxidocs_wasm.js'",JSON.stringify('data:text/javascript;base64,'+Buffer.from(shim).toString('base64')));
+const bridge = `import{parentPort,workerData}from'node:worker_threads';const queued=[];let listener;
+globalThis.self=Object.assign(globalThis,{postMessage:value=>parentPort.postMessage(value),
+ addEventListener:(type,handler)=>{listener=handler;for(const data of queued)listener({data});}});
+parentPort.on('message',data=>listener?listener({data}):queued.push(data));
+await import('data:text/javascript;base64,'+Buffer.from(workerData).toString('base64'));`;
+globalThis.Worker = class BrowserWorker {
+  constructor(){this.thread=new ThreadWorker(new URL('data:text/javascript;base64,'+Buffer.from(bridge).toString('base64')),{workerData:workerSource});}
+  addEventListener(type,handler){this.thread.on(type,value=>handler(type==='message'?{data:value}:value));}
+  postMessage(value){this.thread.postMessage(value);}
+  terminate(){void this.thread.terminate();}
+};
 const page = await readFile(join(here, 'xlsx-demo.html'), 'utf8');
 
 // Which ids the HTML actually declares. Asking for one it has not got is the
@@ -69,11 +91,11 @@ function element(name, id) {
     removeEventListener() {},
     /// Run whatever is listening for `kind`, as the browser would.
     fire(kind, event) {
-      for (const run of this.listeners.get(kind) || []) {
-        run({ preventDefault() {}, stopPropagation() {}, target: this, ...event });
-      }
+      return Promise.all((this.listeners.get(kind) || []).map(run =>
+        run({ preventDefault() {}, stopPropagation() {}, target: this, ...event })));
     },
     appendChild(child) { this.children.push(child); return child; },
+    append(...children) { this.children.push(...children); },
     replaceChildren(...children) { this.children = [...children]; },
     removeChild() {},
     remove() {},
@@ -101,7 +123,7 @@ function element(name, id) {
     scrollIntoView() {},
     focus() {},
     blur() {},
-    click() {},
+    click() { this.clicked = true; if (this.tagName === 'A' && blobUrls.has(this.href)) written.push(blobUrls.get(this.href)); },
     select() {},
     setSelectionRange() {},
     insertAdjacentHTML() {},
@@ -166,17 +188,19 @@ globalThis.Blob = class { constructor(parts, options = {}) { this.parts = parts;
 // The real URL class stays: the wasm glue builds one to find its own binary
 // beside itself. Only the two blob helpers are stood in for.
 // What was handed over is kept: a save writes by making a blob and clicking a
-// link at it, and the blob is the only sign out here that anything was written.
-const written = [];
-URL.createObjectURL = (blob) => { written.push(blob); return 'blob:x'; };
-URL.revokeObjectURL = () => {};
+// link at it. Only a clicked download link counts: macro-produced files can
+// also have available blob URLs without having been downloaded.
+const written = [], blobUrls = new Map();
+let nextBlobUrl = 0;
+URL.createObjectURL = blob => { const url = 'blob:' + (++nextBlobUrl); blobUrls.set(url, blob); return url; };
+URL.revokeObjectURL = url => { blobUrls.delete(url); };
 
 // The page fetches two things — its own wasm and the sample workbook — and the
 // glue checks that what comes back really is a Response before it will stream
 // it, so this hands over a real one.
 globalThis.fetch = async (what) => {
   const name = String(what).split(/[\\/]/).pop();
-  const bytes = await readFile(join(here, name.endsWith('.xlsx') ? 'samples' : '.', name));
+  const bytes = await readFile(name.endsWith('.wasm') ? join(pkg, name) : join(here, name.endsWith('.xlsx') ? 'samples' : '.', name));
   return new Response(bytes, {
     headers: {
       'Content-Type': name.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream',
@@ -186,7 +210,7 @@ globalThis.fetch = async (what) => {
 
 // The script imports the wasm glue by a relative path, so it has to run from
 // beside it rather than from a data URL or a scratch directory.
-const script = /<script[^>]*>([\s\S]*?)<\/script>/.exec(page)[1];
+const script = /<script[^>]*>([\s\S]*?)<\/script>/.exec(page)[1].replaceAll('./oxidocs_wasm.js', bindingURL);
 const under = join(here, '_page_under_test.mjs');
 await writeFile(under, script);
 let broke = null;
@@ -365,35 +389,15 @@ if (bold && saveButton && bold.listeners.has('click')) {
   written.length = 0;
   bold.fire('click', {});
   is('bold alone lights the save button', saveButton.disabled, false);
-  saveButton.fire('click', {});
+  await saveButton.fire('click', {});
   await new Promise((go) => setTimeout(go, 0));
   is('and saving then writes a file', written.length, 1);
 } else {
   is('the page has a bold button and a save button', false, true);
 }
 
-// Drive the actual macro and Save buttons. The DOM has no browser Worker, so
-// its transport shim calls the same real WASM used by the worker integration
-// suite; no workbook result or failure state is fabricated here.
-const realWasm = await import('file://' + join(here, 'oxidocs_wasm.js').replaceAll('\\', '/'));
-globalThis.Worker = class {
-  session = new realWasm.SpreadsheetVbaSession();
-  handlers = new Map();
-  addEventListener(type, handler) { this.handlers.set(type, handler); }
-  terminate() { this.session.free(); }
-  postMessage(data) {
-    queueMicrotask(() => {
-      try {
-        const execution = data.action === 'save'
-          ? this.session.prepare_save(data.workbook, data.source || (data.packageBytes ? realWasm.spreadsheet_vba_source(data.packageBytes) || '' : ''), data.activeSheet, data.fileName, data.options)
-          : this.session.run(data.workbook, data.source, data.procedure, data.args, data.activeSheet, data.fileName, data.options);
-        this.handlers.get('message')({ data: { ok: !execution.error, execution, error: execution.error?.message } });
-      } catch (error) {
-        this.handlers.get('message')({ data: { ok: false, error: error.message } });
-      }
-    });
-  }
-};
+// The complete page and every Save use the actual worker script and WASM.
+const realWasm = await import(bindingURL);
 
 if (picker && picker.onchange && bold && saveButton) {
   const bytes = await readFile(join(here, '..', 'tests', 'fixtures', 'vba', 'named_project_ascii.xlsm'));
@@ -405,12 +409,12 @@ if (picker && picker.onchange && bold && saveButton) {
   written.length = 0;
   made.length = 0;
   bold.fire('click', {});
-  saveButton.fire('click', {});
+  await saveButton.fire('click', {});
   await new Promise(go => setTimeout(go, 0));
   is('the macro workbook is saved', written.length, 1);
-  is('the saved macro workbook keeps its extension', made.find(node => node.tagName === 'A')?.download, 'named_project_ascii-edited.xlsm');
+  is('the saved macro workbook keeps its extension', made.find(node => node.tagName === 'A' && node.clicked)?.download, 'named_project_ascii-edited.xlsm');
   is('and its macro workbook MIME type', written[0]?.type, 'application/vnd.ms-excel.sheet.macroEnabled.12');
-  const wasm = await import('file://' + join(here, 'oxidocs_wasm.js').replaceAll('\\', '/'));
+  const wasm = await import(bindingURL);
   is('the saved macro project remains readable', wasm.spreadsheet_vba_project_name(written[0].parts[0]), 'OxiNamedProject');
 }
 
@@ -426,7 +430,7 @@ async function openMacroFixture() {
   nodes.get('macroArgs').value = '';
   nodes.get('macroProc').value = 'Seed';
   await nodes.get('macroRun').onclick();
-  saveButton.fire('click', {});
+  await saveButton.fire('click', {});
   await new Promise(resolve => setTimeout(resolve, 0));
   written.length = 0;
 }
@@ -440,7 +444,7 @@ for (const [procedure, b1] of [['DivideFailure', 14], ['ManualFailure', 14], ['F
   await nodes.get('macroRun').onclick();
   is(`${procedure}: error enables saving preceding edits`, saveButton.disabled, false);
   is(`${procedure}: error output has no success message`, nodes.get('macroResult').textContent.includes('Completed.'), false);
-  saveButton.fire('click', {});
+  await saveButton.fire('click', {});
   await new Promise(resolve => setTimeout(resolve, 0));
   is(`${procedure}: Save writes a file`, written.length, 1);
   if (written[0]) {
@@ -461,7 +465,7 @@ nodes.get('macroProc').value = 'StatusFailure';
 await nodes.get('macroRun').onclick();
 is('an error without workbook writes preserves existing dirty edits', saveButton.disabled, false);
 is('the output before an error is displayed', nodes.get('macroResult').textContent.includes('status-only'), true);
-saveButton.fire('click', {});
+await saveButton.fire('click', {});
 await new Promise(resolve => setTimeout(resolve, 0));
 is('existing edits remain saveable after the error', written.length, 1);
 if (written[0]) is('existing formatting reaches the saved file', savedCell(realWasm.parse_spreadsheet(written[0].parts[0]), 0)?.style.bold, true);
@@ -491,7 +495,7 @@ async function openSaveFixture(udf) {
   nodes.get('macroSource').value = saveMacroSource;
   nodes.get('macroProc').value = 'Reset'; nodes.get('macroArgs').value = JSON.stringify([udf]);
   await nodes.get('macroRun').onclick();
-  saveButton.fire('click', {});
+  await saveButton.fire('click', {});
   await new Promise(resolve => setTimeout(resolve, 0));
   written.length = 0;
 }
@@ -501,7 +505,7 @@ for (const udf of [false, true]) {
     nodes.get('macroProc').value = 'Configure';
     nodes.get('macroArgs').value = JSON.stringify([-4135, onSave]);
     await nodes.get('macroRun').onclick();
-    saveButton.fire('click', {});
+    await saveButton.fire('click', {});
     await new Promise(resolve => setTimeout(resolve, 0));
     is(`Save UDF=${udf} onSave=${onSave}: writes a file`, written.length, 1);
     if (written[0]) {
@@ -521,7 +525,7 @@ await openSaveFixture(false);
 nodes.get('macroProc').value = 'OnSaveOnly'; nodes.get('macroArgs').value = '[false]';
 await nodes.get('macroRun').onclick();
 is('metadata-only on-save changes remain saveable', saveButton.disabled, false);
-saveButton.fire('click', {});
+await saveButton.fire('click', {});
 await new Promise(resolve => setTimeout(resolve, 0));
 is('metadata-only Save writes a file', written.length, 1);
 if (written[0]) is('metadata-only Save persists calcOnSave', realWasm.parse_spreadsheet(written[0].parts[0]).calculation.on_save, false);
@@ -553,9 +557,10 @@ sourceInput.selectionEnd = sourceInput.selectionStart + 'Twice = amount * 2'.len
 sourceInput.fire('beforeinput', {});
 sourceInput.value = saveMacroSource.replace('Twice = amount * 2', 'Twice = amount * 3');
 sourceInput.fire('input', {});
-saveButton.fire('click', {});
+await saveButton.fire('click', {});
 await new Promise(resolve => setTimeout(resolve, 0));
 is('Save calculates pending editor UDF code without rerunning Configure', written[0] ? savedCell(realWasm.parse_spreadsheet(written[0].parts[0]), 1)?.value : undefined, { Number: 21 });
 
+closeVbaProject();
 console.log(failures === 0 ? '\nthe page loads' : `\n${failures} did not`);
 process.exit(failures === 0 ? 0 : 1);
