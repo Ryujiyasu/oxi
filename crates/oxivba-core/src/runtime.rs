@@ -8477,7 +8477,15 @@ impl<'a> Runtime<'a> {
                                 let indices = evaluated.iter().map(|v| index_from(v, span.line)).collect::<Result<Vec<_>, _>>()?;
                                 Ok(array.values[array_offset(&array, &indices, span.line)?].clone())
                             }
-                            Some(Value::Object(receiver)) => this.host_call(Some(&receiver), "Item", &evaluated, span.line)?.ok_or_else(|| no_such_member(format!("default member is not available: {}.Item", receiver.kind), Some(span.line))),
+                            Some(Value::Object(receiver)) => {
+                                let answer = if args.iter().any(|argument| argument.name.is_some()) {
+                                    let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                                    this.host_call_named(Some(&receiver), "Item", &evaluated, &names, span.line)?
+                                } else {
+                                    this.host_call(Some(&receiver), "Item", &evaluated, span.line)?
+                                };
+                                answer.ok_or_else(|| no_such_member(format!("default member is not available: {}.Item", receiver.kind), Some(span.line)))
+                            }
                             _ => Err(error(RuntimeErrorKind::TypeMismatch, "subscripts on a value that is not an array", Some(span.line))),
                         }
                     });
@@ -8866,7 +8874,11 @@ impl<'a> Runtime<'a> {
 
     fn indexes_procedure_result(&self, procedure: &Procedure, args: &[Argument]) -> bool {
         procedure.params.is_empty() && !args.is_empty()
-            && args.iter().all(|arg| arg.name.is_none())
+            && (args.iter().all(|arg| arg.name.is_none())
+                || procedure.return_type.as_ref().is_some_and(|kind| {
+                    !kind.is_array && self.is_specific_object_type(&kind.name)
+                        && !self.classes.contains_key(&key(&kind.name))
+                }))
             && matches!(procedure.kind, ProcKind::Function | ProcKind::PropertyGet)
             && procedure.return_type.as_ref().is_none_or(|kind| {
                 kind.is_array || matches!(key(&kind.name).as_str(), "variant" | "object")
@@ -8913,8 +8925,13 @@ impl<'a> Runtime<'a> {
                         return Err(no_such_member("the returned class has no default member".into(), line));
                     }
                     let values: Vec<_> = arguments.iter().map(EvaluatedArgument::value).collect();
-                    self.host_call(Some(&object), "Item", &values, line.unwrap_or(0))?
-                        .ok_or_else(|| no_such_member("the returned object has no default member".into(), line))
+                    let answer = if args.iter().any(|argument| argument.name.is_some()) {
+                        let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                        self.host_call_named(Some(&object), "Item", &values, &names, line.unwrap_or(0))?
+                    } else {
+                        self.host_call(Some(&object), "Item", &values, line.unwrap_or(0))?
+                    };
+                    answer.ok_or_else(|| no_such_member("the returned object has no default member".into(), line))
                 }
                 Value::Array(array) => {
                     let indices = arguments.iter().map(|arg| index_from(&arg.value(), line.unwrap_or(0))).collect::<Result<Vec<_>, _>>()?;
