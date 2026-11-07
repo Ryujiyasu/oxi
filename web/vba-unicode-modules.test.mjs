@@ -17,11 +17,13 @@ const liveCases = JSON.parse(await readFile(path.join(fixtures, 'unicode_modules
 // A separate fresh Excel open of unicode_workbook raises 429 because its XML
 // code name remains ThisWorkbook. Preserve the live fixture and assert both
 // contexts. Only the cold failure uses a proxy to transport Err.Number.
+// The detached Japanese class remains separate from the ThisWorkbook document
+// that Excel supplies when it opens the saved file.
 const cases = liveCases.map(item => item.name === 'unicode_workbook' ? {
   ...item, expected: 'error|429', original_procedure: item.procedure,
   procedure: 'NativeColdImportProbe.Probe',
   document_modules: [
-    { name: 'ThisWorkbook', baseType: 'Excel.Workbook', codeName: 'ThisWorkbook', hostOnly: true },
+    { name: 'ThisWorkbook', baseType: 'Excel.Workbook', codeName: 'ThisWorkbook' },
     { name: 'Sheet1', baseType: 'Excel.Worksheet', sheetIndex: 0, codeName: 'Sheet1' },
     { name: '\u65e5\u672c\u8a9e\u53f0\u5e33', baseType: 'Excel.Workbook', unbound: true },
   ],

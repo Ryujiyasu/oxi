@@ -2027,7 +2027,10 @@ impl WorkbookHost<'_> {
                 .map_err(|_| failure())?;
         }
         if project.is_some() || self.file_io.retained_project.is_some() {
-            bytes = crate::vba_project::write_project_source(&bytes, &self.file_io.source, None).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
+            let source_code_page = self.automation_code_page.map(|page| match page {
+                AnsiCodePage::Japanese => 932, AnsiCodePage::Western => 1252,
+            });
+            bytes = crate::vba_project::save_workbook_project(&bytes, &self.file_io.source, source_code_page).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
             bytes = crate::vba_project::compact_project_storage(&bytes).map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
         }
         let retained_project = crate::vba_project::retain_workbook_project(&bytes)

@@ -290,3 +290,43 @@ pub(crate) fn module_source(
         Ok(encoding.decode_without_bom_handling(&bytes).0.into_owned())
     }
 }
+
+/// PROJECTwm maps PROJECT's MBCS names to the Unicode module identities.
+/// A native save can replace an unrepresentable directory ANSI name with '?'
+/// while retaining the original PROJECT/name-map bytes and Unicode identity.
+pub(crate) fn document_module_names(
+    project: &ovba::Project, identities: &[ModuleIdentity], properties: &str,
+) -> std::collections::BTreeSet<String> {
+    fn aliases(project: &ovba::Project) -> Option<std::collections::BTreeMap<String, String>> {
+        let bytes = project.read_stream("/PROJECTwm").ok()?;
+        let encoding = codepage::to_encoding(project.information.code_page)?;
+        let end = bytes.len().checked_sub(2)?;
+        if bytes.get(end..)? != [0, 0] { return None; }
+        let mut at = 0;
+        let mut names = std::collections::BTreeMap::new();
+        while at < end {
+            let ansi_end = at + bytes.get(at..end)?.iter().position(|byte| *byte == 0)?;
+            let ansi = encoding.decode_without_bom_handling_and_without_replacement(&bytes[at..ansi_end])?;
+            let start = ansi_end + 1;
+            let mut finish = start;
+            while bytes.get(finish..finish + 2)? != [0, 0] { finish += 2; }
+            if finish + 2 > end { return None; }
+            let wide = unicode(bytes.get(start..finish)?)?;
+            let key = ansi.to_ascii_lowercase();
+            if names.insert(key, wide.clone()).is_some_and(|old| old != wide) { return None; }
+            at = finish + 2;
+        }
+        (at == end).then_some(names)
+    }
+    // Keep the directory fallback for projects with no usable optional map.
+    let aliases = aliases(project).unwrap_or_default();
+    properties.lines().take_while(|line| !line.starts_with('[')).filter_map(|line| {
+        let name = line.strip_prefix("Document=")?.split_once("/&H")?.0;
+        let mapped = aliases.get(&name.to_ascii_lowercase()).filter(|mapped|
+            identities.iter().any(|identity| identity.name.eq_ignore_ascii_case(mapped)));
+        Some(mapped.map_or_else(|| identities.iter()
+            .find(|identity| identity.declared_name.eq_ignore_ascii_case(name))
+            .map_or_else(|| name.to_ascii_lowercase(), |identity| identity.name.to_ascii_lowercase()),
+            |mapped| mapped.to_ascii_lowercase()))
+    }).collect()
+}

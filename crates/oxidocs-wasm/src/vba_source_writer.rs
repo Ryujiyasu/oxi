@@ -171,6 +171,29 @@ fn filtered_project_name_map(bytes: &[u8], removed: &BTreeSet<String>) -> Result
 /// Update an existing project's source. Document modules can be omitted as
 /// they retain their native identity; omitted ordinary modules are removed.
 pub(crate) fn update_project(project_bytes: &[u8], source: &str, source_code_page: Option<u16>) -> Result<Vec<u8>, String> {
+    update_project_with_workbook_document(project_bytes, source, source_code_page, None)
+}
+
+/// Only the workbook loader may authorize creation of its missing native
+/// component. Ordinary source imports cannot manufacture document modules.
+pub(crate) fn update_project_with_workbook_document(project_bytes: &[u8], source: &str, source_code_page: Option<u16>, workbook_document: Option<&str>) -> Result<Vec<u8>, String> {
+    update_project_inner(project_bytes, source, source_code_page, workbook_document, false)
+}
+
+/// Insert a loader-created component without interpreting or replacing any
+/// existing module's source, including bytes from a different host code page.
+pub(crate) fn insert_workbook_document(project_bytes: &[u8], source: &str, source_code_page: Option<u16>, name: &str) -> Result<Vec<u8>, String> {
+    update_project_inner(project_bytes, source, source_code_page, Some(name), true)
+}
+
+fn update_project_inner(project_bytes: &[u8], source: &str, source_code_page: Option<u16>, workbook_document: Option<&str>, retain_omitted: bool) -> Result<Vec<u8>, String> {
+    struct AddedModule {
+        name: String,
+        class: bool,
+        document: bool,
+        encoded_name: Vec<u8>,
+        source: Vec<u8>,
+    }
     if source.trim().is_empty() {
         return Err("VBA project source is empty".into());
     }
@@ -191,14 +214,11 @@ pub(crate) fn update_project(project_bytes: &[u8], source: &str, source_code_pag
     let project_text = project.read_stream("/PROJECT").map_err(|e|e.to_string())?;
     let project_text = declared_encoding.decode_without_bom_handling_and_without_replacement(&project_text)
         .ok_or("invalid VBA PROJECT text")?;
-    let documents: BTreeSet<_> = project_text.lines()
-        .filter_map(|line|line.strip_prefix("Document=")?.split_once("/&H").map(|(name,_)|name.to_owned()))
-        .collect();
+    let documents = crate::vba_module_directory::document_module_names(&project, &names, &project_text);
     let mut edits = BTreeMap::new();
     let mut seen = BTreeSet::new();
     let mut new_names = BTreeSet::new();
-    // Logical name, ordinary class flag, declared-code-page name, source bytes.
-    let mut additions: Vec<(String, bool, Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut additions: Vec<AddedModule> = Vec::new();
     for module in oxivba_core::parser::source_modules(source) {
         let index = if let Some(name) = &module.named {
             let matches: Vec<usize> = names.iter().enumerate()
@@ -212,14 +232,19 @@ pub(crate) fn update_project(project_bytes: &[u8], source: &str, source_code_pag
                     return Err(format!("duplicate VBA module {name}"));
                 }
                 let mut text = source_body(&module.text, module.class)?;
+                let document = workbook_document.is_some_and(|document| document.eq_ignore_ascii_case(name));
+                if document && (!module.class || !text.lines().any(|line| line.trim().eq_ignore_ascii_case(
+                    "Attribute VB_Base = \"0{00020819-0000-0000-C000-000000000046}\""))) {
+                    return Err(format!("invalid generated workbook document: {name}"));
+                }
                 let class_base = "Attribute VB_Base = \"0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}\"";
                 if text.lines().any(|line| {
                     line.trim_start().to_ascii_lowercase().starts_with("attribute vb_base")
-                        && (!module.class || !line.trim().eq_ignore_ascii_case(class_base))
+                        && (!module.class || (!document && !line.trim().eq_ignore_ascii_case(class_base)))
                 }) {
                     return Err(format!("VBA document module creation is not implemented: {name}"));
                 }
-                if module.class {
+                if module.class && !document {
                     let mut missing = Vec::new();
                     if !text.lines().any(|line| line.trim_start().to_ascii_lowercase().starts_with("attribute vb_base")) {
                         missing.push(class_base.to_string());
@@ -250,7 +275,8 @@ pub(crate) fn update_project(project_bytes: &[u8], source: &str, source_code_pag
                 if replaced {
                     return Err(format!("VBA module name {name} cannot be represented in project code page {}", project.information.code_page));
                 }
-                additions.push((name.clone(), module.class, name_bytes.into_owned(), encoded.into_owned()));
+                additions.push(AddedModule { name: name.clone(), class: module.class, document,
+                    encoded_name: name_bytes.into_owned(), source: encoded.into_owned() });
                 continue;
             }
             if matches.len() != 1 {
@@ -314,7 +340,7 @@ pub(crate) fn update_project(project_bytes: &[u8], source: &str, source_code_pag
         }
     }
     let removed: BTreeSet<usize> = project.modules.iter().enumerate()
-        .filter(|(index, module)| !seen.contains(index) && !documents.contains(&module.name))
+        .filter(|(index, _)| !retain_omitted && !seen.contains(index) && !documents.contains(&names[*index].name.to_ascii_lowercase()))
         .map(|(index, _)| index).collect();
     if edits.is_empty() && additions.is_empty() && removed.is_empty() {
         return Ok(project_bytes.to_vec());
@@ -381,7 +407,7 @@ pub(crate) fn update_project(project_bytes: &[u8], source: &str, source_code_pag
         let mut added_properties = String::new();
         let mut streams: BTreeSet<String> = names.iter().map(|name| name.stream_name.to_ascii_lowercase()).collect();
         let mut serial = names.len();
-        for (name, class, encoded_name, bytes) in additions {
+        for AddedModule { name, class, document, encoded_name, source: bytes } in additions {
             let stream_name = loop {
                 serial += 1;
                 let candidate = format!("OxiModule{serial}");
@@ -407,8 +433,9 @@ pub(crate) fn update_project(project_bytes: &[u8], source: &str, source_code_pag
             map.push(0);
             map.extend_from_slice(&wide_name);
             map.extend_from_slice(&[0, 0]);
-            added_properties.push_str(if class { "Class=" } else { "Module=" });
+            added_properties.push_str(if document { "Document=" } else if class { "Class=" } else { "Module=" });
             added_properties.push_str(&name);
+            if document { added_properties.push_str("/&H00000000"); }
             added_properties.push_str("\r\n");
             sources.push((format!("/VBA/{stream_name}"), compress_source(&bytes)));
         }

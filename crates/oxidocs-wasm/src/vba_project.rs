@@ -33,10 +33,12 @@ pub(crate) fn read_document_modules(
     // An attached object's package type overrides a stale stored VB_Base.
     // Only PROJECT's Document records qualify, never ordinary source classes.
     let mut project_documents = Vec::new();
+    let mut component_names = std::collections::BTreeSet::new();
     let project = open_workbook_project(package)?;
     let has_project = project.is_some();
     if let Some(project) = project {
         let module_names = identities(&project, None)?;
+        component_names.extend(module_names.iter().map(|identity| identity.name.to_ascii_lowercase()));
         let bytes = project
             .read_stream("/PROJECT")
             .map_err(|error| error.to_string())?;
@@ -45,23 +47,7 @@ pub(crate) fn read_document_modules(
         let text = encoding
             .decode_without_bom_handling_and_without_replacement(&bytes)
             .ok_or_else(|| "invalid VBA document names".to_string())?;
-        let names: std::collections::BTreeSet<_> = text
-            .lines()
-            .take_while(|line| !line.starts_with('['))
-            .filter_map(|line| {
-                line.strip_prefix("Document=")?
-                    .split_once("/&H")
-                    .map(|(name, _)| {
-                        module_names
-                            .iter()
-                            .find(|identity| identity.declared_name.eq_ignore_ascii_case(name))
-                            .map_or_else(
-                                || name.to_ascii_lowercase(),
-                                |identity| identity.name.to_ascii_lowercase(),
-                            )
-                    })
-            })
-            .collect();
+        let names = crate::vba_module_directory::document_module_names(&project, &module_names, &text);
         for (module, identity) in project.modules.iter().zip(&module_names) {
             if !names.contains(&identity.name.to_ascii_lowercase()) {
                 continue;
@@ -86,7 +72,7 @@ pub(crate) fn read_document_modules(
                 document.base_type = "Excel.Workbook".into();
                 document.code_name = Some(name.clone());
                 document.unbound = false;
-            } else {
+            } else if !has_project {
                 documents.push(VbaDocumentModule {
                     name: name.clone(),
                     base_type: "Excel.Workbook".into(),
@@ -97,6 +83,22 @@ pub(crate) fn read_document_modules(
                 });
             }
         }
+    }
+    // Excel supplies the workbook's document component on Open, even when
+    // workbookPr is absent or names a component that PROJECT does not declare.
+    // A sheet's codeName alone does not cause the same repair for that sheet.
+    let mut generated_workbook = None;
+    if has_project && !project_documents.iter().any(|document| !document.unbound) {
+        let mut serial = 0u32;
+        let name = loop {
+            let name = if serial == 0 { "ThisWorkbook".to_owned() } else { format!("ThisWorkbook{serial}") };
+            if !component_names.contains(&name.to_ascii_lowercase()) { break name; }
+            serial = serial.checked_add(1).ok_or("no available workbook document name")?;
+        };
+        generated_workbook = Some(VbaDocumentModule {
+            code_name: Some(name.clone()), name, base_type: "Excel.Workbook".into(),
+            ..VbaDocumentModule::default()
+        });
     }
     let relationships = archive
         .try_read_part("xl/_rels/workbook.xml.rels")
@@ -152,6 +154,7 @@ pub(crate) fn read_document_modules(
         }
     }
     documents.extend(project_documents);
+    documents.extend(generated_workbook);
     let mut names = std::collections::BTreeSet::new();
     if documents
         .iter()
@@ -608,10 +611,14 @@ pub fn save_spreadsheet_vba_source(package: &[u8], source: &str, source_code_pag
 }
 
 pub(crate) fn write_project_source(package: &[u8], source: &str, source_code_page: Option<u16>) -> Result<Vec<u8>, String> {
+    write_project_source_inner(package, source, source_code_page, None, false)
+}
+
+fn write_project_source_inner(package: &[u8], source: &str, source_code_page: Option<u16>, workbook_document: Option<&str>, insert_only: bool) -> Result<Vec<u8>, String> {
     // The complete exported source can contain comments before a module's
     // Attribute marker. Keep an unchanged export byte-identical instead of
     // reparsing those comments as the preceding module's trailing text.
-    if !source.contains('\0') {
+    if workbook_document.is_none() && !source.contains('\0') {
         if let Some(existing) = read_project_source_with_code_page(package, source_code_page)? {
             if existing == source || existing.replace("\r\n", "\n") == source.replace("\r\n", "\n") {
                 return Ok(package.to_vec());
@@ -622,7 +629,12 @@ pub(crate) fn write_project_source(package: &[u8], source: &str, source_code_pag
     let Some((target, original)) = workbook_project_part(package)? else {
         return Err("This workbook has no VBA project to edit.".into());
     };
-    let edited = crate::vba_source_writer::update_project(&original, source, source_code_page)?;
+    let edited = if insert_only {
+        crate::vba_source_writer::insert_workbook_document(&original, source, source_code_page,
+            workbook_document.ok_or("missing workbook document name")?)?
+    } else if workbook_document.is_some() {
+        crate::vba_source_writer::update_project_with_workbook_document(&original, source, source_code_page, workbook_document)?
+    } else { crate::vba_source_writer::update_project(&original, source, source_code_page)? };
     if edited == original { return Ok(package.to_vec()); }
     let mut parts = OoxmlArchive::new(package).map_err(|error|error.to_string())?;
     let names = parts.file_names();
@@ -653,6 +665,139 @@ pub(crate) fn write_project_source(package: &[u8], source: &str, source_code_pag
         }
     }
     Ok(output.finish().map_err(|e|e.to_string())?.into_inner())
+}
+
+/// Supply only the missing component created by the workbook loader. Existing
+/// document bodies retain the separate source-import omission contract.
+pub(crate) fn bootstrap_workbook_source(package: &[u8], source: &str) -> Result<(String, Option<String>), String> {
+    let Some(project) = open_workbook_project(package)? else { return Ok((source.into(), None)); };
+    let documents = read_document_modules(package)?;
+    let Some(workbook) = documents.iter().find(|document| !document.unbound && !document.host_only && document.sheet_index.is_none()) else {
+        return Ok((source.into(), None));
+    };
+    let names = identities(&project, None)?;
+    let existing = project.modules.iter().zip(&names).find(|(_, name)| name.name.eq_ignore_ascii_case(&workbook.name));
+    let generated = existing.is_none();
+    let name = workbook.name.clone();
+    if oxivba_core::parser::source_modules(source).iter().any(|module|
+        module.named.as_deref().is_some_and(|module| module.eq_ignore_ascii_case(&name))) {
+        return Ok((source.into(), generated.then_some(name)));
+    }
+    let header = if let Some((module, identity)) = existing {
+        // After Save, an editor may retain the source it loaded before the
+        // empty component was persisted. Keeping that source must not unload
+        // the component or reset live globals. Never replace an existing body.
+        let text = module_source(&project, module, identity, None)?;
+        let default_name = name.get(..12).is_some_and(|prefix| prefix.eq_ignore_ascii_case("ThisWorkbook"))
+            && name.get(12..).is_some_and(|suffix| suffix.bytes().all(|byte| byte.is_ascii_digit()));
+        let inserted_stream = identity.stream_name.strip_prefix("OxiModule")
+            .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()));
+        if !default_name || !inserted_stream || native_document_base(&text) != Some("Excel.Workbook")
+            || !text.lines().all(|line| line.trim().is_empty() || line.trim_start().to_ascii_lowercase().starts_with("attribute ")) {
+            return Ok((source.into(), None));
+        }
+        format!("VERSION 1.0 CLASS\n{text}")
+    } else { workbook_document_header(&name) };
+    Ok((format!("{}{header}", if source.ends_with('\n') { source.to_owned() } else { format!("{source}\n") }), generated.then_some(name)))
+}
+
+fn workbook_document_header(name: &str) -> String {
+    format!("VERSION 1.0 CLASS\nAttribute VB_Name = \"{name}\"\n\
+        Attribute VB_Base = \"0{{00020819-0000-0000-C000-000000000046}}\"\n\
+        Attribute VB_GlobalNameSpace = False\nAttribute VB_Creatable = False\n\
+        Attribute VB_PredeclaredId = True\nAttribute VB_Exposed = True\n\
+        Attribute VB_TemplateDerived = False\nAttribute VB_Customizable = True\n")
+}
+
+/// Workbook Save materializes the loader's component and its native code name.
+/// A source-only no-op export remains byte-identical through write_project_source.
+pub(crate) fn save_workbook_project(package: &[u8], source: &str, source_code_page: Option<u16>) -> Result<Vec<u8>, String> {
+    let (source, generated) = bootstrap_workbook_source(package, source)?;
+    let unchanged = if generated.is_some() {
+        let original = read_project_source_with_code_page(package, source_code_page)?.ok_or("missing VBA project source")?;
+        let original = bootstrap_workbook_source(package, &original)?.0;
+        original.replace("\r\n", "\n") == source.replace("\r\n", "\n")
+    } else { false };
+    let header = generated.as_deref().filter(|_| unchanged).map(workbook_document_header);
+    let saved = write_project_source_inner(package, header.as_deref().unwrap_or(&source), source_code_page, generated.as_deref(), unchanged)?;
+    let Some(name) = generated else { return Ok(saved); };
+    set_workbook_code_name(&saved, &name)
+}
+
+fn set_workbook_code_name(package: &[u8], code_name: &str) -> Result<Vec<u8>, String> {
+    use oxidocs_common::xml_utils::{get_attr, local_name};
+    use quick_xml::{events::{BytesStart, Event}, name::ResolveResult, reader::NsReader, Writer};
+    use std::io::{Cursor, Write};
+    let mut parts = OoxmlArchive::new(package).map_err(|error| error.to_string())?;
+    let xml = parts.read_part("xl/workbook.xml").map_err(|error| error.to_string())?;
+    let mut reader = NsReader::from_str(&xml);
+    let mut writer = Writer::new(Vec::new());
+    let mut depth = 0usize;
+    let mut property_name = String::new();
+    let mut written = false;
+    loop {
+        let (ns, event) = reader.read_resolved_event().map_err(|error| error.to_string())?;
+        let spreadsheet = matches!(ns, ResolveResult::Bound(ns) if matches!(ns.as_ref(),
+            b"http://schemas.openxmlformats.org/spreadsheetml/2006/main" | b"http://purl.oclc.org/ooxml/spreadsheetml/main"));
+        match event {
+            event @ (Event::Start(_) | Event::Empty(_)) => {
+                let empty = matches!(event, Event::Empty(_));
+                let mut element = match event { Event::Start(element) | Event::Empty(element) => element, _ => unreachable!() };
+                let name = local_name(element.name().as_ref());
+                if depth == 0 && spreadsheet && name == "workbook" {
+                    let qualified = String::from_utf8(element.name().as_ref().to_vec()).map_err(|error| error.to_string())?;
+                    property_name = qualified.rsplit_once(':').map_or_else(|| "workbookPr".into(), |(prefix, _)| format!("{prefix}:workbookPr"));
+                }
+                if depth == 1 && spreadsheet && name == "workbookPr" {
+                    if written { return Err("duplicate workbook properties".into()); }
+                    if get_attr(&element, "codeName").as_deref() == Some(code_name) { return Ok(package.to_vec()); }
+                    let attributes = element.attributes().map(|attribute| {
+                        let attribute = attribute.map_err(|error| error.to_string())?;
+                        Ok((attribute.key.as_ref().to_vec(), attribute.value.into_owned()))
+                    }).collect::<Result<Vec<_>, String>>()?;
+                    element.clear_attributes();
+                    for (key, value) in attributes {
+                        if key != b"codeName" { element.push_attribute((key.as_slice(), value.as_slice())); }
+                    }
+                    element.push_attribute(("codeName", code_name));
+                    written = true;
+                } else if depth == 1 && !written && !matches!(name.as_str(), "fileVersion" | "fileSharing") {
+                    let mut property = BytesStart::new(property_name.as_str());
+                    property.push_attribute(("codeName", code_name));
+                    writer.write_event(Event::Empty(property)).map_err(|error| error.to_string())?;
+                    written = true;
+                }
+                if !empty { depth += 1; }
+                writer.write_event(if empty { Event::Empty(element) } else { Event::Start(element) }).map_err(|error| error.to_string())?;
+            }
+            Event::End(element) => {
+                if depth == 1 && !written {
+                    let mut property = BytesStart::new(property_name.as_str());
+                    property.push_attribute(("codeName", code_name));
+                    writer.write_event(Event::Empty(property)).map_err(|error| error.to_string())?;
+                    written = true;
+                }
+                depth = depth.checked_sub(1).ok_or("invalid workbook XML depth")?;
+                writer.write_event(Event::End(element)).map_err(|error| error.to_string())?;
+            }
+            Event::Eof => break,
+            event => writer.write_event(event).map_err(|error| error.to_string())?,
+        }
+    }
+    let xml = writer.into_inner();
+    let mut archive = zip::ZipArchive::new(Cursor::new(package)).map_err(|error| error.to_string())?;
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    output.set_raw_comment(archive.comment().into());
+    for index in 0..archive.len() {
+        let file = archive.by_index(index).map_err(|error| error.to_string())?;
+        if file.name() == "xl/workbook.xml" {
+            let options = zip::write::SimpleFileOptions::default().compression_method(file.compression())
+                .last_modified_time(file.last_modified().unwrap_or_default());
+            output.start_file(file.name(), options).map_err(|error| error.to_string())?;
+            output.write_all(&xml).map_err(|error| error.to_string())?;
+        } else { output.raw_copy_file(file).map_err(|error| error.to_string())?; }
+    }
+    Ok(output.finish().map_err(|error| error.to_string())?.into_inner())
 }
 
 /// Real workbook-copy serialization may rebuild compound allocation while
@@ -780,6 +925,140 @@ mod tests {
         let broken = output.finish().unwrap().into_inner();
         assert!(read_project_source(&broken).unwrap_err().contains("truncated VBA compressed chunk"));
         assert!(read_project_source(original).unwrap().unwrap().contains("Function Twice"));
+    }
+
+    #[test]
+    fn workbook_document_name_map_survives_native_ansi_replacement() {
+        use std::io::{Cursor, Write};
+        for (package, document) in [
+            (include_bytes!("../../../tests/fixtures/vba/unicode_modules_unicode_workbook.xlsm").as_slice(), true),
+            (include_bytes!("../../../tests/fixtures/vba/unicode_modules_unicode_class.xlsm").as_slice(), false),
+        ] {
+            let (target, binary) = workbook_project_part(package).unwrap().unwrap();
+            let project = ovba::open_project(binary.clone()).unwrap();
+            let identities = identities(&project, Some(932)).unwrap();
+            let identity = identities.iter().find(|name| !name.name.is_ascii()).unwrap();
+            let name = identity.name.clone();
+            let mut directory = crate::vba_compression::read_stream(&project, "/VBA/dir", 0).unwrap();
+            let record = identity.record_start;
+            assert_eq!(&directory[record..record + 2], &[0x19, 0]);
+            let size = u32::from_le_bytes(directory[record + 2..record + 6].try_into().unwrap()) as usize;
+            directory.splice(record + 6..record + 6 + size, b"?????".iter().copied());
+            directory[record + 2..record + 6].copy_from_slice(&5u32.to_le_bytes());
+            let mut compound = cfb::CompoundFile::open(Cursor::new(binary)).unwrap();
+            compound.create_stream("/VBA/dir").unwrap().write_all(&crate::vba_source_writer::compress(&directory)).unwrap();
+            let binary = compound.into_inner().into_inner();
+            let mut archive = zip::ZipArchive::new(Cursor::new(package)).unwrap();
+            let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            for index in 0..archive.len() {
+                let file = archive.by_index(index).unwrap();
+                if file.name() == target {
+                    writer.start_file(file.name(), zip::write::SimpleFileOptions::default()).unwrap();
+                    writer.write_all(&binary).unwrap();
+                } else { writer.raw_copy_file(file).unwrap(); }
+            }
+            let package = writer.finish().unwrap().into_inner();
+            let documents = read_document_modules(&package).unwrap();
+            assert_eq!(documents.iter().any(|doc| doc.name == name), document);
+            if document {
+                if let Some(path) = std::env::var_os("OXI_VBA_NATIVE_DOCUMENT_MAP_PROBE") {
+                    let mut native = read_document_modules(&std::fs::read(path).unwrap()).unwrap();
+                    let mut expected = documents.clone();
+                    native.sort_by(|a, b| a.name.cmp(&b.name));
+                    expected.sort_by(|a, b| a.name.cmp(&b.name));
+                    assert_eq!(native, expected, "actual Native-saved component identities");
+                }
+                let saved = write_project_source(&package,
+                    "Attribute VB_Name = \"Driver\"\nPublic Function Probe() As Long\nProbe = 1\nEnd Function\n", Some(932)).unwrap();
+                assert!(read_document_modules(&saved).unwrap().iter().any(|doc| doc.name == name && doc.unbound),
+                    "omitting a document body from a source import retains the component");
+            }
+        }
+    }
+
+    #[test]
+    fn missing_workbook_document_save_keeps_unicode_component_sources() {
+        let package = include_bytes!("../../../tests/fixtures/vba/unicode_modules_unicode_workbook.xlsm");
+        let source = read_project_source_with_code_page(package, Some(932)).unwrap().unwrap();
+        let saved = save_workbook_project(package, &source, Some(932)).unwrap();
+        let declared = read_project_source_with_code_page(package, None).unwrap().unwrap();
+        assert_eq!(save_workbook_project(package, &declared, None).unwrap(), saved,
+            "a metadata-only repair must not reinterpret existing source bytes");
+        let reloaded = read_project_source_with_code_page(&saved, Some(932)).unwrap().unwrap();
+        assert!(reloaded.replace("\r\n", "\n").starts_with(source.replace("\r\n", "\n").trim_end_matches('\n')));
+        let documents = read_document_modules(&saved).unwrap();
+        assert!(documents.iter().any(|doc| doc.name == "ThisWorkbook" && !doc.host_only && !doc.unbound));
+        if std::env::var_os("OXI_VBA_CAPTURE_BOOTSTRAP").is_some() {
+            println!("OXI_VBA_BOOTSTRAP_PACKAGE {}", serde_json::json!({
+                "input":package.as_slice(), "saved":saved, "expected":"ThisWorkbook",
+                "xml_name":"ThisWorkbook", "collision":"unicode", "procedure":"Driver.Probe"
+            }));
+        }
+    }
+
+    #[test]
+    fn native_workbook_document_bootstrap_and_save_preserve_component_kinds() {
+        use std::io::{Read, Write};
+        let seed = include_bytes!("../../../tests/fixtures/vba/document_context_book.xlsm");
+        let original = read_project_source_with_code_page(seed, Some(932)).unwrap().unwrap()
+            + "\nAttribute VB_Name = \"BootstrapProbe\"\nPublic Function Meta() As String\n\
+               Meta = ActiveWorkbook.CodeName & \"|\" & CStr(ActiveWorkbook.Saved)\nEnd Function\n";
+        let fixture = write_project_source(seed, &original, Some(932)).unwrap();
+        let fixture = fixture.as_slice();
+        for (xml_name, extra, expected) in [
+            (Some("ThisWorkbook"), "", "ThisWorkbook"),
+            (None, "", "ThisWorkbook"),
+            (Some("FreshHost"), "", "ThisWorkbook"),
+            (Some("GroupContractProbe"), "", "ThisWorkbook"),
+            (Some("ThisWorkbook"), "\nVERSION 1.0 CLASS\nAttribute VB_Name = \"ThisWorkbook\"\nPublic Token As Long\n", "ThisWorkbook1"),
+            (Some("ThisWorkbook"), "\nAttribute VB_Name = \"ThisWorkbook\"\nPublic Token As Long\n", "ThisWorkbook1"),
+            (Some("ArchiveHost"), "", "ArchiveHost"),
+        ] {
+            let mut input = zip::ZipArchive::new(std::io::Cursor::new(fixture)).unwrap();
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            for index in 0..input.len() {
+                let mut entry = input.by_index(index).unwrap();
+                if entry.name() == "xl/workbook.xml" {
+                    let mut xml = String::new();
+                    entry.read_to_string(&mut xml).unwrap();
+                    assert_eq!(xml.matches("codeName=\"ThisWorkbook\"").count(), 1);
+                    let attribute = xml_name.map(|name| format!("codeName=\"{name}\"")).unwrap_or_default();
+                    let xml = xml.replace("codeName=\"ThisWorkbook\"", &attribute);
+                    writer.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+                    writer.write_all(xml.as_bytes()).unwrap();
+                } else { writer.raw_copy_file(entry).unwrap(); }
+            }
+            let mut package = writer.finish().unwrap().into_inner();
+            if !extra.is_empty() {
+                package = write_project_source(&package, &(original.clone() + extra), Some(932)).unwrap();
+            }
+            let documents = read_document_modules(&package).unwrap();
+            let workbook = documents.iter().find(|doc| !doc.unbound && doc.sheet_index.is_none()).unwrap();
+            assert_eq!(workbook.name, expected, "{xml_name:?}, {extra}");
+            assert!(!workbook.host_only, "Native creates a workbook document before Run");
+            let source = read_project_source_with_code_page(&package, Some(932)).unwrap().unwrap();
+            assert_eq!(write_project_source(&package, &source, Some(932)).unwrap(), package,
+                "source-only no-op exports retain their byte-preservation contract");
+            let saved = save_workbook_project(&package, &source, Some(932)).unwrap();
+            let project = open_workbook_project(&saved).unwrap().unwrap();
+            assert!(project.modules.iter().any(|module| module.name == expected));
+            let properties = project.read_stream("/PROJECT").unwrap();
+            let properties = String::from_utf8(properties).unwrap();
+            assert!(properties.lines().any(|line| line == format!("Document={expected}/&H00000000")));
+            if !extra.is_empty() {
+                let prefix = if extra.contains("VERSION 1.0 CLASS") { "Class" } else { "Module" };
+                assert!(properties.lines().any(|line| line == format!("{prefix}=ThisWorkbook")));
+            }
+            let reloaded = read_document_modules(&saved).unwrap();
+            assert_eq!(documents, reloaded, "Saving retains live native identities");
+            if std::env::var_os("OXI_VBA_CAPTURE_BOOTSTRAP").is_some() {
+                println!("OXI_VBA_BOOTSTRAP_PACKAGE {}", serde_json::json!({
+                    "input":package, "saved":saved, "expected":expected,
+                    "xml_name":xml_name, "collision":if extra.is_empty() { "none" } else if extra.contains("VERSION 1.0 CLASS") { "class" } else { "standard" }
+                }));
+            }
+            assert_eq!(write_project_source(&saved, &read_project_source_with_code_page(&saved, Some(932)).unwrap().unwrap(), Some(932)).unwrap(), saved);
+        }
     }
 
     #[test]
