@@ -18945,8 +18945,17 @@ cells={} pitch={:.2} text={:?}",
             para_style.line_spacing_rule.as_deref(),
             para_style.line_spacing,
         ) {
+            // OXI_ATLEAST_UNDER_FONT_AUTO (2026-11-07, default ON, opt-out _DISABLE): an
+            // atLeast value that does not set the line's height is an auto line and is
+            // placed like one. `_pb_atleast_under_font_slice.py` (blind-J ja/creative__
+            // 99e3d9f9's text box «伊豆の国市商工会 TEL…», Meiryo 14pt, lines-360 grid,
+            // two cells = 36pt): Word's baseline is 623.35 for atLeast 10 / 13 / 14 / 16
+            // / 20pt and for no rule at all; the shape-context bottom-align put the
+            // line at 36 - 14 = 22 + ascent, 13.5 low.
             (Some(rule @ ("exact" | "atLeast")), Some(v))
-                if rule == "exact" || v > 0.01 || !natbox_atleast_on =>
+                if (rule == "exact" || v > 0.01 || !natbox_atleast_on)
+                    && !(rule == "atLeast" && v + 0.5 < line_height
+                        && !crate::env_flag!("OXI_ATLEAST_UNDER_FONT_AUTO_DISABLE")) =>
             {
                 // S1261 (2026-08-30, OPT-IN `OXI_S1261=1` pending gates): under
                 // `lineRule="exact"` Word puts the BASELINE at 0.8 x the line
