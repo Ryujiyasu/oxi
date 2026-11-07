@@ -44237,6 +44237,18 @@ fn execute_workbook_invocation(
     if let Some(state)=context.file_system_state.as_ref() {next_files.restore(state)?;}
     let mut file_name = context.file_name.clone().filter(|name| !name.is_empty());
     next_files.configure(context.file_context.clone(), &stored_source, &mut file_name)?;
+    // Browser-loaded packages have a mounted filename without an OS path.
+    // The editor's Save command targets that existing virtual mount. Keep
+    // ordinary VBA Save and SaveCopyAs invocation semantics independent.
+    if matches!(&save_request, Some(None)) && next_files.full_name.is_none()
+        && next_files.package.is_some() {
+        if let Some(name) = &file_name {
+            let path = next_files.files.absolute_path(name);
+            if next_files.files.bytes(&path).is_ok() {
+                next_files.full_name = Some(path);
+            }
+        }
+    }
     // Resolve capabilities against the loaded owner before taking its state.
     // A source reset must never reinterpret an old handle as a new instance.
     let reset_storage = source_resets_project || documents_changed;
@@ -44845,6 +44857,41 @@ mod tests {
         let text = crate::vba_project::read_project_source_with_code_page(
             saved.save.as_ref().unwrap().package_bytes.as_ref().unwrap(),Some(932)).unwrap().unwrap();
         assert!(text.contains("\u{65e5}\u{672c}\u{8a9e} source profile"));
+    }
+
+
+    #[test]
+    fn saved_state_browser_save_uses_loaded_mount_and_respects_read_only() {
+        for read_only in [false, true] {
+            let (package, source, book) = saved_state_package();
+            let mut context = failure_context();
+            context.file_name = Some("Browser.xlsm".into());
+            context.file_context = Some(file_io::FileContext {
+                package_bytes: Some(package), read_only: Some(read_only),
+                source_code_page: Some(932), ..Default::default()
+            });
+            let mut session = None;
+            let saved = execute_workbook_invocation(book, &source, VbaInvocation {
+                procedure: None, args: vec![],
+                action: Some(ExternalObjectAction::SaveWorkbook { copy_name: None }),
+            }, 0, context, &mut session).unwrap();
+            let output = saved.save.as_ref().unwrap();
+            assert_eq!(output.completed, !read_only);
+            assert_eq!(saved.error.is_some(), read_only,
+                "{:?}", saved.error.as_ref().map(|error| &error.message));
+            if read_only {
+                assert!(output.package_bytes.is_none());
+                assert!(saved.files.is_empty());
+            } else {
+                assert!(output.saved);
+                assert!(output.path.as_deref().unwrap().ends_with("\\Browser.xlsm"));
+                let reopened = oxicells_core::parse_xlsx(
+                    output.package_bytes.as_ref().unwrap()).unwrap();
+                assert_eq!(reopened.sheets.len(), saved.workbook.sheets.len());
+                assert_eq!(session.as_ref().unwrap().host.file_name.as_deref(),
+                    Some("Browser.xlsm"));
+            }
+        }
     }
 
     fn standard_module_shadow_run(body: &str) -> RunOutcome {

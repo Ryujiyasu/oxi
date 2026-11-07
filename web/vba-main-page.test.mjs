@@ -776,7 +776,6 @@ for(const route of ['main','canvas'])for(const flavor of ['recommended','shared'
 }
 assert.equal(savedPreferenceUiRows.length,4);
 
-console.log(JSON.stringify({ main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, saved_preference_main_ui_cases:2, saved_preference_canvas_ui_cases:2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, passed: true }));
 
 // The new file-context fields cross the real JS validator, serde boundary and
 // persistent worker. Rust-only tests cannot prove those transport contracts.
@@ -825,6 +824,19 @@ closeVbaProject();
  assert.equal(copied.save.saved,true);
 }
 closeVbaProject();
+
+// A browser input mount has a display name but no native absolute path.
+// Saving that mounted file must still respect an explicit read-only input.
+{
+ const options={errorLanguage:'ja-JP',hostAnsiCodePage:932,projectSourceCodePage:932,
+  fileContext:{editRevision:1,readOnly:true}};
+ const rejected=await saveVbaWorkbookInWorker(wasm.parse_spreadsheet(savedUIPacket),
+  savedUISource,0,'SavedStateUI.xlsm',options,savedUIPacket);
+ assert.ok(rejected.error,'read-only Save reports a failure');
+ assert.equal(rejected.save.completed,false);
+ assert.ok(rejected.save.package_bytes==null,'read-only Save publishes no file');
+ closeVbaProject();
+}
 
 // Use the actual put/save handlers: accepting the original text still enables
 // Save, while the native saved output and live counter cross the real worker.
@@ -889,3 +901,5 @@ for(const cancel of [true,false]){
  }
  closeVbaProject();
 }
+
+console.log(JSON.stringify({ main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, saved_preference_main_ui_cases:2, saved_preference_canvas_ui_cases:2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, saved_state_validation_cases: 6, saved_state_worker_save: true, same_value_editor_save: true, saved_state_cancel_and_after_save_cases: 2, saved_state_read_only_case: 1, passed: true }));
