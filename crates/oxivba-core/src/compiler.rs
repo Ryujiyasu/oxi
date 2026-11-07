@@ -2588,15 +2588,13 @@ impl<'a> Checker<'a> {
         write: bool,
     ) -> Result<Option<ReferenceSignature>, CompileErrorKind> {
         if let Some(owner) = self.source_indexed_owner(target, args) {
-            // A typed reference result exposes its default-member signature.
-            // Keep source-class factory binding separate from host references.
-            if !matches!(owner, Type::Reference(..))
-                && self.source_signature(target, false)?.is_some()
+            let signature = self.source_default_signature(&owner, write);
+            if signature.is_none() && self.source_signature(target, false)?.is_some()
                 && args.iter().any(|arg| arg.name.is_some())
             {
                 return Err(CompileErrorKind::NamedArgumentNotFound);
             }
-            return Ok(self.source_default_signature(&owner, write));
+            return Ok(signature);
         }
         self.source_signature(target, write)
     }
@@ -2640,8 +2638,13 @@ impl<'a> Checker<'a> {
         match indexed_kind {
             Type::Object => Some(CompileErrorKind::NamedArgumentNotFound),
             Type::Variant | Type::Array(_) => Some(CompileErrorKind::NamedArgumentsNotAllowed),
-            kind @ Type::Reference(..) => self.source_default_signature(&kind, false)
-                .and_then(|signature| Self::reference_argument_error(&signature, args)),
+            kind @ (Type::Class(_) | Type::Reference(..)) => {
+                match self.source_default_signature(&kind, false) {
+                    Some(signature) => Self::reference_argument_error(&signature, args),
+                    None if matches!(kind, Type::Class(_)) => Some(CompileErrorKind::NamedArgumentNotFound),
+                    None => None,
+                }
+            }
             _ => None,
         }
     }
