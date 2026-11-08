@@ -36,9 +36,15 @@ jobs:
           commit="$(git rev-parse "${commit:-$GITHUB_SHA}")"
           echo "OXI_COMMIT=$commit" >> "$GITHUB_ENV"
           echo "TAG=$GOTENBERG_VERSION-oxi-${commit:0:8}" >> "$GITHUB_ENV"
+          # The source label links the package to this repository; without it a
+          # first push with GITHUB_TOKEN is refused ("denied") because the new
+          # package belongs to no repository the token may write to.
           docker build \
             --build-arg GOTENBERG_VERSION="$GOTENBERG_VERSION" \
             --build-arg OXI_COMMIT="$commit" \
+            --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
+            --label org.opencontainers.image.description="Gotenberg $GOTENBERG_VERSION with .docx converted by Oxi ($commit)" \
+            --label org.opencontainers.image.licenses="MIT OR Apache-2.0" \
             -t gotenberg-oxi:test .
 
       - name: End-to-end checks
