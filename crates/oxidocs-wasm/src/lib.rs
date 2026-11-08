@@ -2009,7 +2009,7 @@ fn layout_to_pdf(
                         font_name,
                         font_size: *font_size as f64,
                         fill_color,
-                        character_spacing: *character_spacing as f64,
+                        character_spacing: *character_spacing as f64, stroke_width: 0.0,
                     };
                     contents.push(if let Some(glyph) = &elem.font_glyph {
                         ContentElement::GlyphRun(GlyphRun { span, glyph_indices: vec![glyph.index] })
@@ -2031,6 +2031,7 @@ fn layout_to_pdf(
                         bits_per_component: 8,
                         pixel_width: elem.width as u32,
                         pixel_height: elem.height as u32,
+                        alpha: None,
                     }));
                 }
                 // WordArt watermark: not drawn in the wasm PDF export yet
@@ -2276,7 +2277,7 @@ pub fn create_pdf(title: &str, text: &str) -> Vec<u8> {
                 text: text.to_string(),
                 font_name: "Helvetica".to_string(),
                 font_size: 12.0,
-                fill_color: Color::Gray(0.0), character_spacing: 0.0,
+                fill_color: Color::Gray(0.0), character_spacing: 0.0, stroke_width: 0.0,
             })],
             rotation: 0,
         }],

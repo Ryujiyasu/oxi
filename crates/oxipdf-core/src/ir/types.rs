@@ -165,6 +165,10 @@ pub struct TextSpan {
     pub fill_color: Color,
     /// Extra character spacing in points (PDF Tc operator). 0.0 = default.
     pub character_spacing: f64,
+    /// Outline width in points for a synthetic bold (fill + stroke, PDF Tr 2); 0.0 =
+    /// plain fill.
+    #[serde(default)]
+    pub stroke_width: f64,
 }
 
 /// Vector path data.
@@ -236,6 +240,10 @@ pub struct ImageData {
     pub pixel_width: u32,
     /// Pixel height of the image data
     pub pixel_height: u32,
+    /// One 8-bit alpha value per pixel (written as the image's /SMask), or None for
+    /// an opaque image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

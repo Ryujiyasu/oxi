@@ -35,7 +35,7 @@ fn simple_doc(text: &str) -> PdfDocument {
                 font_name: "F1".into(),
                 font_size: 12.0,
                 fill_color: Color::Gray(0.0),
-                character_spacing: 0.0,
+                character_spacing: 0.0, stroke_width: 0.0,
             })],
             rotation: 0,
         }],
@@ -65,7 +65,7 @@ fn write_then_parse_preserves_page_count() {
         contents: vec![ContentElement::Text(TextSpan {
             x: 72.0, y: 100.0, text: "page 2".into(),
             font_name: "F1".into(), font_size: 12.0,
-            fill_color: Color::Gray(0.0), character_spacing: 0.0,
+            fill_color: Color::Gray(0.0), character_spacing: 0.0, stroke_width: 0.0,
         })],
         rotation: 0,
     });
@@ -114,7 +114,7 @@ fn extract_text_returns_one_entry_per_page() {
         contents: vec![ContentElement::Text(TextSpan {
             x: 72.0, y: 72.0, text: "p2".into(),
             font_name: "F1".into(), font_size: 12.0,
-            fill_color: Color::Gray(0.0), character_spacing: 0.0,
+            fill_color: Color::Gray(0.0), character_spacing: 0.0, stroke_width: 0.0,
         })],
         rotation: 0,
     });
@@ -146,7 +146,7 @@ fn extract_text_skips_non_text_elements() {
                 ContentElement::Text(TextSpan {
                     x: 72.0, y: 72.0, text: "TEXT".into(),
                     font_name: "F1".into(), font_size: 12.0,
-                    fill_color: Color::Gray(0.0), character_spacing: 0.0,
+                    fill_color: Color::Gray(0.0), character_spacing: 0.0, stroke_width: 0.0,
                 }),
             ],
             rotation: 0,

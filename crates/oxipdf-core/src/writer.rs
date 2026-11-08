@@ -101,12 +101,18 @@ impl PdfWriter {
 
         // Collect images per page and allocate XObject references.
         let mut page_images: Vec<Vec<(usize, u32)>> = Vec::new(); // (image_index_in_contents, obj_num)
+        // an image's soft mask (its alpha), keyed by the image's object number
+        let mut smask_objs: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
         for page in &doc.pages {
             let mut images = Vec::new();
             for (idx, el) in page.contents.iter().enumerate() {
-                if let ContentElement::Image(_) = el {
+                if let ContentElement::Image(img) = el {
                     let obj_num = self.alloc_obj();
                     images.push((idx, obj_num));
+                    if img.alpha.is_some() {
+                        let smask = self.alloc_obj();
+                        smask_objs.insert(obj_num, smask);
+                    }
                 }
             }
             page_images.push(images);
@@ -399,13 +405,15 @@ impl PdfWriter {
                         ColorSpace::DeviceCmyk => "DeviceCMYK",
                     };
                     let compressed = compress(&img.data);
+                    let smask = smask_objs.get(&obj_num).copied();
+                    let smask_ref = smask.map(|n| format!("/SMask {n} 0 R ")).unwrap_or_default();
                     self.begin_obj(obj_num);
                     write!(
                         self.buf,
                         "<< /Type /XObject /Subtype /Image \
                          /Width {} /Height {} \
                          /ColorSpace /{cs_name} \
-                         /BitsPerComponent {} \
+                         /BitsPerComponent {} {smask_ref}\
                          /Length {} /Filter /FlateDecode >>\nstream\n",
                         img.pixel_width,
                         img.pixel_height,
@@ -416,6 +424,26 @@ impl PdfWriter {
                     self.buf.extend_from_slice(&compressed);
                     write!(self.buf, "\nendstream\n").unwrap();
                     self.end_obj();
+                    // The alpha channel as a DeviceGray soft mask: transparent pixels
+                    // show what lies beneath instead of their (black) colour values.
+                    if let (Some(n), Some(alpha)) = (smask, img.alpha.as_ref()) {
+                        let ca = compress(alpha);
+                        self.begin_obj(n);
+                        write!(
+                            self.buf,
+                            "<< /Type /XObject /Subtype /Image \
+                             /Width {} /Height {} \
+                             /ColorSpace /DeviceGray /BitsPerComponent 8 \
+                             /Length {} /Filter /FlateDecode >>\nstream\n",
+                            img.pixel_width,
+                            img.pixel_height,
+                            ca.len()
+                        )
+                        .unwrap();
+                        self.buf.extend_from_slice(&ca);
+                        write!(self.buf, "\nendstream\n").unwrap();
+                        self.end_obj();
+                    }
                 }
             }
         }
@@ -523,8 +551,14 @@ fn build_content_stream_with_images(
                 let span = element.text_span().unwrap();
                 let font_key = escape_name(&span.font_name);
                 write_color_op(&mut buf, &span.fill_color, false);
+                if span.stroke_width > 0.0 {
+                    write_color_op(&mut buf, &span.fill_color, true);
+                }
                 write!(buf, "BT\n").unwrap();
                 write!(buf, "/{} {} Tf\n", font_key, span.font_size).unwrap();
+                if span.stroke_width > 0.0 {
+                    write!(buf, "2 Tr {:.4} w\n", span.stroke_width).unwrap();
+                }
                 if span.character_spacing.abs() > 0.001 {
                     write!(buf, "{:.3} Tc\n", span.character_spacing).unwrap();
                 }
@@ -547,6 +581,9 @@ fn build_content_stream_with_images(
                 // 5pt spacing widened the whole table that followed, each glyph +1pt).
                 if span.character_spacing.abs() > 0.001 {
                     write!(buf, "0 Tc\n").unwrap();
+                }
+                if span.stroke_width > 0.0 {
+                    write!(buf, "0 Tr\n").unwrap();
                 }
             }
             ContentElement::Path(path) => {
@@ -825,7 +862,7 @@ mod tests {
                     font_name: "F1".into(),
                     font_size: 12.0,
                     fill_color: Color::Gray(0.0),
-                    character_spacing: 0.0,
+                    character_spacing: 0.0, stroke_width: 0.0,
                 })],
                 rotation: 0,
             }],
@@ -988,6 +1025,7 @@ mod tests {
                     bits_per_component: 8,
                     pixel_width: 200,
                     pixel_height: 200,
+                    alpha: None,
                 })],
                 rotation: 0,
             }],
@@ -1031,7 +1069,7 @@ mod tests {
                     font_name: "MSGothic".into(),
                     font_size: 12.0,
                     fill_color: Color::Gray(0.0),
-                    character_spacing: 0.0,
+                    character_spacing: 0.0, stroke_width: 0.0,
                 })],
                 rotation: 0,
             }],
@@ -1107,7 +1145,7 @@ mod tests {
                         font_name: "Helvetica".into(),
                         font_size: 12.0,
                         fill_color: Color::Gray(0.0),
-                        character_spacing: 0.0,
+                        character_spacing: 0.0, stroke_width: 0.0,
                     }),
                     ContentElement::Text(TextSpan {
                         x: 72.0,
@@ -1116,7 +1154,7 @@ mod tests {
                         font_name: "MSGothic".into(),
                         font_size: 12.0,
                         fill_color: Color::Gray(0.0),
-                        character_spacing: 0.0,
+                        character_spacing: 0.0, stroke_width: 0.0,
                     }),
                 ],
                 rotation: 0,
@@ -1175,7 +1213,7 @@ mod tests {
                 font_name: font.into(),
                 font_size: 12.0,
                 fill_color: Color::Gray(0.0),
-                character_spacing: 0.0,
+                character_spacing: 0.0, stroke_width: 0.0,
             })
         };
         let doc = PdfDocument {
@@ -1264,7 +1302,7 @@ mod tests {
                     font_name: "FArial".into(),
                     font_size: 12.0,
                     fill_color: Color::Gray(0.0),
-                    character_spacing: 0.0,
+                    character_spacing: 0.0, stroke_width: 0.0,
                 })],
                 rotation: 0,
             }],

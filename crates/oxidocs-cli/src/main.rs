@@ -688,7 +688,7 @@ impl PdfBuilder {
     /// Add text at (x, y) where y is in top-down coordinates.
     fn add_text(&mut self, x: f64, y: f64, text: String, font_name: String, font_size: f64, color: Color) {
         self.current_contents.push(ContentElement::Text(TextSpan {
-            x, y, text, font_name, font_size, fill_color: color, character_spacing: 0.0,
+            x, y, text, font_name, font_size, fill_color: color, character_spacing: 0.0, stroke_width: 0.0,
         }));
     }
 
@@ -1660,8 +1660,17 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         }
                     }
 
+                    // OXI_PDF_FAKE_BOLD (2026-11-08, default ON, opt-out _DISABLE): an East
+                    // Asian family with no bold member on this machine is drawn as Word draws
+                    // it -- its regular face, filled and stroked at fs/35 (Word's PDF: «2 Tr
+                    // 0.51429 w» at 18pt) -- instead of a stand-in face. blind-J ja/reports__
+                    // 77526bdb's bold ＭＳ Ｐゴシック «長野労働局» came out light.
+                    let fake_bold = *bold
+                        && std::env::var_os("OXI_PDF_FAKE_BOLD_DISABLE").is_none()
+                        && font_family.as_deref().is_some_and(|f| is_cjk_family(f)
+                            && oxidocs_core::font::runtime::face_file(f, true, false).is_none());
                     // Resolve font name for PDF (map to Type1 base fonts or CJK)
-                    let font_name = resolve_font_styled(font_family.as_deref(), *bold, *italic);
+                    let font_name = resolve_font_styled(font_family.as_deref(), *bold && !fake_bold, *italic);
                     let text = &symbol_text(font_family.as_deref(), &font_name, text, &embedded_fonts);
                     let chars: Vec<char> = text.chars().collect();
                     let mut seg_x = x;
@@ -1728,7 +1737,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                             x: sx, y: text_y,
                             text: seg_text, font_name: seg_font,
                             font_size: fs, fill_color,
-                            character_spacing: *character_spacing as f64,
+                            character_spacing: *character_spacing as f64, stroke_width: if fake_bold { fs / 35.0 } else { 0.0 },
                         }));
                     }
 
@@ -1871,6 +1880,18 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     // Decode image (PNG/JPEG/etc.) to raw RGB pixels
                     if !data.is_empty() {
                         if let Ok(img) = image::load_from_memory(data) {
+                            // OXI_PDF_IMAGE_ALPHA (2026-11-08, default ON, opt-out _DISABLE):
+                            // an image with transparent pixels keeps them as a soft mask;
+                            // to_rgb8 alone turned them black (blind-J ja/reports__77526bdb's
+                            // transparent PNG illustration drew on a black square).
+                            let alpha = if img.color().has_alpha()
+                                && std::env::var_os("OXI_PDF_IMAGE_ALPHA_DISABLE").is_none()
+                            {
+                                let a: Vec<u8> = img.to_rgba8().pixels().map(|p| p.0[3]).collect();
+                                a.iter().any(|&v| v < 255).then_some(a)
+                            } else {
+                                None
+                            };
                             let rgb = img.to_rgb8();
                             let (pw, ph) = rgb.dimensions();
                             let raw_pixels = rgb.into_raw();
@@ -1884,6 +1905,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                                 bits_per_component: 8,
                                 pixel_width: pw,
                                 pixel_height: ph,
+                                alpha,
                             }));
                         }
                     }
