@@ -2360,6 +2360,41 @@ impl<'a> Runtime<'a> {
                 !kind.is_array && self.source_class_key(&kind.name).is_some())
     }
 
+    fn prepare_source_default_dispatch_value(
+        &mut self, receiver: &ObjectRef, value: Value, frame: &mut Frame, line: u32,
+    ) -> Result<Option<Value>, RuntimeError> {
+        if let Some(project) = self.foreign_project(receiver) {
+            return self.in_application_project(project, |runtime|
+                runtime.prepare_source_default_dispatch_value(receiver, value, frame, line));
+        }
+        let parameter = match self.internal_objects.get(&receiver.handle) {
+            Some(InternalObject::Instance(instance)) => self.source_class_procedure_view(
+                &instance.class, "_default", &[ProcKind::PropertyLet], receiver.dispatch_view.as_deref(),
+            ).and_then(|(_, procedure)| procedure.params.last().cloned()),
+            _ => None,
+        };
+        let Some(parameter) = parameter else { return Ok(None); };
+        if parameter.is_array || parameter.type_name.is_new || matches!(value, Value::Missing) {
+            return Ok(Some(value));
+        }
+        let kind = self.parameter_scalar_name(&parameter.type_name.name);
+        let value = if matches!(kind.as_str(),
+            "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double"
+                | "currency" | "date" | "boolean" | "string")
+        {
+            // Automation converts a failed default-value read to type mismatch.
+            // Keep the later declared-type conversion separate from this read.
+            self.scalar_operand(value, frame, line)
+                .map_err(|_| language_error(13, "Automation property value type mismatch", line))?
+        } else { value };
+        self.coerce_runtime(value, &parameter.type_name.name, line, self.this_year())
+            .map(Some)
+            .map_err(|failure| if failure.vba_number == Some(424) {
+                language_error(13, "Automation property value type mismatch", line)
+            } else { failure })
+    }
+
+
     fn source_call_parameters(
         &self,
         object: &Expr,
@@ -4752,6 +4787,36 @@ impl<'a> Runtime<'a> {
             } => {
                 let evaluated=self.prepare_named_setter(target,frame,false)?;
                 let value = self.eval_expr(value, frame)?;
+                let late_storage = if !matches!(target, Expr::Index { .. }) {
+                    self.expression_slot(target, frame).and_then(|slot| {
+                        if !slot.declared.borrow().as_deref()
+                            .is_some_and(|kind| kind.eq_ignore_ascii_case("Object")) {
+                            return None;
+                        }
+                        let held = slot.borrow().clone();
+                        match held {
+                            Value::Object(receiver) if matches!(
+                                self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))
+                            ) => Some(receiver),
+                            _ => None,
+                        }
+                    })
+                } else { None };
+                if let Some(receiver) = late_storage {
+                    if let Some(prepared) = self.prepare_source_default_dispatch_value(
+                        &receiver, value.clone(), frame, span.line,
+                    )? {
+                        drop(value);
+                        let answer = self.automation_default_member(
+                            &receiver, 4, &[prepared], frame, span.line, None,
+                        );
+                        drop(receiver);
+                        let collected = self.collect_instances(span.line);
+                        if answer.is_ok() { collected?; }
+                        answer?;
+                        return Ok(Flow::Continue);
+                    }
+                }
                 let storage_parameter = if !matches!(target, Expr::Index { .. })
                     && self.expression_slot(target, frame).is_some()
                     && self.source_class_name(target, frame).is_some() {
@@ -4856,23 +4921,25 @@ impl<'a> Runtime<'a> {
                 // A host property may want the object itself rather than
                 // what it stands for -- a chart's series keeps the RANGE
                 // it plots.
-                if let (Expr::Member { object, name, span: at, .. }, Value::Object(source)) =
-                    (target, &value)
-                {
-                    let receiver = self.eval_object(object, frame, at.line)?;
-                    let taken = match self.host.as_deref_mut() {
-                        Some(host) => host
-                            .set_from_object(&receiver, name, source)
-                            .map_err(|message| host_failure(message, at.line))?,
-                        None => None,
-                    };
-                    if taken == Some(true) {
+                if self.expression_slot(target, frame).is_none() {
+                    if let (Expr::Member { object, name, span: at, .. }, Value::Object(source)) =
+                        (target, &value)
+                    {
+                        let receiver = self.eval_object(object, frame, at.line)?;
+                        let taken = match self.host.as_deref_mut() {
+                            Some(host) => host
+                                .set_from_object(&receiver, name, source)
+                                .map_err(|message| host_failure(message, at.line))?,
+                            None => None,
+                        };
+                        if taken == Some(true) {
+                            return Ok(Flow::Continue);
+                        }
+                        let view = self.source_member_view(target, frame);
+                        let value = self.let_value(value, frame, span.line)?;
+                        self.assign_member_value(receiver, name, value, frame, at.line, view.as_deref())?;
                         return Ok(Flow::Continue);
                     }
-                    let view = self.source_member_view(target, frame);
-                    let value = self.let_value(value, frame, span.line)?;
-                    self.assign_member_value(receiver, name, value, frame, at.line, view.as_deref())?;
-                    return Ok(Flow::Continue);
                 }
                 let setter_value = if let Expr::Index { target: callee, .. } = target {
                     self.source_setter_signature(callee, frame, false)
