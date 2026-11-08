@@ -29113,7 +29113,9 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn automation_assignment_error(&self, receiver: &ObjectRef, name: &str, number: i64) -> Option<i64> {
-        (number == 1004 && self.range(receiver).is_some() && name.eq_ignore_ascii_case("locked"))
+        (number == 1004 && ((self.range(receiver).is_some() && name.eq_ignore_ascii_case("locked"))
+            || (self.is_application(receiver) && (application_variant_boolean_setting(name).is_some()
+                || name.eq_ignore_ascii_case("screenupdating")))))
             .then_some(number)
     }
 
@@ -29133,6 +29135,8 @@ impl Host for WorkbookHost<'_> {
 
     fn property_assignment_error(&self, receiver: Option<&ObjectRef>, name: &str, value: &Value) -> Option<i64> {
         if let Some(receiver) = receiver {
+            if self.is_application(receiver) && application_variant_boolean_setting(name).is_some()
+                && matches!(value, Value::Nothing) { return Some(5); }
             if self.is_workbook(receiver) && name.eq_ignore_ascii_case("saved") {
                 return Self::legacy_assignment_number(value).err();
             }
@@ -29184,6 +29188,8 @@ impl Host for WorkbookHost<'_> {
     fn property_assignment_uses_variant(&self, receiver: &ObjectRef, name: &str) -> bool {
         (self.is_workbook(receiver) && name.eq_ignore_ascii_case("readonlyrecommended"))
             || (self.range(receiver).is_some() && name.eq_ignore_ascii_case("locked"))
+            || (self.is_application(receiver) && (application_variant_boolean_setting(name).is_some()
+                || name.eq_ignore_ascii_case("screenupdating")))
     }
 
     fn property_assignment_value(&self, _receiver: Option<&ObjectRef>, name: &str, value: &Value, by_reference: bool) -> Option<Value> {
@@ -34936,25 +34942,24 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("screenupdating") {
-                self.screen_updating = application_switch(&value, "Application.ScreenUpdating")?;
+                // The vtable converts text to Boolean before this setter. Excel's
+                // dispatch setter accepts only the unspaced Boolean words.
+                let flag = if let Value::String(text) = &value {
+                    match text.to_ascii_lowercase().as_str() {
+                        "true" => true,
+                        "false" => false,
+                        _ => return Err(self.scalar_set_error("Application", "ScreenUpdating")),
+                    }
+                } else { application_switch(&value, "Application.ScreenUpdating")? };
+                self.screen_updating = flag;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("enableevents") {
                 self.enable_events = application_switch(&value, "Application.EnableEvents")?;
                 return Ok(true);
             }
-            if name.eq_ignore_ascii_case("calculatebeforesave") {
-                let flag = application_switch(&value, "Application.CalculateBeforeSave")?;
-                self.app_settings.insert("calculatebeforesave".to_string(), Value::Boolean(flag));
-                return Ok(true);
-            }
             if name.eq_ignore_ascii_case("calculationstate") {
                 return Err(host_error(450, "CalculationState is read-only"));
-            }
-            if name.eq_ignore_ascii_case("DisplayFormulaBar") || name.eq_ignore_ascii_case("DisplayStatusBar") {
-                let flag = application_switch(&value, &format!("Application.{name}"))?;
-                self.app_settings.insert(name.to_ascii_lowercase(), Value::Boolean(flag));
-                return Ok(true);
             }
             if name.eq_ignore_ascii_case("SheetsInNewWorkbook") {
                 use oxivba_core::runtime::{coerce_automation_scalar, AutomationScalarType};
@@ -34969,6 +34974,17 @@ impl Host for WorkbookHost<'_> {
                     return Err(host_error(1004, "SheetsInNewWorkbook must be in 1..255"));
                 }
                 self.app_settings.insert("sheetsinnewworkbook".into(), Value::Integer(number as i64));
+                return Ok(true);
+            }
+            if let Some(property) = application_variant_boolean_setting(name) {
+                let number = Self::legacy_assignment_number(&value).map_err(|number|
+                    if number == 1004 { self.scalar_set_error("Application", property) }
+                    else { host_error(number, "invalid Application Boolean value") })?;
+                // A scalar Null is accepted without changing the setting.
+                // Validate first so a failed dispatch cannot poison later reads.
+                if let Some(number) = number {
+                    self.app_settings.insert(name.to_ascii_lowercase(), Value::Boolean(number != 0.0));
+                }
                 return Ok(true);
             }
             if APPLICATION_SETTINGS.iter().any(|(held, _, settable)| *settable && held.eq_ignore_ascii_case(name)) {
@@ -36882,6 +36898,17 @@ fn style_face_boolean(value: &Value, property: &str) -> Result<Option<bool>, Str
 ///   either the plain or the `#...#` form, with nothing around it: `"false"`
 ///   and `"#FALSE#"` are False, and `" False "` is a type mismatch
 /// - `Null` and an `Error` are refused
+// Native Excel uses its legacy Variant dispatch conversion for these
+// settings; their statically bound VBA setters still take a Boolean.
+fn application_variant_boolean_setting(name: &str) -> Option<&'static str> {
+    match name.to_ascii_lowercase().as_str() {
+        "displayformulabar" => Some("DisplayFormulaBar"),
+        "displaystatusbar" => Some("DisplayStatusBar"),
+        "calculatebeforesave" => Some("CalculateBeforeSave"),
+        _ => None,
+    }
+}
+
 fn application_switch(value: &Value, property: &str) -> Result<bool, String> {
     match value {
         Value::Boolean(asked) => Ok(*asked),
@@ -59247,6 +59274,2317 @@ End Function
         ];
         assert_eq!(cases.len(), 24);
         check_scalar_native_matrix(&probe, "ScalarSetterContract.WithNothingControl", expected, cases, &[]);
+    }
+
+    fn application_scalar_native_probe() -> String {
+        let original = scalar_with_native_probe();
+        let class = original.find("VERSION 1.0 CLASS").unwrap();
+        format!("{}{}{}{}", &original[..class], r####"Public Function Inspect() As String
+ Dim i As Long, query As Object, report As String
+ report = CountStateContract.Snapshot
+ For i = 0 To 7
+  Set query = Target(i)
+  report = report & "|" & NameOf(i) & "=" & Typed(CallByName(query, NameOf(i), 2))
+ Next
+ Inspect = report
+End Function
+Public Function VisibilityProbe(ByVal form As Long, ByVal valueKind As Long) As String
+ Dim query As Object, before As String, after As String, failure As String, unused As Variant
+ Trace = ""
+ On Error GoTo Failed
+ Application.Visible = False
+ before = Typed(Application.Visible)
+ Select Case form
+ Case 0: Application.Visible = Payload(valueKind, 2)
+ Case 1
+  Set query = Application
+  query.Visible = Payload(valueKind, 2)
+ Case 2: AssignmentReceiver(3).Visible = Payload(valueKind, 2)
+ Case 3
+  With AssignmentReceiver(3)
+   .Visible = Payload(valueKind, 2)
+  End With
+ Case 4
+  Set query = Application
+  unused = CallByName(query, "Visible", VbLet, Payload(valueKind, 2))
+ End Select
+ after = Typed(Application.Visible)
+ VisibilityProbe = "OK|before=" & before & "|after=" & after & "|saved=" & CStr(ThisWorkbook.Saved) & "|trace=" & Trace
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ after = Typed(Application.Visible)
+ VisibilityProbe = "ERR|" & failure & "|before=" & before & "|after=" & after & "|saved=" & CStr(ThisWorkbook.Saved) & "|trace=" & Trace
+End Function
+
+Public Function VisibilityInspect() As String
+ VisibilityInspect = Inspect() & "|application.visible=" & Typed(Application.Visible)
+End Function
+
+Public Function ApplicationSwitchProbe0(ByVal form As Long, ByVal valueKind As Long) As String
+ Dim query As Object, before As String, after As String, failure As String, unused As Variant
+ Trace = ""
+ On Error GoTo Failed
+ Application.DisplayFormulaBar = True
+ Application.DisplayStatusBar = True
+ Application.UseSystemSeparators = True
+ Application.CalculateBeforeSave = True
+ before = Typed(Application.DisplayFormulaBar)
+ Select Case form
+ Case 0: Application.DisplayFormulaBar = Payload(valueKind, 2)
+ Case 1
+  Set query = Application
+  query.DisplayFormulaBar = Payload(valueKind, 2)
+ Case 2: AssignmentReceiver(3).DisplayFormulaBar = Payload(valueKind, 2)
+ Case 3
+  With AssignmentReceiver(3)
+   .DisplayFormulaBar = Payload(valueKind, 2)
+  End With
+ Case 4
+  Set query = Application
+  unused = CallByName(query, "DisplayFormulaBar", VbLet, Payload(valueKind, 2))
+ End Select
+ after = Typed(Application.DisplayFormulaBar)
+ ApplicationSwitchProbe0 = "OK|before=" & before & "|after=" & after & "|saved=" & CStr(ThisWorkbook.Saved) & "|trace=" & Trace
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ after = Typed(Application.DisplayFormulaBar)
+ ApplicationSwitchProbe0 = "ERR|" & failure & "|before=" & before & "|after=" & after & "|saved=" & CStr(ThisWorkbook.Saved) & "|trace=" & Trace
+End Function
+
+Public Function ApplicationSwitchProbe1(ByVal form As Long, ByVal valueKind As Long) As String
+ Dim query As Object, before As String, after As String, failure As String, unused As Variant
+ Trace = ""
+ On Error GoTo Failed
+ Application.DisplayFormulaBar = True
+ Application.DisplayStatusBar = True
+ Application.UseSystemSeparators = True
+ Application.CalculateBeforeSave = True
+ before = Typed(Application.DisplayStatusBar)
+ Select Case form
+ Case 0: Application.DisplayStatusBar = Payload(valueKind, 2)
+ Case 1
+  Set query = Application
+  query.DisplayStatusBar = Payload(valueKind, 2)
+ Case 2: AssignmentReceiver(3).DisplayStatusBar = Payload(valueKind, 2)
+ Case 3
+  With AssignmentReceiver(3)
+   .DisplayStatusBar = Payload(valueKind, 2)
+  End With
+ Case 4
+  Set query = Application
+  unused = CallByName(query, "DisplayStatusBar", VbLet, Payload(valueKind, 2))
+ End Select
+ after = Typed(Application.DisplayStatusBar)
+ ApplicationSwitchProbe1 = "OK|before=" & before & "|after=" & after & "|saved=" & CStr(ThisWorkbook.Saved) & "|trace=" & Trace
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ after = Typed(Application.DisplayStatusBar)
+ ApplicationSwitchProbe1 = "ERR|" & failure & "|before=" & before & "|after=" & after & "|saved=" & CStr(ThisWorkbook.Saved) & "|trace=" & Trace
+End Function
+
+Public Function ApplicationSwitchProbe2(ByVal form As Long, ByVal valueKind As Long) As String
+ Dim query As Object, before As String, after As String, failure As String, unused As Variant
+ Trace = ""
+ On Error GoTo Failed
+ Application.DisplayFormulaBar = True
+ Application.DisplayStatusBar = True
+ Application.UseSystemSeparators = True
+ Application.CalculateBeforeSave = True
+ before = Typed(Application.UseSystemSeparators)
+ Select Case form
+ Case 0: Application.UseSystemSeparators = Payload(valueKind, 2)
+ Case 1
+  Set query = Application
+  query.UseSystemSeparators = Payload(valueKind, 2)
+ Case 2: AssignmentReceiver(3).UseSystemSeparators = Payload(valueKind, 2)
+ Case 3
+  With AssignmentReceiver(3)
+   .UseSystemSeparators = Payload(valueKind, 2)
+  End With
+ Case 4
+  Set query = Application
+  unused = CallByName(query, "UseSystemSeparators", VbLet, Payload(valueKind, 2))
+ End Select
+ after = Typed(Application.UseSystemSeparators)
+ ApplicationSwitchProbe2 = "OK|before=" & before & "|after=" & after & "|saved=" & CStr(ThisWorkbook.Saved) & "|trace=" & Trace
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ after = Typed(Application.UseSystemSeparators)
+ ApplicationSwitchProbe2 = "ERR|" & failure & "|before=" & before & "|after=" & after & "|saved=" & CStr(ThisWorkbook.Saved) & "|trace=" & Trace
+End Function
+
+Public Function ApplicationSwitchProbe3(ByVal form As Long, ByVal valueKind As Long) As String
+ Dim query As Object, before As String, after As String, failure As String, unused As Variant
+ Trace = ""
+ On Error GoTo Failed
+ Application.DisplayFormulaBar = True
+ Application.DisplayStatusBar = True
+ Application.UseSystemSeparators = True
+ Application.CalculateBeforeSave = True
+ before = Typed(Application.CalculateBeforeSave)
+ Select Case form
+ Case 0: Application.CalculateBeforeSave = Payload(valueKind, 2)
+ Case 1
+  Set query = Application
+  query.CalculateBeforeSave = Payload(valueKind, 2)
+ Case 2: AssignmentReceiver(3).CalculateBeforeSave = Payload(valueKind, 2)
+ Case 3
+  With AssignmentReceiver(3)
+   .CalculateBeforeSave = Payload(valueKind, 2)
+  End With
+ Case 4
+  Set query = Application
+  unused = CallByName(query, "CalculateBeforeSave", VbLet, Payload(valueKind, 2))
+ End Select
+ after = Typed(Application.CalculateBeforeSave)
+ ApplicationSwitchProbe3 = "OK|before=" & before & "|after=" & after & "|saved=" & CStr(ThisWorkbook.Saved) & "|trace=" & Trace
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ after = Typed(Application.CalculateBeforeSave)
+ ApplicationSwitchProbe3 = "ERR|" & failure & "|before=" & before & "|after=" & after & "|saved=" & CStr(ThisWorkbook.Saved) & "|trace=" & Trace
+End Function
+
+Public Function ApplicationSwitchInspect() As String
+ ApplicationSwitchInspect = Inspect() & "|application.displayformulabar=" & Typed(Application.DisplayFormulaBar) & "|application.displaystatusbar=" & Typed(Application.DisplayStatusBar) & "|application.usesystemseparators=" & Typed(Application.UseSystemSeparators) & "|application.calculatebeforesave=" & Typed(Application.CalculateBeforeSave)
+End Function
+Public Function BooleanTextControl(ByVal mode As Long, ByVal valueKind As Long) As String
+ Dim value As Variant, answer As Variant, flag As Boolean, query As Object, unused As Variant, failure As String
+ On Error GoTo Failed
+ Application.ScreenUpdating = True
+ Select Case valueKind
+ Case 0: value = "#FALSE#"
+ Case 1: value = "#TRUE#"
+ Case 2: value = " False "
+ Case 3: value = "False "
+ Case 4: value = "true"
+ Case 5: value = " 1 "
+ End Select
+ Select Case mode
+ Case 0: answer = CBool(value)
+ Case 1: flag = value: answer = flag
+ Case 2: Application.ScreenUpdating = value: answer = Application.ScreenUpdating
+ Case 3
+  Set query = Application
+  query.ScreenUpdating = value
+  answer = query.ScreenUpdating
+ Case 4
+  Set query = Application
+  unused = CallByName(query, "ScreenUpdating", VbLet, value)
+  answer = query.ScreenUpdating
+ End Select
+ BooleanTextControl = "OK|" & Typed(answer) & "|screen=" & Typed(Application.ScreenUpdating)
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ BooleanTextControl = "ERR|" & failure & "|screen=" & Typed(Application.ScreenUpdating)
+End Function
+"####, &original[class..], r####"
+Attribute VB_Name = "CountStateContract"
+Option Explicit
+Private Function Atom(ByVal key As String, ByVal value As Variant) As String
+ Dim text As String
+ If IsNull(value) Then
+  text = "<Null>"
+ Else
+  text = CStr(value)
+ End If
+ Atom = key & vbTab & TypeName(value) & vbTab & CStr(VarType(value)) & vbTab & CStr(Len(text)) & ":" & text & vbLf
+End Function
+Public Function Snapshot() As String
+ Dim result As String
+ Dim ws As Worksheet
+ Dim cell As Range
+ Dim i As Long
+ Dim rowIndex As Long
+ Dim colIndex As Long
+ Dim key As String
+ result = Atom("book.saved", ThisWorkbook.Saved)
+ result = result & Atom("book.readOnly", ThisWorkbook.ReadOnly)
+ result = result & Atom("book.sheetCount", ThisWorkbook.Worksheets.Count)
+ result = result & Atom("active.sheet", ActiveSheet.name)
+ result = result & Atom("active.cell", ActiveCell.Address)
+ result = result & Atom("app.calculation", Application.Calculation)
+ result = result & Atom("app.calculateBeforeSave", Application.CalculateBeforeSave)
+ result = result & Atom("app.screenUpdating", Application.ScreenUpdating)
+ result = result & Atom("app.enableEvents", Application.EnableEvents)
+ result = result & Atom("app.displayAlerts", Application.DisplayAlerts)
+ result = result & Atom("app.cursor", Application.Cursor)
+ result = result & Atom("app.interactive", Application.Interactive)
+ result = result & Atom("app.referenceStyle", Application.ReferenceStyle)
+ For Each ws In ThisWorkbook.Worksheets
+  i = i + 1
+  key = "sheet." & CStr(i)
+  result = result & Atom(key & ".name", ws.name)
+  result = result & Atom(key & ".protectContents", ws.ProtectContents)
+  For rowIndex = 1 To 6
+   key = "sheet." & CStr(i) & ".row" & CStr(rowIndex)
+   result = result & Atom(key & ".height", ws.Rows(rowIndex).RowHeight)
+   result = result & Atom(key & ".hidden", ws.Rows(rowIndex).Hidden)
+  Next
+  For colIndex = 1 To 6
+   key = "sheet." & CStr(i) & ".col" & CStr(colIndex)
+   result = result & Atom(key & ".width", ws.Columns(colIndex).ColumnWidth)
+   result = result & Atom(key & ".hidden", ws.Columns(colIndex).Hidden)
+  Next
+  For rowIndex = 1 To 6
+   For colIndex = 1 To 6
+    Set cell = ws.Cells(rowIndex, colIndex)
+    key = "sheet." & CStr(i) & ".r" & CStr(rowIndex) & "c" & CStr(colIndex)
+    result = result & Atom(key & ".value2", cell.Value2)
+    result = result & Atom(key & ".formula", cell.Formula)
+    result = result & Atom(key & ".formula2", cell.Formula2)
+    result = result & Atom(key & ".hasFormula", cell.HasFormula)
+   Next
+  Next
+ Next
+ Snapshot = result
+End Function
+
+"####)
+    }
+
+    fn check_application_scalar_native_matrix(
+        inspector: &str, expected: &[&str], snapshots: &[&str],
+        cases: &[(&str, [i64; 2], usize, usize)],
+    ) {
+        let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
+        let seed_source = crate::vba_project::read_project_source_with_code_page(seed, None).unwrap().unwrap();
+        let bytes = crate::vba_project::write_project_source(seed, &(seed_source + "\n" + &application_scalar_native_probe()), None).unwrap();
+        let source = crate::vba_project::read_project_source_with_code_page(&bytes, None).unwrap().unwrap();
+        let mut book = oxicells_core::parse_xlsx(&bytes).unwrap();
+        book.calculation.dbcs_language = Some(true);
+        let mut differences = Vec::new();
+        for &(procedure, args, result_index, snapshot_index) in cases {
+            let mut current = book.clone();
+            let mut session = None;
+            for phase in ["cold", "warm"] {
+                for (operation, arguments, expected) in [
+                    (procedure, args.into_iter().map(Value::Integer).collect(), expected[result_index]),
+                    (inspector, Vec::new(), snapshots[snapshot_index]),
+                ] {
+                    let mut context = failure_context();
+                    context.project_name = "OxiNamedProject".into();
+                    context.file_name = Some("ScalarSetterContract.xlsm".into());
+                    context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+                    context.environment.help_file = r####"C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm"####.into();
+                    context.application_state = if phase == "cold" && operation == procedure {
+                        Some(serde_json::from_value(serde_json::json!({
+                            "enableEvents":false, "displayAlerts":false, "calculation":-4105
+                        })).unwrap())
+                    } else { None };
+                    context.file_context = Some(serde_json::from_value(serde_json::json!({
+                        "packageBytes":bytes, "readOnly":true, "editRevision":0
+                    })).unwrap());
+                    let outcome = execute_workbook_action_in_session(current, &source, Some(operation),
+                        arguments, 0, context, &mut session).unwrap();
+                    let actual = serde_json::to_value(&outcome.result).unwrap();
+                    if outcome.error.is_some() || actual["value"] != expected {
+                        differences.push(format!("procedure={procedure} args={args:?} phase={phase} operation={operation}: error_present={} result={actual} expected {expected}", outcome.error.is_some()));
+                    }
+                    current = outcome.workbook;
+                }
+            }
+        }
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    #[test]
+    fn native_application_scalar_visible_matches_errors_and_typed_state() {
+        let expected: &[&str] = &[
+            r####"OK|before=False|Boolean|11|after=True|Boolean|11|saved=True|trace=V"####,
+            r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|before=False|Boolean|11|after=False|Boolean|11|saved=True|trace=V"####,
+            r####"OK|before=False|Boolean|11|after=False|Boolean|11|saved=True|trace=V"####,
+            r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|before=False|Boolean|11|after=False|Boolean|11|saved=True|trace=V"####,
+            r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|before=False|Boolean|11|after=False|Boolean|11|saved=True|trace=V"####,
+            r####"OK|before=False|Boolean|11|after=True|Boolean|11|saved=True|trace=VD"####,
+            r####"OK|before=False|Boolean|11|after=True|Boolean|11|saved=True|trace=VR"####,
+            r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|before=False|Boolean|11|after=False|Boolean|11|saved=True|trace=VR"####,
+            r####"OK|before=False|Boolean|11|after=False|Boolean|11|saved=True|trace=VR"####,
+            r####"OK|before=False|Boolean|11|after=True|Boolean|11|saved=True|trace=VRD"####,
+            r####"OK|before=False|Boolean|11|after=True|Boolean|11|saved=True|trace=RV"####,
+            r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|before=False|Boolean|11|after=False|Boolean|11|saved=True|trace=RV"####,
+            r####"OK|before=False|Boolean|11|after=False|Boolean|11|saved=True|trace=RV"####,
+            r####"OK|before=False|Boolean|11|after=True|Boolean|11|saved=True|trace=RVD"####,
+        ];
+        let snapshots: &[&str] = &[
+            r####"book.saved	Boolean	11	4:True
+book.readOnly	Boolean	11	4:True
+book.sheetCount	Long	3	1:1
+active.sheet	String	8	6:Sheet1
+active.cell	String	8	4:$A$1
+app.calculation	Long	3	5:-4105
+app.calculateBeforeSave	Boolean	11	4:True
+app.screenUpdating	Boolean	11	4:True
+app.enableEvents	Boolean	11	5:False
+app.displayAlerts	Boolean	11	5:False
+app.cursor	Long	3	5:-4143
+app.interactive	Boolean	11	4:True
+app.referenceStyle	Long	3	1:1
+sheet.1.name	String	8	6:Sheet1
+sheet.1.protectContents	Boolean	11	5:False
+sheet.1.row1.height	Double	5	2:15
+sheet.1.row1.hidden	Boolean	11	5:False
+sheet.1.row2.height	Double	5	2:15
+sheet.1.row2.hidden	Boolean	11	5:False
+sheet.1.row3.height	Double	5	2:15
+sheet.1.row3.hidden	Boolean	11	5:False
+sheet.1.row4.height	Double	5	2:15
+sheet.1.row4.hidden	Boolean	11	5:False
+sheet.1.row5.height	Double	5	2:15
+sheet.1.row5.hidden	Boolean	11	5:False
+sheet.1.row6.height	Double	5	2:15
+sheet.1.row6.hidden	Boolean	11	5:False
+sheet.1.col1.width	Double	5	4:8.43
+sheet.1.col1.hidden	Boolean	11	5:False
+sheet.1.col2.width	Double	5	4:8.43
+sheet.1.col2.hidden	Boolean	11	5:False
+sheet.1.col3.width	Double	5	4:8.43
+sheet.1.col3.hidden	Boolean	11	5:False
+sheet.1.col4.width	Double	5	4:8.43
+sheet.1.col4.hidden	Boolean	11	5:False
+sheet.1.col5.width	Double	5	4:8.43
+sheet.1.col5.hidden	Boolean	11	5:False
+sheet.1.col6.width	Double	5	4:8.43
+sheet.1.col6.hidden	Boolean	11	5:False
+sheet.1.r1c1.value2	Empty	0	0:
+sheet.1.r1c1.formula	String	8	0:
+sheet.1.r1c1.formula2	String	8	0:
+sheet.1.r1c1.hasFormula	Boolean	11	5:False
+sheet.1.r1c2.value2	Empty	0	0:
+sheet.1.r1c2.formula	String	8	0:
+sheet.1.r1c2.formula2	String	8	0:
+sheet.1.r1c2.hasFormula	Boolean	11	5:False
+sheet.1.r1c3.value2	Empty	0	0:
+sheet.1.r1c3.formula	String	8	0:
+sheet.1.r1c3.formula2	String	8	0:
+sheet.1.r1c3.hasFormula	Boolean	11	5:False
+sheet.1.r1c4.value2	Empty	0	0:
+sheet.1.r1c4.formula	String	8	0:
+sheet.1.r1c4.formula2	String	8	0:
+sheet.1.r1c4.hasFormula	Boolean	11	5:False
+sheet.1.r1c5.value2	Empty	0	0:
+sheet.1.r1c5.formula	String	8	0:
+sheet.1.r1c5.formula2	String	8	0:
+sheet.1.r1c5.hasFormula	Boolean	11	5:False
+sheet.1.r1c6.value2	Empty	0	0:
+sheet.1.r1c6.formula	String	8	0:
+sheet.1.r1c6.formula2	String	8	0:
+sheet.1.r1c6.hasFormula	Boolean	11	5:False
+sheet.1.r2c1.value2	Empty	0	0:
+sheet.1.r2c1.formula	String	8	0:
+sheet.1.r2c1.formula2	String	8	0:
+sheet.1.r2c1.hasFormula	Boolean	11	5:False
+sheet.1.r2c2.value2	Empty	0	0:
+sheet.1.r2c2.formula	String	8	0:
+sheet.1.r2c2.formula2	String	8	0:
+sheet.1.r2c2.hasFormula	Boolean	11	5:False
+sheet.1.r2c3.value2	Empty	0	0:
+sheet.1.r2c3.formula	String	8	0:
+sheet.1.r2c3.formula2	String	8	0:
+sheet.1.r2c3.hasFormula	Boolean	11	5:False
+sheet.1.r2c4.value2	Empty	0	0:
+sheet.1.r2c4.formula	String	8	0:
+sheet.1.r2c4.formula2	String	8	0:
+sheet.1.r2c4.hasFormula	Boolean	11	5:False
+sheet.1.r2c5.value2	Empty	0	0:
+sheet.1.r2c5.formula	String	8	0:
+sheet.1.r2c5.formula2	String	8	0:
+sheet.1.r2c5.hasFormula	Boolean	11	5:False
+sheet.1.r2c6.value2	Empty	0	0:
+sheet.1.r2c6.formula	String	8	0:
+sheet.1.r2c6.formula2	String	8	0:
+sheet.1.r2c6.hasFormula	Boolean	11	5:False
+sheet.1.r3c1.value2	Empty	0	0:
+sheet.1.r3c1.formula	String	8	0:
+sheet.1.r3c1.formula2	String	8	0:
+sheet.1.r3c1.hasFormula	Boolean	11	5:False
+sheet.1.r3c2.value2	Empty	0	0:
+sheet.1.r3c2.formula	String	8	0:
+sheet.1.r3c2.formula2	String	8	0:
+sheet.1.r3c2.hasFormula	Boolean	11	5:False
+sheet.1.r3c3.value2	Empty	0	0:
+sheet.1.r3c3.formula	String	8	0:
+sheet.1.r3c3.formula2	String	8	0:
+sheet.1.r3c3.hasFormula	Boolean	11	5:False
+sheet.1.r3c4.value2	Empty	0	0:
+sheet.1.r3c4.formula	String	8	0:
+sheet.1.r3c4.formula2	String	8	0:
+sheet.1.r3c4.hasFormula	Boolean	11	5:False
+sheet.1.r3c5.value2	Empty	0	0:
+sheet.1.r3c5.formula	String	8	0:
+sheet.1.r3c5.formula2	String	8	0:
+sheet.1.r3c5.hasFormula	Boolean	11	5:False
+sheet.1.r3c6.value2	Empty	0	0:
+sheet.1.r3c6.formula	String	8	0:
+sheet.1.r3c6.formula2	String	8	0:
+sheet.1.r3c6.hasFormula	Boolean	11	5:False
+sheet.1.r4c1.value2	Empty	0	0:
+sheet.1.r4c1.formula	String	8	0:
+sheet.1.r4c1.formula2	String	8	0:
+sheet.1.r4c1.hasFormula	Boolean	11	5:False
+sheet.1.r4c2.value2	Empty	0	0:
+sheet.1.r4c2.formula	String	8	0:
+sheet.1.r4c2.formula2	String	8	0:
+sheet.1.r4c2.hasFormula	Boolean	11	5:False
+sheet.1.r4c3.value2	Empty	0	0:
+sheet.1.r4c3.formula	String	8	0:
+sheet.1.r4c3.formula2	String	8	0:
+sheet.1.r4c3.hasFormula	Boolean	11	5:False
+sheet.1.r4c4.value2	Empty	0	0:
+sheet.1.r4c4.formula	String	8	0:
+sheet.1.r4c4.formula2	String	8	0:
+sheet.1.r4c4.hasFormula	Boolean	11	5:False
+sheet.1.r4c5.value2	Empty	0	0:
+sheet.1.r4c5.formula	String	8	0:
+sheet.1.r4c5.formula2	String	8	0:
+sheet.1.r4c5.hasFormula	Boolean	11	5:False
+sheet.1.r4c6.value2	Empty	0	0:
+sheet.1.r4c6.formula	String	8	0:
+sheet.1.r4c6.formula2	String	8	0:
+sheet.1.r4c6.hasFormula	Boolean	11	5:False
+sheet.1.r5c1.value2	Empty	0	0:
+sheet.1.r5c1.formula	String	8	0:
+sheet.1.r5c1.formula2	String	8	0:
+sheet.1.r5c1.hasFormula	Boolean	11	5:False
+sheet.1.r5c2.value2	Empty	0	0:
+sheet.1.r5c2.formula	String	8	0:
+sheet.1.r5c2.formula2	String	8	0:
+sheet.1.r5c2.hasFormula	Boolean	11	5:False
+sheet.1.r5c3.value2	Empty	0	0:
+sheet.1.r5c3.formula	String	8	0:
+sheet.1.r5c3.formula2	String	8	0:
+sheet.1.r5c3.hasFormula	Boolean	11	5:False
+sheet.1.r5c4.value2	Empty	0	0:
+sheet.1.r5c4.formula	String	8	0:
+sheet.1.r5c4.formula2	String	8	0:
+sheet.1.r5c4.hasFormula	Boolean	11	5:False
+sheet.1.r5c5.value2	Empty	0	0:
+sheet.1.r5c5.formula	String	8	0:
+sheet.1.r5c5.formula2	String	8	0:
+sheet.1.r5c5.hasFormula	Boolean	11	5:False
+sheet.1.r5c6.value2	Empty	0	0:
+sheet.1.r5c6.formula	String	8	0:
+sheet.1.r5c6.formula2	String	8	0:
+sheet.1.r5c6.hasFormula	Boolean	11	5:False
+sheet.1.r6c1.value2	Empty	0	0:
+sheet.1.r6c1.formula	String	8	0:
+sheet.1.r6c1.formula2	String	8	0:
+sheet.1.r6c1.hasFormula	Boolean	11	5:False
+sheet.1.r6c2.value2	Empty	0	0:
+sheet.1.r6c2.formula	String	8	0:
+sheet.1.r6c2.formula2	String	8	0:
+sheet.1.r6c2.hasFormula	Boolean	11	5:False
+sheet.1.r6c3.value2	Empty	0	0:
+sheet.1.r6c3.formula	String	8	0:
+sheet.1.r6c3.formula2	String	8	0:
+sheet.1.r6c3.hasFormula	Boolean	11	5:False
+sheet.1.r6c4.value2	Empty	0	0:
+sheet.1.r6c4.formula	String	8	0:
+sheet.1.r6c4.formula2	String	8	0:
+sheet.1.r6c4.hasFormula	Boolean	11	5:False
+sheet.1.r6c5.value2	Empty	0	0:
+sheet.1.r6c5.formula	String	8	0:
+sheet.1.r6c5.formula2	String	8	0:
+sheet.1.r6c5.hasFormula	Boolean	11	5:False
+sheet.1.r6c6.value2	Empty	0	0:
+sheet.1.r6c6.formula	String	8	0:
+sheet.1.r6c6.formula2	String	8	0:
+sheet.1.r6c6.hasFormula	Boolean	11	5:False
+|Saved=True|Boolean|11|ReadOnlyRecommended=False|Boolean|11|Visible=-1|Long|3|Index=1|Long|3|Locked=True|Boolean|11|Row=1|Long|3|Build=20527|Double|5|CalculationState=0|Long|3|application.visible=True|Boolean|11"####,
+            r####"book.saved	Boolean	11	4:True
+book.readOnly	Boolean	11	4:True
+book.sheetCount	Long	3	1:1
+active.sheet	String	8	6:Sheet1
+active.cell	String	8	4:$A$1
+app.calculation	Long	3	5:-4105
+app.calculateBeforeSave	Boolean	11	4:True
+app.screenUpdating	Boolean	11	4:True
+app.enableEvents	Boolean	11	5:False
+app.displayAlerts	Boolean	11	5:False
+app.cursor	Long	3	5:-4143
+app.interactive	Boolean	11	4:True
+app.referenceStyle	Long	3	1:1
+sheet.1.name	String	8	6:Sheet1
+sheet.1.protectContents	Boolean	11	5:False
+sheet.1.row1.height	Double	5	2:15
+sheet.1.row1.hidden	Boolean	11	5:False
+sheet.1.row2.height	Double	5	2:15
+sheet.1.row2.hidden	Boolean	11	5:False
+sheet.1.row3.height	Double	5	2:15
+sheet.1.row3.hidden	Boolean	11	5:False
+sheet.1.row4.height	Double	5	2:15
+sheet.1.row4.hidden	Boolean	11	5:False
+sheet.1.row5.height	Double	5	2:15
+sheet.1.row5.hidden	Boolean	11	5:False
+sheet.1.row6.height	Double	5	2:15
+sheet.1.row6.hidden	Boolean	11	5:False
+sheet.1.col1.width	Double	5	4:8.43
+sheet.1.col1.hidden	Boolean	11	5:False
+sheet.1.col2.width	Double	5	4:8.43
+sheet.1.col2.hidden	Boolean	11	5:False
+sheet.1.col3.width	Double	5	4:8.43
+sheet.1.col3.hidden	Boolean	11	5:False
+sheet.1.col4.width	Double	5	4:8.43
+sheet.1.col4.hidden	Boolean	11	5:False
+sheet.1.col5.width	Double	5	4:8.43
+sheet.1.col5.hidden	Boolean	11	5:False
+sheet.1.col6.width	Double	5	4:8.43
+sheet.1.col6.hidden	Boolean	11	5:False
+sheet.1.r1c1.value2	Empty	0	0:
+sheet.1.r1c1.formula	String	8	0:
+sheet.1.r1c1.formula2	String	8	0:
+sheet.1.r1c1.hasFormula	Boolean	11	5:False
+sheet.1.r1c2.value2	Empty	0	0:
+sheet.1.r1c2.formula	String	8	0:
+sheet.1.r1c2.formula2	String	8	0:
+sheet.1.r1c2.hasFormula	Boolean	11	5:False
+sheet.1.r1c3.value2	Empty	0	0:
+sheet.1.r1c3.formula	String	8	0:
+sheet.1.r1c3.formula2	String	8	0:
+sheet.1.r1c3.hasFormula	Boolean	11	5:False
+sheet.1.r1c4.value2	Empty	0	0:
+sheet.1.r1c4.formula	String	8	0:
+sheet.1.r1c4.formula2	String	8	0:
+sheet.1.r1c4.hasFormula	Boolean	11	5:False
+sheet.1.r1c5.value2	Empty	0	0:
+sheet.1.r1c5.formula	String	8	0:
+sheet.1.r1c5.formula2	String	8	0:
+sheet.1.r1c5.hasFormula	Boolean	11	5:False
+sheet.1.r1c6.value2	Empty	0	0:
+sheet.1.r1c6.formula	String	8	0:
+sheet.1.r1c6.formula2	String	8	0:
+sheet.1.r1c6.hasFormula	Boolean	11	5:False
+sheet.1.r2c1.value2	Empty	0	0:
+sheet.1.r2c1.formula	String	8	0:
+sheet.1.r2c1.formula2	String	8	0:
+sheet.1.r2c1.hasFormula	Boolean	11	5:False
+sheet.1.r2c2.value2	Empty	0	0:
+sheet.1.r2c2.formula	String	8	0:
+sheet.1.r2c2.formula2	String	8	0:
+sheet.1.r2c2.hasFormula	Boolean	11	5:False
+sheet.1.r2c3.value2	Empty	0	0:
+sheet.1.r2c3.formula	String	8	0:
+sheet.1.r2c3.formula2	String	8	0:
+sheet.1.r2c3.hasFormula	Boolean	11	5:False
+sheet.1.r2c4.value2	Empty	0	0:
+sheet.1.r2c4.formula	String	8	0:
+sheet.1.r2c4.formula2	String	8	0:
+sheet.1.r2c4.hasFormula	Boolean	11	5:False
+sheet.1.r2c5.value2	Empty	0	0:
+sheet.1.r2c5.formula	String	8	0:
+sheet.1.r2c5.formula2	String	8	0:
+sheet.1.r2c5.hasFormula	Boolean	11	5:False
+sheet.1.r2c6.value2	Empty	0	0:
+sheet.1.r2c6.formula	String	8	0:
+sheet.1.r2c6.formula2	String	8	0:
+sheet.1.r2c6.hasFormula	Boolean	11	5:False
+sheet.1.r3c1.value2	Empty	0	0:
+sheet.1.r3c1.formula	String	8	0:
+sheet.1.r3c1.formula2	String	8	0:
+sheet.1.r3c1.hasFormula	Boolean	11	5:False
+sheet.1.r3c2.value2	Empty	0	0:
+sheet.1.r3c2.formula	String	8	0:
+sheet.1.r3c2.formula2	String	8	0:
+sheet.1.r3c2.hasFormula	Boolean	11	5:False
+sheet.1.r3c3.value2	Empty	0	0:
+sheet.1.r3c3.formula	String	8	0:
+sheet.1.r3c3.formula2	String	8	0:
+sheet.1.r3c3.hasFormula	Boolean	11	5:False
+sheet.1.r3c4.value2	Empty	0	0:
+sheet.1.r3c4.formula	String	8	0:
+sheet.1.r3c4.formula2	String	8	0:
+sheet.1.r3c4.hasFormula	Boolean	11	5:False
+sheet.1.r3c5.value2	Empty	0	0:
+sheet.1.r3c5.formula	String	8	0:
+sheet.1.r3c5.formula2	String	8	0:
+sheet.1.r3c5.hasFormula	Boolean	11	5:False
+sheet.1.r3c6.value2	Empty	0	0:
+sheet.1.r3c6.formula	String	8	0:
+sheet.1.r3c6.formula2	String	8	0:
+sheet.1.r3c6.hasFormula	Boolean	11	5:False
+sheet.1.r4c1.value2	Empty	0	0:
+sheet.1.r4c1.formula	String	8	0:
+sheet.1.r4c1.formula2	String	8	0:
+sheet.1.r4c1.hasFormula	Boolean	11	5:False
+sheet.1.r4c2.value2	Empty	0	0:
+sheet.1.r4c2.formula	String	8	0:
+sheet.1.r4c2.formula2	String	8	0:
+sheet.1.r4c2.hasFormula	Boolean	11	5:False
+sheet.1.r4c3.value2	Empty	0	0:
+sheet.1.r4c3.formula	String	8	0:
+sheet.1.r4c3.formula2	String	8	0:
+sheet.1.r4c3.hasFormula	Boolean	11	5:False
+sheet.1.r4c4.value2	Empty	0	0:
+sheet.1.r4c4.formula	String	8	0:
+sheet.1.r4c4.formula2	String	8	0:
+sheet.1.r4c4.hasFormula	Boolean	11	5:False
+sheet.1.r4c5.value2	Empty	0	0:
+sheet.1.r4c5.formula	String	8	0:
+sheet.1.r4c5.formula2	String	8	0:
+sheet.1.r4c5.hasFormula	Boolean	11	5:False
+sheet.1.r4c6.value2	Empty	0	0:
+sheet.1.r4c6.formula	String	8	0:
+sheet.1.r4c6.formula2	String	8	0:
+sheet.1.r4c6.hasFormula	Boolean	11	5:False
+sheet.1.r5c1.value2	Empty	0	0:
+sheet.1.r5c1.formula	String	8	0:
+sheet.1.r5c1.formula2	String	8	0:
+sheet.1.r5c1.hasFormula	Boolean	11	5:False
+sheet.1.r5c2.value2	Empty	0	0:
+sheet.1.r5c2.formula	String	8	0:
+sheet.1.r5c2.formula2	String	8	0:
+sheet.1.r5c2.hasFormula	Boolean	11	5:False
+sheet.1.r5c3.value2	Empty	0	0:
+sheet.1.r5c3.formula	String	8	0:
+sheet.1.r5c3.formula2	String	8	0:
+sheet.1.r5c3.hasFormula	Boolean	11	5:False
+sheet.1.r5c4.value2	Empty	0	0:
+sheet.1.r5c4.formula	String	8	0:
+sheet.1.r5c4.formula2	String	8	0:
+sheet.1.r5c4.hasFormula	Boolean	11	5:False
+sheet.1.r5c5.value2	Empty	0	0:
+sheet.1.r5c5.formula	String	8	0:
+sheet.1.r5c5.formula2	String	8	0:
+sheet.1.r5c5.hasFormula	Boolean	11	5:False
+sheet.1.r5c6.value2	Empty	0	0:
+sheet.1.r5c6.formula	String	8	0:
+sheet.1.r5c6.formula2	String	8	0:
+sheet.1.r5c6.hasFormula	Boolean	11	5:False
+sheet.1.r6c1.value2	Empty	0	0:
+sheet.1.r6c1.formula	String	8	0:
+sheet.1.r6c1.formula2	String	8	0:
+sheet.1.r6c1.hasFormula	Boolean	11	5:False
+sheet.1.r6c2.value2	Empty	0	0:
+sheet.1.r6c2.formula	String	8	0:
+sheet.1.r6c2.formula2	String	8	0:
+sheet.1.r6c2.hasFormula	Boolean	11	5:False
+sheet.1.r6c3.value2	Empty	0	0:
+sheet.1.r6c3.formula	String	8	0:
+sheet.1.r6c3.formula2	String	8	0:
+sheet.1.r6c3.hasFormula	Boolean	11	5:False
+sheet.1.r6c4.value2	Empty	0	0:
+sheet.1.r6c4.formula	String	8	0:
+sheet.1.r6c4.formula2	String	8	0:
+sheet.1.r6c4.hasFormula	Boolean	11	5:False
+sheet.1.r6c5.value2	Empty	0	0:
+sheet.1.r6c5.formula	String	8	0:
+sheet.1.r6c5.formula2	String	8	0:
+sheet.1.r6c5.hasFormula	Boolean	11	5:False
+sheet.1.r6c6.value2	Empty	0	0:
+sheet.1.r6c6.formula	String	8	0:
+sheet.1.r6c6.formula2	String	8	0:
+sheet.1.r6c6.hasFormula	Boolean	11	5:False
+|Saved=True|Boolean|11|ReadOnlyRecommended=False|Boolean|11|Visible=-1|Long|3|Index=1|Long|3|Locked=True|Boolean|11|Row=1|Long|3|Build=20527|Double|5|CalculationState=0|Long|3|application.visible=False|Boolean|11"####,
+        ];
+        let cases: &[(&str, [i64; 2], usize, usize)] = &[
+            ("ScalarSetterContract.VisibilityProbe", [0, 0], 0, 0),
+            ("ScalarSetterContract.VisibilityProbe", [0, 1], 1, 1),
+            ("ScalarSetterContract.VisibilityProbe", [0, 2], 2, 1),
+            ("ScalarSetterContract.VisibilityProbe", [0, 3], 3, 1),
+            ("ScalarSetterContract.VisibilityProbe", [0, 4], 4, 1),
+            ("ScalarSetterContract.VisibilityProbe", [0, 5], 2, 1),
+            ("ScalarSetterContract.VisibilityProbe", [0, 6], 5, 0),
+            ("ScalarSetterContract.VisibilityProbe", [0, 7], 3, 1),
+            ("ScalarSetterContract.VisibilityProbe", [0, 8], 2, 1),
+            ("ScalarSetterContract.VisibilityProbe", [1, 0], 0, 0),
+            ("ScalarSetterContract.VisibilityProbe", [1, 1], 3, 1),
+            ("ScalarSetterContract.VisibilityProbe", [1, 2], 2, 1),
+            ("ScalarSetterContract.VisibilityProbe", [1, 3], 3, 1),
+            ("ScalarSetterContract.VisibilityProbe", [1, 4], 3, 1),
+            ("ScalarSetterContract.VisibilityProbe", [1, 5], 2, 1),
+            ("ScalarSetterContract.VisibilityProbe", [1, 6], 5, 0),
+            ("ScalarSetterContract.VisibilityProbe", [1, 7], 3, 1),
+            ("ScalarSetterContract.VisibilityProbe", [1, 8], 2, 1),
+            ("ScalarSetterContract.VisibilityProbe", [2, 0], 6, 0),
+            ("ScalarSetterContract.VisibilityProbe", [2, 1], 7, 1),
+            ("ScalarSetterContract.VisibilityProbe", [2, 2], 8, 1),
+            ("ScalarSetterContract.VisibilityProbe", [2, 3], 7, 1),
+            ("ScalarSetterContract.VisibilityProbe", [2, 4], 7, 1),
+            ("ScalarSetterContract.VisibilityProbe", [2, 5], 8, 1),
+            ("ScalarSetterContract.VisibilityProbe", [2, 6], 9, 0),
+            ("ScalarSetterContract.VisibilityProbe", [2, 7], 7, 1),
+            ("ScalarSetterContract.VisibilityProbe", [2, 8], 8, 1),
+            ("ScalarSetterContract.VisibilityProbe", [3, 0], 10, 0),
+            ("ScalarSetterContract.VisibilityProbe", [3, 1], 11, 1),
+            ("ScalarSetterContract.VisibilityProbe", [3, 2], 12, 1),
+            ("ScalarSetterContract.VisibilityProbe", [3, 3], 11, 1),
+            ("ScalarSetterContract.VisibilityProbe", [3, 4], 11, 1),
+            ("ScalarSetterContract.VisibilityProbe", [3, 5], 12, 1),
+            ("ScalarSetterContract.VisibilityProbe", [3, 6], 13, 0),
+            ("ScalarSetterContract.VisibilityProbe", [3, 7], 11, 1),
+            ("ScalarSetterContract.VisibilityProbe", [3, 8], 12, 1),
+            ("ScalarSetterContract.VisibilityProbe", [4, 0], 0, 0),
+            ("ScalarSetterContract.VisibilityProbe", [4, 1], 3, 1),
+            ("ScalarSetterContract.VisibilityProbe", [4, 2], 2, 1),
+            ("ScalarSetterContract.VisibilityProbe", [4, 3], 3, 1),
+            ("ScalarSetterContract.VisibilityProbe", [4, 4], 3, 1),
+            ("ScalarSetterContract.VisibilityProbe", [4, 5], 2, 1),
+            ("ScalarSetterContract.VisibilityProbe", [4, 6], 5, 0),
+            ("ScalarSetterContract.VisibilityProbe", [4, 7], 3, 1),
+            ("ScalarSetterContract.VisibilityProbe", [4, 8], 2, 1),
+        ];
+        assert_eq!(cases.len(), 45);
+        check_application_scalar_native_matrix("ScalarSetterContract.VisibilityInspect", expected, snapshots, cases);
+    }
+
+    #[test]
+    fn native_application_scalar_boolean_settings_match_errors_and_typed_state() {
+        let expected: &[&str] = &[
+            r####"OK|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=V"####,
+            r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=V"####,
+            r####"OK|before=True|Boolean|11|after=False|Boolean|11|saved=True|trace=V"####,
+            r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=V"####,
+            r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=V"####,
+            r####"OK|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=VD"####,
+            r####"ERR|1004|Microsoft Excel|Application クラスの DisplayFormulaBar プロパティを設定できません。|xlmain11.chm|1001004|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=V"####,
+            r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=V"####,
+            r####"OK|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=VR"####,
+            r####"OK|before=True|Boolean|11|after=False|Boolean|11|saved=True|trace=VR"####,
+            r####"ERR|1004|Microsoft Excel|Application クラスの DisplayFormulaBar プロパティを設定できません。|xlmain11.chm|1001004|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=VR"####,
+            r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=VR"####,
+            r####"OK|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=VRD"####,
+            r####"OK|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=RV"####,
+            r####"OK|before=True|Boolean|11|after=False|Boolean|11|saved=True|trace=RV"####,
+            r####"ERR|1004|Microsoft Excel|Application クラスの DisplayFormulaBar プロパティを設定できません。|xlmain11.chm|1001004|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=RV"####,
+            r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=RV"####,
+            r####"OK|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=RVD"####,
+            r####"ERR|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=V"####,
+            r####"ERR|1004|Microsoft Excel|Application クラスの DisplayStatusBar プロパティを設定できません。|xlmain11.chm|1001004|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=V"####,
+            r####"ERR|1004|Microsoft Excel|Application クラスの DisplayStatusBar プロパティを設定できません。|xlmain11.chm|1001004|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=VR"####,
+            r####"ERR|1004|Microsoft Excel|Application クラスの DisplayStatusBar プロパティを設定できません。|xlmain11.chm|1001004|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=RV"####,
+            r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=VR"####,
+            r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=RV"####,
+            r####"ERR|1004|Microsoft Excel|Application クラスの CalculateBeforeSave プロパティを設定できません。|xlmain11.chm|1001004|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=V"####,
+            r####"ERR|1004|Microsoft Excel|Application クラスの CalculateBeforeSave プロパティを設定できません。|xlmain11.chm|1001004|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=VR"####,
+            r####"ERR|1004|Microsoft Excel|Application クラスの CalculateBeforeSave プロパティを設定できません。|xlmain11.chm|1001004|before=True|Boolean|11|after=True|Boolean|11|saved=True|trace=RV"####,
+        ];
+        let snapshots: &[&str] = &[
+            r####"book.saved	Boolean	11	4:True
+book.readOnly	Boolean	11	4:True
+book.sheetCount	Long	3	1:1
+active.sheet	String	8	6:Sheet1
+active.cell	String	8	4:$A$1
+app.calculation	Long	3	5:-4105
+app.calculateBeforeSave	Boolean	11	4:True
+app.screenUpdating	Boolean	11	4:True
+app.enableEvents	Boolean	11	5:False
+app.displayAlerts	Boolean	11	5:False
+app.cursor	Long	3	5:-4143
+app.interactive	Boolean	11	4:True
+app.referenceStyle	Long	3	1:1
+sheet.1.name	String	8	6:Sheet1
+sheet.1.protectContents	Boolean	11	5:False
+sheet.1.row1.height	Double	5	2:15
+sheet.1.row1.hidden	Boolean	11	5:False
+sheet.1.row2.height	Double	5	2:15
+sheet.1.row2.hidden	Boolean	11	5:False
+sheet.1.row3.height	Double	5	2:15
+sheet.1.row3.hidden	Boolean	11	5:False
+sheet.1.row4.height	Double	5	2:15
+sheet.1.row4.hidden	Boolean	11	5:False
+sheet.1.row5.height	Double	5	2:15
+sheet.1.row5.hidden	Boolean	11	5:False
+sheet.1.row6.height	Double	5	2:15
+sheet.1.row6.hidden	Boolean	11	5:False
+sheet.1.col1.width	Double	5	4:8.43
+sheet.1.col1.hidden	Boolean	11	5:False
+sheet.1.col2.width	Double	5	4:8.43
+sheet.1.col2.hidden	Boolean	11	5:False
+sheet.1.col3.width	Double	5	4:8.43
+sheet.1.col3.hidden	Boolean	11	5:False
+sheet.1.col4.width	Double	5	4:8.43
+sheet.1.col4.hidden	Boolean	11	5:False
+sheet.1.col5.width	Double	5	4:8.43
+sheet.1.col5.hidden	Boolean	11	5:False
+sheet.1.col6.width	Double	5	4:8.43
+sheet.1.col6.hidden	Boolean	11	5:False
+sheet.1.r1c1.value2	Empty	0	0:
+sheet.1.r1c1.formula	String	8	0:
+sheet.1.r1c1.formula2	String	8	0:
+sheet.1.r1c1.hasFormula	Boolean	11	5:False
+sheet.1.r1c2.value2	Empty	0	0:
+sheet.1.r1c2.formula	String	8	0:
+sheet.1.r1c2.formula2	String	8	0:
+sheet.1.r1c2.hasFormula	Boolean	11	5:False
+sheet.1.r1c3.value2	Empty	0	0:
+sheet.1.r1c3.formula	String	8	0:
+sheet.1.r1c3.formula2	String	8	0:
+sheet.1.r1c3.hasFormula	Boolean	11	5:False
+sheet.1.r1c4.value2	Empty	0	0:
+sheet.1.r1c4.formula	String	8	0:
+sheet.1.r1c4.formula2	String	8	0:
+sheet.1.r1c4.hasFormula	Boolean	11	5:False
+sheet.1.r1c5.value2	Empty	0	0:
+sheet.1.r1c5.formula	String	8	0:
+sheet.1.r1c5.formula2	String	8	0:
+sheet.1.r1c5.hasFormula	Boolean	11	5:False
+sheet.1.r1c6.value2	Empty	0	0:
+sheet.1.r1c6.formula	String	8	0:
+sheet.1.r1c6.formula2	String	8	0:
+sheet.1.r1c6.hasFormula	Boolean	11	5:False
+sheet.1.r2c1.value2	Empty	0	0:
+sheet.1.r2c1.formula	String	8	0:
+sheet.1.r2c1.formula2	String	8	0:
+sheet.1.r2c1.hasFormula	Boolean	11	5:False
+sheet.1.r2c2.value2	Empty	0	0:
+sheet.1.r2c2.formula	String	8	0:
+sheet.1.r2c2.formula2	String	8	0:
+sheet.1.r2c2.hasFormula	Boolean	11	5:False
+sheet.1.r2c3.value2	Empty	0	0:
+sheet.1.r2c3.formula	String	8	0:
+sheet.1.r2c3.formula2	String	8	0:
+sheet.1.r2c3.hasFormula	Boolean	11	5:False
+sheet.1.r2c4.value2	Empty	0	0:
+sheet.1.r2c4.formula	String	8	0:
+sheet.1.r2c4.formula2	String	8	0:
+sheet.1.r2c4.hasFormula	Boolean	11	5:False
+sheet.1.r2c5.value2	Empty	0	0:
+sheet.1.r2c5.formula	String	8	0:
+sheet.1.r2c5.formula2	String	8	0:
+sheet.1.r2c5.hasFormula	Boolean	11	5:False
+sheet.1.r2c6.value2	Empty	0	0:
+sheet.1.r2c6.formula	String	8	0:
+sheet.1.r2c6.formula2	String	8	0:
+sheet.1.r2c6.hasFormula	Boolean	11	5:False
+sheet.1.r3c1.value2	Empty	0	0:
+sheet.1.r3c1.formula	String	8	0:
+sheet.1.r3c1.formula2	String	8	0:
+sheet.1.r3c1.hasFormula	Boolean	11	5:False
+sheet.1.r3c2.value2	Empty	0	0:
+sheet.1.r3c2.formula	String	8	0:
+sheet.1.r3c2.formula2	String	8	0:
+sheet.1.r3c2.hasFormula	Boolean	11	5:False
+sheet.1.r3c3.value2	Empty	0	0:
+sheet.1.r3c3.formula	String	8	0:
+sheet.1.r3c3.formula2	String	8	0:
+sheet.1.r3c3.hasFormula	Boolean	11	5:False
+sheet.1.r3c4.value2	Empty	0	0:
+sheet.1.r3c4.formula	String	8	0:
+sheet.1.r3c4.formula2	String	8	0:
+sheet.1.r3c4.hasFormula	Boolean	11	5:False
+sheet.1.r3c5.value2	Empty	0	0:
+sheet.1.r3c5.formula	String	8	0:
+sheet.1.r3c5.formula2	String	8	0:
+sheet.1.r3c5.hasFormula	Boolean	11	5:False
+sheet.1.r3c6.value2	Empty	0	0:
+sheet.1.r3c6.formula	String	8	0:
+sheet.1.r3c6.formula2	String	8	0:
+sheet.1.r3c6.hasFormula	Boolean	11	5:False
+sheet.1.r4c1.value2	Empty	0	0:
+sheet.1.r4c1.formula	String	8	0:
+sheet.1.r4c1.formula2	String	8	0:
+sheet.1.r4c1.hasFormula	Boolean	11	5:False
+sheet.1.r4c2.value2	Empty	0	0:
+sheet.1.r4c2.formula	String	8	0:
+sheet.1.r4c2.formula2	String	8	0:
+sheet.1.r4c2.hasFormula	Boolean	11	5:False
+sheet.1.r4c3.value2	Empty	0	0:
+sheet.1.r4c3.formula	String	8	0:
+sheet.1.r4c3.formula2	String	8	0:
+sheet.1.r4c3.hasFormula	Boolean	11	5:False
+sheet.1.r4c4.value2	Empty	0	0:
+sheet.1.r4c4.formula	String	8	0:
+sheet.1.r4c4.formula2	String	8	0:
+sheet.1.r4c4.hasFormula	Boolean	11	5:False
+sheet.1.r4c5.value2	Empty	0	0:
+sheet.1.r4c5.formula	String	8	0:
+sheet.1.r4c5.formula2	String	8	0:
+sheet.1.r4c5.hasFormula	Boolean	11	5:False
+sheet.1.r4c6.value2	Empty	0	0:
+sheet.1.r4c6.formula	String	8	0:
+sheet.1.r4c6.formula2	String	8	0:
+sheet.1.r4c6.hasFormula	Boolean	11	5:False
+sheet.1.r5c1.value2	Empty	0	0:
+sheet.1.r5c1.formula	String	8	0:
+sheet.1.r5c1.formula2	String	8	0:
+sheet.1.r5c1.hasFormula	Boolean	11	5:False
+sheet.1.r5c2.value2	Empty	0	0:
+sheet.1.r5c2.formula	String	8	0:
+sheet.1.r5c2.formula2	String	8	0:
+sheet.1.r5c2.hasFormula	Boolean	11	5:False
+sheet.1.r5c3.value2	Empty	0	0:
+sheet.1.r5c3.formula	String	8	0:
+sheet.1.r5c3.formula2	String	8	0:
+sheet.1.r5c3.hasFormula	Boolean	11	5:False
+sheet.1.r5c4.value2	Empty	0	0:
+sheet.1.r5c4.formula	String	8	0:
+sheet.1.r5c4.formula2	String	8	0:
+sheet.1.r5c4.hasFormula	Boolean	11	5:False
+sheet.1.r5c5.value2	Empty	0	0:
+sheet.1.r5c5.formula	String	8	0:
+sheet.1.r5c5.formula2	String	8	0:
+sheet.1.r5c5.hasFormula	Boolean	11	5:False
+sheet.1.r5c6.value2	Empty	0	0:
+sheet.1.r5c6.formula	String	8	0:
+sheet.1.r5c6.formula2	String	8	0:
+sheet.1.r5c6.hasFormula	Boolean	11	5:False
+sheet.1.r6c1.value2	Empty	0	0:
+sheet.1.r6c1.formula	String	8	0:
+sheet.1.r6c1.formula2	String	8	0:
+sheet.1.r6c1.hasFormula	Boolean	11	5:False
+sheet.1.r6c2.value2	Empty	0	0:
+sheet.1.r6c2.formula	String	8	0:
+sheet.1.r6c2.formula2	String	8	0:
+sheet.1.r6c2.hasFormula	Boolean	11	5:False
+sheet.1.r6c3.value2	Empty	0	0:
+sheet.1.r6c3.formula	String	8	0:
+sheet.1.r6c3.formula2	String	8	0:
+sheet.1.r6c3.hasFormula	Boolean	11	5:False
+sheet.1.r6c4.value2	Empty	0	0:
+sheet.1.r6c4.formula	String	8	0:
+sheet.1.r6c4.formula2	String	8	0:
+sheet.1.r6c4.hasFormula	Boolean	11	5:False
+sheet.1.r6c5.value2	Empty	0	0:
+sheet.1.r6c5.formula	String	8	0:
+sheet.1.r6c5.formula2	String	8	0:
+sheet.1.r6c5.hasFormula	Boolean	11	5:False
+sheet.1.r6c6.value2	Empty	0	0:
+sheet.1.r6c6.formula	String	8	0:
+sheet.1.r6c6.formula2	String	8	0:
+sheet.1.r6c6.hasFormula	Boolean	11	5:False
+|Saved=True|Boolean|11|ReadOnlyRecommended=False|Boolean|11|Visible=-1|Long|3|Index=1|Long|3|Locked=True|Boolean|11|Row=1|Long|3|Build=20527|Double|5|CalculationState=0|Long|3|application.displayformulabar=True|Boolean|11|application.displaystatusbar=True|Boolean|11|application.usesystemseparators=True|Boolean|11|application.calculatebeforesave=True|Boolean|11"####,
+            r####"book.saved	Boolean	11	4:True
+book.readOnly	Boolean	11	4:True
+book.sheetCount	Long	3	1:1
+active.sheet	String	8	6:Sheet1
+active.cell	String	8	4:$A$1
+app.calculation	Long	3	5:-4105
+app.calculateBeforeSave	Boolean	11	4:True
+app.screenUpdating	Boolean	11	4:True
+app.enableEvents	Boolean	11	5:False
+app.displayAlerts	Boolean	11	5:False
+app.cursor	Long	3	5:-4143
+app.interactive	Boolean	11	4:True
+app.referenceStyle	Long	3	1:1
+sheet.1.name	String	8	6:Sheet1
+sheet.1.protectContents	Boolean	11	5:False
+sheet.1.row1.height	Double	5	2:15
+sheet.1.row1.hidden	Boolean	11	5:False
+sheet.1.row2.height	Double	5	2:15
+sheet.1.row2.hidden	Boolean	11	5:False
+sheet.1.row3.height	Double	5	2:15
+sheet.1.row3.hidden	Boolean	11	5:False
+sheet.1.row4.height	Double	5	2:15
+sheet.1.row4.hidden	Boolean	11	5:False
+sheet.1.row5.height	Double	5	2:15
+sheet.1.row5.hidden	Boolean	11	5:False
+sheet.1.row6.height	Double	5	2:15
+sheet.1.row6.hidden	Boolean	11	5:False
+sheet.1.col1.width	Double	5	4:8.43
+sheet.1.col1.hidden	Boolean	11	5:False
+sheet.1.col2.width	Double	5	4:8.43
+sheet.1.col2.hidden	Boolean	11	5:False
+sheet.1.col3.width	Double	5	4:8.43
+sheet.1.col3.hidden	Boolean	11	5:False
+sheet.1.col4.width	Double	5	4:8.43
+sheet.1.col4.hidden	Boolean	11	5:False
+sheet.1.col5.width	Double	5	4:8.43
+sheet.1.col5.hidden	Boolean	11	5:False
+sheet.1.col6.width	Double	5	4:8.43
+sheet.1.col6.hidden	Boolean	11	5:False
+sheet.1.r1c1.value2	Empty	0	0:
+sheet.1.r1c1.formula	String	8	0:
+sheet.1.r1c1.formula2	String	8	0:
+sheet.1.r1c1.hasFormula	Boolean	11	5:False
+sheet.1.r1c2.value2	Empty	0	0:
+sheet.1.r1c2.formula	String	8	0:
+sheet.1.r1c2.formula2	String	8	0:
+sheet.1.r1c2.hasFormula	Boolean	11	5:False
+sheet.1.r1c3.value2	Empty	0	0:
+sheet.1.r1c3.formula	String	8	0:
+sheet.1.r1c3.formula2	String	8	0:
+sheet.1.r1c3.hasFormula	Boolean	11	5:False
+sheet.1.r1c4.value2	Empty	0	0:
+sheet.1.r1c4.formula	String	8	0:
+sheet.1.r1c4.formula2	String	8	0:
+sheet.1.r1c4.hasFormula	Boolean	11	5:False
+sheet.1.r1c5.value2	Empty	0	0:
+sheet.1.r1c5.formula	String	8	0:
+sheet.1.r1c5.formula2	String	8	0:
+sheet.1.r1c5.hasFormula	Boolean	11	5:False
+sheet.1.r1c6.value2	Empty	0	0:
+sheet.1.r1c6.formula	String	8	0:
+sheet.1.r1c6.formula2	String	8	0:
+sheet.1.r1c6.hasFormula	Boolean	11	5:False
+sheet.1.r2c1.value2	Empty	0	0:
+sheet.1.r2c1.formula	String	8	0:
+sheet.1.r2c1.formula2	String	8	0:
+sheet.1.r2c1.hasFormula	Boolean	11	5:False
+sheet.1.r2c2.value2	Empty	0	0:
+sheet.1.r2c2.formula	String	8	0:
+sheet.1.r2c2.formula2	String	8	0:
+sheet.1.r2c2.hasFormula	Boolean	11	5:False
+sheet.1.r2c3.value2	Empty	0	0:
+sheet.1.r2c3.formula	String	8	0:
+sheet.1.r2c3.formula2	String	8	0:
+sheet.1.r2c3.hasFormula	Boolean	11	5:False
+sheet.1.r2c4.value2	Empty	0	0:
+sheet.1.r2c4.formula	String	8	0:
+sheet.1.r2c4.formula2	String	8	0:
+sheet.1.r2c4.hasFormula	Boolean	11	5:False
+sheet.1.r2c5.value2	Empty	0	0:
+sheet.1.r2c5.formula	String	8	0:
+sheet.1.r2c5.formula2	String	8	0:
+sheet.1.r2c5.hasFormula	Boolean	11	5:False
+sheet.1.r2c6.value2	Empty	0	0:
+sheet.1.r2c6.formula	String	8	0:
+sheet.1.r2c6.formula2	String	8	0:
+sheet.1.r2c6.hasFormula	Boolean	11	5:False
+sheet.1.r3c1.value2	Empty	0	0:
+sheet.1.r3c1.formula	String	8	0:
+sheet.1.r3c1.formula2	String	8	0:
+sheet.1.r3c1.hasFormula	Boolean	11	5:False
+sheet.1.r3c2.value2	Empty	0	0:
+sheet.1.r3c2.formula	String	8	0:
+sheet.1.r3c2.formula2	String	8	0:
+sheet.1.r3c2.hasFormula	Boolean	11	5:False
+sheet.1.r3c3.value2	Empty	0	0:
+sheet.1.r3c3.formula	String	8	0:
+sheet.1.r3c3.formula2	String	8	0:
+sheet.1.r3c3.hasFormula	Boolean	11	5:False
+sheet.1.r3c4.value2	Empty	0	0:
+sheet.1.r3c4.formula	String	8	0:
+sheet.1.r3c4.formula2	String	8	0:
+sheet.1.r3c4.hasFormula	Boolean	11	5:False
+sheet.1.r3c5.value2	Empty	0	0:
+sheet.1.r3c5.formula	String	8	0:
+sheet.1.r3c5.formula2	String	8	0:
+sheet.1.r3c5.hasFormula	Boolean	11	5:False
+sheet.1.r3c6.value2	Empty	0	0:
+sheet.1.r3c6.formula	String	8	0:
+sheet.1.r3c6.formula2	String	8	0:
+sheet.1.r3c6.hasFormula	Boolean	11	5:False
+sheet.1.r4c1.value2	Empty	0	0:
+sheet.1.r4c1.formula	String	8	0:
+sheet.1.r4c1.formula2	String	8	0:
+sheet.1.r4c1.hasFormula	Boolean	11	5:False
+sheet.1.r4c2.value2	Empty	0	0:
+sheet.1.r4c2.formula	String	8	0:
+sheet.1.r4c2.formula2	String	8	0:
+sheet.1.r4c2.hasFormula	Boolean	11	5:False
+sheet.1.r4c3.value2	Empty	0	0:
+sheet.1.r4c3.formula	String	8	0:
+sheet.1.r4c3.formula2	String	8	0:
+sheet.1.r4c3.hasFormula	Boolean	11	5:False
+sheet.1.r4c4.value2	Empty	0	0:
+sheet.1.r4c4.formula	String	8	0:
+sheet.1.r4c4.formula2	String	8	0:
+sheet.1.r4c4.hasFormula	Boolean	11	5:False
+sheet.1.r4c5.value2	Empty	0	0:
+sheet.1.r4c5.formula	String	8	0:
+sheet.1.r4c5.formula2	String	8	0:
+sheet.1.r4c5.hasFormula	Boolean	11	5:False
+sheet.1.r4c6.value2	Empty	0	0:
+sheet.1.r4c6.formula	String	8	0:
+sheet.1.r4c6.formula2	String	8	0:
+sheet.1.r4c6.hasFormula	Boolean	11	5:False
+sheet.1.r5c1.value2	Empty	0	0:
+sheet.1.r5c1.formula	String	8	0:
+sheet.1.r5c1.formula2	String	8	0:
+sheet.1.r5c1.hasFormula	Boolean	11	5:False
+sheet.1.r5c2.value2	Empty	0	0:
+sheet.1.r5c2.formula	String	8	0:
+sheet.1.r5c2.formula2	String	8	0:
+sheet.1.r5c2.hasFormula	Boolean	11	5:False
+sheet.1.r5c3.value2	Empty	0	0:
+sheet.1.r5c3.formula	String	8	0:
+sheet.1.r5c3.formula2	String	8	0:
+sheet.1.r5c3.hasFormula	Boolean	11	5:False
+sheet.1.r5c4.value2	Empty	0	0:
+sheet.1.r5c4.formula	String	8	0:
+sheet.1.r5c4.formula2	String	8	0:
+sheet.1.r5c4.hasFormula	Boolean	11	5:False
+sheet.1.r5c5.value2	Empty	0	0:
+sheet.1.r5c5.formula	String	8	0:
+sheet.1.r5c5.formula2	String	8	0:
+sheet.1.r5c5.hasFormula	Boolean	11	5:False
+sheet.1.r5c6.value2	Empty	0	0:
+sheet.1.r5c6.formula	String	8	0:
+sheet.1.r5c6.formula2	String	8	0:
+sheet.1.r5c6.hasFormula	Boolean	11	5:False
+sheet.1.r6c1.value2	Empty	0	0:
+sheet.1.r6c1.formula	String	8	0:
+sheet.1.r6c1.formula2	String	8	0:
+sheet.1.r6c1.hasFormula	Boolean	11	5:False
+sheet.1.r6c2.value2	Empty	0	0:
+sheet.1.r6c2.formula	String	8	0:
+sheet.1.r6c2.formula2	String	8	0:
+sheet.1.r6c2.hasFormula	Boolean	11	5:False
+sheet.1.r6c3.value2	Empty	0	0:
+sheet.1.r6c3.formula	String	8	0:
+sheet.1.r6c3.formula2	String	8	0:
+sheet.1.r6c3.hasFormula	Boolean	11	5:False
+sheet.1.r6c4.value2	Empty	0	0:
+sheet.1.r6c4.formula	String	8	0:
+sheet.1.r6c4.formula2	String	8	0:
+sheet.1.r6c4.hasFormula	Boolean	11	5:False
+sheet.1.r6c5.value2	Empty	0	0:
+sheet.1.r6c5.formula	String	8	0:
+sheet.1.r6c5.formula2	String	8	0:
+sheet.1.r6c5.hasFormula	Boolean	11	5:False
+sheet.1.r6c6.value2	Empty	0	0:
+sheet.1.r6c6.formula	String	8	0:
+sheet.1.r6c6.formula2	String	8	0:
+sheet.1.r6c6.hasFormula	Boolean	11	5:False
+|Saved=True|Boolean|11|ReadOnlyRecommended=False|Boolean|11|Visible=-1|Long|3|Index=1|Long|3|Locked=True|Boolean|11|Row=1|Long|3|Build=20527|Double|5|CalculationState=0|Long|3|application.displayformulabar=False|Boolean|11|application.displaystatusbar=True|Boolean|11|application.usesystemseparators=True|Boolean|11|application.calculatebeforesave=True|Boolean|11"####,
+            r####"book.saved	Boolean	11	4:True
+book.readOnly	Boolean	11	4:True
+book.sheetCount	Long	3	1:1
+active.sheet	String	8	6:Sheet1
+active.cell	String	8	4:$A$1
+app.calculation	Long	3	5:-4105
+app.calculateBeforeSave	Boolean	11	4:True
+app.screenUpdating	Boolean	11	4:True
+app.enableEvents	Boolean	11	5:False
+app.displayAlerts	Boolean	11	5:False
+app.cursor	Long	3	5:-4143
+app.interactive	Boolean	11	4:True
+app.referenceStyle	Long	3	1:1
+sheet.1.name	String	8	6:Sheet1
+sheet.1.protectContents	Boolean	11	5:False
+sheet.1.row1.height	Double	5	2:15
+sheet.1.row1.hidden	Boolean	11	5:False
+sheet.1.row2.height	Double	5	2:15
+sheet.1.row2.hidden	Boolean	11	5:False
+sheet.1.row3.height	Double	5	2:15
+sheet.1.row3.hidden	Boolean	11	5:False
+sheet.1.row4.height	Double	5	2:15
+sheet.1.row4.hidden	Boolean	11	5:False
+sheet.1.row5.height	Double	5	2:15
+sheet.1.row5.hidden	Boolean	11	5:False
+sheet.1.row6.height	Double	5	2:15
+sheet.1.row6.hidden	Boolean	11	5:False
+sheet.1.col1.width	Double	5	4:8.43
+sheet.1.col1.hidden	Boolean	11	5:False
+sheet.1.col2.width	Double	5	4:8.43
+sheet.1.col2.hidden	Boolean	11	5:False
+sheet.1.col3.width	Double	5	4:8.43
+sheet.1.col3.hidden	Boolean	11	5:False
+sheet.1.col4.width	Double	5	4:8.43
+sheet.1.col4.hidden	Boolean	11	5:False
+sheet.1.col5.width	Double	5	4:8.43
+sheet.1.col5.hidden	Boolean	11	5:False
+sheet.1.col6.width	Double	5	4:8.43
+sheet.1.col6.hidden	Boolean	11	5:False
+sheet.1.r1c1.value2	Empty	0	0:
+sheet.1.r1c1.formula	String	8	0:
+sheet.1.r1c1.formula2	String	8	0:
+sheet.1.r1c1.hasFormula	Boolean	11	5:False
+sheet.1.r1c2.value2	Empty	0	0:
+sheet.1.r1c2.formula	String	8	0:
+sheet.1.r1c2.formula2	String	8	0:
+sheet.1.r1c2.hasFormula	Boolean	11	5:False
+sheet.1.r1c3.value2	Empty	0	0:
+sheet.1.r1c3.formula	String	8	0:
+sheet.1.r1c3.formula2	String	8	0:
+sheet.1.r1c3.hasFormula	Boolean	11	5:False
+sheet.1.r1c4.value2	Empty	0	0:
+sheet.1.r1c4.formula	String	8	0:
+sheet.1.r1c4.formula2	String	8	0:
+sheet.1.r1c4.hasFormula	Boolean	11	5:False
+sheet.1.r1c5.value2	Empty	0	0:
+sheet.1.r1c5.formula	String	8	0:
+sheet.1.r1c5.formula2	String	8	0:
+sheet.1.r1c5.hasFormula	Boolean	11	5:False
+sheet.1.r1c6.value2	Empty	0	0:
+sheet.1.r1c6.formula	String	8	0:
+sheet.1.r1c6.formula2	String	8	0:
+sheet.1.r1c6.hasFormula	Boolean	11	5:False
+sheet.1.r2c1.value2	Empty	0	0:
+sheet.1.r2c1.formula	String	8	0:
+sheet.1.r2c1.formula2	String	8	0:
+sheet.1.r2c1.hasFormula	Boolean	11	5:False
+sheet.1.r2c2.value2	Empty	0	0:
+sheet.1.r2c2.formula	String	8	0:
+sheet.1.r2c2.formula2	String	8	0:
+sheet.1.r2c2.hasFormula	Boolean	11	5:False
+sheet.1.r2c3.value2	Empty	0	0:
+sheet.1.r2c3.formula	String	8	0:
+sheet.1.r2c3.formula2	String	8	0:
+sheet.1.r2c3.hasFormula	Boolean	11	5:False
+sheet.1.r2c4.value2	Empty	0	0:
+sheet.1.r2c4.formula	String	8	0:
+sheet.1.r2c4.formula2	String	8	0:
+sheet.1.r2c4.hasFormula	Boolean	11	5:False
+sheet.1.r2c5.value2	Empty	0	0:
+sheet.1.r2c5.formula	String	8	0:
+sheet.1.r2c5.formula2	String	8	0:
+sheet.1.r2c5.hasFormula	Boolean	11	5:False
+sheet.1.r2c6.value2	Empty	0	0:
+sheet.1.r2c6.formula	String	8	0:
+sheet.1.r2c6.formula2	String	8	0:
+sheet.1.r2c6.hasFormula	Boolean	11	5:False
+sheet.1.r3c1.value2	Empty	0	0:
+sheet.1.r3c1.formula	String	8	0:
+sheet.1.r3c1.formula2	String	8	0:
+sheet.1.r3c1.hasFormula	Boolean	11	5:False
+sheet.1.r3c2.value2	Empty	0	0:
+sheet.1.r3c2.formula	String	8	0:
+sheet.1.r3c2.formula2	String	8	0:
+sheet.1.r3c2.hasFormula	Boolean	11	5:False
+sheet.1.r3c3.value2	Empty	0	0:
+sheet.1.r3c3.formula	String	8	0:
+sheet.1.r3c3.formula2	String	8	0:
+sheet.1.r3c3.hasFormula	Boolean	11	5:False
+sheet.1.r3c4.value2	Empty	0	0:
+sheet.1.r3c4.formula	String	8	0:
+sheet.1.r3c4.formula2	String	8	0:
+sheet.1.r3c4.hasFormula	Boolean	11	5:False
+sheet.1.r3c5.value2	Empty	0	0:
+sheet.1.r3c5.formula	String	8	0:
+sheet.1.r3c5.formula2	String	8	0:
+sheet.1.r3c5.hasFormula	Boolean	11	5:False
+sheet.1.r3c6.value2	Empty	0	0:
+sheet.1.r3c6.formula	String	8	0:
+sheet.1.r3c6.formula2	String	8	0:
+sheet.1.r3c6.hasFormula	Boolean	11	5:False
+sheet.1.r4c1.value2	Empty	0	0:
+sheet.1.r4c1.formula	String	8	0:
+sheet.1.r4c1.formula2	String	8	0:
+sheet.1.r4c1.hasFormula	Boolean	11	5:False
+sheet.1.r4c2.value2	Empty	0	0:
+sheet.1.r4c2.formula	String	8	0:
+sheet.1.r4c2.formula2	String	8	0:
+sheet.1.r4c2.hasFormula	Boolean	11	5:False
+sheet.1.r4c3.value2	Empty	0	0:
+sheet.1.r4c3.formula	String	8	0:
+sheet.1.r4c3.formula2	String	8	0:
+sheet.1.r4c3.hasFormula	Boolean	11	5:False
+sheet.1.r4c4.value2	Empty	0	0:
+sheet.1.r4c4.formula	String	8	0:
+sheet.1.r4c4.formula2	String	8	0:
+sheet.1.r4c4.hasFormula	Boolean	11	5:False
+sheet.1.r4c5.value2	Empty	0	0:
+sheet.1.r4c5.formula	String	8	0:
+sheet.1.r4c5.formula2	String	8	0:
+sheet.1.r4c5.hasFormula	Boolean	11	5:False
+sheet.1.r4c6.value2	Empty	0	0:
+sheet.1.r4c6.formula	String	8	0:
+sheet.1.r4c6.formula2	String	8	0:
+sheet.1.r4c6.hasFormula	Boolean	11	5:False
+sheet.1.r5c1.value2	Empty	0	0:
+sheet.1.r5c1.formula	String	8	0:
+sheet.1.r5c1.formula2	String	8	0:
+sheet.1.r5c1.hasFormula	Boolean	11	5:False
+sheet.1.r5c2.value2	Empty	0	0:
+sheet.1.r5c2.formula	String	8	0:
+sheet.1.r5c2.formula2	String	8	0:
+sheet.1.r5c2.hasFormula	Boolean	11	5:False
+sheet.1.r5c3.value2	Empty	0	0:
+sheet.1.r5c3.formula	String	8	0:
+sheet.1.r5c3.formula2	String	8	0:
+sheet.1.r5c3.hasFormula	Boolean	11	5:False
+sheet.1.r5c4.value2	Empty	0	0:
+sheet.1.r5c4.formula	String	8	0:
+sheet.1.r5c4.formula2	String	8	0:
+sheet.1.r5c4.hasFormula	Boolean	11	5:False
+sheet.1.r5c5.value2	Empty	0	0:
+sheet.1.r5c5.formula	String	8	0:
+sheet.1.r5c5.formula2	String	8	0:
+sheet.1.r5c5.hasFormula	Boolean	11	5:False
+sheet.1.r5c6.value2	Empty	0	0:
+sheet.1.r5c6.formula	String	8	0:
+sheet.1.r5c6.formula2	String	8	0:
+sheet.1.r5c6.hasFormula	Boolean	11	5:False
+sheet.1.r6c1.value2	Empty	0	0:
+sheet.1.r6c1.formula	String	8	0:
+sheet.1.r6c1.formula2	String	8	0:
+sheet.1.r6c1.hasFormula	Boolean	11	5:False
+sheet.1.r6c2.value2	Empty	0	0:
+sheet.1.r6c2.formula	String	8	0:
+sheet.1.r6c2.formula2	String	8	0:
+sheet.1.r6c2.hasFormula	Boolean	11	5:False
+sheet.1.r6c3.value2	Empty	0	0:
+sheet.1.r6c3.formula	String	8	0:
+sheet.1.r6c3.formula2	String	8	0:
+sheet.1.r6c3.hasFormula	Boolean	11	5:False
+sheet.1.r6c4.value2	Empty	0	0:
+sheet.1.r6c4.formula	String	8	0:
+sheet.1.r6c4.formula2	String	8	0:
+sheet.1.r6c4.hasFormula	Boolean	11	5:False
+sheet.1.r6c5.value2	Empty	0	0:
+sheet.1.r6c5.formula	String	8	0:
+sheet.1.r6c5.formula2	String	8	0:
+sheet.1.r6c5.hasFormula	Boolean	11	5:False
+sheet.1.r6c6.value2	Empty	0	0:
+sheet.1.r6c6.formula	String	8	0:
+sheet.1.r6c6.formula2	String	8	0:
+sheet.1.r6c6.hasFormula	Boolean	11	5:False
+|Saved=True|Boolean|11|ReadOnlyRecommended=False|Boolean|11|Visible=-1|Long|3|Index=1|Long|3|Locked=True|Boolean|11|Row=1|Long|3|Build=20527|Double|5|CalculationState=0|Long|3|application.displayformulabar=True|Boolean|11|application.displaystatusbar=False|Boolean|11|application.usesystemseparators=True|Boolean|11|application.calculatebeforesave=True|Boolean|11"####,
+            r####"book.saved	Boolean	11	4:True
+book.readOnly	Boolean	11	4:True
+book.sheetCount	Long	3	1:1
+active.sheet	String	8	6:Sheet1
+active.cell	String	8	4:$A$1
+app.calculation	Long	3	5:-4105
+app.calculateBeforeSave	Boolean	11	4:True
+app.screenUpdating	Boolean	11	4:True
+app.enableEvents	Boolean	11	5:False
+app.displayAlerts	Boolean	11	5:False
+app.cursor	Long	3	5:-4143
+app.interactive	Boolean	11	4:True
+app.referenceStyle	Long	3	1:1
+sheet.1.name	String	8	6:Sheet1
+sheet.1.protectContents	Boolean	11	5:False
+sheet.1.row1.height	Double	5	2:15
+sheet.1.row1.hidden	Boolean	11	5:False
+sheet.1.row2.height	Double	5	2:15
+sheet.1.row2.hidden	Boolean	11	5:False
+sheet.1.row3.height	Double	5	2:15
+sheet.1.row3.hidden	Boolean	11	5:False
+sheet.1.row4.height	Double	5	2:15
+sheet.1.row4.hidden	Boolean	11	5:False
+sheet.1.row5.height	Double	5	2:15
+sheet.1.row5.hidden	Boolean	11	5:False
+sheet.1.row6.height	Double	5	2:15
+sheet.1.row6.hidden	Boolean	11	5:False
+sheet.1.col1.width	Double	5	4:8.43
+sheet.1.col1.hidden	Boolean	11	5:False
+sheet.1.col2.width	Double	5	4:8.43
+sheet.1.col2.hidden	Boolean	11	5:False
+sheet.1.col3.width	Double	5	4:8.43
+sheet.1.col3.hidden	Boolean	11	5:False
+sheet.1.col4.width	Double	5	4:8.43
+sheet.1.col4.hidden	Boolean	11	5:False
+sheet.1.col5.width	Double	5	4:8.43
+sheet.1.col5.hidden	Boolean	11	5:False
+sheet.1.col6.width	Double	5	4:8.43
+sheet.1.col6.hidden	Boolean	11	5:False
+sheet.1.r1c1.value2	Empty	0	0:
+sheet.1.r1c1.formula	String	8	0:
+sheet.1.r1c1.formula2	String	8	0:
+sheet.1.r1c1.hasFormula	Boolean	11	5:False
+sheet.1.r1c2.value2	Empty	0	0:
+sheet.1.r1c2.formula	String	8	0:
+sheet.1.r1c2.formula2	String	8	0:
+sheet.1.r1c2.hasFormula	Boolean	11	5:False
+sheet.1.r1c3.value2	Empty	0	0:
+sheet.1.r1c3.formula	String	8	0:
+sheet.1.r1c3.formula2	String	8	0:
+sheet.1.r1c3.hasFormula	Boolean	11	5:False
+sheet.1.r1c4.value2	Empty	0	0:
+sheet.1.r1c4.formula	String	8	0:
+sheet.1.r1c4.formula2	String	8	0:
+sheet.1.r1c4.hasFormula	Boolean	11	5:False
+sheet.1.r1c5.value2	Empty	0	0:
+sheet.1.r1c5.formula	String	8	0:
+sheet.1.r1c5.formula2	String	8	0:
+sheet.1.r1c5.hasFormula	Boolean	11	5:False
+sheet.1.r1c6.value2	Empty	0	0:
+sheet.1.r1c6.formula	String	8	0:
+sheet.1.r1c6.formula2	String	8	0:
+sheet.1.r1c6.hasFormula	Boolean	11	5:False
+sheet.1.r2c1.value2	Empty	0	0:
+sheet.1.r2c1.formula	String	8	0:
+sheet.1.r2c1.formula2	String	8	0:
+sheet.1.r2c1.hasFormula	Boolean	11	5:False
+sheet.1.r2c2.value2	Empty	0	0:
+sheet.1.r2c2.formula	String	8	0:
+sheet.1.r2c2.formula2	String	8	0:
+sheet.1.r2c2.hasFormula	Boolean	11	5:False
+sheet.1.r2c3.value2	Empty	0	0:
+sheet.1.r2c3.formula	String	8	0:
+sheet.1.r2c3.formula2	String	8	0:
+sheet.1.r2c3.hasFormula	Boolean	11	5:False
+sheet.1.r2c4.value2	Empty	0	0:
+sheet.1.r2c4.formula	String	8	0:
+sheet.1.r2c4.formula2	String	8	0:
+sheet.1.r2c4.hasFormula	Boolean	11	5:False
+sheet.1.r2c5.value2	Empty	0	0:
+sheet.1.r2c5.formula	String	8	0:
+sheet.1.r2c5.formula2	String	8	0:
+sheet.1.r2c5.hasFormula	Boolean	11	5:False
+sheet.1.r2c6.value2	Empty	0	0:
+sheet.1.r2c6.formula	String	8	0:
+sheet.1.r2c6.formula2	String	8	0:
+sheet.1.r2c6.hasFormula	Boolean	11	5:False
+sheet.1.r3c1.value2	Empty	0	0:
+sheet.1.r3c1.formula	String	8	0:
+sheet.1.r3c1.formula2	String	8	0:
+sheet.1.r3c1.hasFormula	Boolean	11	5:False
+sheet.1.r3c2.value2	Empty	0	0:
+sheet.1.r3c2.formula	String	8	0:
+sheet.1.r3c2.formula2	String	8	0:
+sheet.1.r3c2.hasFormula	Boolean	11	5:False
+sheet.1.r3c3.value2	Empty	0	0:
+sheet.1.r3c3.formula	String	8	0:
+sheet.1.r3c3.formula2	String	8	0:
+sheet.1.r3c3.hasFormula	Boolean	11	5:False
+sheet.1.r3c4.value2	Empty	0	0:
+sheet.1.r3c4.formula	String	8	0:
+sheet.1.r3c4.formula2	String	8	0:
+sheet.1.r3c4.hasFormula	Boolean	11	5:False
+sheet.1.r3c5.value2	Empty	0	0:
+sheet.1.r3c5.formula	String	8	0:
+sheet.1.r3c5.formula2	String	8	0:
+sheet.1.r3c5.hasFormula	Boolean	11	5:False
+sheet.1.r3c6.value2	Empty	0	0:
+sheet.1.r3c6.formula	String	8	0:
+sheet.1.r3c6.formula2	String	8	0:
+sheet.1.r3c6.hasFormula	Boolean	11	5:False
+sheet.1.r4c1.value2	Empty	0	0:
+sheet.1.r4c1.formula	String	8	0:
+sheet.1.r4c1.formula2	String	8	0:
+sheet.1.r4c1.hasFormula	Boolean	11	5:False
+sheet.1.r4c2.value2	Empty	0	0:
+sheet.1.r4c2.formula	String	8	0:
+sheet.1.r4c2.formula2	String	8	0:
+sheet.1.r4c2.hasFormula	Boolean	11	5:False
+sheet.1.r4c3.value2	Empty	0	0:
+sheet.1.r4c3.formula	String	8	0:
+sheet.1.r4c3.formula2	String	8	0:
+sheet.1.r4c3.hasFormula	Boolean	11	5:False
+sheet.1.r4c4.value2	Empty	0	0:
+sheet.1.r4c4.formula	String	8	0:
+sheet.1.r4c4.formula2	String	8	0:
+sheet.1.r4c4.hasFormula	Boolean	11	5:False
+sheet.1.r4c5.value2	Empty	0	0:
+sheet.1.r4c5.formula	String	8	0:
+sheet.1.r4c5.formula2	String	8	0:
+sheet.1.r4c5.hasFormula	Boolean	11	5:False
+sheet.1.r4c6.value2	Empty	0	0:
+sheet.1.r4c6.formula	String	8	0:
+sheet.1.r4c6.formula2	String	8	0:
+sheet.1.r4c6.hasFormula	Boolean	11	5:False
+sheet.1.r5c1.value2	Empty	0	0:
+sheet.1.r5c1.formula	String	8	0:
+sheet.1.r5c1.formula2	String	8	0:
+sheet.1.r5c1.hasFormula	Boolean	11	5:False
+sheet.1.r5c2.value2	Empty	0	0:
+sheet.1.r5c2.formula	String	8	0:
+sheet.1.r5c2.formula2	String	8	0:
+sheet.1.r5c2.hasFormula	Boolean	11	5:False
+sheet.1.r5c3.value2	Empty	0	0:
+sheet.1.r5c3.formula	String	8	0:
+sheet.1.r5c3.formula2	String	8	0:
+sheet.1.r5c3.hasFormula	Boolean	11	5:False
+sheet.1.r5c4.value2	Empty	0	0:
+sheet.1.r5c4.formula	String	8	0:
+sheet.1.r5c4.formula2	String	8	0:
+sheet.1.r5c4.hasFormula	Boolean	11	5:False
+sheet.1.r5c5.value2	Empty	0	0:
+sheet.1.r5c5.formula	String	8	0:
+sheet.1.r5c5.formula2	String	8	0:
+sheet.1.r5c5.hasFormula	Boolean	11	5:False
+sheet.1.r5c6.value2	Empty	0	0:
+sheet.1.r5c6.formula	String	8	0:
+sheet.1.r5c6.formula2	String	8	0:
+sheet.1.r5c6.hasFormula	Boolean	11	5:False
+sheet.1.r6c1.value2	Empty	0	0:
+sheet.1.r6c1.formula	String	8	0:
+sheet.1.r6c1.formula2	String	8	0:
+sheet.1.r6c1.hasFormula	Boolean	11	5:False
+sheet.1.r6c2.value2	Empty	0	0:
+sheet.1.r6c2.formula	String	8	0:
+sheet.1.r6c2.formula2	String	8	0:
+sheet.1.r6c2.hasFormula	Boolean	11	5:False
+sheet.1.r6c3.value2	Empty	0	0:
+sheet.1.r6c3.formula	String	8	0:
+sheet.1.r6c3.formula2	String	8	0:
+sheet.1.r6c3.hasFormula	Boolean	11	5:False
+sheet.1.r6c4.value2	Empty	0	0:
+sheet.1.r6c4.formula	String	8	0:
+sheet.1.r6c4.formula2	String	8	0:
+sheet.1.r6c4.hasFormula	Boolean	11	5:False
+sheet.1.r6c5.value2	Empty	0	0:
+sheet.1.r6c5.formula	String	8	0:
+sheet.1.r6c5.formula2	String	8	0:
+sheet.1.r6c5.hasFormula	Boolean	11	5:False
+sheet.1.r6c6.value2	Empty	0	0:
+sheet.1.r6c6.formula	String	8	0:
+sheet.1.r6c6.formula2	String	8	0:
+sheet.1.r6c6.hasFormula	Boolean	11	5:False
+|Saved=True|Boolean|11|ReadOnlyRecommended=False|Boolean|11|Visible=-1|Long|3|Index=1|Long|3|Locked=True|Boolean|11|Row=1|Long|3|Build=20527|Double|5|CalculationState=0|Long|3|application.displayformulabar=True|Boolean|11|application.displaystatusbar=True|Boolean|11|application.usesystemseparators=False|Boolean|11|application.calculatebeforesave=True|Boolean|11"####,
+            r####"book.saved	Boolean	11	4:True
+book.readOnly	Boolean	11	4:True
+book.sheetCount	Long	3	1:1
+active.sheet	String	8	6:Sheet1
+active.cell	String	8	4:$A$1
+app.calculation	Long	3	5:-4105
+app.calculateBeforeSave	Boolean	11	5:False
+app.screenUpdating	Boolean	11	4:True
+app.enableEvents	Boolean	11	5:False
+app.displayAlerts	Boolean	11	5:False
+app.cursor	Long	3	5:-4143
+app.interactive	Boolean	11	4:True
+app.referenceStyle	Long	3	1:1
+sheet.1.name	String	8	6:Sheet1
+sheet.1.protectContents	Boolean	11	5:False
+sheet.1.row1.height	Double	5	2:15
+sheet.1.row1.hidden	Boolean	11	5:False
+sheet.1.row2.height	Double	5	2:15
+sheet.1.row2.hidden	Boolean	11	5:False
+sheet.1.row3.height	Double	5	2:15
+sheet.1.row3.hidden	Boolean	11	5:False
+sheet.1.row4.height	Double	5	2:15
+sheet.1.row4.hidden	Boolean	11	5:False
+sheet.1.row5.height	Double	5	2:15
+sheet.1.row5.hidden	Boolean	11	5:False
+sheet.1.row6.height	Double	5	2:15
+sheet.1.row6.hidden	Boolean	11	5:False
+sheet.1.col1.width	Double	5	4:8.43
+sheet.1.col1.hidden	Boolean	11	5:False
+sheet.1.col2.width	Double	5	4:8.43
+sheet.1.col2.hidden	Boolean	11	5:False
+sheet.1.col3.width	Double	5	4:8.43
+sheet.1.col3.hidden	Boolean	11	5:False
+sheet.1.col4.width	Double	5	4:8.43
+sheet.1.col4.hidden	Boolean	11	5:False
+sheet.1.col5.width	Double	5	4:8.43
+sheet.1.col5.hidden	Boolean	11	5:False
+sheet.1.col6.width	Double	5	4:8.43
+sheet.1.col6.hidden	Boolean	11	5:False
+sheet.1.r1c1.value2	Empty	0	0:
+sheet.1.r1c1.formula	String	8	0:
+sheet.1.r1c1.formula2	String	8	0:
+sheet.1.r1c1.hasFormula	Boolean	11	5:False
+sheet.1.r1c2.value2	Empty	0	0:
+sheet.1.r1c2.formula	String	8	0:
+sheet.1.r1c2.formula2	String	8	0:
+sheet.1.r1c2.hasFormula	Boolean	11	5:False
+sheet.1.r1c3.value2	Empty	0	0:
+sheet.1.r1c3.formula	String	8	0:
+sheet.1.r1c3.formula2	String	8	0:
+sheet.1.r1c3.hasFormula	Boolean	11	5:False
+sheet.1.r1c4.value2	Empty	0	0:
+sheet.1.r1c4.formula	String	8	0:
+sheet.1.r1c4.formula2	String	8	0:
+sheet.1.r1c4.hasFormula	Boolean	11	5:False
+sheet.1.r1c5.value2	Empty	0	0:
+sheet.1.r1c5.formula	String	8	0:
+sheet.1.r1c5.formula2	String	8	0:
+sheet.1.r1c5.hasFormula	Boolean	11	5:False
+sheet.1.r1c6.value2	Empty	0	0:
+sheet.1.r1c6.formula	String	8	0:
+sheet.1.r1c6.formula2	String	8	0:
+sheet.1.r1c6.hasFormula	Boolean	11	5:False
+sheet.1.r2c1.value2	Empty	0	0:
+sheet.1.r2c1.formula	String	8	0:
+sheet.1.r2c1.formula2	String	8	0:
+sheet.1.r2c1.hasFormula	Boolean	11	5:False
+sheet.1.r2c2.value2	Empty	0	0:
+sheet.1.r2c2.formula	String	8	0:
+sheet.1.r2c2.formula2	String	8	0:
+sheet.1.r2c2.hasFormula	Boolean	11	5:False
+sheet.1.r2c3.value2	Empty	0	0:
+sheet.1.r2c3.formula	String	8	0:
+sheet.1.r2c3.formula2	String	8	0:
+sheet.1.r2c3.hasFormula	Boolean	11	5:False
+sheet.1.r2c4.value2	Empty	0	0:
+sheet.1.r2c4.formula	String	8	0:
+sheet.1.r2c4.formula2	String	8	0:
+sheet.1.r2c4.hasFormula	Boolean	11	5:False
+sheet.1.r2c5.value2	Empty	0	0:
+sheet.1.r2c5.formula	String	8	0:
+sheet.1.r2c5.formula2	String	8	0:
+sheet.1.r2c5.hasFormula	Boolean	11	5:False
+sheet.1.r2c6.value2	Empty	0	0:
+sheet.1.r2c6.formula	String	8	0:
+sheet.1.r2c6.formula2	String	8	0:
+sheet.1.r2c6.hasFormula	Boolean	11	5:False
+sheet.1.r3c1.value2	Empty	0	0:
+sheet.1.r3c1.formula	String	8	0:
+sheet.1.r3c1.formula2	String	8	0:
+sheet.1.r3c1.hasFormula	Boolean	11	5:False
+sheet.1.r3c2.value2	Empty	0	0:
+sheet.1.r3c2.formula	String	8	0:
+sheet.1.r3c2.formula2	String	8	0:
+sheet.1.r3c2.hasFormula	Boolean	11	5:False
+sheet.1.r3c3.value2	Empty	0	0:
+sheet.1.r3c3.formula	String	8	0:
+sheet.1.r3c3.formula2	String	8	0:
+sheet.1.r3c3.hasFormula	Boolean	11	5:False
+sheet.1.r3c4.value2	Empty	0	0:
+sheet.1.r3c4.formula	String	8	0:
+sheet.1.r3c4.formula2	String	8	0:
+sheet.1.r3c4.hasFormula	Boolean	11	5:False
+sheet.1.r3c5.value2	Empty	0	0:
+sheet.1.r3c5.formula	String	8	0:
+sheet.1.r3c5.formula2	String	8	0:
+sheet.1.r3c5.hasFormula	Boolean	11	5:False
+sheet.1.r3c6.value2	Empty	0	0:
+sheet.1.r3c6.formula	String	8	0:
+sheet.1.r3c6.formula2	String	8	0:
+sheet.1.r3c6.hasFormula	Boolean	11	5:False
+sheet.1.r4c1.value2	Empty	0	0:
+sheet.1.r4c1.formula	String	8	0:
+sheet.1.r4c1.formula2	String	8	0:
+sheet.1.r4c1.hasFormula	Boolean	11	5:False
+sheet.1.r4c2.value2	Empty	0	0:
+sheet.1.r4c2.formula	String	8	0:
+sheet.1.r4c2.formula2	String	8	0:
+sheet.1.r4c2.hasFormula	Boolean	11	5:False
+sheet.1.r4c3.value2	Empty	0	0:
+sheet.1.r4c3.formula	String	8	0:
+sheet.1.r4c3.formula2	String	8	0:
+sheet.1.r4c3.hasFormula	Boolean	11	5:False
+sheet.1.r4c4.value2	Empty	0	0:
+sheet.1.r4c4.formula	String	8	0:
+sheet.1.r4c4.formula2	String	8	0:
+sheet.1.r4c4.hasFormula	Boolean	11	5:False
+sheet.1.r4c5.value2	Empty	0	0:
+sheet.1.r4c5.formula	String	8	0:
+sheet.1.r4c5.formula2	String	8	0:
+sheet.1.r4c5.hasFormula	Boolean	11	5:False
+sheet.1.r4c6.value2	Empty	0	0:
+sheet.1.r4c6.formula	String	8	0:
+sheet.1.r4c6.formula2	String	8	0:
+sheet.1.r4c6.hasFormula	Boolean	11	5:False
+sheet.1.r5c1.value2	Empty	0	0:
+sheet.1.r5c1.formula	String	8	0:
+sheet.1.r5c1.formula2	String	8	0:
+sheet.1.r5c1.hasFormula	Boolean	11	5:False
+sheet.1.r5c2.value2	Empty	0	0:
+sheet.1.r5c2.formula	String	8	0:
+sheet.1.r5c2.formula2	String	8	0:
+sheet.1.r5c2.hasFormula	Boolean	11	5:False
+sheet.1.r5c3.value2	Empty	0	0:
+sheet.1.r5c3.formula	String	8	0:
+sheet.1.r5c3.formula2	String	8	0:
+sheet.1.r5c3.hasFormula	Boolean	11	5:False
+sheet.1.r5c4.value2	Empty	0	0:
+sheet.1.r5c4.formula	String	8	0:
+sheet.1.r5c4.formula2	String	8	0:
+sheet.1.r5c4.hasFormula	Boolean	11	5:False
+sheet.1.r5c5.value2	Empty	0	0:
+sheet.1.r5c5.formula	String	8	0:
+sheet.1.r5c5.formula2	String	8	0:
+sheet.1.r5c5.hasFormula	Boolean	11	5:False
+sheet.1.r5c6.value2	Empty	0	0:
+sheet.1.r5c6.formula	String	8	0:
+sheet.1.r5c6.formula2	String	8	0:
+sheet.1.r5c6.hasFormula	Boolean	11	5:False
+sheet.1.r6c1.value2	Empty	0	0:
+sheet.1.r6c1.formula	String	8	0:
+sheet.1.r6c1.formula2	String	8	0:
+sheet.1.r6c1.hasFormula	Boolean	11	5:False
+sheet.1.r6c2.value2	Empty	0	0:
+sheet.1.r6c2.formula	String	8	0:
+sheet.1.r6c2.formula2	String	8	0:
+sheet.1.r6c2.hasFormula	Boolean	11	5:False
+sheet.1.r6c3.value2	Empty	0	0:
+sheet.1.r6c3.formula	String	8	0:
+sheet.1.r6c3.formula2	String	8	0:
+sheet.1.r6c3.hasFormula	Boolean	11	5:False
+sheet.1.r6c4.value2	Empty	0	0:
+sheet.1.r6c4.formula	String	8	0:
+sheet.1.r6c4.formula2	String	8	0:
+sheet.1.r6c4.hasFormula	Boolean	11	5:False
+sheet.1.r6c5.value2	Empty	0	0:
+sheet.1.r6c5.formula	String	8	0:
+sheet.1.r6c5.formula2	String	8	0:
+sheet.1.r6c5.hasFormula	Boolean	11	5:False
+sheet.1.r6c6.value2	Empty	0	0:
+sheet.1.r6c6.formula	String	8	0:
+sheet.1.r6c6.formula2	String	8	0:
+sheet.1.r6c6.hasFormula	Boolean	11	5:False
+|Saved=True|Boolean|11|ReadOnlyRecommended=False|Boolean|11|Visible=-1|Long|3|Index=1|Long|3|Locked=True|Boolean|11|Row=1|Long|3|Build=20527|Double|5|CalculationState=0|Long|3|application.displayformulabar=True|Boolean|11|application.displaystatusbar=True|Boolean|11|application.usesystemseparators=True|Boolean|11|application.calculatebeforesave=False|Boolean|11"####,
+        ];
+        let cases: &[(&str, [i64; 2], usize, usize)] = &[
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [0, 0], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [0, 1], 1, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [0, 2], 2, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [0, 3], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [0, 4], 4, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [0, 5], 2, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [0, 6], 5, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [0, 7], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [0, 8], 2, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [1, 0], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [1, 1], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [1, 2], 2, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [1, 3], 6, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [1, 4], 7, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [1, 5], 2, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [1, 6], 5, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [1, 7], 6, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [1, 8], 2, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [2, 0], 8, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [2, 1], 8, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [2, 2], 9, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [2, 3], 10, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [2, 4], 11, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [2, 5], 9, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [2, 6], 12, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [2, 7], 10, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [2, 8], 9, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [3, 0], 13, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [3, 1], 13, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [3, 2], 14, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [3, 3], 15, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [3, 4], 16, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [3, 5], 14, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [3, 6], 17, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [3, 7], 15, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [3, 8], 14, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [4, 0], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [4, 1], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [4, 2], 2, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [4, 3], 18, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [4, 4], 7, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [4, 5], 2, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [4, 6], 5, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [4, 7], 18, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe0", [4, 8], 2, 1),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [0, 0], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [0, 1], 1, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [0, 2], 2, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [0, 3], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [0, 4], 4, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [0, 5], 2, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [0, 6], 5, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [0, 7], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [0, 8], 2, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [1, 0], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [1, 1], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [1, 2], 2, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [1, 3], 19, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [1, 4], 7, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [1, 5], 2, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [1, 6], 5, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [1, 7], 19, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [1, 8], 2, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [2, 0], 8, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [2, 1], 8, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [2, 2], 9, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [2, 3], 20, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [2, 4], 11, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [2, 5], 9, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [2, 6], 12, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [2, 7], 20, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [2, 8], 9, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [3, 0], 13, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [3, 1], 13, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [3, 2], 14, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [3, 3], 21, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [3, 4], 16, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [3, 5], 14, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [3, 6], 17, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [3, 7], 21, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [3, 8], 14, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [4, 0], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [4, 1], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [4, 2], 2, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [4, 3], 18, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [4, 4], 7, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [4, 5], 2, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [4, 6], 5, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [4, 7], 18, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe1", [4, 8], 2, 2),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [0, 0], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [0, 1], 1, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [0, 2], 2, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [0, 3], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [0, 4], 4, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [0, 5], 2, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [0, 6], 5, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [0, 7], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [0, 8], 2, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [1, 0], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [1, 1], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [1, 2], 2, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [1, 3], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [1, 4], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [1, 5], 2, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [1, 6], 5, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [1, 7], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [1, 8], 2, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [2, 0], 8, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [2, 1], 22, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [2, 2], 9, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [2, 3], 22, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [2, 4], 22, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [2, 5], 9, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [2, 6], 12, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [2, 7], 22, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [2, 8], 9, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [3, 0], 13, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [3, 1], 23, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [3, 2], 14, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [3, 3], 23, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [3, 4], 23, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [3, 5], 14, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [3, 6], 17, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [3, 7], 23, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [3, 8], 14, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [4, 0], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [4, 1], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [4, 2], 2, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [4, 3], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [4, 4], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [4, 5], 2, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [4, 6], 5, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [4, 7], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe2", [4, 8], 2, 3),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [0, 0], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [0, 1], 1, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [0, 2], 2, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [0, 3], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [0, 4], 4, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [0, 5], 2, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [0, 6], 5, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [0, 7], 3, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [0, 8], 2, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [1, 0], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [1, 1], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [1, 2], 2, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [1, 3], 24, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [1, 4], 7, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [1, 5], 2, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [1, 6], 5, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [1, 7], 24, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [1, 8], 2, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [2, 0], 8, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [2, 1], 8, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [2, 2], 9, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [2, 3], 25, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [2, 4], 11, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [2, 5], 9, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [2, 6], 12, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [2, 7], 25, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [2, 8], 9, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [3, 0], 13, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [3, 1], 13, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [3, 2], 14, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [3, 3], 26, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [3, 4], 16, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [3, 5], 14, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [3, 6], 17, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [3, 7], 26, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [3, 8], 14, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [4, 0], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [4, 1], 0, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [4, 2], 2, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [4, 3], 18, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [4, 4], 7, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [4, 5], 2, 4),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [4, 6], 5, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [4, 7], 18, 0),
+            ("ScalarSetterContract.ApplicationSwitchProbe3", [4, 8], 2, 4),
+        ];
+        assert_eq!(cases.len(), 180);
+        check_application_scalar_native_matrix("ScalarSetterContract.ApplicationSwitchInspect", expected, snapshots, cases);
+    }
+
+    #[test]
+    fn native_application_scalar_boolean_text_control_matches_bindings() {
+        let expected: &[&str] = &[
+            r####"OK|False|Boolean|11|screen=True|Boolean|11"####,
+            r####"OK|True|Boolean|11|screen=True|Boolean|11"####,
+            r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|screen=True|Boolean|11"####,
+            r####"OK|False|Boolean|11|screen=False|Boolean|11"####,
+            r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|screen=True|Boolean|11"####,
+            r####"ERR|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095|screen=True|Boolean|11"####,
+        ];
+        let snapshots: &[&str] = &[
+            r####"book.saved	Boolean	11	4:True
+book.readOnly	Boolean	11	4:True
+book.sheetCount	Long	3	1:1
+active.sheet	String	8	6:Sheet1
+active.cell	String	8	4:$A$1
+app.calculation	Long	3	5:-4105
+app.calculateBeforeSave	Boolean	11	4:True
+app.screenUpdating	Boolean	11	4:True
+app.enableEvents	Boolean	11	5:False
+app.displayAlerts	Boolean	11	5:False
+app.cursor	Long	3	5:-4143
+app.interactive	Boolean	11	4:True
+app.referenceStyle	Long	3	1:1
+sheet.1.name	String	8	6:Sheet1
+sheet.1.protectContents	Boolean	11	5:False
+sheet.1.row1.height	Double	5	2:15
+sheet.1.row1.hidden	Boolean	11	5:False
+sheet.1.row2.height	Double	5	2:15
+sheet.1.row2.hidden	Boolean	11	5:False
+sheet.1.row3.height	Double	5	2:15
+sheet.1.row3.hidden	Boolean	11	5:False
+sheet.1.row4.height	Double	5	2:15
+sheet.1.row4.hidden	Boolean	11	5:False
+sheet.1.row5.height	Double	5	2:15
+sheet.1.row5.hidden	Boolean	11	5:False
+sheet.1.row6.height	Double	5	2:15
+sheet.1.row6.hidden	Boolean	11	5:False
+sheet.1.col1.width	Double	5	4:8.43
+sheet.1.col1.hidden	Boolean	11	5:False
+sheet.1.col2.width	Double	5	4:8.43
+sheet.1.col2.hidden	Boolean	11	5:False
+sheet.1.col3.width	Double	5	4:8.43
+sheet.1.col3.hidden	Boolean	11	5:False
+sheet.1.col4.width	Double	5	4:8.43
+sheet.1.col4.hidden	Boolean	11	5:False
+sheet.1.col5.width	Double	5	4:8.43
+sheet.1.col5.hidden	Boolean	11	5:False
+sheet.1.col6.width	Double	5	4:8.43
+sheet.1.col6.hidden	Boolean	11	5:False
+sheet.1.r1c1.value2	Empty	0	0:
+sheet.1.r1c1.formula	String	8	0:
+sheet.1.r1c1.formula2	String	8	0:
+sheet.1.r1c1.hasFormula	Boolean	11	5:False
+sheet.1.r1c2.value2	Empty	0	0:
+sheet.1.r1c2.formula	String	8	0:
+sheet.1.r1c2.formula2	String	8	0:
+sheet.1.r1c2.hasFormula	Boolean	11	5:False
+sheet.1.r1c3.value2	Empty	0	0:
+sheet.1.r1c3.formula	String	8	0:
+sheet.1.r1c3.formula2	String	8	0:
+sheet.1.r1c3.hasFormula	Boolean	11	5:False
+sheet.1.r1c4.value2	Empty	0	0:
+sheet.1.r1c4.formula	String	8	0:
+sheet.1.r1c4.formula2	String	8	0:
+sheet.1.r1c4.hasFormula	Boolean	11	5:False
+sheet.1.r1c5.value2	Empty	0	0:
+sheet.1.r1c5.formula	String	8	0:
+sheet.1.r1c5.formula2	String	8	0:
+sheet.1.r1c5.hasFormula	Boolean	11	5:False
+sheet.1.r1c6.value2	Empty	0	0:
+sheet.1.r1c6.formula	String	8	0:
+sheet.1.r1c6.formula2	String	8	0:
+sheet.1.r1c6.hasFormula	Boolean	11	5:False
+sheet.1.r2c1.value2	Empty	0	0:
+sheet.1.r2c1.formula	String	8	0:
+sheet.1.r2c1.formula2	String	8	0:
+sheet.1.r2c1.hasFormula	Boolean	11	5:False
+sheet.1.r2c2.value2	Empty	0	0:
+sheet.1.r2c2.formula	String	8	0:
+sheet.1.r2c2.formula2	String	8	0:
+sheet.1.r2c2.hasFormula	Boolean	11	5:False
+sheet.1.r2c3.value2	Empty	0	0:
+sheet.1.r2c3.formula	String	8	0:
+sheet.1.r2c3.formula2	String	8	0:
+sheet.1.r2c3.hasFormula	Boolean	11	5:False
+sheet.1.r2c4.value2	Empty	0	0:
+sheet.1.r2c4.formula	String	8	0:
+sheet.1.r2c4.formula2	String	8	0:
+sheet.1.r2c4.hasFormula	Boolean	11	5:False
+sheet.1.r2c5.value2	Empty	0	0:
+sheet.1.r2c5.formula	String	8	0:
+sheet.1.r2c5.formula2	String	8	0:
+sheet.1.r2c5.hasFormula	Boolean	11	5:False
+sheet.1.r2c6.value2	Empty	0	0:
+sheet.1.r2c6.formula	String	8	0:
+sheet.1.r2c6.formula2	String	8	0:
+sheet.1.r2c6.hasFormula	Boolean	11	5:False
+sheet.1.r3c1.value2	Empty	0	0:
+sheet.1.r3c1.formula	String	8	0:
+sheet.1.r3c1.formula2	String	8	0:
+sheet.1.r3c1.hasFormula	Boolean	11	5:False
+sheet.1.r3c2.value2	Empty	0	0:
+sheet.1.r3c2.formula	String	8	0:
+sheet.1.r3c2.formula2	String	8	0:
+sheet.1.r3c2.hasFormula	Boolean	11	5:False
+sheet.1.r3c3.value2	Empty	0	0:
+sheet.1.r3c3.formula	String	8	0:
+sheet.1.r3c3.formula2	String	8	0:
+sheet.1.r3c3.hasFormula	Boolean	11	5:False
+sheet.1.r3c4.value2	Empty	0	0:
+sheet.1.r3c4.formula	String	8	0:
+sheet.1.r3c4.formula2	String	8	0:
+sheet.1.r3c4.hasFormula	Boolean	11	5:False
+sheet.1.r3c5.value2	Empty	0	0:
+sheet.1.r3c5.formula	String	8	0:
+sheet.1.r3c5.formula2	String	8	0:
+sheet.1.r3c5.hasFormula	Boolean	11	5:False
+sheet.1.r3c6.value2	Empty	0	0:
+sheet.1.r3c6.formula	String	8	0:
+sheet.1.r3c6.formula2	String	8	0:
+sheet.1.r3c6.hasFormula	Boolean	11	5:False
+sheet.1.r4c1.value2	Empty	0	0:
+sheet.1.r4c1.formula	String	8	0:
+sheet.1.r4c1.formula2	String	8	0:
+sheet.1.r4c1.hasFormula	Boolean	11	5:False
+sheet.1.r4c2.value2	Empty	0	0:
+sheet.1.r4c2.formula	String	8	0:
+sheet.1.r4c2.formula2	String	8	0:
+sheet.1.r4c2.hasFormula	Boolean	11	5:False
+sheet.1.r4c3.value2	Empty	0	0:
+sheet.1.r4c3.formula	String	8	0:
+sheet.1.r4c3.formula2	String	8	0:
+sheet.1.r4c3.hasFormula	Boolean	11	5:False
+sheet.1.r4c4.value2	Empty	0	0:
+sheet.1.r4c4.formula	String	8	0:
+sheet.1.r4c4.formula2	String	8	0:
+sheet.1.r4c4.hasFormula	Boolean	11	5:False
+sheet.1.r4c5.value2	Empty	0	0:
+sheet.1.r4c5.formula	String	8	0:
+sheet.1.r4c5.formula2	String	8	0:
+sheet.1.r4c5.hasFormula	Boolean	11	5:False
+sheet.1.r4c6.value2	Empty	0	0:
+sheet.1.r4c6.formula	String	8	0:
+sheet.1.r4c6.formula2	String	8	0:
+sheet.1.r4c6.hasFormula	Boolean	11	5:False
+sheet.1.r5c1.value2	Empty	0	0:
+sheet.1.r5c1.formula	String	8	0:
+sheet.1.r5c1.formula2	String	8	0:
+sheet.1.r5c1.hasFormula	Boolean	11	5:False
+sheet.1.r5c2.value2	Empty	0	0:
+sheet.1.r5c2.formula	String	8	0:
+sheet.1.r5c2.formula2	String	8	0:
+sheet.1.r5c2.hasFormula	Boolean	11	5:False
+sheet.1.r5c3.value2	Empty	0	0:
+sheet.1.r5c3.formula	String	8	0:
+sheet.1.r5c3.formula2	String	8	0:
+sheet.1.r5c3.hasFormula	Boolean	11	5:False
+sheet.1.r5c4.value2	Empty	0	0:
+sheet.1.r5c4.formula	String	8	0:
+sheet.1.r5c4.formula2	String	8	0:
+sheet.1.r5c4.hasFormula	Boolean	11	5:False
+sheet.1.r5c5.value2	Empty	0	0:
+sheet.1.r5c5.formula	String	8	0:
+sheet.1.r5c5.formula2	String	8	0:
+sheet.1.r5c5.hasFormula	Boolean	11	5:False
+sheet.1.r5c6.value2	Empty	0	0:
+sheet.1.r5c6.formula	String	8	0:
+sheet.1.r5c6.formula2	String	8	0:
+sheet.1.r5c6.hasFormula	Boolean	11	5:False
+sheet.1.r6c1.value2	Empty	0	0:
+sheet.1.r6c1.formula	String	8	0:
+sheet.1.r6c1.formula2	String	8	0:
+sheet.1.r6c1.hasFormula	Boolean	11	5:False
+sheet.1.r6c2.value2	Empty	0	0:
+sheet.1.r6c2.formula	String	8	0:
+sheet.1.r6c2.formula2	String	8	0:
+sheet.1.r6c2.hasFormula	Boolean	11	5:False
+sheet.1.r6c3.value2	Empty	0	0:
+sheet.1.r6c3.formula	String	8	0:
+sheet.1.r6c3.formula2	String	8	0:
+sheet.1.r6c3.hasFormula	Boolean	11	5:False
+sheet.1.r6c4.value2	Empty	0	0:
+sheet.1.r6c4.formula	String	8	0:
+sheet.1.r6c4.formula2	String	8	0:
+sheet.1.r6c4.hasFormula	Boolean	11	5:False
+sheet.1.r6c5.value2	Empty	0	0:
+sheet.1.r6c5.formula	String	8	0:
+sheet.1.r6c5.formula2	String	8	0:
+sheet.1.r6c5.hasFormula	Boolean	11	5:False
+sheet.1.r6c6.value2	Empty	0	0:
+sheet.1.r6c6.formula	String	8	0:
+sheet.1.r6c6.formula2	String	8	0:
+sheet.1.r6c6.hasFormula	Boolean	11	5:False
+|Saved=True|Boolean|11|ReadOnlyRecommended=False|Boolean|11|Visible=-1|Long|3|Index=1|Long|3|Locked=True|Boolean|11|Row=1|Long|3|Build=20527|Double|5|CalculationState=0|Long|3"####,
+            r####"book.saved	Boolean	11	4:True
+book.readOnly	Boolean	11	4:True
+book.sheetCount	Long	3	1:1
+active.sheet	String	8	6:Sheet1
+active.cell	String	8	4:$A$1
+app.calculation	Long	3	5:-4105
+app.calculateBeforeSave	Boolean	11	4:True
+app.screenUpdating	Boolean	11	5:False
+app.enableEvents	Boolean	11	5:False
+app.displayAlerts	Boolean	11	5:False
+app.cursor	Long	3	5:-4143
+app.interactive	Boolean	11	4:True
+app.referenceStyle	Long	3	1:1
+sheet.1.name	String	8	6:Sheet1
+sheet.1.protectContents	Boolean	11	5:False
+sheet.1.row1.height	Double	5	2:15
+sheet.1.row1.hidden	Boolean	11	5:False
+sheet.1.row2.height	Double	5	2:15
+sheet.1.row2.hidden	Boolean	11	5:False
+sheet.1.row3.height	Double	5	2:15
+sheet.1.row3.hidden	Boolean	11	5:False
+sheet.1.row4.height	Double	5	2:15
+sheet.1.row4.hidden	Boolean	11	5:False
+sheet.1.row5.height	Double	5	2:15
+sheet.1.row5.hidden	Boolean	11	5:False
+sheet.1.row6.height	Double	5	2:15
+sheet.1.row6.hidden	Boolean	11	5:False
+sheet.1.col1.width	Double	5	4:8.43
+sheet.1.col1.hidden	Boolean	11	5:False
+sheet.1.col2.width	Double	5	4:8.43
+sheet.1.col2.hidden	Boolean	11	5:False
+sheet.1.col3.width	Double	5	4:8.43
+sheet.1.col3.hidden	Boolean	11	5:False
+sheet.1.col4.width	Double	5	4:8.43
+sheet.1.col4.hidden	Boolean	11	5:False
+sheet.1.col5.width	Double	5	4:8.43
+sheet.1.col5.hidden	Boolean	11	5:False
+sheet.1.col6.width	Double	5	4:8.43
+sheet.1.col6.hidden	Boolean	11	5:False
+sheet.1.r1c1.value2	Empty	0	0:
+sheet.1.r1c1.formula	String	8	0:
+sheet.1.r1c1.formula2	String	8	0:
+sheet.1.r1c1.hasFormula	Boolean	11	5:False
+sheet.1.r1c2.value2	Empty	0	0:
+sheet.1.r1c2.formula	String	8	0:
+sheet.1.r1c2.formula2	String	8	0:
+sheet.1.r1c2.hasFormula	Boolean	11	5:False
+sheet.1.r1c3.value2	Empty	0	0:
+sheet.1.r1c3.formula	String	8	0:
+sheet.1.r1c3.formula2	String	8	0:
+sheet.1.r1c3.hasFormula	Boolean	11	5:False
+sheet.1.r1c4.value2	Empty	0	0:
+sheet.1.r1c4.formula	String	8	0:
+sheet.1.r1c4.formula2	String	8	0:
+sheet.1.r1c4.hasFormula	Boolean	11	5:False
+sheet.1.r1c5.value2	Empty	0	0:
+sheet.1.r1c5.formula	String	8	0:
+sheet.1.r1c5.formula2	String	8	0:
+sheet.1.r1c5.hasFormula	Boolean	11	5:False
+sheet.1.r1c6.value2	Empty	0	0:
+sheet.1.r1c6.formula	String	8	0:
+sheet.1.r1c6.formula2	String	8	0:
+sheet.1.r1c6.hasFormula	Boolean	11	5:False
+sheet.1.r2c1.value2	Empty	0	0:
+sheet.1.r2c1.formula	String	8	0:
+sheet.1.r2c1.formula2	String	8	0:
+sheet.1.r2c1.hasFormula	Boolean	11	5:False
+sheet.1.r2c2.value2	Empty	0	0:
+sheet.1.r2c2.formula	String	8	0:
+sheet.1.r2c2.formula2	String	8	0:
+sheet.1.r2c2.hasFormula	Boolean	11	5:False
+sheet.1.r2c3.value2	Empty	0	0:
+sheet.1.r2c3.formula	String	8	0:
+sheet.1.r2c3.formula2	String	8	0:
+sheet.1.r2c3.hasFormula	Boolean	11	5:False
+sheet.1.r2c4.value2	Empty	0	0:
+sheet.1.r2c4.formula	String	8	0:
+sheet.1.r2c4.formula2	String	8	0:
+sheet.1.r2c4.hasFormula	Boolean	11	5:False
+sheet.1.r2c5.value2	Empty	0	0:
+sheet.1.r2c5.formula	String	8	0:
+sheet.1.r2c5.formula2	String	8	0:
+sheet.1.r2c5.hasFormula	Boolean	11	5:False
+sheet.1.r2c6.value2	Empty	0	0:
+sheet.1.r2c6.formula	String	8	0:
+sheet.1.r2c6.formula2	String	8	0:
+sheet.1.r2c6.hasFormula	Boolean	11	5:False
+sheet.1.r3c1.value2	Empty	0	0:
+sheet.1.r3c1.formula	String	8	0:
+sheet.1.r3c1.formula2	String	8	0:
+sheet.1.r3c1.hasFormula	Boolean	11	5:False
+sheet.1.r3c2.value2	Empty	0	0:
+sheet.1.r3c2.formula	String	8	0:
+sheet.1.r3c2.formula2	String	8	0:
+sheet.1.r3c2.hasFormula	Boolean	11	5:False
+sheet.1.r3c3.value2	Empty	0	0:
+sheet.1.r3c3.formula	String	8	0:
+sheet.1.r3c3.formula2	String	8	0:
+sheet.1.r3c3.hasFormula	Boolean	11	5:False
+sheet.1.r3c4.value2	Empty	0	0:
+sheet.1.r3c4.formula	String	8	0:
+sheet.1.r3c4.formula2	String	8	0:
+sheet.1.r3c4.hasFormula	Boolean	11	5:False
+sheet.1.r3c5.value2	Empty	0	0:
+sheet.1.r3c5.formula	String	8	0:
+sheet.1.r3c5.formula2	String	8	0:
+sheet.1.r3c5.hasFormula	Boolean	11	5:False
+sheet.1.r3c6.value2	Empty	0	0:
+sheet.1.r3c6.formula	String	8	0:
+sheet.1.r3c6.formula2	String	8	0:
+sheet.1.r3c6.hasFormula	Boolean	11	5:False
+sheet.1.r4c1.value2	Empty	0	0:
+sheet.1.r4c1.formula	String	8	0:
+sheet.1.r4c1.formula2	String	8	0:
+sheet.1.r4c1.hasFormula	Boolean	11	5:False
+sheet.1.r4c2.value2	Empty	0	0:
+sheet.1.r4c2.formula	String	8	0:
+sheet.1.r4c2.formula2	String	8	0:
+sheet.1.r4c2.hasFormula	Boolean	11	5:False
+sheet.1.r4c3.value2	Empty	0	0:
+sheet.1.r4c3.formula	String	8	0:
+sheet.1.r4c3.formula2	String	8	0:
+sheet.1.r4c3.hasFormula	Boolean	11	5:False
+sheet.1.r4c4.value2	Empty	0	0:
+sheet.1.r4c4.formula	String	8	0:
+sheet.1.r4c4.formula2	String	8	0:
+sheet.1.r4c4.hasFormula	Boolean	11	5:False
+sheet.1.r4c5.value2	Empty	0	0:
+sheet.1.r4c5.formula	String	8	0:
+sheet.1.r4c5.formula2	String	8	0:
+sheet.1.r4c5.hasFormula	Boolean	11	5:False
+sheet.1.r4c6.value2	Empty	0	0:
+sheet.1.r4c6.formula	String	8	0:
+sheet.1.r4c6.formula2	String	8	0:
+sheet.1.r4c6.hasFormula	Boolean	11	5:False
+sheet.1.r5c1.value2	Empty	0	0:
+sheet.1.r5c1.formula	String	8	0:
+sheet.1.r5c1.formula2	String	8	0:
+sheet.1.r5c1.hasFormula	Boolean	11	5:False
+sheet.1.r5c2.value2	Empty	0	0:
+sheet.1.r5c2.formula	String	8	0:
+sheet.1.r5c2.formula2	String	8	0:
+sheet.1.r5c2.hasFormula	Boolean	11	5:False
+sheet.1.r5c3.value2	Empty	0	0:
+sheet.1.r5c3.formula	String	8	0:
+sheet.1.r5c3.formula2	String	8	0:
+sheet.1.r5c3.hasFormula	Boolean	11	5:False
+sheet.1.r5c4.value2	Empty	0	0:
+sheet.1.r5c4.formula	String	8	0:
+sheet.1.r5c4.formula2	String	8	0:
+sheet.1.r5c4.hasFormula	Boolean	11	5:False
+sheet.1.r5c5.value2	Empty	0	0:
+sheet.1.r5c5.formula	String	8	0:
+sheet.1.r5c5.formula2	String	8	0:
+sheet.1.r5c5.hasFormula	Boolean	11	5:False
+sheet.1.r5c6.value2	Empty	0	0:
+sheet.1.r5c6.formula	String	8	0:
+sheet.1.r5c6.formula2	String	8	0:
+sheet.1.r5c6.hasFormula	Boolean	11	5:False
+sheet.1.r6c1.value2	Empty	0	0:
+sheet.1.r6c1.formula	String	8	0:
+sheet.1.r6c1.formula2	String	8	0:
+sheet.1.r6c1.hasFormula	Boolean	11	5:False
+sheet.1.r6c2.value2	Empty	0	0:
+sheet.1.r6c2.formula	String	8	0:
+sheet.1.r6c2.formula2	String	8	0:
+sheet.1.r6c2.hasFormula	Boolean	11	5:False
+sheet.1.r6c3.value2	Empty	0	0:
+sheet.1.r6c3.formula	String	8	0:
+sheet.1.r6c3.formula2	String	8	0:
+sheet.1.r6c3.hasFormula	Boolean	11	5:False
+sheet.1.r6c4.value2	Empty	0	0:
+sheet.1.r6c4.formula	String	8	0:
+sheet.1.r6c4.formula2	String	8	0:
+sheet.1.r6c4.hasFormula	Boolean	11	5:False
+sheet.1.r6c5.value2	Empty	0	0:
+sheet.1.r6c5.formula	String	8	0:
+sheet.1.r6c5.formula2	String	8	0:
+sheet.1.r6c5.hasFormula	Boolean	11	5:False
+sheet.1.r6c6.value2	Empty	0	0:
+sheet.1.r6c6.formula	String	8	0:
+sheet.1.r6c6.formula2	String	8	0:
+sheet.1.r6c6.hasFormula	Boolean	11	5:False
+|Saved=True|Boolean|11|ReadOnlyRecommended=False|Boolean|11|Visible=-1|Long|3|Index=1|Long|3|Locked=True|Boolean|11|Row=1|Long|3|Build=20527|Double|5|CalculationState=0|Long|3"####,
+        ];
+        let cases: &[(&str, [i64; 2], usize, usize)] = &[
+            ("ScalarSetterContract.BooleanTextControl", [0, 0], 0, 0),
+            ("ScalarSetterContract.BooleanTextControl", [0, 1], 1, 0),
+            ("ScalarSetterContract.BooleanTextControl", [0, 2], 2, 0),
+            ("ScalarSetterContract.BooleanTextControl", [0, 3], 2, 0),
+            ("ScalarSetterContract.BooleanTextControl", [0, 4], 1, 0),
+            ("ScalarSetterContract.BooleanTextControl", [0, 5], 1, 0),
+            ("ScalarSetterContract.BooleanTextControl", [1, 0], 0, 0),
+            ("ScalarSetterContract.BooleanTextControl", [1, 1], 1, 0),
+            ("ScalarSetterContract.BooleanTextControl", [1, 2], 2, 0),
+            ("ScalarSetterContract.BooleanTextControl", [1, 3], 2, 0),
+            ("ScalarSetterContract.BooleanTextControl", [1, 4], 1, 0),
+            ("ScalarSetterContract.BooleanTextControl", [1, 5], 1, 0),
+            ("ScalarSetterContract.BooleanTextControl", [2, 0], 3, 1),
+            ("ScalarSetterContract.BooleanTextControl", [2, 1], 1, 0),
+            ("ScalarSetterContract.BooleanTextControl", [2, 2], 2, 0),
+            ("ScalarSetterContract.BooleanTextControl", [2, 3], 2, 0),
+            ("ScalarSetterContract.BooleanTextControl", [2, 4], 1, 0),
+            ("ScalarSetterContract.BooleanTextControl", [2, 5], 1, 0),
+            ("ScalarSetterContract.BooleanTextControl", [3, 0], 4, 0),
+            ("ScalarSetterContract.BooleanTextControl", [3, 1], 4, 0),
+            ("ScalarSetterContract.BooleanTextControl", [3, 2], 4, 0),
+            ("ScalarSetterContract.BooleanTextControl", [3, 3], 4, 0),
+            ("ScalarSetterContract.BooleanTextControl", [3, 4], 1, 0),
+            ("ScalarSetterContract.BooleanTextControl", [3, 5], 4, 0),
+            ("ScalarSetterContract.BooleanTextControl", [4, 0], 5, 0),
+            ("ScalarSetterContract.BooleanTextControl", [4, 1], 5, 0),
+            ("ScalarSetterContract.BooleanTextControl", [4, 2], 5, 0),
+            ("ScalarSetterContract.BooleanTextControl", [4, 3], 5, 0),
+            ("ScalarSetterContract.BooleanTextControl", [4, 4], 1, 0),
+            ("ScalarSetterContract.BooleanTextControl", [4, 5], 5, 0),
+        ];
+        assert_eq!(cases.len(), 30);
+        check_application_scalar_native_matrix("ScalarSetterContract.Inspect", expected, snapshots, cases);
     }
 
     #[test]
