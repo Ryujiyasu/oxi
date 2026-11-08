@@ -1,6 +1,8 @@
 name: CI
 
-# The gates the README promises, run on every push and pull request.
+# The gates the README promises. A push to main runs the test suite and clippy
+# when code changed; pull requests, the nightly run and a manual run also build
+# the WebAssembly package.
 #
 # The pixel-fidelity gates (SSIM against Word, Excel and PowerPoint's own
 # renders) need a Windows machine with Microsoft Office installed and are run
@@ -11,12 +13,15 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'tools/metrics/**'
-      - 'tools/golden-test/**'
+    paths:
+      - 'crates/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci.yml'
   pull_request:
+  schedule:
+    - cron: '0 18 * * *'
   workflow_dispatch:
     inputs:
       font_metrics:
@@ -66,7 +71,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked
 
   wasm:
-    if: ${{ !inputs.font_metrics }}
+    if: ${{ github.event_name != 'push' && !inputs.font_metrics }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
