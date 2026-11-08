@@ -5244,6 +5244,18 @@ impl<'a> Runtime<'a> {
                             // The name probe already resolved this receiver. A different
                             // host type may still have a scalar setter with that name.
                             // Keep the same receiver through its ordinary conversion.
+                            if let Some(prepared) = self.prepare_source_dispatch_value(
+                                &receiver, name, value.clone(), 0, true, frame, span.line,
+                            )? {
+                                drop(value);
+                                let answer = self.assign_prepared_dispatch_value(&receiver, name,
+                                    (&[], &[]), prepared, frame, span.line);
+                                drop(receiver);
+                                let collected = self.collect_instances(span.line);
+                                if answer.is_ok() { collected?; }
+                                answer?;
+                                return Ok(Flow::Continue);
+                            }
                             if let Value::Object(source) = &value {
                                 let taken = self.host.as_deref_mut().map(|host|
                                     host.set_from_object(&receiver, name, source))
