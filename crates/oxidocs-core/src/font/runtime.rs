@@ -262,6 +262,30 @@ fn load_from_disk(family: &str, bold: bool, italic: bool) -> Option<&'static Fon
     None
 }
 
+/// The file and collection index of the face named by `family` on this machine (the
+/// same search `resolve` uses, S1272's collection walk included), for writers that
+/// embed the face itself. `None` when the machine does not have it.
+pub fn face_file(family: &str, bold: bool, italic: bool) -> Option<(PathBuf, u32)> {
+    for root in search_roots() {
+        for path in candidate_files(&root) {
+            let Ok(data) = std::fs::read(&path) else { continue };
+            let faces: Vec<(u32, skrifa::FontRef)> = match skrifa::raw::FileRef::new(&data) {
+                Ok(skrifa::raw::FileRef::Font(f)) => vec![(0, f)],
+                Ok(skrifa::raw::FileRef::Collection(c)) => {
+                    (0..c.len()).filter_map(|i| c.get(i).ok().map(|f| (i, f))).collect()
+                }
+                Err(_) => continue,
+            };
+            for (index, font) in faces {
+                if face_matches(&font, family, bold, italic) {
+                    return Some((path.clone(), index));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// The face named by `family`, if this machine has it and the tables do not.
 ///
 /// Returns `None` for a face that is genuinely absent, which is the case S1146

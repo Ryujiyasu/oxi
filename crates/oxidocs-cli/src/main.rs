@@ -3535,6 +3535,23 @@ fn build_embedded_fonts(
         if fonts.contains_key(&resolved) {
             continue;
         }
+        // OXI_PDF_FACE_INDEX (2026-11-08, default ON, opt-out _DISABLE): embed the face
+        // the document names from the machine's own file AND collection index, found
+        // the way the layout finds it (font::runtime). The table below always took face
+        // 0 of a .ttc, so ＭＳ Ｐゴシック came out as ＭＳ ゴシック (msgothic.ttc face 0,
+        // monospaced) and 游明朝 / メイリオ fell to the stand-in: blind-J ja/reports__
+        // 77526bdb's proportional body ran full-width past its cells in the PDF while
+        // the layout (and the renderer) set it at the proportional advances.
+        if std::env::var_os("OXI_PDF_FACE_INDEX_DISABLE").is_none() {
+            if let Some((path, face)) = oxidocs_core::font::runtime::face_file(name, false, false) {
+                let label = resolved.replace(['-', ' '], "_");
+                if let Ok(result) = subset_font_native_face(&path.to_string_lossy(), face, &used_chars) {
+                    eprintln!("Embedding CJK font '{}' ({}) from {} face {} ({} bytes)", resolved, name, path.display(), face, result.data.len());
+                    fonts.insert(resolved, result);
+                    continue;
+                }
+            }
+        }
         let system = system_files
             .iter()
             .find(|(family, _)| *family == resolved)
@@ -3714,9 +3731,13 @@ enum NativeSubset {
 /// quarters of a conversion's time, and a dependency a server image need
 /// not have.
 fn subset_font_native(font_path: &str, chars: &std::collections::BTreeSet<char>) -> Result<EmbeddedFont, NativeSubset> {
+    subset_font_native_face(font_path, 0, chars)
+}
+
+fn subset_font_native_face(font_path: &str, face: u32, chars: &std::collections::BTreeSet<char>) -> Result<EmbeddedFont, NativeSubset> {
     use oxipdf_core::font_util;
     let file = fs::read(font_path).map_err(|e| NativeSubset::Failed(e.to_string()))?;
-    let lifted = font_util::extract_ttc_face(&file, 0);
+    let lifted = font_util::extract_ttc_face(&file, face);
     let data: &[u8] = lifted.as_deref().unwrap_or(&file);
     // The best cmap, a symbol font's (3,0) table included, so a Wingdings
     // code finds its glyph.
