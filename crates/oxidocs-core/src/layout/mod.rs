@@ -3938,6 +3938,9 @@ fn word_com_single_line_height(family: &str, fs: f32) -> Option<f32> {
 /// Derived from COM measurement: comparing Word's actual character
 /// positions (Range.Information) against input spacing values.
 /// Example: cs=-0.45pt → -9tw → round(-9*96/1440) = -1px → -0.75pt
+/// OXI_TXBX_LINK: marks a chain box whose content was handed on by the box before.
+const CHAIN_FED: u32 = 0x8000_0000;
+
 thread_local! {
     /// S721 body arm: set by the paragraph-level two-pass orphan re-break
     /// (see the caller near break_into_lines) so the cap computation inside
@@ -3990,6 +3993,11 @@ thread_local! {
     /// arm); LAST = the latest text laid out so far (causal last-before-page).
     /// Cross-section by design (a Chapter set in section k resolves in
     /// section k+1's header); reset per layout run at the section loop.
+    /// OXI_TXBX_LINK: the lines (or whole paragraphs) a linked chain's box could not hold, waiting for the
+    /// box with the next seq -- chain id -> (next seq, elements with x relative to the
+    /// inner left and y relative to the inner top). Reset per layout run.
+    static TXBX_CHAIN_STASH: std::cell::RefCell<std::collections::HashMap<u32, (u32, Vec<LayoutElement>, Vec<Block>)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
     static S1174_FIRST: std::cell::RefCell<std::collections::HashMap<String, String>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
     static S1174_LAST: std::cell::RefCell<std::collections::HashMap<String, String>> =
@@ -4924,6 +4932,7 @@ impl LayoutEngine {
         // paragraphs; skipped work everywhere when no STYLEREF header exists.
         S1174_FIRST.with(|m| m.borrow_mut().clear());
         S1174_LAST.with(|m| m.borrow_mut().clear());
+        TXBX_CHAIN_STASH.with(|m| m.borrow_mut().clear());
         let s1174_doc_active = !crate::env_flag!("OXI_S1174_DISABLE")
             && doc_resolved.pages.iter().any(|p| {
                 Self::s1174_has_ref(&p.header)
@@ -10250,6 +10259,11 @@ cells={} pitch={:.2} text={:?}",
         }
         let v_anchor = text_box.v_text_anchor.as_deref().unwrap_or("t");
         let mut cursor = LayoutCursor::new(abs_y + inset_t + v_corner_inset);
+        // OXI_TXBX_LINK: the story box of a linked chain lays out its whole story;
+        // what it cannot hold flows on (see below), so neither stop at its bottom.
+        let txbx_chain = text_box.chain.filter(|_| !crate::env_flag!("OXI_TXBX_LINK_DISABLE"));
+        let chain_head = txbx_chain.is_some_and(|c| c.1 == 0 || c.1 & CHAIN_FED != 0);
+        let mut block_el_start: Vec<usize> = Vec::new();
 
         // We layout content inside the text box without page-breaking.
         // Use dummy page/elements vecs since we don't want page breaks inside text boxes.
@@ -10301,13 +10315,14 @@ cells={} pitch={:.2} text={:?}",
         let mut txbx_prev_after: f32 = 0.0;
 
         for block in box_blocks {
+            block_el_start.push(elements.len());
             if txbx_after_on && !matches!(block, Block::Paragraph(_)) {
                 cursor.advance(txbx_prev_after);
                 txbx_prev_after = 0.0;
                 txbx_prev_para = None;
             }
             // Stop if we've exceeded the text box bounds
-            if cursor.cursor_y > abs_y + text_box.height - inset_b - v_corner_inset {
+            if !chain_head && cursor.cursor_y > abs_y + text_box.height - inset_b - v_corner_inset {
                 break;
             }
 
@@ -10837,7 +10852,7 @@ cells={} pitch={:.2} text={:?}",
         // every arm's last drawn line is the last whose middle clears the inner bottom.
         // ja/reference__22761439's two 660pt column boxes of «○○○» lines: Word stops at
         // 804 / 811, Oxi ran them on to 1100 across the footer.
-        if !crate::env_flag!("OXI_TXBX_OVERFLOW_MID_DISABLE") && !text_box.vertical_text {
+        if !crate::env_flag!("OXI_TXBX_OVERFLOW_MID_DISABLE") && !text_box.vertical_text && !chain_head {
             let inner_bottom = abs_y + text_box.height - inset_b - v_corner_inset;
             elements.retain(|el| match &el.content {
                 LayoutContent::Text { .. } => el.y + el.height / 2.0 <= inner_bottom + 0.01,
@@ -10905,10 +10920,24 @@ cells={} pitch={:.2} text={:?}",
             && (page.grid_char_pitch.is_none()
                 || !crate::env_flag!("OXI_TXBX_LAC_GRID_DISABLE"))
             && page.grid_line_pitch.is_some()
-            && text_box.blocks.iter().all(|b| {
-                matches!(b, Block::Paragraph(p) if p.style.snap_to_grid
-                    && p.style.line_spacing_rule.as_deref() != Some("exact"))
-            });
+            && if crate::env_flag!("OXI_CLNSP_MIXED_GRID_DISABLE") {
+                text_box.blocks.iter().all(|b| {
+                    matches!(b, Block::Paragraph(p) if p.style.snap_to_grid
+                        && p.style.line_spacing_rule.as_deref() != Some("exact"))
+                })
+            } else {
+                // OXI_CLNSP_MIXED_GRID (2026-11-08, default ON, opt-out _DISABLE): one
+                // grid-snapped line puts the whole box on the regular path, whose exact
+                // lines are right as well. docx-corpus ja/reference__d1a2bafd's 168pt
+                // box (YuGothic 12, auto / exact 12 / atLeast 20 / exact 20 lines, lines
+                // grid 18): Word baselines 273.1 296.5 321.1 344.5 363.0, regular path
+                // 272.9 296.4 320.9 344.4 362.8, the CLNSP chain 265.0 280.7 297.1
+                // 312.7 331.2 (the atLeast / auto lines unsnapped).
+                text_box.blocks.iter().all(|b| matches!(b, Block::Paragraph(p) if p.style.snap_to_grid))
+                    && text_box.blocks.iter().any(|b| {
+                        matches!(b, Block::Paragraph(p) if p.style.line_spacing_rule.as_deref() != Some("exact"))
+                    })
+            };
         if text_box.compat_line_spacing
             && !crate::env_flag!("OXI_CLNSP_DISABLE")
             && !clnsp_box_on_grid
@@ -11195,6 +11224,110 @@ cells={} pitch={:.2} text={:?}",
         for el in elements.iter_mut() {
             if el.x == abs_x && el.y == abs_y && el.height == text_box.height {
                 el.height = actual_height;
+            }
+        }
+
+        // OXI_TXBX_LINK (2026-11-08, default ON, opt-out _DISABLE): a linked chain
+        // (`wps:txbx id` + `wps:linkedTxbx id seq`) is one story poured box by box,
+        // LINE by line (mid-paragraph too): a line stays only if its whole line box
+        // clears the inner bottom, the rest continues at the next box's inner top.
+        // docx-corpus en_creative__f920d474 (Word COM TextFrame.TextRange: 0..812 |
+        // 812..1658) and a first-box height sweep (2pt steps, 30 arms): five lines
+        // leave at top + 11.45..12.2 = their line height, not their middle (the
+        // unlinked OXI_TXBX_OVERFLOW_MID rule); a box takes at least one line
+        // (en_educational__fe967f85's 3.5 x 9pt box holds «S»). Oxi poured the whole
+        // story into the first box and hid the rest.
+        if let Some((cid, seq_raw)) = txbx_chain.filter(|_| !text_box.vertical_text) {
+            let fed = seq_raw & CHAIN_FED != 0;
+            let seq = seq_raw & !CHAIN_FED;
+            let inner_top = abs_y + inset_t + v_corner_inset;
+            let inner_bottom = abs_y + text_box.height - inset_b - v_corner_inset;
+            let movable = |c: &LayoutContent| matches!(c, LayoutContent::Text { .. } | LayoutContent::Image { .. });
+            if seq > 0 && !fed {
+                let carried = TXBX_CHAIN_STASH.with(|m| {
+                    m.borrow().get(&cid).filter(|(next, _, _)| *next == seq).map(|(_, v, b)| (v.clone(), b.clone()))
+                });
+                if let Some((lines, blocks)) = carried {
+                    if !blocks.is_empty() {
+                        // whole paragraphs: laid out again at this box's own measure
+                        let fed_box = TextBox {
+                            blocks,
+                            chain: Some((cid, seq | CHAIN_FED)),
+                            border: false,
+                            fill: None,
+                            vector_shapes: Vec::new(),
+                            children: Vec::new(),
+                            ..text_box.clone()
+                        };
+                        let fed_els = self.layout_text_box_at(
+                            &fed_box, page, block_y_positions, block_col_x, Some((abs_x, abs_y)));
+                        elements.extend(fed_els.into_iter().filter(|e| {
+                            !matches!(e.content, LayoutContent::ClipStart | LayoutContent::ClipEnd | LayoutContent::BoxRect { .. })
+                        }));
+                    } else {
+                        for mut el in lines {
+                            el.x += inner_x;
+                            el.y += inner_top;
+                            elements.push(el);
+                        }
+                    }
+                }
+            }
+            let first_y = elements.iter().filter(|e| movable(&e.content)).map(|e| e.y).fold(f32::INFINITY, f32::min);
+            let cut_y = elements
+                .iter()
+                .filter(|e| movable(&e.content) && e.y + e.height > inner_bottom + 0.01)
+                .map(|e| e.y)
+                .fold(f32::INFINITY, f32::min);
+            // at least one line per box
+            let cut_y = if cut_y.is_finite() && cut_y <= first_y + 0.5 {
+                elements.iter().filter(|e| movable(&e.content) && e.y > first_y + 0.5).map(|e| e.y).fold(f32::INFINITY, f32::min)
+            } else {
+                cut_y
+            };
+            // a cut at a paragraph's first line hands the remaining paragraphs on
+            let block_cut = cut_y.is_finite()
+                .then(|| {
+                    block_el_start.iter().enumerate().find_map(|(bi, &start)| {
+                        let end = block_el_start.get(bi + 1).copied().unwrap_or(elements.len());
+                        let first = elements[start..end.min(elements.len())]
+                            .iter()
+                            .filter(|e| movable(&e.content))
+                            .map(|e| e.y)
+                            .fold(f32::INFINITY, f32::min);
+                        (first.is_finite() && (first - cut_y).abs() < 0.5).then_some(bi)
+                    })
+                })
+                .flatten()
+                .filter(|_| !box_blocks.is_empty());
+            if let Some(bi) = block_cut {
+                let start = block_el_start[bi];
+                let mut k = 0usize;
+                elements.retain(|e| {
+                    k += 1;
+                    !(k - 1 >= start && movable(&e.content))
+                });
+                let rest: Vec<Block> = box_blocks[bi..].to_vec();
+                TXBX_CHAIN_STASH.with(|m| m.borrow_mut().insert(cid, (seq + 1, Vec::new(), rest)));
+            } else if cut_y.is_finite() {
+                // the moved lines keep their offset below the line top: the first
+                // stayed line's offset from the inner top
+                let lead = (first_y - inner_top).max(0.0);
+                let mut moved = Vec::new();
+                elements.retain(|e| {
+                    if movable(&e.content) && e.y >= cut_y - 0.5 {
+                        let mut m = e.clone();
+                        m.x -= inner_x;
+                        m.y = m.y - cut_y + lead;
+                        moved.push(m);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                TXBX_CHAIN_STASH.with(|m| m.borrow_mut().insert(cid, (seq + 1, moved, Vec::new())));
+            } else if seq == 0 {
+                TXBX_CHAIN_STASH.with(|m| m.borrow_mut().remove(&cid));
             }
         }
 

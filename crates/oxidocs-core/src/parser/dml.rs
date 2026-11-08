@@ -219,5 +219,6 @@ pub(super) fn text_box(
         children: Vec::new(),
         body_wrap_none: wrap_none,
         children_on_line: false,
+        chain: None,
     }
 }

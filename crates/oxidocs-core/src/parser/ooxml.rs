@@ -8202,6 +8202,8 @@ fn parse_drawing(
     let mut text_auto_fit = false;
     // OXI_WRAPNONE_WIDTH: bodyPr wrap="none"
     let mut text_wrap_none = false;
+    // OXI_TXBX_LINK: (chain id, seq) of a linked text box.
+    let mut txbx_chain: Option<(u32, u32)> = None;
     // S537b: wordprocessingCanvas marker (wpc:wpc child of graphicData).
     let mut is_canvas = false;
     // The diagramData relationship of a SmartArt (`dgm:relIds r:dm`), and the
@@ -9050,6 +9052,16 @@ fn parse_drawing(
                         }
                     }
                     // DrawingML shape text content
+                    // OXI_TXBX_LINK: the story box of a linked chain carries its id.
+                    "txbx" if !s839_in_wgp => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "id" {
+                                if let Ok(id) = String::from_utf8_lossy(&attr.value).parse::<u32>() {
+                                    txbx_chain = Some((id, 0));
+                                }
+                            }
+                        }
+                    }
                     "txbxContent" => {
                         // Parse text blocks inside shape
                         // OXI_WPG_TEXT_CHILDREN: a group member's text is its own
@@ -9782,6 +9794,21 @@ fn parse_drawing(
                         text_auto_fit = true;
                     }
                     // Text body properties — text insets (bodyPr as empty element)
+                    // OXI_TXBX_LINK: a continuation box of a linked chain.
+                    "linkedTxbx" if !s839_in_wgp => {
+                        let (mut id, mut seq) = (None, None);
+                        for attr in e.attributes().flatten() {
+                            let v = String::from_utf8_lossy(&attr.value).parse::<u32>().ok();
+                            match local_name(attr.key.as_ref()).as_str() {
+                                "id" => id = v,
+                                "seq" => seq = v,
+                                _ => {}
+                            }
+                        }
+                        if let (Some(id), Some(seq)) = (id, seq) {
+                            txbx_chain = Some((id, seq));
+                        }
+                    }
                     "bodyPr" => {
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
@@ -10238,6 +10265,7 @@ fn parse_drawing(
                                     children: Vec::new(),
                                     body_wrap_none: text_wrap_none,
                                     children_on_line: false,
+                                    chain: None,
                                 });
                             }
                             if (stroke.is_some() || fill.is_some()) && (is_line || is_rect)
@@ -10405,6 +10433,7 @@ fn parse_drawing(
                                     children: Vec::new(),
                                     body_wrap_none: false,
                                     children_on_line: false,
+                                    chain: None,
                                 });
                             }
                         }
@@ -10770,8 +10799,11 @@ fn parse_drawing(
         eprintln!("[TBPARSE] font_ref={:?} fill={:?} blocks={} outline={} visual={}",
             font_ref_color, shape_fill, shape_text_blocks.len(), is_outline_shape, has_visual);
     }
-    let text_box = if !is_outline_shape
-        && (!shape_text_blocks.is_empty() || has_visual || !s839_text_children.is_empty() || group_drawn)
+    // OXI_TXBX_LINK: a continuation box has no text of its own (its shape is drawn
+    // as an outline shape) but receives the chain's overflow, so it is a box too.
+    let text_box = if (!is_outline_shape
+        && (!shape_text_blocks.is_empty() || has_visual || !s839_text_children.is_empty() || group_drawn))
+        || (txbx_chain.is_some_and(|c| c.1 > 0) && !crate::env_flag!("OXI_TXBX_LINK_DISABLE"))
     {
         Some(TextBox {
             wrap_polygon: wrapping_points.clone(),
@@ -10875,6 +10907,7 @@ fn parse_drawing(
             children: std::mem::take(&mut s839_text_children),
             body_wrap_none: text_wrap_none,
             children_on_line: group_drawn,
+            chain: txbx_chain.filter(|_| !crate::env_flag!("OXI_TXBX_LINK_DISABLE")),
         })
     } else {
         None
@@ -11170,6 +11203,7 @@ fn vml_shape_text_box(sh: &Shape) -> TextBox {
         children: Vec::new(),
         body_wrap_none: false,
         children_on_line: false,
+        chain: None,
     }
 }
 
@@ -12158,6 +12192,7 @@ fn parse_vml_pict(
                 children: Vec::new(),
                 body_wrap_none: false,
                 children_on_line: false,
+                chain: None,
             }
         }).collect();
         let vector_shapes = vml_group_rects.into_iter().map(|mut v| {
@@ -12204,6 +12239,7 @@ fn parse_vml_pict(
             children: grp_children,
             body_wrap_none: false,
             children_on_line: false,
+            chain: None,
         });
         return Ok(DrawingResult {
             symbol_text: None,
@@ -12284,6 +12320,7 @@ fn parse_vml_pict(
             children: Vec::new(),
             body_wrap_none: false,
             children_on_line: false,
+            chain: None,
         });
         return Ok(DrawingResult {
             symbol_text: None,
@@ -12361,6 +12398,7 @@ fn parse_vml_pict(
             children: Vec::new(),
             body_wrap_none: false,
             children_on_line: false,
+            chain: None,
         });
         let placeholder = Some(Image {
             rotation: 0.0,

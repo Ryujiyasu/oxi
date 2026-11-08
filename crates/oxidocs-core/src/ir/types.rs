@@ -1403,6 +1403,11 @@ pub struct TextBox {
     /// is the column, not where the line put the group). Set for SmartArt.
     #[serde(default)]
     pub children_on_line: bool,
+    /// OXI_TXBX_LINK: the linked-text-box chain this box belongs to -- (chain id,
+    /// seq): seq 0 for the box holding the story (`wps:txbx id`), n for the n-th
+    /// `wps:linkedTxbx` that continues it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain: Option<(u32, u32)>,
     /// S1270 (2026-09-02): the host paragraph ends with an explicit page break
     /// that sits AFTER this drawing's run.
     ///
