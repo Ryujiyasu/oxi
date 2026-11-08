@@ -2403,38 +2403,73 @@ impl<'a> Runtime<'a> {
         }
     }
 
+
+    fn source_default_value_class(&self, target: &Expr, frame: &Frame) -> Option<String> {
+        if self.expression_slot(target, frame).is_some() {
+            return self.source_class_name(target, frame);
+        }
+        let procedure = if let Some((module, name)) = self.qualified_standard_member(target, frame) {
+            module.items.iter().find_map(|item| match item {
+                ModuleItem::Procedure(procedure)
+                    if procedure.name.eq_ignore_ascii_case(name)
+                        && matches!(procedure.kind, ProcKind::Function | ProcKind::PropertyGet) =>
+                {
+                    Some(procedure.clone())
+                }
+                _ => None,
+            })
+        } else {
+            expr_name(target).and_then(|name| self.resolve_procedure(
+                name, Some(&[ProcKind::Function, ProcKind::PropertyGet])).ok().flatten()
+                .map(|(_, procedure)| procedure))
+        }?;
+        if !procedure.params.is_empty() { return None; }
+        procedure.return_type.filter(|kind| !kind.is_array)
+            .and_then(|kind| self.source_class_key(&kind.name))
+    }
+
     fn source_setter_parameters(
+        &self, target: &Expr, frame: &Frame, object_value: bool,
+    ) -> Option<Vec<crate::ast::Param>> {
+        let mut parameters = self.source_setter_signature(target, frame, object_value)?;
+        parameters.pop();
+        Some(parameters)
+    }
+
+    fn source_setter_signature(
         &self,
         target: &Expr,
         frame: &Frame,
         object_value: bool,
     ) -> Option<Vec<crate::ast::Param>> {
-        if let Some((_, mut procedure)) = self.source_module_setter(target, frame, object_value) {
-            procedure.params.pop();
+        if let Some((_, procedure)) = self.source_module_setter(target, frame, object_value) {
             return Some(procedure.params);
         }
-        let (class, name) = match target {
-            Expr::Member { object, name, .. } => {
-                (self.source_class_name(object, frame)?, name.as_str())
+        let (class, name) = if let Some(class) = self.source_default_value_class(target, frame) {
+            (class, "_default")
+        } else {
+            match target {
+                Expr::Member { object, name, .. } => {
+                    (self.source_class_name(object, frame)?, name.as_str())
+                }
+                Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
+                    let Some(WithSubject::Object {
+                        class: Some(class), ..
+                    }) = frame.with_objects.last()
+                    else {
+                        return None;
+                    };
+                    (class.clone(), name.as_str())
+                }
+                _ => (self.source_class_name(target, frame)?, "_default"),
             }
-            Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
-                let Some(WithSubject::Object {
-                    class: Some(class), ..
-                }) = frame.with_objects.last()
-                else {
-                    return None;
-                };
-                (class.clone(), name.as_str())
-            }
-            _ => (self.source_class_name(target, frame)?, "_default"),
         };
-        let (_, mut procedure) = if object_value {
+        let (_, procedure) = if object_value {
             self.source_class_procedure(&class, name, &[ProcKind::PropertySet])
                 .or_else(|| self.source_class_procedure(&class, name, &[ProcKind::PropertyLet]))
         } else {
             self.source_class_procedure(&class, name, &[ProcKind::PropertyLet])
         }?;
-        procedure.params.pop();
         Some(procedure.params)
     }
 
@@ -2460,7 +2495,7 @@ impl<'a> Runtime<'a> {
             && receiver_type.is_none();
         let setter = self.source_setter_parameters(target, frame, object_value);
         if let Some(parameters) = setter {
-            if !late_member && !args.iter().any(|argument| argument.name.is_some()) { return Ok(None); }
+            if args.len() < 2 { return Ok(None); }
             let values = self.evaluate_selected_arguments(args, *force_by_value, Some(&parameters), frame, None)?;
             return Ok(Some(PreparedAssignmentArguments { values, parameters: Some(parameters) }));
         }
@@ -2568,11 +2603,12 @@ impl<'a> Runtime<'a> {
         view: Option<&str>,
         frame: &mut Frame,
         line: u32,
+        assignment_kind: Option<ProcKind>,
     ) -> Result<bool, RuntimeError> {
         if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
 
         if let Some(project)=self.foreign_project(receiver){
-            return self.in_application_project(project,|runtime|runtime.call_instance_set_source(receiver, name, args, evaluated, value, view, frame, line));
+            return self.in_application_project(project,|runtime|runtime.call_instance_set_source(receiver, name, args, evaluated, value, view, frame, line, assignment_kind));
         }
 
 
@@ -2582,7 +2618,8 @@ impl<'a> Runtime<'a> {
         };
         let class = instance.class.clone();
         let view = view.or(receiver.dispatch_view.as_deref());
-        let found = if matches!(value, Value::Object(_) | Value::Nothing) {
+        let object_value = assignment_kind.map_or(matches!(value, Value::Object(_) | Value::Nothing), |kind| kind == ProcKind::PropertySet);
+        let found = if object_value {
             self.source_class_procedure_view(&class, name, &[ProcKind::PropertySet], view)
                 .or_else(|| {
                     self.source_class_procedure_view(&class, name, &[ProcKind::PropertyLet], view)
@@ -4751,7 +4788,15 @@ impl<'a> Runtime<'a> {
                     self.assign_member_value(receiver, name, value, frame, at.line, view.as_deref())?;
                     return Ok(Flow::Continue);
                 }
-                let value = self.let_value(value, frame, span.line)?;
+                let setter_value = if let Expr::Index { target: callee, .. } = target {
+                    self.source_setter_signature(callee, frame, false)
+                        .and_then(|parameters| parameters.last().cloned())
+                } else { None };
+                let value = if let Some(parameter) = setter_value {
+                    self.prepare_byval_argument(value, &parameter, frame, span.line)?
+                } else {
+                    self.let_value(value, frame, span.line)?
+                };
                 // A variable that held an object, or an array that might,
                 // may have held the last reference: measured, `v = 5` over
                 // an instance runs its Class_Terminate on that line.
@@ -4759,7 +4804,7 @@ impl<'a> Runtime<'a> {
                     .and_then(|name| self.lookup_slot(frame, name))
                     .is_some_and(|slot| matches!(&*slot.borrow(), Value::Object(_) | Value::Array(_)));
                 let evaluated = self.finish_assignment_arguments(target, evaluated, frame)?;
-                self.assign_evaluated(target, value, frame, span.line,evaluated.as_deref())?;
+                self.assign_evaluated(target, value, frame, span.line,evaluated.as_deref(),Some(ProcKind::PropertyLet))?;
                 if held {
                     self.collect_instances(span.line)?;
                 }
@@ -4794,7 +4839,7 @@ impl<'a> Runtime<'a> {
                     });
                 }
                 let evaluated = self.finish_assignment_arguments(target, evaluated, frame)?;
-                self.assign_evaluated(target, value, frame, span.line,evaluated.as_deref())?;
+                self.assign_evaluated(target, value, frame, span.line,evaluated.as_deref(),Some(ProcKind::PropertySet))?;
                 // What the variable held may have been the last reference.
                 self.collect_instances(span.line)?;
                 Ok(Flow::Continue)
@@ -7394,7 +7439,7 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<(), RuntimeError> {
-        self.assign_evaluated(target,value,frame,line,None)
+        self.assign_evaluated(target,value,frame,line,None,None)
     }
 
     /// Let into object storage writes its default member; Variant storage is replaced.
@@ -7428,6 +7473,7 @@ impl<'a> Runtime<'a> {
                     view,
                     frame,
                     line,
+                    None,
                 )? {
                     return Ok(true);
                 }
@@ -7465,7 +7511,7 @@ impl<'a> Runtime<'a> {
 
     fn assign_member_value(&mut self, receiver: ObjectRef, name: &str, value: Value, frame: &mut Frame, line: u32, view: Option<&str>) -> Result<(), RuntimeError> {
         if is_err_object(&receiver) { return err_set(frame, name, value, line); }
-        if self.call_instance_set_source(&receiver, name, &[], &[], value.clone(), view, frame, line)? {
+        if self.call_instance_set_source(&receiver, name, &[], &[], value.clone(), view, frame, line, None)? {
             return Ok(());
         }
         self.check_host_object_assignment(&receiver, name, &value, line)?;
@@ -7495,10 +7541,12 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
         evaluated: Option<&[EvaluatedArgument]>,
+        assignment_kind: Option<ProcKind>,
     ) -> Result<(), RuntimeError> {
         self.ensure_expression_module(target, frame)?;
         let full_target = target;
         let mut value = value;
+        let object_value = assignment_kind.map_or(matches!(value, Value::Object(_) | Value::Nothing), |kind| kind == ProcKind::PropertySet);
         if let Expr::Index {
             target: callee,
             args,
@@ -7509,7 +7557,7 @@ impl<'a> Runtime<'a> {
             if let Some((module, procedure)) = self.source_module_setter(
                 callee,
                 frame,
-                matches!(value, Value::Object(_) | Value::Nothing),
+                object_value,
             ) {
                 let captured = if evaluated.is_none() {
                     let count = procedure.params.len().saturating_sub(1);
@@ -7528,6 +7576,33 @@ impl<'a> Runtime<'a> {
                 return self.call_resolved_set_source(
                     module, &procedure, None, args, evaluated, value, frame, line,
                 );
+            }
+
+            if self.source_default_value_class(callee, frame).is_some() {
+                if let Some(parameters) = self.source_setter_parameters(
+                    callee, frame, object_value,
+                ) {
+                    // Capture index places in the caller before entering a
+                    // module or invoking the parameterless object factory.
+                    let captured = if evaluated.is_none() {
+                        Some(self.evaluate_source_arguments(
+                            args, *force_by_value, Some(&parameters), frame,
+                        )?)
+                    } else { None };
+                    let arguments = evaluated.or(captured.as_deref())
+                        .expect("default setter arguments captured");
+                    let class = self.source_default_value_class(callee, frame);
+                    let receiver = self.eval_object(callee, frame, line)?;
+                    let answer = self.call_instance_set_source(&receiver, "_default", args, arguments,
+                        value, class.as_deref(), frame, line, assignment_kind);
+                    drop(receiver);
+                    let collected = self.collect_instances(line);
+                    if answer.is_ok() { collected?; }
+                    if answer? { return Ok(()); }
+                    return Err(no_such_member(
+                        "the class has no writable default member".into(), Some(line),
+                    ));
+                }
             }
         }
         if let Expr::Index {
@@ -7961,6 +8036,7 @@ impl<'a> Runtime<'a> {
                             view.as_deref(),
                             frame,
                             line,
+                            assignment_kind,
                         )? {
                             return Ok(());
                         }
@@ -22536,23 +22612,23 @@ Private stored As Long
     #[test]
     fn new_collection_and_module_as_new_reactivate_after_nothing() {
         let value = run(
-            "Private shared As New Collection\n\
+            "Private heldItems As New Collection\n\
              Private Sub FillShared()\n\
-               shared.Add 20\n\
-               shared.Add 22\n\
+               heldItems.Add 20\n\
+               heldItems.Add 22\n\
              End Sub\n\
              Private Sub ClearShared()\n\
-               Set shared = Nothing\n\
+               Set heldItems = Nothing\n\
              End Sub\n\
              Public Function CollectionLifetime() As Long\n\
-               Dim local As Collection\n\
-               Set local = New Collection\n\
-               local.Add 1\n\
+               Dim localItems As Collection\n\
+               Set localItems = New Collection\n\
+               localItems.Add 1\n\
                FillShared\n\
-               CollectionLifetime = shared(1) + shared(2) + local.Count\n\
+               CollectionLifetime = heldItems(1) + heldItems(2) + localItems.Count\n\
                ClearShared\n\
-               shared.Add 5\n\
-               CollectionLifetime = CollectionLifetime * 10 + shared(1)\n\
+               heldItems.Add 5\n\
+               CollectionLifetime = CollectionLifetime * 10 + heldItems(1)\n\
              End Function\n",
             "CollectionLifetime",
             vec![],
@@ -23015,17 +23091,17 @@ Private stored As Long
                value = 88\n\
              End Sub\n\
              Public Function ProbeByRef() As String\n\
-               Dim shared As Long\n\
+               Dim heldValue As Long\n\
                Dim copied As Long\n\
                Dim bareCopied As Long\n\
-               shared = 1\n\
+               heldValue = 1\n\
                copied = 2\n\
                bareCopied = 3\n\
-               Combine shared, shared\n\
+               Combine heldValue, heldValue\n\
                ReplaceCopy copied\n\
                Call Replace((copied))\n\
                Replace (bareCopied)\n\
-               ProbeByRef = shared & \"|\" & copied & \"|\" & bareCopied\n\
+               ProbeByRef = heldValue & \"|\" & copied & \"|\" & bareCopied\n\
              End Function\n",
             "ProbeByRef",
             vec![],

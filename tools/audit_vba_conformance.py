@@ -784,11 +784,15 @@ def update_overview(root, report):
     from html import escape
 
     path = root / "pipeline_data/vba_overview_20261027.html"
-    html = path.read_text(encoding="utf-8")
+    html = path.read_text(encoding="utf-8-sig")
     start, end = "<!-- uniform-vba-audit:start -->", "<!-- uniform-vba-audit:end -->"
+    target = report.get("target_wasm_sha256")
     rows = [[r["id"], r["status"], bool(r.get("native", {}).get("event_source")),
              r["member"].startswith("_Dummy"),
-             len({case for item in r["evidence"] for case in item.get("case_ids", [])})]
+             len({case for item in r["evidence"] for case in item.get("case_ids", [])}),
+             len({case for item in r["evidence"]
+                  if target and item.get("provenance", {}).get("wasm_sha256") == target
+                  for case in item.get("case_ids", [])})]
             for r in report["rows"]]
     data = json.dumps(rows, ensure_ascii=True, separators=(",", ":")).replace("<", "\\u003c")
     counts = " / ".join(f"{escape(status)} {report['status_counts'].get(status, 0):,}"
@@ -806,6 +810,11 @@ def update_overview(root, report):
     batch_text = " ".join(batch_lines) if batch_lines else "実測結果はまだ取り込み前です。"
     batch_text += (f" ケース証拠の対応付けは {report['operations_with_case_evidence']} 操作。"
                    "限定ケースの比較であり、全機能の合格数には加算していません。")
+    current_note = (f"対象WASM: {escape(target)}。現行版の条件への対応付けがある操作は "
+                    f"{sum(bool(row[5]) for row in rows):,} 件です。"
+                    "ソース上の参照との対応であり、各APIの実行や全条件の合格を保証するものではありません。"
+                    "過去の結果を含む件数と、現行版の件数を分けて表示します。" if target else
+                    "対象WASMが未指定のため、現行版への対応件数は表示していません。")
     panel = '''
 <section id="uniform-vba-audit" style="margin:20px;padding:24px;background:white;border:3px solid #00796c;border-radius:12px">
 <h2>全機能を共通基準で検証する台帳</h2>
@@ -817,21 +826,24 @@ def update_overview(root, report):
 適用外には理由と証拠を必須とし、ソース内の実装名やテスト総数だけでは合格にしません。</p>
 <p>BATCH</p><p>順序: 既存の比較証拠を台帳へ対応付け → 日常操作と VBA 言語・実行系を横断する検証 → 残る全 API・イベント・外部連携。
 各範囲で同じ基準を使い、部分的な一致と未検証を併記します。全件の終了日は、ケース不足と実測所要時間が判明するまで未確定です。</p>
+<p id="uniform-vba-current-proof">CURRENT_NOTE</p>
 <label>機能を検索 <input id="uniform-vba-query" placeholder="Range.Value2 / WorksheetFunction / AppEvents" style="width:min(100%,500px)"></label>
 <label>判定 <select id="uniform-vba-status"><option value="">すべて</option><option>合格</option><option>不一致</option><option>未検証</option><option>未対応</option></select></label>
-<p id="uniform-vba-count"></p><table><thead><tr><th>ライブラリ・型・メンバー : 操作</th><th>共通判定</th><th>補足</th><th>対応付けた限定ケース</th></tr></thead><tbody id="uniform-vba-rows"></tbody></table>
+<label><input id="uniform-vba-current-only" type="checkbox">現行版への対応あり</label>
+<p id="uniform-vba-count"></p><table><thead><tr><th>ライブラリ・型・メンバー : 操作</th><th>共通判定</th><th>補足</th><th>対応条件（過去含む）</th><th>対応条件（現行版）</th></tr></thead><tbody id="uniform-vba-rows"></tbody></table>
 <button id="uniform-vba-more" type="button">次の 100 件を表示</button>
 </section>
 <script id="uniform-vba-data" type="application/json">DATA</script>
-<script>(()=>{const data=JSON.parse(document.getElementById('uniform-vba-data').textContent),q=document.getElementById('uniform-vba-query'),s=document.getElementById('uniform-vba-status');let limit=100;
-function render(){const f=data.filter(r=>r[0].toLowerCase().includes(q.value.toLowerCase())&&(!s.value||r[1]===s.value)),body=document.getElementById('uniform-vba-rows');body.replaceChildren();
-for(const r of f.slice(0,limit)){const row=document.createElement('tr');for(const text of [r[0],r[1],r[3]?'予約メンバー':r[2]?'イベント元インターフェイス':'',r[4]||'未対応付け']){const cell=document.createElement('td');cell.textContent=text;row.appendChild(cell)}body.appendChild(row)}
+<script>(()=>{const data=JSON.parse(document.getElementById('uniform-vba-data').textContent),q=document.getElementById('uniform-vba-query'),s=document.getElementById('uniform-vba-status'),current=document.getElementById('uniform-vba-current-only');let limit=100;
+function render(){const f=data.filter(r=>r[0].toLowerCase().includes(q.value.toLowerCase())&&(!s.value||r[1]===s.value)&&(!current.checked||r[5]>0)),body=document.getElementById('uniform-vba-rows');body.replaceChildren();
+for(const r of f.slice(0,limit)){const row=document.createElement('tr');for(const text of [r[0],r[1],r[3]?'予約メンバー':r[2]?'イベント元インターフェイス':'',r[4]||'未対応付け',r[5]||'未対応付け']){const cell=document.createElement('td');cell.textContent=text;row.appendChild(cell)}body.appendChild(row)}
 document.getElementById('uniform-vba-count').textContent=f.length.toLocaleString()+' 件中 '+Math.min(f.length,limit).toLocaleString()+' 件を表示';document.getElementById('uniform-vba-more').hidden=f.length<=limit;}
-q.addEventListener('input',()=>{limit=100;render()});s.addEventListener('change',()=>{limit=100;render()});document.getElementById('uniform-vba-more').addEventListener('click',()=>{limit+=100;render()});render();})();</script>
+q.addEventListener('input',()=>{limit=100;render()});s.addEventListener('change',()=>{limit=100;render()});current.addEventListener('change',()=>{limit=100;render()});document.getElementById('uniform-vba-more').addEventListener('click',()=>{limit+=100;render()});render();})();</script>
 '''.replace("DATE", escape(report["generated_at"])).replace("COUNTS", counts).replace("BATCH", escape(batch_text))
     panel = panel.replace("LEGACY", f"{(report.get('legacy') or {}).get('rows', 0):,}")
     panel = panel.replace("DECLARED", f"{report['excel_declared_member_pairs']:,}")
     panel = panel.replace("DUMMY", f"{sum(r['member'].startswith('_Dummy') for r in report['rows']):,}")
+    panel = panel.replace("CURRENT_NOTE", escape(current_note))
     panel = panel.replace("DATA", data)
     block = start + panel + end
     if start in html:
@@ -840,7 +852,7 @@ q.addEventListener('input',()=>{limit=100;render()});s.addEventListener('change'
         html, count = re.subn(r"(<body[^>]*>)", lambda m: m[1] + block, html, count=1)
         if count != 1:
             raise ValueError("overview has no body element")
-    path.write_text(html, encoding="utf-8")
+    path.write_bytes(b"\xef\xbb\xbf" + html.encode("utf-8"))
 
 
 if __name__ == "__main__":
