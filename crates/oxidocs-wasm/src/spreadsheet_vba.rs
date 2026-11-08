@@ -28361,6 +28361,11 @@ impl Host for ApplicationHost<'_> {
             host.default_member_error(receiver.expect("native receiver"))
         })
     }
+    fn default_assignment_coercion_error(&self, receiver: &ObjectRef) -> Option<i64> {
+        self.read(Some(receiver), "", false, |host, receiver| {
+            host.default_assignment_coercion_error(receiver.expect("native receiver"))
+        })
+    }
     fn scalar_argument_type(&self, receiver: &ObjectRef, name: &str,
         args: &[Value], argument_names: &[Option<String>], index: usize)
         -> Option<oxivba_core::runtime::AutomationScalarType> {
@@ -28834,6 +28839,10 @@ impl Host for WorkbookHost<'_> {
             Some(HostObject::Validation(_) | HostObject::ValidationBlocks(_)) => Some(438),
             _ => None,
         }
+    }
+
+    fn default_assignment_coercion_error(&self, receiver: &ObjectRef) -> Option<i64> {
+        self.range(receiver).is_some().then_some(1004)
     }
 
     fn automation_invocation_allowed(&self, receiver: &ObjectRef, name: &str, kind: u8) -> bool {
@@ -52238,6 +52247,220 @@ End Function
     }
 
 
+
+
+
+
+    #[test]
+    fn source_factory_host_properties_use_document_base_setter_types() {
+        for edge in [false, true] {
+            let mut probe = source_default_storage_probe().replace(
+                " Case 4\n  Set rhs = Nothing\n End Select",
+                " Case 4\n  Set rhs = Nothing\n Case 5\n  rhs = Null\n Case 6\n  rhs = Empty\n Case 7\n  rhs = CVErr(2007)\n Case 8\n  rhs = Array(1, 2)\n Case 9\n  rhs = 2147483648#\n End Select",
+            );
+            probe.push_str("\nPublic Function FactoryBox() As Object\n Trace = Trace & \"F\"\n Set FactoryBox = Worksheets(1)\nEnd Function\n");
+            let mut source = source_default_storage_fixture(&probe, "String", Some("Object"))
+                .replace("box = ReadRhs(rhs)", "NamedDefaultProbe.FactoryBox.Name = ReadRhs(rhs)\n Report = TypeName(Worksheets(1).Name) & \":\" & Worksheets(1).Name");
+            source.push_str(r#"
+VERSION 1.0 CLASS
+Attribute VB_Name = "ThisWorkbook"
+Attribute VB_Base = "0{00020819-0000-0000-C000-000000000046}"
+Attribute VB_PredeclaredId = True
+VERSION 1.0 CLASS
+Attribute VB_Name = "Sheet1"
+Attribute VB_Base = "0{00020820-0000-0000-C000-000000000046}"
+Attribute VB_PredeclaredId = True
+"#);
+            let context = || {
+                let mut context = failure_context();
+                context.project_name = "OxiNamedProject".into();
+                context.document_modules = Some(vec![
+                    VbaDocumentModule { name: "ThisWorkbook".into(), base_type: "Excel.Workbook".into(),
+                        sheet_index: None, code_name: Some("ThisWorkbook".into()), unbound: false, host_only: false },
+                    VbaDocumentModule { name: "Sheet1".into(), base_type: "Excel.Worksheet".into(),
+                        sheet_index: Some(0), code_name: Some("Sheet1".into()), unbound: false, host_only: false },
+                ]);
+                context
+            };
+            let expected = if edge {
+                ["ERR|13|RF|", "ERR|1004|RF|", "ERR|13|RF|", "ERR|13|RF|", "OK|RF|String:2147483648"]
+            } else {
+                ["OK|RF|String:17", "OK|RF|String:abc", "OK|RFP|String:payload", "ERR|13|RF|", "ERR|13|RF|"]
+            };
+            let names = if edge { ["Sheet1", "Sheet1", "Sheet1", "Sheet1", "2147483648"] }
+                else { ["17", "abc", "payload", "payload", "payload"] };
+            let mut session = None;
+            let control = execute_workbook_action_in_session(workbook(), &source,
+                Some("NamedDefaultProbe.Control"), vec![], 0, context(), &mut session).unwrap();
+            assert!(control.error.is_none());
+            assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+            let mut book = control.workbook;
+            let mut differences = Vec::new();
+            for (index, expected) in expected.into_iter().enumerate() {
+                let kind = index as i64 + if edge { 5 } else { 0 };
+                let outcome = execute_workbook_action_in_session(book, &source,
+                    Some("NamedDefaultProbe.Probe"), vec![Value::Integer(0), Value::Integer(kind)],
+                    0, context(), &mut session).unwrap();
+                let actual = serde_json::to_value(&outcome.result).unwrap();
+                if outcome.error.is_some() || actual["value"] != expected || outcome.workbook.sheets[0].name != names[index] {
+                    differences.push(format!("value={kind}: {actual}, name={} expected {expected}, name={}", outcome.workbook.sheets[0].name, names[index]));
+                }
+                book = outcome.workbook;
+            }
+            assert!(differences.is_empty(), "edge={edge}: {}", differences.join("\n"));
+        }
+    }
+
+
+    #[test]
+    fn source_factory_return_types_and_optional_arguments_follow_native_dispatch() {
+        let fixtures: &[(&str, &str, &[&str], &[&str])] = &[
+            ("variant_return", "error_explicit", &["ERR|13|RFP|", "ERR|13|RFP|", "ERR|13|RFP|", "ERR|13|RFP|"], &[]),
+            ("variant_return", "error_indexed", &["ERR|13|RFP|", "ERR|13|RFP|", "ERR|13|RFP|", "ERR|13|RFP|"], &[]),
+            ("variant_return", "values_qualified", &["OK|IRFL|String:8:False", "OK|IRFL|String:8:False", "OK|IRFPL|String:8:False", "ERR|13|IRF|", "ERR|13|IRF|"], &[]),
+            ("variant_return", "values_unqualified", &["OK|IRFL|String:8:False", "OK|IRFL|String:8:False", "OK|IRFPL|String:8:False", "ERR|13|IRF|", "ERR|13|IRF|"], &[]),
+            ("optional_parameter", "error_explicit", &["ERR|13|RFP|", "ERR|13|RFP|", "ERR|13|RFP|", "ERR|13|RFP|"], &[]),
+            ("optional_parameter", "error_indexed", &["ERR|449|RF|", "ERR|449|RF|", "ERR|449|RF|", "ERR|449|RF|"], &[]),
+            ("optional_parameter", "values_qualified", &["ERR|449|RIF|", "ERR|449|RIF|", "ERR|449|RIF|", "ERR|449|RIF|", "ERR|449|RIF|"], &[]),
+            ("optional_parameter", "values_unqualified", &["ERR|449|RIF|", "ERR|449|RIF|", "ERR|449|RIF|", "ERR|449|RIF|", "ERR|449|RIF|"], &[]),
+            ("implicit_variant", "error_explicit", &["ERR|13|RFP|", "ERR|13|RFP|", "ERR|13|RFP|", "ERR|13|RFP|"], &[]),
+            ("implicit_variant", "error_indexed", &["ERR|13|RFP|", "ERR|13|RFP|", "ERR|13|RFP|", "ERR|13|RFP|"], &[]),
+            ("implicit_variant", "values_qualified", &["OK|IRFL|String:8:False", "OK|IRFL|String:8:False", "OK|IRFPL|String:8:False", "ERR|13|IRF|", "ERR|13|IRF|"], &[]),
+            ("implicit_variant", "values_unqualified", &["OK|IRFL|String:8:False", "OK|IRFL|String:8:False", "OK|IRFPL|String:8:False", "ERR|13|IRF|", "ERR|13|IRF|"], &[]),
+            ("required_argument", "error_indexed", &["ERR|449|RF|", "ERR|449|RF|", "ERR|449|RF|", "ERR|449|RF|"], &[]),
+            ("required_argument", "values_qualified", &["ERR|449|RIF|", "ERR|449|RIF|", "ERR|449|RIF|", "ERR|449|RIF|", "ERR|449|RIF|"], &[]),
+            ("optional_range", "values_qualified", &["OK|RIF|Double:17", "OK|RIF|String:abc", "OK|RIFP|String:payload", "ERR|1004|RIF|", "ERR|1004|RIF|"], &["Number:17", "String:abc", "String:payload", "String:payload", "String:payload"]),
+            ("required_range", "values_qualified", &["OK|RIF|Double:17", "OK|RIF|String:abc", "OK|RIFP|String:payload", "ERR|1004|RIF|", "ERR|1004|RIF|"], &["Number:17", "String:abc", "String:payload", "String:payload", "String:payload"]),
+            ("required_noindex_class", "values_qualified", &["OK|RIFL|String:8:False", "OK|RIFL|String:8:False", "OK|RIFPL|String:8:False", "ERR|13|RIF|", "ERR|13|RIF|"], &[]),
+            ("required_argument", "values_unqualified", &["ERR|449|RIF|", "ERR|449|RIF|", "ERR|449|RIF|", "ERR|449|RIF|", "ERR|449|RIF|"], &[]),
+            ("optional_range", "values_unqualified", &["OK|RIF|Double:17", "OK|RIF|String:abc", "OK|RIFP|String:payload", "ERR|1004|RIF|", "ERR|1004|RIF|"], &["Number:17", "String:abc", "String:payload", "String:payload", "String:payload"]),
+            ("required_range", "values_unqualified", &["OK|RIF|Double:17", "OK|RIF|String:abc", "OK|RIFP|String:payload", "ERR|1004|RIF|", "ERR|1004|RIF|"], &["Number:17", "String:abc", "String:payload", "String:payload", "String:payload"]),
+            ("required_noindex_class", "values_unqualified", &["OK|RIFL|String:8:False", "OK|RIFL|String:8:False", "OK|RIFPL|String:8:False", "ERR|13|RIF|", "ERR|13|RIF|"], &[]),
+            ("variant_array", "values_qualified", &["OK|IRF|", "OK|IRF|", "OK|IRFP|", "ERR|438|IRF|", "ERR|91|IRF|"], &[]),
+            ("variant_scalar", "values_qualified", &["ERR|13|IRF|", "ERR|13|IRF|", "ERR|13|IRF|", "ERR|13|IRF|", "ERR|13|IRF|"], &[]),
+            ("variant_nothing", "values_qualified", &["ERR|91|IRF|", "ERR|91|IRF|", "ERR|91|IRF|", "ERR|91|IRF|", "ERR|91|IRF|"], &[]),
+            ("range_errors", "values_qualified", &["ERR|1004|RIFP||OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|1000095", "ERR|1004|RIFP||OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|1000095", "ERR|1004|RIFP||OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|1000095", "ERR|1004|RIFP||OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|1000095", "ERR|1004|RIF||OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|1000095", "ERR|1004|RIF||OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|1000095"], &["Empty", "Empty", "Empty", "Empty", "Empty", "Empty"]),
+            ("range_errors", "values_unqualified", &["ERR|1004|RIFP||OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|1000095", "ERR|1004|RIFP||OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|1000095", "ERR|1004|RIFP||OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|1000095", "ERR|1004|RIFP||OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|1000095", "ERR|1004|RIF||OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|1000095", "ERR|1004|RIF||OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|1000095"], &["Empty", "Empty", "Empty", "Empty", "Empty", "Empty"]),
+            ("array_bounds", "values_qualified", &["ERR|9|IRF|", "ERR|9|IRF|", "ERR|9|IRF|", "ERR|9|IRF|", "ERR|9|IRF|"], &[]),
+            ("array_shared", "values_qualified", &["OK|IRF|Integer:1", "OK|IRF|Integer:1", "OK|IRFP|Integer:1", "ERR|438|IRF|", "ERR|91|IRF|"], &[]),
+            ("standard_property", "values_qualified", &["OK|RIL|Integer:False", "OK|RIL|String:False", "OK|RIL|ScalarPayload:True", "OK|RIL|PlainPayload:True", "OK|RIL|Nothing:True"], &[]),
+            ("standard_property", "values_unqualified", &["OK|RIL|Integer:False", "OK|RIL|String:False", "OK|RIL|ScalarPayload:True", "OK|RIL|PlainPayload:True", "OK|RIL|Nothing:True"], &[]),
+        ];
+        let context = || { let mut context = failure_context(); context.project_name = "OxiNamedProject".into(); context };
+        let mut differences = Vec::new();
+        let mut observations = 0;
+        for &(form, path, expected, cells) in fixtures {
+            let getter_errors = path.starts_with("error") || form == "range_errors";
+            let range = matches!(form, "optional_range" | "required_range" | "range_errors");
+            let mut probe = source_default_storage_probe().to_string();
+            if getter_errors {
+                probe = probe.replace("Public Report As String", "Public Report As String\nPublic ThrowCode As Long");
+                probe.push_str("\nPublic Function SetThrowCode(ByVal code As Long) As String\n ThrowCode = code\n SetThrowCode = \"set\"\nEnd Function\n");
+            }
+            let signature = match form {
+                "optional_parameter" | "optional_range" | "range_errors" => "(Optional ByVal ignored As Long = 0) As Object",
+                "required_argument" | "required_range" | "required_noindex_class" => "(ByVal ignored As Long) As Object",
+                "standard_property" => "(ByVal ignored As Long) As Variant",
+                "implicit_variant" => "()",
+                _ => "() As Variant",
+            };
+            let body = match form {
+                "variant_array" | "array_bounds" => "FactoryBox = Array(1, 2)",
+                "array_shared" => "FactoryBox = SharedArray",
+                "variant_scalar" => "FactoryBox = 17",
+                "variant_nothing" => "Set FactoryBox = Nothing",
+                _ if range => "Set FactoryBox = Worksheets(1).Range(\"A1\")",
+                _ => "Set FactoryBox = HeldBox",
+            };
+            if form == "array_shared" {
+                probe = probe.replace("Public Report As String", "Public Report As String\nPublic SharedArray As Variant")
+                    .replace(" Control = \"ready\"", " SharedArray = Array(1, 2)\n Control = \"ready\"");
+            }
+            if form == "standard_property" {
+                probe.push_str("\nPublic Property Get FactoryBox(ByVal ignored As Long) As Variant\n Trace = Trace & \"F\"\n Set FactoryBox = HeldBox\nEnd Property\nPublic Property Let FactoryBox(ByVal ignored As Long, ByVal value As Variant)\n Trace = Trace & \"L\"\n Report = TypeName(value) & \":\" & CStr(IsObject(value))\nEnd Property\n");
+            } else {
+                probe.push_str(&format!("\nPublic Function FactoryBox{signature}\n Trace = Trace & \"F\"\n {body}\nEnd Function\n"));
+            }
+            if !path.starts_with("error") {
+                probe.push_str(&format!("\nPublic Function ReadIndex() As Long\n Trace = Trace & \"I\"\n ReadIndex = {}\nEnd Function\n",
+                    if form == "array_bounds" { 99 } else { 0 }));
+            }
+            let mut assignment = match path {
+                "error_explicit" => "NamedDefaultProbe.FactoryBox.ValueAt = ReadRhs(rhs)",
+                "error_indexed" => "NamedDefaultProbe.FactoryBox(0) = ReadRhs(rhs)",
+                "values_qualified" => "NamedDefaultProbe.FactoryBox(ReadIndex()) = ReadRhs(rhs)",
+                _ => "FactoryBox(ReadIndex()) = ReadRhs(rhs)",
+            }.to_string();
+            if range {
+                assignment.push_str("\n Report = TypeName(Worksheets(1).Range(\"A1\").Value2) & \":\" & CStr(Worksheets(1).Range(\"A1\").Value2)");
+            }
+            if form == "array_shared" {
+                assignment.push_str("\n Report = TypeName(SharedArray(0)) & \":\" & CStr(SharedArray(0))");
+            }
+            let mut source = source_default_storage_fixture(&probe, "String", Some("Object"))
+                .replace("box = ReadRhs(rhs)", &assignment);
+            if path != "error_explicit" && form != "required_noindex_class" {
+                source = source
+                    .replace("Property Get ValueAt() As String", "Property Get ValueAt(ByVal index As Long) As String")
+                    .replace("Property Let ValueAt(ByVal Value As String)", "Property Let ValueAt(ByVal index As Long, ByVal Value As String)")
+                    .replace("Property Set ValueAt(ByVal Value As Variant)", "Property Set ValueAt(ByVal index As Long, ByVal Value As Variant)");
+            }
+            if getter_errors {
+                source = source.replace(" Value = \"payload\"", " Err.Raise NamedDefaultProbe.ThrowCode\n Value = \"payload\"");
+            }
+            if form == "range_errors" {
+                source = source.replace("Probe = \"ERR|\" & CStr(Err.Number) & \"|\" & Trace & \"|\" & Report",
+                    "Probe = \"ERR|\" & CStr(Err.Number) & \"|\" & Trace & \"|\" & Report & \"|\" & Err.Source & \"|\" & Err.Description & \"|\" & CStr(Err.HelpContext)");
+            }
+            let mut session = None;
+            let mut initial = workbook();
+            if range { initial.sheets[0].rows.clear(); }
+            let control = execute_workbook_action_in_session(initial, &source,
+                Some("NamedDefaultProbe.Control"), vec![], 0, context(), &mut session).unwrap();
+            observations += 1;
+            assert!(control.error.is_none());
+            assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+            let mut book = control.workbook;
+            let conditions: Vec<_> = if getter_errors {
+                [91, 424, 438, 193].into_iter().map(|code| (2, Some(code)))
+                    .chain(if form == "range_errors" { vec![(3, None), (4, None)] } else { vec![] }).collect()
+            } else { (0..5).map(|kind| (kind, None)).collect() };
+            assert_eq!(conditions.len(), expected.len());
+            for (at, (kind, code)) in conditions.into_iter().enumerate() {
+                if let Some(code) = code {
+                    let setting = execute_workbook_action_in_session(book, &source,
+                        Some("NamedDefaultProbe.SetThrowCode"), vec![Value::Integer(code)],
+                        0, context(), &mut session).unwrap();
+                    observations += 1;
+                    assert!(setting.error.is_none());
+                    assert_eq!(serde_json::to_value(&setting.result).unwrap()["value"], "set");
+                    book = setting.workbook;
+                }
+                let outcome = execute_workbook_action_in_session(book, &source,
+                    Some("NamedDefaultProbe.Probe"), vec![Value::Integer(0), Value::Integer(kind)],
+                    0, context(), &mut session).unwrap();
+                observations += 1;
+                let actual = serde_json::to_value(&outcome.result).unwrap();
+                if outcome.error.is_some() || actual["value"] != expected[at] {
+                    differences.push(format!("form={form} path={path} kind={kind} code={code:?}: {actual} expected {}", expected[at]));
+                }
+                book = outcome.workbook;
+                if range {
+                    let cell = book.sheets[0].rows.iter().find(|row| row.index == 1)
+                        .and_then(|row| row.cells.iter().find(|cell| cell.col == 0));
+                    let actual = cell.map_or_else(|| "Empty".to_string(), |cell| match &cell.value {
+                        CellValue::Empty => "Empty".to_string(),
+                        CellValue::Number(value) => format!("Number:{value}"),
+                        CellValue::String(value) => format!("String:{value}"),
+                        _ => serde_json::to_string(&cell.value).unwrap(),
+                    });
+                    if actual != cells[at] { differences.push(format!("form={form} path={path} kind={kind}: cell {actual} expected {}", cells[at])); }
+                }
+            }
+        }
+        assert_eq!(observations, 211);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
 
     #[test]
     fn source_scalar_dispatch_edges_keep_native_null_and_overflow_errors() {
