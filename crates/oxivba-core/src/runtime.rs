@@ -273,6 +273,25 @@ pub trait Host {
         Ok(None)
     }
 
+    /// Successful Automation property puts can return a host value. This is
+    /// separate from ordinary dotted assignment, whose statement has no result.
+    fn automation_assignment_result(&self, _receiver: &ObjectRef, _name: &str, _value: &Value) -> Value {
+        Value::Empty
+    }
+
+    /// A host can expose a language-level Automation assignment error while
+    /// its dotted setter reports the original host-specific error metadata.
+    /// This runs after the setter so partial state changes are retained.
+    fn automation_assignment_error(&self, _receiver: &ObjectRef, _name: &str, _number: i64) -> Option<i64> {
+        None
+    }
+
+    /// A scalar host property can reject indices before reading an RHS
+    /// object's default member. Source properties use their own signatures.
+    fn indexed_assignment_error(&self, _receiver: &ObjectRef, _name: &str) -> Option<String> {
+        None
+    }
+
     /// Some host setters reject an object value before its default member is
     /// resolved. Source class assignments keep their ordinary VBA conversion.
     /// With no receiver, identify only values and names requiring host validation
@@ -280,6 +299,13 @@ pub trait Host {
     /// receiver evaluation order.
     fn property_assignment_error(&self, _receiver: Option<&ObjectRef>, _name: &str, _value: &Value) -> Option<i64> {
         None
+    }
+
+    /// The host setter consumes the resulting Variant after ordinary default
+    /// member evaluation. Its getter's declared type is not a value-conversion
+    /// signature for this late-bound assignment.
+    fn property_assignment_uses_variant(&self, _receiver: &ObjectRef, _name: &str) -> bool {
+        false
     }
 
     /// A VARIANT-valued host setter can inspect an object or Nothing without
@@ -2419,7 +2445,9 @@ impl<'a> Runtime<'a> {
                 })
         };
         let host_parameter = |owner: &str| self.host.as_deref()
-            .filter(|host| host.automation_invocation_allowed(receiver, name, 4))
+            .filter(|host| host.automation_invocation_allowed(receiver, name, 4)
+                && !host.property_assignment_uses_variant(receiver, name)
+                && host.property_assignment_value(Some(receiver), name, &value, false).is_none())
             .and_then(|host| host.assignment_call_result(Some(owner), name))
             .and_then(|name| scalar_parameter(TypeName { name, ..TypeName::implicit() }));
         let parameter = match self.internal_objects.get(&receiver.handle) {
@@ -4996,6 +5024,12 @@ impl<'a> Runtime<'a> {
                             "the returned value is not an object", span.line)),
                     };
                     let answer = (|| {
+                        if !source_arguments.is_empty() && !self.instance_handles_member(&receiver, name) {
+                            if let Some(message) = self.host.as_deref().and_then(|host|
+                                host.indexed_assignment_error(&receiver, name)) {
+                                return Err(host_failure(message, span.line));
+                            }
+                        }
                         if let Some(prepared) = self.prepare_source_dispatch_value(
                             &receiver, name, value.clone(), source_arguments.len(), source_arguments.is_empty(), frame, span.line,
                         )? {
@@ -5068,6 +5102,13 @@ impl<'a> Runtime<'a> {
                 // the Automation boundary. Keep typed calls on their direct
                 // binding path, and preserve objects for Variant/Object formals.
                 if let Some((receiver, name)) = self.late_source_assignment_target(target, frame) {
+                    if matches!(target, Expr::Index { .. }) && !self.instance_handles_member(&receiver, &name) {
+                        if let Some(message) = self.host.as_deref().and_then(|host|
+                            host.indexed_assignment_error(&receiver, &name)) {
+                            self.finish_assignment_arguments(target, evaluated, frame)?;
+                            return Err(host_failure(message, span.line));
+                        }
+                    }
                     if let Some(prepared) = self.prepare_source_dispatch_value(
                         &receiver, &name, value.clone(), match target { Expr::Index { args, .. } => args.len(), _ => 0 }, !matches!(target, Expr::Index { .. }), frame, span.line,
                     )? {
@@ -8040,6 +8081,12 @@ impl<'a> Runtime<'a> {
     }
 
     fn check_host_object_assignment(&self, receiver: &ObjectRef, name: &str, value: &Value, line: u32) -> Result<(), RuntimeError> {
+        if matches!(value, Value::Object(_) | Value::Nothing) {
+            if let Some(number) = self.host.as_deref().and_then(|host|
+                host.automation_invocation_error(receiver, name, 8)) {
+                return Err(language_error(number, format!("invalid Property Set: {name}"), line));
+            }
+        }
         if matches!(value, Value::Object(_) | Value::Nothing)
             && self.host.as_deref().is_some_and(|host| !host.automation_invocation_allowed(receiver, name, 8)) {
             return Err(no_such_member(format!("{}.{} has no Property Set", receiver.kind, name), Some(line)));
@@ -10240,6 +10287,7 @@ impl<'a> Runtime<'a> {
         }
         match kind {
             4 | 8 => {
+                let answer = (|| {
                 let (value, indices) = rest.split_last().expect("assignment value checked above");
                 let mut value = value.clone();
                 if kind == 4 {
@@ -10247,8 +10295,13 @@ impl<'a> Runtime<'a> {
                         let by_reference = source.and_then(|(_, values, _)| values.last())
                             .is_some_and(|argument| argument.reference.borrow().is_some());
                         if let Some(prepared) = self.host.as_deref().and_then(|host| host.property_assignment_value(Some(receiver), &member, &value, by_reference)) {
-                            return if self.host_set(receiver, &member, prepared, at)? {
-                                Ok(Value::Empty)
+                            if let Some(number) = self.host.as_deref().and_then(|host|
+                                host.property_assignment_error(Some(receiver), &member, &value)) {
+                                return Err(language_error(number, format!("invalid value for property {member}"), at));
+                            }
+                            return if self.host_set(receiver, &member, prepared.clone(), at)? {
+                                Ok(self.host.as_deref().map_or(Value::Empty, |host|
+                                    host.automation_assignment_result(receiver, &member, &prepared)))
                             } else { Err(missing()) };
                         }
                     }
@@ -10261,21 +10314,33 @@ impl<'a> Runtime<'a> {
                         if indices.is_empty() {
                             let taken = self.host.as_deref_mut().map(|host| host.set_from_object(receiver, &member, object))
                                 .transpose().map_err(|message| host_failure(message, at))?.flatten();
-                            if taken == Some(true) { return Ok(Value::Empty); }
+                            if taken == Some(true) {
+                                return Ok(self.host.as_deref().map_or(Value::Empty, |host|
+                                    host.automation_assignment_result(receiver, &member, &value)));
+                            }
                         }
                     }
                     value = self.let_value(value, frame, at)?;
                 }
+                let assigned_value = value.clone();
                 let assigned = if indices.is_empty() {
                     self.host_set(receiver, &member, value, at)?
                 } else {
                     self.host_set_indexed(receiver, &member, indices, value, at)?
                 };
                 if assigned {
-                    Ok(Value::Empty)
+                    Ok(self.host.as_deref().map_or(Value::Empty, |host|
+                        host.automation_assignment_result(receiver, &member, &assigned_value)))
                 } else {
                     Err(missing())
                 }
+                })();
+                answer.map_err(|failure| {
+                    if let Some(number) = self.host.as_deref().and_then(|host|
+                        host.automation_assignment_error(receiver, &member, runtime_error_number(&failure))) {
+                        language_error(number, format!("Automation assignment failed: {member}"), at)
+                    } else { failure }
+                })
             }
             1 | 2 | 3 => {
                 let mut values = rest.to_vec();
