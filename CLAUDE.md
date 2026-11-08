@@ -84,7 +84,7 @@ memory is not.
 
 Three-layer model (decided 2026-06-13):
 - **Core engine crates** (oxidocs, oxidocs-common, oxidocs-core, oxicells-core, oxislides-core, oxipdf-core, oxihanko, oxidocs-cli, oxi-desktop): **MPL-2.0**. Every `.rs` file in these crates must carry the MPL-2.0 Exhibit A header (file-level copyleft makes per-file headers load-bearing — add the header to any NEW source file)
-- **Bindings** (oxidocs-wasm, oxidocs-python): **MIT OR Apache-2.0** (Rust ecosystem dual-license convention)
+- **Bindings and integrations** (oxidocs-wasm, oxidocs-python, integrations/gotenberg): **MIT OR Apache-2.0** (Rust ecosystem dual-license convention)
 - **Conformance corpus** (self-authored repros in tools/golden-test/repros/): **CC BY-SA 4.0**; measurement code is MPL-2.0
 
 Contributions: DCO only (`git commit -s`), no CLA. All third-party crate licenses must be MPL-2.0-compatible (MIT, Apache-2.0, BSD).

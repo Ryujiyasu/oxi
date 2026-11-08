@@ -1,0 +1,4 @@
+simple.docx       Apache POI test-data/document/SimpleHeadThreeColFoot.docx (Apache-2.0)
+lists.docx        docling tests/data/docx/sources/docx_lists.docx (MIT)
+unsupported.docx  LibreOffice core sw/qa/extras/ooxmlexport/data/fdo79822.docx (MPL-2.0); oxidocs --strict reports SmartArt it cannot draw
+sheet.xlsx        Gotenberg test/integration/testdata/singlepagesheets-scrolled.xlsx (MIT)
