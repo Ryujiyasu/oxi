@@ -1056,6 +1056,10 @@ impl<'a> Parser<'a> {
         let is_const = self.eat_kw("const");
         if !is_const {
             self.eat_kw("dim");
+            if !is_static {
+                // Shared is a legacy marker; it does not make Dim storage static.
+                self.eat_kw("shared");
+            }
         }
         let mut items = Vec::new();
         loop {
