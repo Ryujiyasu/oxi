@@ -1625,6 +1625,8 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
         let w = lp.width as f64;
         let h = lp.height as f64;
         let mut contents: Vec<ContentElement> = Vec::new();
+        // (index in contents, left, top, bottom, right, highlight name) of the last highlight box
+        let mut last_hl: Option<(usize, f64, f64, f64, f64, String)> = None;
 
         for elem in &lp.elements {
             let x = elem.x as f64;
@@ -1661,7 +1663,29 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
 
                     // Highlight background
                     if let Some(ref hl) = highlight {
-                        if let Some(hl_color) = parse_highlight_color(hl) {
+                        // OXI_PDF_HIGHLIGHT_JOIN (2026-11-09, default ON, opt-out _DISABLE): a
+                        // highlight that continues the previous one on the same line widens
+                        // that box instead of starting another; abutting boxes left a light
+                        // anti-aliased seam at every element edge (blind-J ja/policies__28f59048,
+                        // «中央太郎（チュウオウタロウ）» striped where Word draws one band).
+                        let join = std::env::var_os("OXI_PDF_HIGHLIGHT_JOIN_DISABLE").is_none()
+                            && last_hl.as_ref().is_some_and(|(_, _, t, b, r, name)| name == hl
+                                && (t - y).abs() < 0.01 && (b - (y + eh)).abs() < 0.01
+                                && x >= *r - 0.75 && x <= *r + 0.75);
+                        if join {
+                            let (idx, l, t, b, r, _) = last_hl.as_mut().unwrap();
+                            *r = r.max(x + ew);
+                            if let ContentElement::Path(p) = &mut contents[*idx] {
+                                p.operations = vec![
+                                    PathOp::MoveTo(*l, *t),
+                                    PathOp::LineTo(*r, *t),
+                                    PathOp::LineTo(*r, *b),
+                                    PathOp::LineTo(*l, *b),
+                                    PathOp::ClosePath,
+                                ];
+                            }
+                        } else if let Some(hl_color) = parse_highlight_color(hl) {
+                            last_hl = Some((contents.len(), x, y, y + eh, x + ew, hl.clone()));
                             contents.push(ContentElement::Path(PathData {
                                 operations: vec![
                                     PathOp::MoveTo(x, y),
