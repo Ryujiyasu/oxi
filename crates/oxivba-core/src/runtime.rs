@@ -273,6 +273,29 @@ pub trait Host {
         Ok(None)
     }
 
+    /// Successful Automation property puts can return a host value. This is
+    /// separate from ordinary dotted assignment, whose statement has no result.
+    fn automation_assignment_result(&self, _receiver: &ObjectRef, _name: &str, _value: &Value) -> Value {
+        Value::Empty
+    }
+
+    /// A host can expose a language-level Automation assignment error while
+    /// its dotted setter reports the original host-specific error metadata.
+    /// This runs after the setter so partial state changes are retained.
+    fn automation_call_error(&self, _receiver: &ObjectRef, _name: &str, _number: i64) -> Option<i64> {
+        None
+    }
+
+    fn automation_assignment_error(&self, _receiver: &ObjectRef, _name: &str, _number: i64) -> Option<i64> {
+        None
+    }
+
+    /// A scalar host property can reject indices before reading an RHS
+    /// object's default member. Source properties use their own signatures.
+    fn indexed_assignment_error(&self, _receiver: &ObjectRef, _name: &str) -> Option<String> {
+        None
+    }
+
     /// Some host setters reject an object value before its default member is
     /// resolved. Source class assignments keep their ordinary VBA conversion.
     /// With no receiver, identify only values and names requiring host validation
@@ -280,6 +303,13 @@ pub trait Host {
     /// receiver evaluation order.
     fn property_assignment_error(&self, _receiver: Option<&ObjectRef>, _name: &str, _value: &Value) -> Option<i64> {
         None
+    }
+
+    /// The host setter consumes the resulting Variant after ordinary default
+    /// member evaluation. Its getter's declared type is not a value-conversion
+    /// signature for this late-bound assignment.
+    fn property_assignment_uses_variant(&self, _receiver: &ObjectRef, _name: &str) -> bool {
+        false
     }
 
     /// A VARIANT-valued host setter can inspect an object or Nothing without
@@ -307,6 +337,12 @@ pub trait Host {
     /// dotted syntax, which can also index the array a property returns.
     fn prepare_automation_get(&self, _receiver: &ObjectRef, _name: &str, _args: &[Value]) -> Result<Option<(String, Vec<Value>)>, String> {
         Ok(None)
+    }
+
+    /// Read a source object's default argument value without a scalar cast.
+    fn source_argument_uses_value(&self, _receiver: &ObjectRef, _name: &str,
+        _args: &[Value], _argument_names: &[Option<String>], _index: usize) -> bool {
+        false
     }
 
     /// Typed scalar arguments whose object defaults must be evaluated by the
@@ -2419,7 +2455,9 @@ impl<'a> Runtime<'a> {
                 })
         };
         let host_parameter = |owner: &str| self.host.as_deref()
-            .filter(|host| host.automation_invocation_allowed(receiver, name, 4))
+            .filter(|host| host.automation_invocation_allowed(receiver, name, 4)
+                && !host.property_assignment_uses_variant(receiver, name)
+                && host.property_assignment_value(Some(receiver), name, &value, false).is_none())
             .and_then(|host| host.assignment_call_result(Some(owner), name))
             .and_then(|name| scalar_parameter(TypeName { name, ..TypeName::implicit() }));
         let parameter = match self.internal_objects.get(&receiver.handle) {
@@ -4862,7 +4900,7 @@ impl<'a> Runtime<'a> {
         } else {
             failure.message.clone()
         };
-        let host_help = if failure.kind == RuntimeErrorKind::Host {
+        let host_help = if failure.kind == RuntimeErrorKind::Host && !failure.vba_default_description {
             self.host.as_deref().and_then(|host| {
                 host.error_help(number, failure.vba_source.as_deref())
             })
@@ -4996,6 +5034,12 @@ impl<'a> Runtime<'a> {
                             "the returned value is not an object", span.line)),
                     };
                     let answer = (|| {
+                        if !source_arguments.is_empty() && !self.instance_handles_member(&receiver, name) {
+                            if let Some(message) = self.host.as_deref().and_then(|host|
+                                host.indexed_assignment_error(&receiver, name)) {
+                                return Err(host_failure(message, span.line));
+                            }
+                        }
                         if let Some(prepared) = self.prepare_source_dispatch_value(
                             &receiver, name, value.clone(), source_arguments.len(), source_arguments.is_empty(), frame, span.line,
                         )? {
@@ -5068,6 +5112,13 @@ impl<'a> Runtime<'a> {
                 // the Automation boundary. Keep typed calls on their direct
                 // binding path, and preserve objects for Variant/Object formals.
                 if let Some((receiver, name)) = self.late_source_assignment_target(target, frame) {
+                    if matches!(target, Expr::Index { .. }) && !self.instance_handles_member(&receiver, &name) {
+                        if let Some(message) = self.host.as_deref().and_then(|host|
+                            host.indexed_assignment_error(&receiver, &name)) {
+                            self.finish_assignment_arguments(target, evaluated, frame)?;
+                            return Err(host_failure(message, span.line));
+                        }
+                    }
                     if let Some(prepared) = self.prepare_source_dispatch_value(
                         &receiver, &name, value.clone(), match target { Expr::Index { args, .. } => args.len(), _ => 0 }, !matches!(target, Expr::Index { .. }), frame, span.line,
                     )? {
@@ -5188,6 +5239,23 @@ impl<'a> Runtime<'a> {
                             }
                             return Err(no_such_member(format!("{}.{} has no setter", receiver.kind, name), Some(span.line)));
                         }
+                        if self.host.as_deref().is_some_and(|host|
+                            host.property_assignment_value(None, name, &value, false).is_some()) {
+                            // The name probe already resolved this receiver. A different
+                            // host type may still have a scalar setter with that name.
+                            // Keep the same receiver through its ordinary conversion.
+                            if let Value::Object(source) = &value {
+                                let taken = self.host.as_deref_mut().map(|host|
+                                    host.set_from_object(&receiver, name, source))
+                                    .transpose().map_err(|message| host_failure(message, span.line))?
+                                    .flatten();
+                                if taken == Some(true) { return Ok(Flow::Continue); }
+                            }
+                            let view = self.source_member_view(target, frame);
+                            let value = self.let_value(value, frame, span.line)?;
+                            self.assign_member_value(receiver, name, value, frame, span.line, view.as_deref())?;
+                            return Ok(Flow::Continue);
+                        }
                     }
                 }
                 if matches!(value, Value::Nothing) {
@@ -5226,6 +5294,13 @@ impl<'a> Runtime<'a> {
                         (target, &value)
                     {
                         let receiver = self.eval_object(object, frame, at.line)?;
+                        if !self.instance_handles_member(&receiver, name) {
+                            if let Some(prepared) = self.host.as_deref().and_then(|host|
+                                host.property_assignment_value(Some(&receiver), name, &value, false)) {
+                                if self.host_set(&receiver, name, prepared, at.line)? { return Ok(Flow::Continue); }
+                                return Err(no_such_member(format!("{}.{} has no setter", receiver.kind, name), Some(at.line)));
+                            }
+                        }
                         let taken = match self.host.as_deref_mut() {
                             Some(host) => host
                                 .set_from_object(&receiver, name, source)
@@ -8034,12 +8109,19 @@ impl<'a> Runtime<'a> {
         }
         match self.with_callback_error_context(frame, |runtime, _| runtime.host_get(&receiver, name, line))? {
             Some(destination @ (Value::Object(_) | Value::Nothing)) => self.assign_returned_object(destination, value, frame, line),
+            None => Err(no_such_member(format!("{}.{} has no setter", receiver.kind, name), Some(line))),
             _ => Err(error(RuntimeErrorKind::Unsupported,
                 format!("host property is not writable: {}.{name}", receiver.kind), Some(line))),
         }
     }
 
     fn check_host_object_assignment(&self, receiver: &ObjectRef, name: &str, value: &Value, line: u32) -> Result<(), RuntimeError> {
+        if matches!(value, Value::Object(_) | Value::Nothing) {
+            if let Some(number) = self.host.as_deref().and_then(|host|
+                host.automation_invocation_error(receiver, name, 8)) {
+                return Err(language_error(number, format!("invalid Property Set: {name}"), line));
+            }
+        }
         if matches!(value, Value::Object(_) | Value::Nothing)
             && self.host.as_deref().is_some_and(|host| !host.automation_invocation_allowed(receiver, name, 8)) {
             return Err(no_such_member(format!("{}.{} has no Property Set", receiver.kind, name), Some(line)));
@@ -10240,6 +10322,7 @@ impl<'a> Runtime<'a> {
         }
         match kind {
             4 | 8 => {
+                let answer = (|| {
                 let (value, indices) = rest.split_last().expect("assignment value checked above");
                 let mut value = value.clone();
                 if kind == 4 {
@@ -10247,8 +10330,13 @@ impl<'a> Runtime<'a> {
                         let by_reference = source.and_then(|(_, values, _)| values.last())
                             .is_some_and(|argument| argument.reference.borrow().is_some());
                         if let Some(prepared) = self.host.as_deref().and_then(|host| host.property_assignment_value(Some(receiver), &member, &value, by_reference)) {
-                            return if self.host_set(receiver, &member, prepared, at)? {
-                                Ok(Value::Empty)
+                            if let Some(number) = self.host.as_deref().and_then(|host|
+                                host.property_assignment_error(Some(receiver), &member, &value)) {
+                                return Err(language_error(number, format!("invalid value for property {member}"), at));
+                            }
+                            return if self.host_set(receiver, &member, prepared.clone(), at)? {
+                                Ok(self.host.as_deref().map_or(Value::Empty, |host|
+                                    host.automation_assignment_result(receiver, &member, &prepared)))
                             } else { Err(missing()) };
                         }
                     }
@@ -10261,21 +10349,33 @@ impl<'a> Runtime<'a> {
                         if indices.is_empty() {
                             let taken = self.host.as_deref_mut().map(|host| host.set_from_object(receiver, &member, object))
                                 .transpose().map_err(|message| host_failure(message, at))?.flatten();
-                            if taken == Some(true) { return Ok(Value::Empty); }
+                            if taken == Some(true) {
+                                return Ok(self.host.as_deref().map_or(Value::Empty, |host|
+                                    host.automation_assignment_result(receiver, &member, &value)));
+                            }
                         }
                     }
                     value = self.let_value(value, frame, at)?;
                 }
+                let assigned_value = value.clone();
                 let assigned = if indices.is_empty() {
                     self.host_set(receiver, &member, value, at)?
                 } else {
                     self.host_set_indexed(receiver, &member, indices, value, at)?
                 };
                 if assigned {
-                    Ok(Value::Empty)
+                    Ok(self.host.as_deref().map_or(Value::Empty, |host|
+                        host.automation_assignment_result(receiver, &member, &assigned_value)))
                 } else {
                     Err(missing())
                 }
+                })();
+                answer.map_err(|failure| {
+                    if let Some(number) = self.host.as_deref().and_then(|host|
+                        host.automation_assignment_error(receiver, &member, runtime_error_number(&failure))) {
+                        language_error(number, format!("Automation assignment failed: {member}"), at)
+                    } else { failure }
+                })
             }
             1 | 2 | 3 => {
                 let mut values = rest.to_vec();
@@ -10292,7 +10392,15 @@ impl<'a> Runtime<'a> {
                         return Ok(value);
                     }
                 }
-                self.host_call(Some(receiver), name, arguments, at)?.ok_or_else(missing)
+                self.host_call(Some(receiver), name, arguments, at).map_err(|failure| {
+                    if failure.kind == RuntimeErrorKind::Host && failure.vba_source.as_deref() == Some("Microsoft Excel") {
+                        if let Some(number) = self.host.as_deref().and_then(|host|
+                            host.automation_call_error(receiver, &member, runtime_error_number(&failure))) {
+                            return language_error(number, format!("Automation call failed: {member}"), at);
+                        }
+                    }
+                    failure
+                })?.ok_or_else(missing)
             }
             _ => Err(missing()),
         }
@@ -10663,8 +10771,11 @@ impl<'a> Runtime<'a> {
         -> Result<(), RuntimeError>
     {
         for index in 0..args.len() {
-            let Some(target) = self.host.as_deref().and_then(|host|
-                host.scalar_argument_type(receiver, name, args, names, index)) else { continue; };
+            let target = self.host.as_deref().and_then(|host|
+                host.scalar_argument_type(receiver, name, args, names, index));
+            let uses_value = self.host.as_deref().is_some_and(|host|
+                host.source_argument_uses_value(receiver, name, args, names, index));
+            if target.is_none() && !uses_value { continue; }
             if !matches!(&args[index], Value::Object(object) if
                 matches!(self.internal_objects.get(&object.handle), Some(InternalObject::Instance(_)))) {
                 continue;
@@ -10696,13 +10807,16 @@ impl<'a> Runtime<'a> {
                         language_error(13, "the default member could not supply a scalar argument", line)
                     } else { failure }
                 })?;
-                if matches!(value, Value::Nothing) ||
-                    automation && matches!(value, Value::Object(_) | Value::Null) {
+                if target.is_some() && (matches!(value, Value::Nothing) ||
+                    automation && matches!(value, Value::Object(_) | Value::Null)) {
                     return Err(language_error(13, "the default member did not return a scalar argument", line));
                 }
             }
-            args[index] = coerce_automation_scalar(&value, target)
-                .map_err(|message| host_failure(message, line))?;
+            args[index] = match target {
+                Some(target) => coerce_automation_scalar(&value, target)
+                    .map_err(|message| host_failure(message, line))?,
+                None => value,
+            };
         }
         Ok(())
     }
@@ -12108,6 +12222,11 @@ pub fn host_error_from(number: i64, source: &str, description: impl Into<String>
     format!("{HOST_ERROR_MARK}{number}@{source}={}", description.into())
 }
 
+/// A named host error that uses VBA's localized default description and help.
+pub fn host_error_default_from(number: i64, source: &str, reason: impl Into<String>) -> String {
+    format!("{HOST_ERROR_MARK}{number}@{source}:{}", reason.into())
+}
+
 /// A host's refusal as a runtime error: 1004 unless the host said otherwise.
 ///
 /// A numbered refusal carries VBA's own description for that number, which
@@ -12135,13 +12254,17 @@ fn host_failure(message: String, line: u32) -> RuntimeError {
             }
         }
         if let Some((number, _)) = rest.split_once(':') {
+            let (number, source) = match number.split_once('@') {
+                Some((number, source)) => (number, Some(source.to_string())),
+                None => (number, None),
+            };
             if let Ok(number) = number.parse::<i64>() {
                 return RuntimeError {
                     kind: RuntimeErrorKind::Host,
                     message: vba_error_description(number).to_string(),
                     line: Some(line),
                     vba_number: Some(number),
-                    vba_source: None,
+                    vba_source: source,
                     vba_help_file: None,
                     vba_help_context: None,
                     vba_default_description: true,
